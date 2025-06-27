@@ -1,0 +1,61 @@
+[package]
+name = "whatsapp-rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Data Serialization
+serde = { version = "1.0.188", features = ["derive"] }
+serde_with = { version = "3.5.0", features = ["base64"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Protobuf compatibility
+prost = "0.14.1"
+bytes = "1.5"
+
+# Cryptography
+getrandom = "0.2.16"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+ed25519-dalek = { version = "2.1.1", features = ["serde", "hazmat"] }
+curve25519-dalek = { version = "4.1.3" }
+rand = { version = "0.8.5", features = ["getrandom"] }
+aes-gcm = "0.10.2"
+cbc = { version = "0.1.2", features = ["alloc"] }
+cipher = "0.4"
+aes = "0.8.3"
+sha2 = "0.10.6"
+hmac = "0.12.1"
+hkdf = "0.12.3"
+serde_bytes = "0.11"
+thiserror = "2.0.12"
+
+# Zlib decompression for WABinary
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
+hex = "0.4"
+once_cell = "1.19"
+futures-util = "0.3.31"
+env_logger = "0.11"
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
+log = "0.4.27"
+tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
+anyhow = "1.0"
+base64 = "0.22.1"
+urlencoding = "2.1"
+md5 = "0.7.0"
+async-trait = "0.1.88"
+scopeguard = "1.2"
+ 
+[build-dependencies]
+prost-build = "0.14.1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
