@@ -107,7 +107,9 @@ impl Client {
                 error!("Failed to connect, will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
-                    warn!("Message loop exited with an error. Will attempt to reconnect if enabled.");
+                    warn!(
+                        "Message loop exited with an error. Will attempt to reconnect if enabled."
+                    );
                 } else {
                     warn!("Message loop exited gracefully.");
                 }
@@ -268,6 +270,7 @@ impl Client {
             "success" => self.handle_success(&node).await,
             "failure" => self.handle_connect_failure(&node).await,
             "stream:error" => self.handle_stream_error(&node).await,
+            "ib" => self.handle_ib(&node).await,
             "iq" => {
                 if !self.handle_iq(&node).await {
                     warn!(target: "Client", "Received unhandled IQ: {}", node);
@@ -488,10 +491,33 @@ impl Client {
             SocketError::Crypto("Encrypt error".to_string())
         })?;
 
-        frame_socket
+        return frame_socket
             .send_frame(&encrypted_payload)
             .await
-            .map_err(Into::into)
+            .map_err(Into::into);
+    }
+
+    async fn handle_ib(&self, node: &Node) {
+        for child in node.children().unwrap_or_default() {
+            match child.tag.as_str() {
+                "dirty" => {
+                    let mut attrs = child.attrs();
+                    let dirty_type = attrs.string("type");
+                    info!(
+                        target: "Client",
+                        "Received dirty state notification for type: '{}'. App State Sync needed.",
+                        dirty_type
+                    );
+                    // TODO: Trigger an App State Sync for the given type.
+                }
+                "edge_routing" => {
+                    info!(target: "Client", "Received edge routing info, ignoring for now.");
+                }
+                _ => {
+                    warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
+                }
+            }
+        }
     }
 }
 

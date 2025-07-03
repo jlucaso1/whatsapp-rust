@@ -38,7 +38,7 @@ pub static BASE_CLIENT_PAYLOAD: Lazy<wa::ClientPayload> = Lazy::new(|| wa::Clien
 
 // Port of Go's `DeviceProps`
 pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
-    os: Some("whatsmeow".to_string()),
+    os: Some("rust".to_string()),
     version: Some(wa::device_props::AppVersion {
         primary: Some(0),
         secondary: Some(1),
