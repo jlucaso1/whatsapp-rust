@@ -20,6 +20,11 @@ impl IdentityKey {
     pub fn serialize(&self) -> Vec<u8> {
         self.public_key.serialize()
     }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, crate::signal::protocol::ProtocolError> {
+        let pk = super::ecc::curve::decode_point(bytes)?;
+        Ok(IdentityKey::new(pk))
+    }
 }
 
 // Corresponds to keys/identity/IdentityKeyPair.go

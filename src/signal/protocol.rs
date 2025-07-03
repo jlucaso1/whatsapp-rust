@@ -97,17 +97,14 @@ impl SignalMessage {
         receiver_identity_key: &IdentityKey,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
-
         let proto = protos::SignalMessage {
             ratchet_key: Some(sender_ratchet_key.serialize()),
             counter: Some(counter),
             previous_counter: Some(previous_counter),
             ciphertext: Some(ciphertext.clone()),
         };
-
         let mut serialized_proto = Vec::new();
         proto.encode(&mut serialized_proto)?;
-
         let mac = Self::get_mac(
             sender_identity_key,
             receiver_identity_key,
@@ -115,18 +112,38 @@ impl SignalMessage {
             &[version_byte],
             &serialized_proto,
         );
-
         let mut serialized_form = Vec::with_capacity(1 + serialized_proto.len() + MAC_LENGTH);
         serialized_form.push(version_byte);
         serialized_form.extend_from_slice(&serialized_proto);
         serialized_form.extend_from_slice(&mac);
-
         Ok(Self {
             sender_ratchet_key,
             counter,
             previous_counter,
             ciphertext,
             serialized_form,
+        })
+    }
+
+    pub fn deserialize(serialized: &[u8]) -> Result<Self, ProtocolError> {
+        if serialized.len() < 1 + MAC_LENGTH {
+            return Err(ProtocolError::IncompleteMessage);
+        }
+        let version_byte = serialized[0];
+        let message_version = version_byte >> 4;
+        if message_version != CURRENT_VERSION {
+            return Err(ProtocolError::InvalidVersion(message_version));
+        }
+        let serialized_proto = &serialized[1..serialized.len() - MAC_LENGTH];
+        let proto = protos::SignalMessage::decode(serialized_proto)?;
+        let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
+        let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
+        Ok(SignalMessage {
+            sender_ratchet_key: ratchet_key,
+            counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
+            previous_counter: proto.previous_counter.unwrap_or(0),
+            ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
+            serialized_form: serialized.to_vec(),
         })
     }
 
@@ -258,6 +275,42 @@ impl PreKeySignalMessage {
     pub fn serialize(&self) -> Vec<u8> {
         self.serialized_form.clone()
     }
+
+    // Simple deserialization without MAC verification
+    pub fn deserialize(serialized: &[u8]) -> Result<Self, ProtocolError> {
+        if serialized.len() < 2 {
+            return Err(ProtocolError::IncompleteMessage);
+        }
+        let version_byte = serialized[0];
+        let message_version = version_byte >> 4;
+        if message_version != CURRENT_VERSION {
+            return Err(ProtocolError::InvalidVersion(message_version));
+        }
+        let proto =
+            protos::PreKeySignalMessage::decode(&serialized[1..]).map_err(ProtocolError::Proto)?;
+        let registration_id = proto
+            .registration_id
+            .ok_or(ProtocolError::IncompleteMessage)?;
+        let pre_key_id = proto.pre_key_id;
+        let signed_pre_key_id = proto
+            .signed_pre_key_id
+            .ok_or(ProtocolError::IncompleteMessage)?;
+        let base_key = proto.base_key.ok_or(ProtocolError::IncompleteMessage)?;
+        let identity_key = proto.identity_key.ok_or(ProtocolError::IncompleteMessage)?;
+        let message_bytes = proto.message.ok_or(ProtocolError::IncompleteMessage)?;
+        let base_key = super::ecc::curve::decode_point(&base_key)?;
+        let identity_key = IdentityKey::deserialize(&identity_key)?;
+        let message = SignalMessage::deserialize(&message_bytes)?;
+        Ok(Self {
+            registration_id,
+            pre_key_id,
+            signed_pre_key_id,
+            base_key,
+            identity_key,
+            message,
+            serialized_form: serialized.to_vec(),
+        })
+    }
 }
 
 impl CiphertextMessage for PreKeySignalMessage {
@@ -266,5 +319,14 @@ impl CiphertextMessage for PreKeySignalMessage {
     }
     fn q_type(&self) -> u32 {
         PREKEY_TYPE
+    }
+}
+
+impl From<crate::signal::root_key::RootKeyError> for ProtocolError {
+    fn from(e: crate::signal::root_key::RootKeyError) -> Self {
+        ProtocolError::Proto(prost::DecodeError::new(std::borrow::Cow::Owned(format!(
+            "{:?}",
+            e
+        ))))
     }
 }

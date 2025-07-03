@@ -1,3 +1,4 @@
+mod signal;
 /// The public key for verifying the server's intermediate certificate.
 pub const WA_CERT_PUB_KEY: [u8; 32] = [
     0x14, 0x23, 0x75, 0x57, 0x4d, 0x0a, 0x58, 0x71, 0x66, 0xaa, 0xe7, 0x1e, 0xbe, 0x51, 0x64, 0x37,
@@ -15,6 +16,7 @@ pub mod traits;
 use crate::store::traits::*;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct Device {
     pub id: Option<Jid>,
     pub registration_id: u32,

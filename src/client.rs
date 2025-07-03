@@ -1,12 +1,18 @@
 use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
+use crate::signal::store::SessionStore;
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use crate::store;
 
 use crate::binary;
 use crate::qrcode;
 use crate::types::events::{ConnectFailureReason, Event};
+// --- Signal imports for E2EE ---
+use crate::proto::whatsapp as wa;
+use crate::signal::{address::SignalAddress, session::SessionCipher};
+use crate::types::jid::Jid;
+use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
@@ -284,8 +290,14 @@ impl Client {
                     warn!(target: "Client", "Received unhandled IQ: {}", node);
                 }
             }
-            "receipt" | "message" | "notification" | "call" | "presence" | "chatstate" => {
+            "receipt" | "notification" | "call" | "presence" | "chatstate" => {
                 warn!(target: "Client", "TODO: Implement handler for <{}>", node.tag);
+            }
+            "message" => {
+                let client_clone = self.clone();
+                tokio::spawn(async move {
+                    client_clone.handle_encrypted_message(node).await;
+                });
             }
             "ack" => {} // Ignore acks for now
             _ => {
@@ -294,13 +306,122 @@ impl Client {
         }
     }
 
-    async fn handle_success(&self, _node: &Node) {
+    // --- App State Sync Logic ---
+    async fn fetch_app_state_patches(
+        &self,
+        name: &str,
+        version: u64,
+        is_full_sync: bool,
+    ) -> Result<Node, crate::request::IqError> {
+        use crate::binary::node::{Attrs, Node, NodeContent};
+        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::types::jid;
+
+        let mut attrs = Attrs::new();
+        attrs.insert("name".to_string(), name.to_string());
+        attrs.insert("return_snapshot".to_string(), is_full_sync.to_string());
+        if !is_full_sync {
+            attrs.insert("version".to_string(), version.to_string());
+        }
+
+        let collection_node = Node {
+            tag: "collection".to_string(),
+            attrs,
+            content: None,
+        };
+
+        let sync_node = Node {
+            tag: "sync".to_string(),
+            attrs: Attrs::new(),
+            content: Some(NodeContent::Nodes(vec![collection_node])),
+        };
+
+        let iq = InfoQuery {
+            namespace: "w:sync:app:state",
+            query_type: InfoQueryType::Set,
+            to: jid::SERVER_JID.parse().unwrap(),
+            target: None,
+            id: None,
+            content: Some(NodeContent::Nodes(vec![sync_node])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await
+    }
+
+    async fn app_state_sync(&self, name: &str, full_sync: bool) {
+        info!(target: "Client/AppState", "Starting AppState sync for '{}' (full_sync: {})", name, full_sync);
+        // In a full implementation, you'd load the version and hash from the store.
+        // For now, we'll start from version 0 for a full sync.
+        let mut version = 0;
+        if !full_sync {
+            // TODO: Load version from store
+        }
+
+        let mut has_more = true;
+        let mut is_first_sync = full_sync;
+
+        while has_more {
+            let resp = match self
+                .fetch_app_state_patches(name, version, is_first_sync)
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!(target: "Client/AppState", "Failed to fetch patches for {}: {:?}", name, e);
+                    return;
+                }
+            };
+            is_first_sync = false;
+
+            if let Some(sync_node) = resp.get_optional_child("sync") {
+                if let Some(collection_node) = sync_node.get_optional_child("collection") {
+                    let mut attrs = collection_node.attrs();
+                    version = attrs.optional_u64("version").unwrap_or(version);
+                    has_more = attrs.optional_bool("has_more_patches");
+
+                    // TODO: This is where you would decode and apply the patches.
+                    // For now, we just log that we received them.
+                    let patch_count = collection_node
+                        .get_optional_child("patches")
+                        .map_or(0, |n| n.children().map_or(0, |c| c.len()));
+                    let has_snapshot = collection_node.get_optional_child("snapshot").is_some();
+
+                    info!(
+                        target: "Client/AppState",
+                        "Received sync for '{}': version={}, has_more={}, snapshot={}, patches={}",
+                        name, version, has_more, has_snapshot, patch_count
+                    );
+                } else {
+                    warn!(target: "Client/AppState", "Sync response for '{}' missing <collection> node", name);
+                    has_more = false;
+                }
+            } else {
+                warn!(target: "Client/AppState", "Sync response for '{}' missing <sync> node", name);
+                has_more = false;
+            }
+        }
+        info!(target: "Client/AppState", "Finished AppState sync for '{}'", name);
+    }
+
+    async fn handle_success(self: &Arc<Self>, _node: &Node) {
         info!("Successfully authenticated with WhatsApp servers!");
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
         self.dispatch_event(Event::Connected(crate::types::events::Connected))
             .await;
+
+        // After logging in, we need to do a full sync of our state.
+        let self_clone = Arc::clone(self);
+        tokio::spawn(async move {
+            self_clone.app_state_sync("critical_block", true).await;
+            self_clone
+                .app_state_sync("critical_unblock_low", true)
+                .await;
+            self_clone.app_state_sync("regular", true).await;
+            // Add other states as needed, e.g., "regular_high", "regular_low"
+        });
     }
 
     async fn expect_disconnect(&self) {
@@ -503,6 +624,175 @@ impl Client {
         })?;
 
         noise_socket.send_frame(&payload).await.map_err(Into::into)
+    }
+
+    // --- Signal E2EE: Handle incoming encrypted message ---
+    pub async fn handle_encrypted_message(&self, node: Node) {
+        // 1. Parse message info (dummy for now)
+        let info = match self.parse_message_info(node.clone()).await {
+            Ok(info) => info,
+            Err(e) => {
+                warn!("Failed to parse message info: {:?}", e);
+                return;
+            }
+        };
+
+        // 2. Find the encrypted payload
+        let enc_node = match node.get_optional_child("enc") {
+            Some(node) => node,
+            None => {
+                warn!("Received message without <enc> child: {}", node.tag);
+                return;
+            }
+        };
+
+        let enc_type = enc_node.attrs().string("type");
+        let ciphertext = match &enc_node.content {
+            Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+            _ => {
+                warn!("Enc node has no byte content");
+                return;
+            }
+        };
+
+        // 3. Decrypt
+        if enc_type == "pkmsg" || enc_type == "msg" {
+            // This is a 1-on-1 message
+            let signal_address = SignalAddress::new(
+                info.source.sender.user.clone(),
+                info.source.sender.device as u32,
+            );
+            let store_guard = self.store.read().await;
+            let device = Arc::new((*store_guard).clone());
+            let cipher = SessionCipher::new(device.clone(), signal_address);
+
+            match cipher.decrypt(&ciphertext).await {
+                Ok(plaintext) => {
+                    info!(
+                        "Successfully decrypted {} message from {}: {} bytes of plaintext",
+                        enc_type,
+                        info.source.sender,
+                        plaintext.len()
+                    );
+                    // TODO: Unmarshal plaintext into wa::Message and dispatch event
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to decrypt {} message from {}: {:?}",
+                        enc_type, info.source.sender, e
+                    );
+                }
+            }
+            info!(
+                "Would decrypt {} message from {}",
+                enc_type, info.source.sender
+            );
+            // let signal_message = signal::protocol::SignalMessage::deserialize(&ciphertext).unwrap();
+            // let plaintext = cipher.decrypt(&signal_message).await;
+            // match plaintext {
+            //     Ok(pt) => {
+            //         let mut msg = wa::Message::decode(&*pt).unwrap();
+            //         self.dispatch_event(Event::Message(events::Message { info, message: Box::new(msg), ... })).await;
+            //     }
+            //     Err(e) => {
+            //         error!("Failed to decrypt message from {}: {:?}", info.source.sender, e);
+            //     }
+            // }
+        } else if enc_type == "skmsg" {
+            info!("Group message decryption (skmsg) is not yet implemented.");
+        }
+    }
+
+    // --- Signal E2EE: Dummy parse_message_info ---
+    pub async fn parse_message_info(&self, node: Node) -> Result<MessageInfo, anyhow::Error> {
+        let mut attrs = node.attrs();
+        Ok(MessageInfo {
+            source: crate::types::message::MessageSource {
+                chat: attrs.jid("from"),
+                sender: attrs.jid("participant"),
+                is_from_me: false,
+                is_group: attrs.jid("from").is_group(),
+                ..Default::default()
+            },
+            id: attrs.string("id"),
+            ..Default::default()
+        })
+    }
+
+    // --- Signal E2EE: Send a text message ---
+    pub async fn send_text_message(&self, to: Jid, text: &str) -> Result<(), anyhow::Error> {
+        let content = wa::Message {
+            conversation: Some(text.to_string()),
+            ..Default::default()
+        };
+        self.send_message(to, content).await
+    }
+
+    // --- Signal E2EE: Send a message (encrypted) ---
+    pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+        let store = self.store.read().await;
+        if store.id.is_none() {
+            return Err(anyhow::anyhow!("Not logged in"));
+        }
+
+        // 1. Create a Signal Address for the recipient
+        let signal_address = SignalAddress::new(to.user.clone(), to.device as u32);
+
+        // 2. Check if a session exists. If not, build one.
+        let store_arc = Arc::new(store.clone());
+        let session_exists =
+            match SessionStore::contains_session(&*store_arc, &signal_address).await {
+                Ok(val) => val,
+                Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
+            };
+        if !session_exists {
+            info!("No session found for {}, building a new one.", to);
+            // TODO: Fetch prekey bundle from server
+            // let bundle = self.fetch_prekey_bundle(to).await?;
+            // let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+            // builder.process_bundle(bundle).await?;
+            return Err(anyhow::anyhow!(
+                "Session building not yet implemented. Cannot send message."
+            ));
+        }
+
+        // 3. Encrypt the message
+        let cipher = SessionCipher::new(store_arc.clone(), signal_address);
+        let serialized_msg_proto = <wa::Message as prost::Message>::encode_to_vec(&message);
+
+        let encrypted_message = match cipher.encrypt(&serialized_msg_proto).await {
+            Ok(msg) => msg,
+            Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
+        };
+
+        // 4. Construct the <message> stanza
+        let stanza = crate::binary::node::Node {
+            tag: "message".to_string(),
+            attrs: [
+                ("to".to_string(), to.to_string()),
+                ("id".to_string(), self.generate_request_id()),
+                ("type".to_string(), "text".to_string()),
+            ]
+            .into(),
+            content: Some(crate::binary::node::NodeContent::Nodes(vec![
+                crate::binary::node::Node {
+                    tag: "enc".to_string(),
+                    attrs: [
+                        ("v".to_string(), "2".to_string()),
+                        ("type".to_string(), "msg".to_string()), // TODO: set to "pkmsg" if needed
+                    ]
+                    .into(),
+                    content: Some(crate::binary::node::NodeContent::Bytes(
+                        encrypted_message.serialize(),
+                    )),
+                },
+            ])),
+        };
+
+        // 5. Send it
+        self.send_node(stanza).await?;
+
+        Ok(())
     }
 
     async fn handle_ib(&self, node: &Node) {

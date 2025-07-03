@@ -1,8 +1,10 @@
 use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
+use crate::signal::protocol::ProtocolError;
 use crate::signal::state::record::PreKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
+use crate::signal::state::session_state::SessionState;
 use std::sync::Arc;
 
 pub struct SessionCipher<S: SignalProtocolStore> {
@@ -87,87 +89,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     }
 }
 
-use crate::crypto::cbc::CbcError;
-use thiserror::Error; // Import CbcError
-
-#[derive(Debug, Error)]
-pub enum DecryptionError {
-    #[error("no valid sessions found to decrypt message")]
-    NoValidSessions,
-    #[error("old counter (current: {current}, received: {received})")]
-    OldCounter { current: u32, received: u32 },
-    #[error("message is too far in the future")]
-    TooFarInFuture,
-    #[error("uninitialized session")]
-    UninitializedSession,
-    #[error("protocol error: {0}")]
-    Protocol(#[from] super::protocol::ProtocolError),
-    #[error("root key error: {0}")]
-    RootKey(#[from] super::root_key::RootKeyError),
-    #[error("store error: {0}")]
-    Store(#[from] Box<dyn std::error::Error>),
-    #[error("cbc error: {0}")] // Added CbcError variant
-    Cbc(#[from] CbcError),
-}
-
 impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
-    // ... existing methods ...
-
-    pub async fn decrypt(
-        &self,
-        ciphertext_message: &SignalMessage,
-    ) -> Result<Vec<u8>, DecryptionError> {
-        let mut session_record = self
-            .store
-            .load_session(&self.remote_address)
-            .await
-            .map_err(|e| DecryptionError::Store(e))?;
-
-        let plaintext =
-            self.decrypt_with_state(session_record.session_state_mut(), ciphertext_message);
-
-        if let Ok(pt) = plaintext {
-            self.store
-                .store_session(&self.remote_address, &session_record)
-                .await
-                .map_err(|e| DecryptionError::Store(e))?;
-            return Ok(pt);
-        }
-
-        // Handle out-of-order messages by trying previous sessions
-        for i in 0..session_record.previous_states().len() {
-            let mut state = session_record.previous_states()[i].clone();
-            if let Ok(pt) = self.decrypt_with_state(&mut state, ciphertext_message) {
-                session_record.promote_state(i);
-                self.store
-                    .store_session(&self.remote_address, &session_record)
-                    .await
-                    .map_err(|e| DecryptionError::Store(e))?;
-                return Ok(pt);
-            }
-        }
-
-        Err(DecryptionError::NoValidSessions)
-    }
-
-    fn decrypt_with_state(
-        &self,
-        session_state: &mut crate::signal::state::session_state::SessionState,
-        ciphertext: &SignalMessage,
-    ) -> Result<Vec<u8>, DecryptionError> {
-        if session_state.sender_chain_opt().is_none() {
-            return Err(DecryptionError::UninitializedSession);
-        }
-
-        let (chain_key, message_keys) = // Removed mut
-            self.get_or_create_message_keys(session_state, ciphertext)?;
-
-        let decrypted_plaintext = self.decrypt_internal(&message_keys, &ciphertext.ciphertext)?;
-
-        session_state.set_receiver_chain_key(ciphertext.sender_ratchet_key.clone(), chain_key);
-        Ok(decrypted_plaintext)
-    }
-
     fn get_or_create_message_keys(
         &self,
         session_state: &mut crate::signal::state::session_state::SessionState,
@@ -255,6 +177,126 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         use crate::crypto::cbc;
         cbc::decrypt(message_keys.cipher_key(), message_keys.iv(), ciphertext)
             .map_err(|e| DecryptionError::Cbc(e)) // Mapped to CbcError
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DecryptionError {
+    #[error("protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
+    #[error("cbc error: {0}")]
+    Cbc(#[from] crate::crypto::cbc::CbcError),
+    #[error("store error: {0}")]
+    Store(Box<dyn std::error::Error + Send + Sync>),
+    #[error("no valid sessions")]
+    NoValidSessions,
+    #[error("uninitialized session")]
+    UninitializedSession,
+    #[error("old counter (current: {current}, received: {received})")]
+    OldCounter { current: u32, received: u32 },
+    #[error("message is too far in the future")]
+    TooFarInFuture,
+}
+
+impl From<crate::signal::root_key::RootKeyError> for DecryptionError {
+    fn from(e: crate::signal::root_key::RootKeyError) -> Self {
+        DecryptionError::Protocol(ProtocolError::from(e))
+    }
+}
+
+impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
+    pub async fn decrypt(&self, ciphertext_bytes: &[u8]) -> Result<Vec<u8>, DecryptionError> {
+        let mut session_record = self
+            .store
+            .load_session(&self.remote_address)
+            .await
+            .map_err(|e| DecryptionError::Store(e))?;
+
+        // Try to decrypt with the current state.
+        if let Ok(plaintext) = self
+            .try_decrypt_with_state(session_record.session_state_mut(), ciphertext_bytes)
+            .await
+        {
+            self.store
+                .store_session(&self.remote_address, &session_record)
+                .await
+                .map_err(|e| DecryptionError::Store(e))?;
+            return Ok(plaintext);
+        }
+
+        // If that fails, try with previous states.
+        for i in 0..session_record.previous_states().len() {
+            let mut state_clone = session_record.previous_states()[i].clone();
+            if let Ok(plaintext) = self
+                .try_decrypt_with_state(&mut state_clone, ciphertext_bytes)
+                .await
+            {
+                session_record.promote_state(i);
+                self.store
+                    .store_session(&self.remote_address, &session_record)
+                    .await
+                    .map_err(DecryptionError::Store)?;
+                return Ok(plaintext);
+            }
+        }
+
+        Err(DecryptionError::NoValidSessions)
+    }
+
+    async fn try_decrypt_with_state(
+        &self,
+        session_state: &mut SessionState,
+        ciphertext_bytes: &[u8],
+    ) -> Result<Vec<u8>, DecryptionError> {
+        // Try as SignalMessage
+        if let Ok(msg) = SignalMessage::deserialize(ciphertext_bytes) {
+            return self.decrypt_with_state(session_state, &msg).await;
+        }
+        // Try as PreKeySignalMessage
+        if let Ok(prekey_msg) = PreKeySignalMessage::deserialize(ciphertext_bytes) {
+            let builder = super::session::SessionBuilder::new(
+                self.store.clone(),
+                self.remote_address.clone(),
+            );
+            builder
+                .process_prekey_message(&prekey_msg)
+                .await
+                .map_err(|e| {
+                    let s = format!("{:?}", e);
+                    DecryptionError::Store(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        s,
+                    )))
+                })?;
+            return self
+                .decrypt_with_state(session_state, &prekey_msg.message)
+                .await;
+        }
+        Err(DecryptionError::Protocol(ProtocolError::Proto(
+            prost::DecodeError::new("Could not decode as SignalMessage or PreKeySignalMessage"),
+        )))
+    }
+
+    async fn decrypt_with_state(
+        &self,
+        session_state: &mut SessionState,
+        ciphertext: &SignalMessage,
+    ) -> Result<Vec<u8>, DecryptionError> {
+        if session_state.sender_chain_opt().is_none() {
+            return Err(DecryptionError::UninitializedSession);
+        }
+        let (chain_key, message_keys) =
+            self.get_or_create_message_keys(session_state, ciphertext)?;
+        // MAC verification
+        crate::signal::protocol::signal_message_deserialize_and_verify(
+            &ciphertext.serialized_form,
+            message_keys.mac_key(),
+            session_state.remote_identity_public().as_ref(),
+            session_state.local_identity_public().as_ref(),
+        )?;
+        let decrypted_plaintext = self.decrypt_internal(&message_keys, &ciphertext.ciphertext)?;
+        session_state.set_receiver_chain_key(ciphertext.sender_ratchet_key.clone(), chain_key);
+        Ok(decrypted_plaintext)
     }
 }
 

@@ -1,4 +1,3 @@
-// src/signal/state/signed_prekey_record.rs
 use crate::signal::ecc::key_pair::EcKeyPair;
 use chrono::{DateTime, Utc};
 
@@ -36,5 +35,9 @@ impl SignedPreKeyRecord {
 
     pub fn signature(&self) -> [u8; 64] {
         self.signature
+    }
+
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        self.timestamp
     }
 }

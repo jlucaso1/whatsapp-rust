@@ -8,7 +8,7 @@ pub enum AddressingMode {
     Lid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MessageSource {
     pub chat: Jid,
     pub sender: Jid,
@@ -41,6 +41,12 @@ pub enum EditAttribute {
     SenderRevoke,
     AdminRevoke,
     Unknown(String),
+}
+
+impl Default for EditAttribute {
+    fn default() -> Self {
+        EditAttribute::Empty
+    }
 }
 
 impl From<String> for EditAttribute {
@@ -80,7 +86,7 @@ pub struct MsgMetaInfo {
     pub thread_message_sender_jid: Option<Jid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MessageInfo {
     pub source: MessageSource,
     pub id: MessageId,
