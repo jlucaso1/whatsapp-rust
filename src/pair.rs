@@ -11,6 +11,7 @@ use hmac::{Hmac, Mac};
 use log::{debug, error, info, warn};
 use prost::Message;
 use sha2::Sha256;
+use std::sync::Arc;
 
 use std::sync::atomic::Ordering;
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
@@ -23,7 +24,7 @@ const ADV_HOSTED_PREFIX_DEVICE_SIGNATURE_VERIFICATION: &[u8] = &[6, 6];
 type HmacSha256 = Hmac<Sha256>;
 
 /// Handles incoming IQ stanzas related to the pairing process.
-pub async fn handle_iq(client: &mut Client, node: &Node) -> bool {
+pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     if node.attrs.get("from").cloned().unwrap_or_default() != SERVER_JID {
         return false;
     }
@@ -35,18 +36,16 @@ pub async fn handle_iq(client: &mut Client, node: &Node) -> bool {
                     // 1. Acknowledge the request immediately, like the Go implementation.
                     acknowledge_request(client, node).await;
 
-                    // 2. Extract QR code refs and generate full QR data strings
-                    let codes: Vec<String> = child
-                        .get_children_by_tag("ref")
-                        .iter()
-                        .filter_map(|grandchild| match &grandchild.content {
-                            Some(NodeContent::Bytes(bytes)) => {
-                                String::from_utf8(bytes.clone()).ok()
+                    // 2. Extract QR code refs and generate full QR data strings (async)
+                    let mut codes = Vec::new();
+                    for grandchild in child.get_children_by_tag("ref") {
+                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content {
+                            if let Ok(r) = String::from_utf8(bytes.clone()) {
+                                let store_guard = client.store.read().await;
+                                codes.push(make_qr_data(&store_guard, r));
                             }
-                            _ => None,
-                        })
-                        .map(|r| make_qr_data(&client.store, r))
-                        .collect();
+                        }
+                    }
 
                     debug!(target: "Client/Pair", "Dispatching QR event with {} codes", codes.len());
                     client.dispatch_event(Event::Qr(Qr { codes })).await;
@@ -118,7 +117,7 @@ async fn send_pair_error(client: &Client, req_id: &str, code: u16, text: &str) {
 }
 
 /// Handles the <pair-success> stanza, finalizing the pairing process.
-async fn handle_pair_success(client: &mut Client, request_node: &Node, success_node: &Node) {
+async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
         None => {
@@ -202,7 +201,7 @@ async fn handle_pair_success(client: &mut Client, request_node: &Node, success_n
             client.expected_disconnect.store(true, Ordering::Relaxed);
 
             info!("Successfully paired {}", jid);
-            client.store.id = Some(jid.clone());
+            client.store.write().await.id = Some(jid.clone());
             // Optionally: persist lid, business_name, platform, etc.
 
             let success_event = PairSuccess {
@@ -250,9 +249,10 @@ impl std::fmt::Display for PairCryptoError {
 }
 
 async fn do_pair_crypto(
-    store: &crate::store::Device,
+    store: &tokio::sync::RwLock<crate::store::Device>,
     device_identity_bytes: &[u8],
 ) -> Result<(Vec<u8>, u32), PairCryptoError> {
+    let store_guard = store.read().await;
     // 1. Unmarshal HMAC container and verify HMAC
     let hmac_container =
         wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes).map_err(|e| {
@@ -267,7 +267,7 @@ async fn do_pair_crypto(
     let is_hosted_account = hmac_container.account_type.is_some()
         && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
-    let mut mac = HmacSha256::new_from_slice(&store.adv_secret_key).unwrap();
+    let mut mac = HmacSha256::new_from_slice(&store_guard.adv_secret_key).unwrap();
     // Get details and hmac as slices, handling potential None values
     let details_bytes = hmac_container
         .details
@@ -319,7 +319,7 @@ async fn do_pair_crypto(
     let msg_to_verify = concat_bytes(&[
         account_sig_prefix,
         &inner_details_bytes,
-        &store.identity_key.public_key,
+        &store_guard.identity_key.public_key,
     ]);
 
     let Ok(signature) = ed25519_dalek::Signature::from_slice(account_sig_bytes) else {
@@ -354,10 +354,10 @@ async fn do_pair_crypto(
     let msg_to_sign = concat_bytes(&[
         device_sig_prefix,
         &inner_details_bytes,
-        &store.identity_key.public_key,
+        &store_guard.identity_key.public_key,
         account_sig_key_bytes,
     ]);
-    let device_signature = store.identity_key.sign_message(&msg_to_sign).to_vec();
+    let device_signature = store_guard.identity_key.sign_message(&msg_to_sign).to_vec();
     signed_identity.device_signature = Some(device_signature);
 
     // 4. Unmarshal final details to get key_index

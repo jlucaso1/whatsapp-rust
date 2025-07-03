@@ -123,12 +123,15 @@ impl NoiseHandshake {
         Ok((write, read))
     }
 
-    pub fn finish(self) -> Result<NoiseSocket> {
+    pub fn finish(
+        self,
+        frame_socket: std::sync::Arc<tokio::sync::Mutex<crate::socket::FrameSocket>>,
+    ) -> Result<NoiseSocket> {
         let (write_bytes, read_bytes) = self.extract_and_expand(None)?;
         let write_key =
             gcm::prepare(&write_bytes).map_err(|e| SocketError::Crypto(e.to_string()))?;
         let read_key = gcm::prepare(&read_bytes).map_err(|e| SocketError::Crypto(e.to_string()))?;
 
-        Ok(NoiseSocket::new(write_key, read_key))
+        Ok(NoiseSocket::new(frame_socket, write_key, read_key))
     }
 }

@@ -2,6 +2,7 @@ pub mod binary;
 pub mod client;
 pub mod crypto;
 pub mod handshake;
+pub mod keepalive;
 pub mod pair;
 pub mod proto;
 pub mod qrcode;

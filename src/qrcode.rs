@@ -99,7 +99,7 @@ pub(crate) async fn get_qr_channel_logic(
     if client.is_connected() {
         return Err(QrError::AlreadyConnected);
     }
-    if client.store.id.is_some() {
+    if client.store.read().await.id.is_some() {
         return Err(QrError::AlreadyLoggedIn);
     }
 

@@ -92,8 +92,8 @@ impl Client {
             content: query.content,
         };
 
-        let noise_socket_guard = self.noise_socket.lock().await;
-        let noise_socket = match noise_socket_guard.as_ref() {
+        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
+        let noise_socket = match noise_socket_arc {
             Some(s) => s,
             None => return Err(IqError::NotConnected),
         };

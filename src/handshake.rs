@@ -8,6 +8,7 @@ use ed25519_dalek::Verifier;
 use ed25519_dalek::{Signature, VerifyingKey};
 use log::{debug, info};
 use prost::Message;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{timeout, Duration};
 
@@ -42,10 +43,10 @@ type Result<T> = std::result::Result<T, HandshakeError>;
 
 /// Performs the full Noise handshake and authentication with the server.
 pub async fn do_handshake(
-    store: &crate::store::Device,
+    store: &tokio::sync::RwLock<crate::store::Device>,
     frame_socket: &mut FrameSocket,
     frames_rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>,
-) -> Result<NoiseSocket> {
+) -> Result<Arc<NoiseSocket>> {
     // 1. Initial setup and create ephemeral keys for this session
     let ephemeral_kp = KeyPair::new();
     // Use the WhatsApp connection header constant
@@ -89,6 +90,9 @@ pub async fn do_handshake(
         .map_err(|_| HandshakeError::Timeout)?
         .ok_or(HandshakeError::Timeout)?;
 
+    // Use the store RwLock for client payload
+    // ... use store_guard for all field accesses below ...
+    // (rest of function unchanged until field accesses)
     debug!(
         "<-- Received handshake response ({} bytes)",
         resp_frame.len(),
@@ -159,13 +163,14 @@ pub async fn do_handshake(
     info!("Server certificate verified successfully");
 
     // 7. Send ClientFinish
+    let store_guard = store.read().await;
     let encrypted_pubkey = nh
-        .encrypt(&store.noise_key.public_key)
+        .encrypt(&store_guard.noise_key.public_key)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
-    nh.mix_shared_secret(&store.noise_key.private_key, &server_ephemeral)
+    nh.mix_shared_secret(&store_guard.noise_key.private_key, &server_ephemeral)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-    let client_payload = store.get_client_payload();
+    let client_payload = store_guard.get_client_payload();
     let client_finish_payload_bytes = client_payload.encode_to_vec();
     // [HANDSHAKE_DEBUG] Log ClientFinish.payload (unencrypted)
     debug!(
@@ -188,12 +193,19 @@ pub async fn do_handshake(
     let mut buf = Vec::new();
     client_finish.encode(&mut buf)?;
     debug!("--> Sending ClientFinish payload ({} bytes)", buf.len());
-    frame_socket.send_frame(&buf).await?;
+
+    // Wrap frame_socket in Arc<Mutex<>> for NoiseSocket
+    let frame_socket_arc = std::sync::Arc::new(tokio::sync::Mutex::new(std::mem::replace(
+        frame_socket,
+        FrameSocket::new().0,
+    )));
+    frame_socket_arc.lock().await.send_frame(&buf).await?;
 
     // 8. Finalize handshake and return the encrypted NoiseSocket
-    let noise_socket = nh
-        .finish()
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+    let noise_socket = Arc::new(
+        nh.finish(frame_socket_arc)
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?,
+    );
 
     info!(target: "Client", "Handshake complete, switching to encrypted communication");
     Ok(noise_socket)

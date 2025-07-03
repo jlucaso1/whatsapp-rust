@@ -18,14 +18,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let store = store::Device::new(store_backend.clone(), store_backend.clone());
 
     info!("Creating client...");
-    let client = Arc::new(tokio::sync::Mutex::new(Client::new(store)));
+    let client = Arc::new(Client::new(store));
 
     // If not logged in, start the QR pairing process
-    let client_guard = client.lock().await;
-    if client_guard.store.id.is_none() {
-        let mut qr_rx = client_guard.get_qr_channel().await?;
-        drop(client_guard);
+    if client.store.read().await.id.is_none() {
+        let client_clone = client.clone();
         tokio::spawn(async move {
+            let mut qr_rx = client_clone.get_qr_channel().await.unwrap();
             info!("QR Channel listener started. Waiting for events...");
             while let Some(event) = qr_rx.recv().await {
                 match event {
@@ -61,7 +60,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // The main run loop
-    client.lock().await.run().await;
+    client.run().await;
 
     info!("Application has shut down.");
     Ok(())

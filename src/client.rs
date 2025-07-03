@@ -1,5 +1,3 @@
-// src/client.rs
-
 use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
@@ -39,7 +37,7 @@ pub enum ClientError {
 }
 
 pub struct Client {
-    pub store: store::Device,
+    pub store: tokio::sync::RwLock<store::Device>,
 
     // Concurrency and state management
     pub(crate) is_logged_in: Arc<AtomicBool>,
@@ -49,7 +47,7 @@ pub struct Client {
 
     // Socket and connection fields
     pub(crate) frame_socket: Arc<Mutex<Option<FrameSocket>>>,
-    pub(crate) noise_socket: Arc<Mutex<Option<NoiseSocket>>>,
+    pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
     pub(crate) frames_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<bytes::Bytes>>>>,
 
     // Request and event handling
@@ -71,7 +69,7 @@ impl Client {
         rand::thread_rng().fill_bytes(&mut unique_id_bytes);
 
         Self {
-            store,
+            store: tokio::sync::RwLock::new(store),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -95,7 +93,7 @@ impl Client {
 
     /// The main entry point to start the client.
     /// This will connect and then enter a loop to maintain the connection.
-    pub async fn run(&mut self) {
+    pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
             warn!("Client `run` method called while already running.");
             return;
@@ -142,7 +140,7 @@ impl Client {
     }
 
     /// Internal connect logic.
-    async fn connect(&self) -> Result<(), anyhow::Error> {
+    pub async fn connect(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         if self.is_connecting.swap(true, Ordering::SeqCst) {
             return Err(ClientError::AlreadyConnected.into());
         }
@@ -164,6 +162,10 @@ impl Client {
         *self.frame_socket.lock().await = Some(frame_socket);
         *self.frames_rx.lock().await = Some(frames_rx);
         *self.noise_socket.lock().await = Some(noise_socket);
+
+        // Spawn keepalive loop after successful connect
+        let client_clone = self.clone();
+        tokio::spawn(client_clone.keepalive_loop());
 
         Ok(())
     }
@@ -187,7 +189,7 @@ impl Client {
         *self.frames_rx.lock().await = None;
     }
 
-    async fn read_messages_loop(&mut self) -> Result<(), anyhow::Error> {
+    async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         info!(target: "Client", "Starting message processing loop...");
 
         let mut rx_guard = self.frames_rx.lock().await;
@@ -226,9 +228,9 @@ impl Client {
         }
     }
 
-    async fn process_encrypted_frame(&mut self, encrypted_frame: &bytes::Bytes) {
-        let noise_socket_guard = self.noise_socket.lock().await;
-        let noise_socket = match noise_socket_guard.as_ref() {
+    async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
+        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
+        let noise_socket = match noise_socket_arc {
             Some(s) => s,
             None => {
                 error!("Cannot process frame: not connected (no noise socket)");
@@ -243,7 +245,6 @@ impl Client {
                 return;
             }
         };
-        drop(noise_socket_guard);
 
         let unpacked_data_cow = match binary::util::unpack(&decrypted_payload) {
             Ok(data) => data,
@@ -259,8 +260,15 @@ impl Client {
         };
     }
 
-    async fn process_node(&mut self, node: Node) {
+    async fn process_node(self: &Arc<Self>, node: Node) {
         debug!(target: "Client/Recv", "{}", node);
+
+        // Add this check at the top
+        if node.tag == "xmlstreamend" {
+            warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
+            self.shutdown_notifier.notify_one();
+            return;
+        }
 
         if node.tag == "iq" && self.handle_iq_response(node.clone()).await {
             return;
@@ -295,10 +303,13 @@ impl Client {
             .await;
     }
 
+    async fn expect_disconnect(&self) {
+        self.expected_disconnect.store(true, Ordering::Relaxed);
+    }
+
     async fn handle_stream_error(&self, node: &Node) {
         self.is_logged_in.store(false, Ordering::Relaxed);
-        self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.shutdown_notifier.notify_one(); // Stop current read loop
+        // Don't clear waiters here, let the disconnect handler do it.
 
         let mut attrs = node.attrs();
         let code = attrs.optional_string("code").unwrap_or("");
@@ -307,33 +318,38 @@ impl Client {
             .map(|n| n.attrs().optional_string("type").unwrap_or("").to_string())
             .unwrap_or_default();
 
+        // The key is to decide if this is a recoverable error.
+        // A `515` after pairing is normal and should trigger a reconnect.
+        // A `515` at any other time is also a server-side disconnect that we should recover from.
+        // Therefore, we do NOT call `expect_disconnect()` for it. The `run` loop will see it
+        // as an unexpected disconnect and try to reconnect.
         match (code, conflict_type.as_str()) {
             ("515", _) => {
-                info!(target: "Client", "Got 515 stream error, forcing reconnect.");
-                self.expected_disconnect.store(false, Ordering::Relaxed); // This is an unexpected disconnect
+                info!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
+                // We do *not* set expected_disconnect to true. This allows the run loop to handle it.
             }
-            ("401", "device_removed") => {
-                info!(target: "Client", "Got device removed stream error, logging out.");
+            ("401", "device_removed") | (_, "replaced") => {
+                info!(target: "Client", "Got stream error indicating client was removed or replaced. Logging out.");
+                self.expect_disconnect().await; // This is a terminal error, so we expect the disconnect.
                 self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                self.dispatch_event(Event::LoggedOut(crate::types::events::LoggedOut {
-                    on_connect: false,
-                    reason: ConnectFailureReason::LoggedOut,
-                }))
-                .await;
-                // TODO: Add store.delete()
-            }
-            (_, "replaced") => {
-                info!(target: "Client", "Got 'replaced' stream error (another client connected).");
-                self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                self.dispatch_event(Event::StreamReplaced(crate::types::events::StreamReplaced))
-                    .await;
+
+                let event = if conflict_type == "replaced" {
+                    Event::StreamReplaced(crate::types::events::StreamReplaced)
+                } else {
+                    Event::LoggedOut(crate::types::events::LoggedOut {
+                        on_connect: false,
+                        reason: ConnectFailureReason::LoggedOut,
+                    })
+                };
+                self.dispatch_event(event).await;
             }
             ("503", _) => {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
-                self.expected_disconnect.store(false, Ordering::Relaxed);
+                // We do *not* set expected_disconnect to true. This allows the run loop to handle it.
             }
             _ => {
                 error!(target: "Client", "Unknown stream error: {}", node);
+                self.expect_disconnect().await; // Assume unknown stream errors are terminal.
                 self.dispatch_event(Event::StreamError(crate::types::events::StreamError {
                     code: code.to_string(),
                     raw: Some(node.clone()),
@@ -341,6 +357,9 @@ impl Client {
                 .await;
             }
         }
+
+        // We must signal the read_messages_loop to stop after a stream error.
+        self.shutdown_notifier.notify_one();
     }
 
     async fn handle_connect_failure(&self, node: &Node) {
@@ -395,7 +414,7 @@ impl Client {
         }
     }
 
-    async fn handle_iq(&mut self, node: &Node) -> bool {
+    async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
         if let Some("get") = node.attrs().optional_string("type") {
             if let Some(_ping_node) = node.get_optional_child("ping") {
                 info!(target: "Client", "Received ping, sending pong.");
@@ -470,14 +489,11 @@ impl Client {
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
-        let noise_socket_guard = self.noise_socket.lock().await;
-        let frame_socket_guard = self.frame_socket.lock().await;
-        let noise_socket = noise_socket_guard
-            .as_ref()
-            .ok_or(ClientError::NotConnected)?;
-        let frame_socket = frame_socket_guard
-            .as_ref()
-            .ok_or(ClientError::NotConnected)?;
+        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
+        let noise_socket = match noise_socket_arc {
+            Some(socket) => socket,
+            None => return Err(ClientError::NotConnected),
+        };
 
         debug!(target: "Client/Send", "{}", node);
 
@@ -486,15 +502,7 @@ impl Client {
             SocketError::Crypto("Marshal error".to_string())
         })?;
 
-        let encrypted_payload = noise_socket.encrypt_frame(&payload).map_err(|e| {
-            error!("Failed to encrypt frame: {:?}", e);
-            SocketError::Crypto("Encrypt error".to_string())
-        })?;
-
-        return frame_socket
-            .send_frame(&encrypted_payload)
-            .await
-            .map_err(Into::into);
+        noise_socket.send_frame(&payload).await.map_err(Into::into)
     }
 
     async fn handle_ib(&self, node: &Node) {

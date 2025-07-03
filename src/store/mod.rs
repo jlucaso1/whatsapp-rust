@@ -15,7 +15,6 @@ pub mod traits;
 use crate::store::traits::*;
 use std::sync::Arc;
 
-#[derive(Clone)]
 pub struct Device {
     pub id: Option<Jid>,
     pub registration_id: u32,
