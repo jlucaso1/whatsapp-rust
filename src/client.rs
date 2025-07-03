@@ -102,19 +102,17 @@ impl Client {
         }
         while self.is_running.load(Ordering::Relaxed) {
             self.expected_disconnect.store(false, Ordering::Relaxed);
-            let conn_result = self.connect().await;
 
-            if let Err(e) = conn_result {
-                error!("Failed to connect: {:?}", e);
-                // Permanent error or user stopped the client
-                if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
-                    self.is_running.store(false, Ordering::Relaxed);
-                    break;
+            if self.connect().await.is_err() {
+                error!("Failed to connect, will retry...");
+            } else {
+                if self.read_messages_loop().await.is_err() {
+                    warn!("Message loop exited with an error. Will attempt to reconnect if enabled.");
+                } else {
+                    warn!("Message loop exited gracefully.");
                 }
-            } else if self.read_messages_loop().await.is_err() {
-                // read_messages_loop exited with an error, which implies a disconnect.
-                // The loop will now decide whether to reconnect.
-                warn!("Message loop exited. Will attempt to reconnect if enabled.");
+                // Always cleanup after message loop exits
+                self.cleanup_connection_state().await;
             }
 
             if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
@@ -122,7 +120,6 @@ impl Client {
                 break;
             }
 
-            // Backoff before reconnecting
             let error_count = self.auto_reconnect_errors.fetch_add(1, Ordering::SeqCst);
             let delay_secs = u64::from(error_count * 2).min(30);
             let delay = Duration::from_secs(delay_secs);
