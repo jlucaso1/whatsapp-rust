@@ -1,2 +1,7 @@
 pub mod address;
+pub mod chain_key;
 pub mod ecc;
+pub mod identity;
+pub mod kdf;
+pub mod message_key;
+pub mod root_key;
