@@ -10,3 +10,5 @@ pub mod root_key;
 pub mod session;
 pub mod state;
 pub mod store;
+
+mod protos;
