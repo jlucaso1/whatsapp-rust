@@ -1829,6 +1829,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_bytes",
+ "serde_json",
  "serde_with",
  "sha2",
  "subtle",

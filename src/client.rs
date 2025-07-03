@@ -10,10 +10,14 @@ use crate::qrcode;
 use crate::types::events::{ConnectFailureReason, Event};
 // --- Signal imports for E2EE ---
 use crate::proto::whatsapp as wa;
+use crate::proto::whatsapp::message::AppStateSyncKeyShare;
+// use crate::store::traits::AppStateStore; // unused
+use crate::appstate::keys::ALL_PATCH_NAMES;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::jid::Jid;
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
+use prost::Message;
 use rand::RngCore;
 use scopeguard;
 use std::collections::HashMap;
@@ -267,7 +271,21 @@ impl Client {
     }
 
     async fn process_node(self: &Arc<Self>, node: Node) {
-        debug!(target: "Client/Recv", "{}", node);
+        // Special handling for noisy app state sync responses
+        if node.tag == "iq" {
+            if let Some(sync_node) = node.get_optional_child("sync") {
+                if let Some(collection_node) = sync_node.get_optional_child("collection") {
+                    let name = collection_node.attrs().string("name");
+                    debug!(target: "Client/Recv", "Received app state sync response for '{}' (hiding content).", name);
+                } else {
+                    debug!(target: "Client/Recv", "{}", node);
+                }
+            } else {
+                debug!(target: "Client/Recv", "{}", node);
+            }
+        } else {
+            debug!(target: "Client/Recv", "{}", node);
+        }
 
         // Add this check at the top
         if node.tag == "xmlstreamend" {
@@ -284,7 +302,7 @@ impl Client {
             "success" => self.handle_success(&node).await,
             "failure" => self.handle_connect_failure(&node).await,
             "stream:error" => self.handle_stream_error(&node).await,
-            "ib" => self.handle_ib(&node).await,
+            "ib" => self.clone().handle_ib(&node).await,
             "iq" => {
                 if !self.handle_iq(&node).await {
                     warn!(target: "Client", "Received unhandled IQ: {}", node);
@@ -350,20 +368,34 @@ impl Client {
     }
 
     async fn app_state_sync(&self, name: &str, full_sync: bool) {
+        use crate::appstate::processor::{PatchList, Processor};
+
         info!(target: "Client/AppState", "Starting AppState sync for '{}' (full_sync: {})", name, full_sync);
-        // In a full implementation, you'd load the version and hash from the store.
-        // For now, we'll start from version 0 for a full sync.
-        let mut version = 0;
-        if !full_sync {
-            // TODO: Load version from store
+
+        // Use the client's store
+        let store_guard = self.store.read().await;
+        let app_state_store = store_guard.app_state_store.clone();
+        let app_state_keys = store_guard.app_state_keys.clone();
+        let processor = Processor::new(app_state_store.clone(), app_state_keys.clone());
+
+        let mut current_state = match app_state_store.get_app_state_version(name).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to get app state version for {}: {:?}", name, e);
+                return;
+            }
+        };
+        if full_sync {
+            current_state.version = 0;
+            current_state.hash = [0; 128];
         }
 
         let mut has_more = true;
         let mut is_first_sync = full_sync;
 
         while has_more {
-            let resp = match self
-                .fetch_app_state_patches(name, version, is_first_sync)
+            let resp_node = match self
+                .fetch_app_state_patches(name, current_state.version, is_first_sync)
                 .await
             {
                 Ok(resp) => resp,
@@ -374,24 +406,53 @@ impl Client {
             };
             is_first_sync = false;
 
-            if let Some(sync_node) = resp.get_optional_child("sync") {
+            if let Some(sync_node) = resp_node.get_optional_child("sync") {
                 if let Some(collection_node) = sync_node.get_optional_child("collection") {
                     let mut attrs = collection_node.attrs();
-                    version = attrs.optional_u64("version").unwrap_or(version);
                     has_more = attrs.optional_bool("has_more_patches");
 
-                    // TODO: This is where you would decode and apply the patches.
-                    // For now, we just log that we received them.
-                    let patch_count = collection_node
-                        .get_optional_child("patches")
-                        .map_or(0, |n| n.children().map_or(0, |c| c.len()));
-                    let has_snapshot = collection_node.get_optional_child("snapshot").is_some();
+                    let mut patches = Vec::new();
+                    if let Some(patches_node) = collection_node.get_optional_child("patches") {
+                        for patch_child in patches_node.children().unwrap_or_default() {
+                            if let Some(crate::binary::node::NodeContent::Bytes(b)) =
+                                &patch_child.content
+                            {
+                                if let Ok(patch) = wa::SyncdPatch::decode(b.as_slice()) {
+                                    patches.push(patch);
+                                }
+                            }
+                        }
+                    }
 
-                    info!(
-                        target: "Client/AppState",
-                        "Received sync for '{}': version={}, has_more={}, snapshot={}, patches={}",
-                        name, version, has_more, has_snapshot, patch_count
-                    );
+                    let snapshot = None;
+                    // TODO: Implement snapshot downloading from external blob reference
+                    // For now, this part is skipped.
+
+                    let patch_list = PatchList {
+                        name: name.to_string(),
+                        has_more_patches: has_more,
+                        patches,
+                        snapshot,
+                    };
+
+                    match processor
+                        .decode_patches(&patch_list, current_state.clone())
+                        .await
+                    {
+                        Ok((mutations, new_state)) => {
+                            current_state = new_state;
+                            info!(
+                                target: "Client/AppState",
+                                "Decoded {} mutations for '{}'. New version: {}",
+                                mutations.len(), name, current_state.version
+                            );
+                            // TODO: Dispatch these mutations as events
+                        }
+                        Err(e) => {
+                            error!("Failed to decode patches for {}: {:?}", name, e);
+                            has_more = false; // Stop on error
+                        }
+                    }
                 } else {
                     warn!(target: "Client/AppState", "Sync response for '{}' missing <collection> node", name);
                     has_more = false;
@@ -627,17 +688,15 @@ impl Client {
     }
 
     // --- Signal E2EE: Handle incoming encrypted message ---
-    pub async fn handle_encrypted_message(&self, node: Node) {
-        // 1. Parse message info (dummy for now)
+    pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
         let info = match self.parse_message_info(node.clone()).await {
             Ok(info) => info,
             Err(e) => {
-                warn!("Failed to parse message info: {:?}", e);
+                log::warn!("Failed to parse message info: {:?}", e);
                 return;
             }
         };
 
-        // 2. Find the encrypted payload
         let enc_node = match node.get_optional_child("enc") {
             Some(node) => node,
             None => {
@@ -646,7 +705,6 @@ impl Client {
             }
         };
 
-        let enc_type = enc_node.attrs().string("type");
         let ciphertext = match &enc_node.content {
             Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
             _ => {
@@ -655,51 +713,59 @@ impl Client {
             }
         };
 
-        // 3. Decrypt
-        if enc_type == "pkmsg" || enc_type == "msg" {
-            // This is a 1-on-1 message
-            let signal_address = SignalAddress::new(
-                info.source.sender.user.clone(),
-                info.source.sender.device as u32,
-            );
-            let store_guard = self.store.read().await;
-            let device = Arc::new((*store_guard).clone());
-            let cipher = SessionCipher::new(device.clone(), signal_address);
+        let signal_address = SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+        let store_guard = self.store.read().await;
+        let device_arc = Arc::new((*store_guard).clone());
+        let cipher = SessionCipher::new(device_arc.clone(), signal_address);
 
-            match cipher.decrypt(&ciphertext).await {
-                Ok(plaintext) => {
-                    info!(
-                        "Successfully decrypted {} message from {}: {} bytes of plaintext",
-                        enc_type,
-                        info.source.sender,
-                        plaintext.len()
-                    );
-                    // TODO: Unmarshal plaintext into wa::Message and dispatch event
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to decrypt {} message from {}: {:?}",
-                        enc_type, info.source.sender, e
-                    );
+        match cipher.decrypt(&ciphertext).await {
+            Ok(plaintext) => {
+                log::info!(
+                    "Successfully decrypted message from {}: {} bytes of plaintext",
+                    info.source.sender,
+                    plaintext.len()
+                );
+
+                // Now, check if this plaintext contains the AppStateSyncKeyShare
+                if let Ok(msg) = wa::Message::decode(&*plaintext) {
+                    if let Some(protocol_message) = msg.protocol_message.as_ref() {
+                        if let Some(key_share) = protocol_message.app_state_sync_key_share.as_ref()
+                        {
+                            log::info!(
+                                "Found AppStateSyncKeyShare with {} keys. Storing them now.",
+                                key_share.keys.len()
+                            );
+                            self.handle_app_state_sync_key_share(key_share).await;
+                            // After storing keys, re-trigger the syncs
+                            let self_clone = self.clone();
+                            tokio::spawn(async move {
+                                self_clone.app_state_sync("critical_block", false).await;
+                                self_clone
+                                    .app_state_sync("critical_unblock_low", false)
+                                    .await;
+                                self_clone.app_state_sync("regular", false).await;
+                            });
+                        }
+                    } else {
+                        // It's a regular message, dispatch it!
+                        if let Some(conversation) = msg.conversation {
+                            log::info!("Received message: {}", conversation);
+                        }
+                    }
+                } else {
+                    log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");
                 }
             }
-            info!(
-                "Would decrypt {} message from {}",
-                enc_type, info.source.sender
-            );
-            // let signal_message = signal::protocol::SignalMessage::deserialize(&ciphertext).unwrap();
-            // let plaintext = cipher.decrypt(&signal_message).await;
-            // match plaintext {
-            //     Ok(pt) => {
-            //         let mut msg = wa::Message::decode(&*pt).unwrap();
-            //         self.dispatch_event(Event::Message(events::Message { info, message: Box::new(msg), ... })).await;
-            //     }
-            //     Err(e) => {
-            //         error!("Failed to decrypt message from {}: {:?}", info.source.sender, e);
-            //     }
-            // }
-        } else if enc_type == "skmsg" {
-            info!("Group message decryption (skmsg) is not yet implemented.");
+            Err(e) => {
+                log::error!(
+                    "Failed to decrypt message from {}: {:?}",
+                    info.source.sender,
+                    e
+                );
+            }
         }
     }
 
@@ -795,24 +861,77 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_ib(&self, node: &Node) {
+    async fn handle_ib(self: Arc<Self>, node: &Node) {
         for child in node.children().unwrap_or_default() {
             match child.tag.as_str() {
                 "dirty" => {
                     let mut attrs = child.attrs();
                     let dirty_type = attrs.string("type");
-                    info!(
-                        target: "Client",
-                        "Received dirty state notification for type: '{}'. App State Sync needed.",
-                        dirty_type
-                    );
-                    // TODO: Trigger an App State Sync for the given type.
+                    if dirty_type == "account_sync" {
+                        info!(
+                            target: "Client",
+                            "Received 'account_sync' dirty state notification. Triggering sync for all app state categories."
+                        );
+                        let client_clone = self.clone();
+                        tokio::spawn(async move {
+                            for name in ALL_PATCH_NAMES {
+                                client_clone.app_state_sync(name, false).await;
+                            }
+                        });
+                    } else {
+                        info!(
+                            target: "Client",
+                            "Received dirty state notification for type: '{}'. Triggering App State Sync.",
+                            dirty_type
+                        );
+                        let client_clone = self.clone();
+                        tokio::spawn(async move {
+                            client_clone.app_state_sync(&dirty_type, false).await;
+                        });
+                    }
                 }
                 "edge_routing" => {
                     info!(target: "Client", "Received edge routing info, ignoring for now.");
                 }
                 _ => {
                     warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
+                }
+            }
+        }
+    }
+    /// Store AppStateSyncKey(s) received from a protocol message.
+    pub async fn handle_app_state_sync_key_share(&self, keys: &AppStateSyncKeyShare) {
+        let key_store = self.store.read().await.app_state_keys.clone();
+        for key in &keys.keys {
+            if let Some(key_id_proto) = &key.key_id {
+                if let Some(key_id) = &key_id_proto.key_id {
+                    if let Some(key_data) = &key.key_data {
+                        if let Some(fingerprint) = &key_data.fingerprint {
+                            if let Some(data) = &key_data.key_data {
+                                let fingerprint_bytes = fingerprint.encode_to_vec();
+                                let new_key = store::traits::AppStateSyncKey {
+                                    key_data: data.clone(),
+                                    fingerprint: fingerprint_bytes,
+                                    timestamp: key_data.timestamp(),
+                                };
+
+                                if let Err(e) =
+                                    key_store.set_app_state_sync_key(key_id, new_key).await
+                                {
+                                    error!(
+                                        "Failed to store app state sync key {:?}: {:?}",
+                                        hex::encode(key_id),
+                                        e
+                                    );
+                                } else {
+                                    info!(
+                                        "Stored new app state sync key with ID {:?}",
+                                        hex::encode(key_id)
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 use super::ecc::curve;
 use super::ecc::key_pair::EcKeyPair;
-use super::ecc::keys::EcPublicKey;
+use super::ecc::keys::{EcPrivateKey, EcPublicKey};
 use super::identity::{IdentityKey, IdentityKeyPair};
 use super::kdf;
 use super::root_key::{RootKey, SessionKeyPair};
@@ -13,7 +13,7 @@ pub fn calculate_sender_session(
     their_identity_key: &IdentityKey,
     their_signed_pre_key: Arc<dyn EcPublicKey>,
     their_one_time_pre_key: Option<Arc<dyn EcPublicKey>>,
-) -> Result<SessionKeyPair, Box<dyn std::error::Error>> {
+) -> Result<SessionKeyPair, Box<dyn std::error::Error + Send + Sync>> {
     let mut master_secret = vec![0xFF; 32];
 
     // DH1: our identity key & their signed pre-key
@@ -63,7 +63,7 @@ pub fn calculate_receiver_session(
     our_one_time_pre_key: Option<&EcKeyPair>,
     their_identity_key: &IdentityKey,
     their_base_key: Arc<dyn EcPublicKey>,
-) -> Result<SessionKeyPair, Box<dyn std::error::Error>> {
+) -> Result<SessionKeyPair, Box<dyn std::error::Error + Send + Sync>> {
     let mut master_secret = vec![0xFF; 32];
 
     // DH1: our signed pre-key & their identity key

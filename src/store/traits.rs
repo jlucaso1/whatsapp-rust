@@ -1,6 +1,12 @@
-// src/store/traits.rs
 use crate::store::error::Result;
 use async_trait::async_trait;
+
+#[derive(Debug, Clone)]
+pub struct AppStateSyncKey {
+    pub key_data: Vec<u8>,
+    pub fingerprint: Vec<u8>,
+    pub timestamp: i64,
+}
 
 #[async_trait]
 pub trait IdentityStore: Send + Sync {
@@ -19,9 +25,30 @@ pub trait SessionStore: Send + Sync {
     // TODO: Add other methods like delete_all_sessions, migrate_pn_to_lid
 }
 
+#[async_trait]
+pub trait AppStateStore: Send + Sync {
+    async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState>;
+    async fn set_app_state_version(
+        &self,
+        name: &str,
+        state: crate::appstate::hash::HashState,
+    ) -> Result<()>;
+}
+
+#[async_trait]
+pub trait AppStateKeyStore: Send + Sync {
+    async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>>;
+    async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
+}
+
 // TODO: Define PreKeyStore, SenderKeyStore, ContactStore, etc.
 
 pub trait AllStores:
-    IdentityStore + SessionStore /* + PreKeyStore + SenderKeyStore + ... */ + Send + Sync
+    IdentityStore + SessionStore + AppStateStore + AppStateKeyStore + Send + Sync
+{
+}
+
+impl<T: IdentityStore + SessionStore + AppStateStore + AppStateKeyStore + Send + Sync> AllStores
+    for T
 {
 }

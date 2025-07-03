@@ -1,7 +1,6 @@
 use super::key_pair::EcKeyPair;
 use super::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPrivateKey, EcPublicKey, DJB_TYPE};
 use rand::rngs::OsRng;
-use std::sync::Arc;
 use thiserror::Error;
 use x25519_dalek::{x25519, PublicKey, StaticSecret};
 use xeddsa::xed25519::{PrivateKey, PublicKey as XeddsaPublicKey};
@@ -18,13 +17,13 @@ pub fn generate_key_pair() -> EcKeyPair {
     let private = StaticSecret::random_from_rng(&mut OsRng);
     let public = PublicKey::from(&private);
     EcKeyPair::new(
-        Arc::new(DjbEcPublicKey::new(*public.as_bytes())),
-        Arc::new(DjbEcPrivateKey::new(private.to_bytes())),
+        DjbEcPublicKey::new(*public.as_bytes()),
+        DjbEcPrivateKey::new(private.to_bytes()),
     )
 }
 
 // Corresponds to DecodePoint()
-pub fn decode_point(bytes: &[u8]) -> Result<Arc<dyn EcPublicKey>, CurveError> {
+pub fn decode_point(bytes: &[u8]) -> Result<DjbEcPublicKey, CurveError> {
     if bytes.is_empty() {
         return Err(CurveError::BadKeyType(0));
     }
@@ -35,11 +34,11 @@ pub fn decode_point(bytes: &[u8]) -> Result<Arc<dyn EcPublicKey>, CurveError> {
     let key_bytes: [u8; 32] = bytes[1..]
         .try_into()
         .map_err(|_| CurveError::BadKeyType(key_type))?;
-    Ok(Arc::new(DjbEcPublicKey::new(key_bytes)))
+    Ok(DjbEcPublicKey::new(key_bytes))
 }
 
 // Corresponds to CalculateSignature()
-pub fn calculate_signature(signing_key: Arc<dyn EcPrivateKey>, message: &[u8]) -> [u8; 64] {
+pub fn calculate_signature(signing_key: DjbEcPrivateKey, message: &[u8]) -> [u8; 64] {
     let private_key_bytes = signing_key.serialize();
     let priv_key = PrivateKey(private_key_bytes);
     let mut rng = OsRng;
@@ -47,11 +46,7 @@ pub fn calculate_signature(signing_key: Arc<dyn EcPrivateKey>, message: &[u8]) -
 }
 
 // Corresponds to VerifySignature()
-pub fn verify_signature(
-    signing_key: Arc<dyn EcPublicKey>,
-    message: &[u8],
-    signature: &[u8; 64],
-) -> bool {
+pub fn verify_signature(signing_key: DjbEcPublicKey, message: &[u8], signature: &[u8; 64]) -> bool {
     let public_key_bytes = signing_key.public_key();
     let pub_key = XeddsaPublicKey(public_key_bytes);
     pub_key.verify(message, signature).is_ok()

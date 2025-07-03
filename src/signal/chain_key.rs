@@ -6,8 +6,9 @@ use sha2::Sha256;
 const MESSAGE_KEY_SEED: &[u8] = &[0x01];
 const CHAIN_KEY_SEED: &[u8] = &[0x02];
 
+use serde::{Deserialize, Serialize};
 // Corresponds to keys/chain/ChainKey.go
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChainKey {
     key: [u8; 32],
     index: u32,

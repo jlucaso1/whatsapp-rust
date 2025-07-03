@@ -1,8 +1,9 @@
 pub const DERIVED_SECRETS_SIZE: usize = 80;
 pub const KDF_SALT: &str = "WhisperMessageKeys";
 
+use serde::{Deserialize, Serialize};
 // Corresponds to keys/message/MessageKey.go
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MessageKeys {
     cipher_key: Vec<u8>,
     mac_key: Vec<u8>,

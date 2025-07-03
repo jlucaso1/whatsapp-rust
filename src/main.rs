@@ -15,7 +15,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let store_backend = Arc::new(MemoryStore::new());
 
     info!("Initializing a new device with the store...");
-    let store = store::Device::new(store_backend.clone(), store_backend.clone());
+    let store = store::Device::new(
+        store_backend.clone(),
+        store_backend.clone(),
+        store_backend.clone(),
+        store_backend.clone(),
+        store_backend.clone(),
+        store_backend.clone(),
+    );
 
     info!("Creating client...");
     let client = Arc::new(Client::new(store));

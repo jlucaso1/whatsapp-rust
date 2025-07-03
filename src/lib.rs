@@ -1,3 +1,4 @@
+pub mod appstate;
 pub mod binary;
 pub mod client;
 pub mod crypto;

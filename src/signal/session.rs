@@ -62,7 +62,8 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                     local_reg_id,
                     pending.pre_key_id,
                     pending.signed_pre_key_id,
-                    pending.base_key.clone(),
+                    Arc::new(pending.base_key.clone())
+                        as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
                     session_state.local_identity_public().as_ref().clone(),
                     signal_message,
                 )?)
@@ -210,33 +211,48 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             .store
             .load_session(&self.remote_address)
             .await
-            .map_err(|e| DecryptionError::Store(e))?;
+            .map_err(|e| DecryptionError::Store(e.into()))?;
 
-        // Try to decrypt with the current state.
-        if let Ok(plaintext) = self
-            .try_decrypt_with_state(session_record.session_state_mut(), ciphertext_bytes)
-            .await
-        {
-            self.store
-                .store_session(&self.remote_address, &session_record)
+        // First, try to parse the message as a PreKeySignalMessage
+        if let Ok(prekey_msg) = PreKeySignalMessage::deserialize(ciphertext_bytes) {
+            let builder = super::session::SessionBuilder::new(
+                self.store.clone(),
+                self.remote_address.clone(),
+            );
+            let _unsigned_prekey_id = builder
+                .process_prekey_message(&prekey_msg)
                 .await
-                .map_err(|e| DecryptionError::Store(e))?;
-            return Ok(plaintext);
+                .map_err(|e| DecryptionError::Store(e.into()))?;
+            // Now decrypt the inner SignalMessage
+            return self
+                .decrypt_with_state(session_record.session_state_mut(), &prekey_msg.message)
+                .await;
         }
 
-        // If that fails, try with previous states.
-        for i in 0..session_record.previous_states().len() {
-            let mut state_clone = session_record.previous_states()[i].clone();
+        // If not a pkmsg, try as a regular SignalMessage
+        if let Ok(msg) = SignalMessage::deserialize(ciphertext_bytes) {
             if let Ok(plaintext) = self
-                .try_decrypt_with_state(&mut state_clone, ciphertext_bytes)
+                .try_decrypt_with_state(session_record.session_state_mut(), &msg)
                 .await
             {
-                session_record.promote_state(i);
                 self.store
                     .store_session(&self.remote_address, &session_record)
                     .await
-                    .map_err(DecryptionError::Store)?;
+                    .map_err(|e| DecryptionError::Store(e))?;
                 return Ok(plaintext);
+            }
+
+            // Try previous states
+            for i in 0..session_record.previous_states().len() {
+                let mut state_clone = session_record.previous_states()[i].clone();
+                if let Ok(plaintext) = self.try_decrypt_with_state(&mut state_clone, &msg).await {
+                    session_record.promote_state(i);
+                    self.store
+                        .store_session(&self.remote_address, &session_record)
+                        .await
+                        .map_err(DecryptionError::Store)?;
+                    return Ok(plaintext);
+                }
             }
         }
 
@@ -246,35 +262,9 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     async fn try_decrypt_with_state(
         &self,
         session_state: &mut SessionState,
-        ciphertext_bytes: &[u8],
+        ciphertext: &SignalMessage,
     ) -> Result<Vec<u8>, DecryptionError> {
-        // Try as SignalMessage
-        if let Ok(msg) = SignalMessage::deserialize(ciphertext_bytes) {
-            return self.decrypt_with_state(session_state, &msg).await;
-        }
-        // Try as PreKeySignalMessage
-        if let Ok(prekey_msg) = PreKeySignalMessage::deserialize(ciphertext_bytes) {
-            let builder = super::session::SessionBuilder::new(
-                self.store.clone(),
-                self.remote_address.clone(),
-            );
-            builder
-                .process_prekey_message(&prekey_msg)
-                .await
-                .map_err(|e| {
-                    let s = format!("{:?}", e);
-                    DecryptionError::Store(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        s,
-                    )))
-                })?;
-            return self
-                .decrypt_with_state(session_state, &prekey_msg.message)
-                .await;
-        }
-        Err(DecryptionError::Protocol(ProtocolError::Proto(
-            prost::DecodeError::new("Could not decode as SignalMessage or PreKeySignalMessage"),
-        )))
+        self.decrypt_with_state(session_state, ciphertext).await
     }
 
     async fn decrypt_with_state(
@@ -318,13 +308,13 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
     pub async fn process_prekey_message(
         &self,
         message: &PreKeySignalMessage,
-    ) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
         let their_identity_key = &message.identity_key;
         if !self
             .store
             .is_trusted_identity(&self.remote_address, their_identity_key)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?
         {
             return Err("Untrusted identity key".into());
         }
@@ -333,12 +323,12 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .store
             .get_identity_key_pair()
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
         let our_signed_prekey = self
             .store
             .load_signed_prekey(message.signed_pre_key_id)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?
             .ok_or("Signed pre-key not found in store")?;
 
         let mut our_one_time_prekey: Option<PreKeyRecord> = None;
@@ -347,7 +337,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
                 .store
                 .load_prekey(id)
                 .await
-                .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
         }
 
         let session_key_pair = super::ratchet::calculate_receiver_session(
@@ -362,15 +352,15 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .store
             .load_session(&self.remote_address)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
         if session_record.is_fresh() {
             session_record.archive_current_state();
         }
 
         let state = session_record.session_state_mut();
         state.set_session_version(3);
-        state.set_remote_identity_key(Arc::new(their_identity_key.clone()));
-        state.set_local_identity_key(Arc::new(our_identity.public_key));
+        state.set_remote_identity_key(their_identity_key.clone());
+        state.set_local_identity_key(our_identity.public_key.clone());
         state.set_sender_chain(
             our_signed_prekey.key_pair().clone(),
             session_key_pair.chain_key,
@@ -380,11 +370,11 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         self.store
             .store_session(&self.remote_address, &session_record)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
         self.store
             .save_identity(&self.remote_address, their_identity_key)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
 
         Ok(message.pre_key_id)
     }

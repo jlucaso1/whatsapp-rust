@@ -59,7 +59,7 @@ pub fn signal_message_deserialize_and_verify(
     let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
 
     Ok(SignalMessage {
-        sender_ratchet_key: ratchet_key,
+        sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
         counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
         previous_counter: proto.previous_counter.unwrap_or(0),
         ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
@@ -139,7 +139,7 @@ impl SignalMessage {
         let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
         let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
         Ok(SignalMessage {
-            sender_ratchet_key: ratchet_key,
+            sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
             previous_counter: proto.previous_counter.unwrap_or(0),
             ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
@@ -206,7 +206,7 @@ impl SignalMessage {
             .map_err(ProtocolError::InvalidKey)?;
 
         Ok(Self {
-            sender_ratchet_key: ratchet_key,
+            sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
             previous_counter: proto.previous_counter.unwrap_or(0),
             ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
@@ -305,7 +305,7 @@ impl PreKeySignalMessage {
             registration_id,
             pre_key_id,
             signed_pre_key_id,
-            base_key,
+            base_key: Arc::new(base_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             identity_key,
             message,
             serialized_form: serialized.to_vec(),

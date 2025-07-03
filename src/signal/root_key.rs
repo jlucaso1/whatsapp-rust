@@ -15,8 +15,9 @@ pub enum RootKeyError {
     Kdf(#[from] kdf::KdfError),
 }
 
+use serde::{Deserialize, Serialize};
 // Corresponds to keys/root/RootKey.go
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RootKey {
     key: [u8; 32],
 }
@@ -48,7 +49,8 @@ impl RootKey {
         our_ratchet_key: &EcKeyPair,
     ) -> Result<SessionKeyPair, RootKeyError> {
         let their_public_key = their_ratchet_key.public_key();
-        let our_private_key = our_ratchet_key.private_key.serialize();
+        let our_private_key =
+            crate::signal::ecc::keys::EcPrivateKey::serialize(&our_ratchet_key.private_key);
 
         let shared_secret = calculate_shared_secret(our_private_key, their_public_key);
 

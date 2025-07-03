@@ -1,9 +1,11 @@
 use super::session_state::SessionState;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 const MAX_ARCHIVED_STATES: usize = 40;
 
 // Corresponds to state/record/SessionRecord.go
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SessionRecord {
     session_state: SessionState,
     previous_states: VecDeque<SessionState>,

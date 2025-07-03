@@ -8,7 +8,6 @@ use crate::signal::state::signed_prekey_record::SignedPreKeyRecord;
 use crate::signal::store::*;
 use crate::store::Device;
 use async_trait::async_trait;
-use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -21,14 +20,10 @@ impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(
         &self,
     ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        let public = IdentityKey::new(Arc::new(ecc::keys::DjbEcPublicKey::new(
-            self.identity_key.public_key,
-        )));
+        let public = IdentityKey::new(ecc::keys::DjbEcPublicKey::new(self.identity_key.public_key));
         let private = ecc::key_pair::EcKeyPair::new(
-            Arc::new(ecc::keys::DjbEcPublicKey::new(self.identity_key.public_key)),
-            Arc::new(ecc::keys::DjbEcPrivateKey::new(
-                self.identity_key.private_key,
-            )),
+            ecc::keys::DjbEcPublicKey::new(self.identity_key.public_key),
+            ecc::keys::DjbEcPrivateKey::new(self.identity_key.private_key),
         );
         Ok(IdentityKeyPair::new(public, private))
     }
@@ -45,7 +40,7 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.identities
-            .put_identity(&address.to_string(), identity_key.public_key().public_key())
+            .put_identity(&address.to_string(), identity_key.public_key().public_key)
             .await
             .map_err(|e| e.into())
     }
@@ -65,30 +60,28 @@ impl IdentityKeyStore for Device {
 impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
-        _prekey_id: u32,
+        prekey_id: u32,
     ) -> Result<Option<PreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: This requires adding PreKey storage to your `store::traits` and `MemoryStore`.
-        // For now, we return None.
-        Ok(None)
+        self.pre_keys.load_prekey(prekey_id).await
     }
     async fn store_prekey(
         &self,
-        _prekey_id: u32,
-        _record: PreKeyRecord,
+        prekey_id: u32,
+        record: PreKeyRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
+        self.pre_keys.store_prekey(prekey_id, record).await
     }
     async fn contains_prekey(
         &self,
-        _prekey_id: u32,
+        prekey_id: u32,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(false)
+        self.pre_keys.contains_prekey(prekey_id).await
     }
     async fn remove_prekey(
         &self,
-        _prekey_id: u32,
+        prekey_id: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
+        self.pre_keys.remove_prekey(prekey_id).await
     }
 }
 
@@ -99,48 +92,39 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
-        if self.signed_pre_key.key_id == signed_prekey_id {
-            let key_pair = ecc::key_pair::EcKeyPair::new(
-                Arc::new(ecc::keys::DjbEcPublicKey::new(
-                    self.signed_pre_key.key_pair.public_key,
-                )),
-                Arc::new(ecc::keys::DjbEcPrivateKey::new(
-                    self.signed_pre_key.key_pair.private_key,
-                )),
-            );
-            let record = SignedPreKeyRecord::new(
-                signed_prekey_id,
-                key_pair,
-                self.signed_pre_key.signature.unwrap(),
-                chrono::Utc::now(),
-            );
-            return Ok(Some(record));
-        }
-        Ok(None)
+        self.signed_pre_keys
+            .load_signed_prekey(signed_prekey_id)
+            .await
     }
     async fn load_signed_prekeys(
         &self,
     ) -> Result<Vec<SignedPreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(vec![])
+        self.signed_pre_keys.load_signed_prekeys().await
     }
     async fn store_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
-        _record: SignedPreKeyRecord,
+        signed_prekey_id: u32,
+        record: SignedPreKeyRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
+        self.signed_pre_keys
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
     }
     async fn contains_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
+        signed_prekey_id: u32,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(false)
+        self.signed_pre_keys
+            .contains_signed_prekey(signed_prekey_id)
+            .await
     }
     async fn remove_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
+        signed_prekey_id: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
+        self.signed_pre_keys
+            .remove_signed_prekey(signed_prekey_id)
+            .await
     }
 }
 
@@ -149,20 +133,27 @@ impl SignedPreKeyStore for Device {
 impl SessionStore for Device {
     async fn load_session(
         &self,
-        _address: &SignalAddress,
+        address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        // This is where you'd deserialize from your main session store.
-        // For now, we return a new, empty record.
-        Ok(SessionRecord::new())
+        if let Some(data) = self.sessions.get_session(&address.to_string()).await? {
+            // TODO: Deserialize SessionRecord from data
+            Ok(SessionRecord::new()) // Placeholder
+        } else {
+            Ok(SessionRecord::new())
+        }
     }
 
     async fn store_session(
         &self,
-        _address: &SignalAddress,
-        _record: &SessionRecord,
+        address: &SignalAddress,
+        record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // This is where you'd serialize the record and save it.
-        Ok(())
+        // TODO: Serialize SessionRecord to Vec<u8>
+        let data = vec![]; // Placeholder
+        self.sessions
+            .put_session(&address.to_string(), &data)
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn get_sub_device_sessions(
@@ -173,15 +164,21 @@ impl SessionStore for Device {
     }
     async fn contains_session(
         &self,
-        _address: &SignalAddress,
+        address: &SignalAddress,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(true)
-    } // Assume true for now
+        self.sessions
+            .has_session(&address.to_string())
+            .await
+            .map_err(|e| e.into())
+    }
     async fn delete_session(
         &self,
-        _address: &SignalAddress,
+        address: &SignalAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
+        self.sessions
+            .delete_session(&address.to_string())
+            .await
+            .map_err(|e| e.into())
     }
     async fn delete_all_sessions(
         &self,

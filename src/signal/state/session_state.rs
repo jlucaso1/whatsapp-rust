@@ -4,23 +4,26 @@ use crate::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPublicKey};
 use crate::signal::identity::IdentityKey;
 use crate::signal::message_key::MessageKeys;
 use crate::signal::root_key::RootKey;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 const MAX_MESSAGE_KEYS: usize = 2000;
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Chain {
     pub sender_ratchet_key_pair: EcKeyPair,
     pub chain_key: ChainKey,
     pub message_keys: VecDeque<MessageKeys>,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SessionState {
     session_version: u32,
-    local_identity_public: Arc<IdentityKey>,
-    remote_identity_public: Arc<IdentityKey>,
+    // TODO: Arc<IdentityKey> is not serializable by default.
+    // For now, replace with IdentityKey directly for serialization.
+    local_identity_public: IdentityKey,
+    remote_identity_public: IdentityKey,
     root_key: RootKey,
     previous_counter: u32,
     sender_chain: Option<Chain>,
@@ -61,11 +64,11 @@ impl Chain {
     }
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PendingPreKey {
     pub pre_key_id: Option<u32>,
     pub signed_pre_key_id: u32,
-    pub base_key: Arc<dyn EcPublicKey>,
+    pub base_key: DjbEcPublicKey,
 }
 
 pub struct PendingKeyExchange {
@@ -76,12 +79,8 @@ impl SessionState {
     pub fn new() -> Self {
         Self {
             session_version: 3,
-            local_identity_public: Arc::new(IdentityKey::new(Arc::new(DjbEcPublicKey::new(
-                [0; 32],
-            )))),
-            remote_identity_public: Arc::new(IdentityKey::new(Arc::new(DjbEcPublicKey::new(
-                [0; 32],
-            )))),
+            local_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
+            remote_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
             root_key: RootKey::new([0; 32]),
             previous_counter: 0,
             sender_chain: None,
@@ -119,10 +118,12 @@ impl SessionState {
     }
 
     pub fn sender_ratchet_key(&self) -> Arc<dyn EcPublicKey> {
-        self.sender_chain()
-            .sender_ratchet_key_pair
-            .public_key
-            .clone()
+        Arc::new(
+            self.sender_chain()
+                .sender_ratchet_key_pair
+                .public_key
+                .clone(),
+        )
     }
 
     pub fn previous_counter(&self) -> u32 {
@@ -130,18 +131,18 @@ impl SessionState {
     }
 
     pub fn local_identity_public(&self) -> Arc<IdentityKey> {
-        self.local_identity_public.clone()
+        Arc::new(self.local_identity_public.clone())
     }
 
     pub fn remote_identity_public(&self) -> Arc<IdentityKey> {
-        self.remote_identity_public.clone()
+        Arc::new(self.remote_identity_public.clone())
     }
 
     pub fn set_unacknowledged_prekey_message(
         &mut self,
         pre_key_id: Option<u32>,
         signed_pre_key_id: u32,
-        base_key: Arc<dyn EcPublicKey>,
+        base_key: DjbEcPublicKey,
     ) {
         self.pending_pre_key = Some(PendingPreKey {
             pre_key_id,
@@ -158,11 +159,11 @@ impl SessionState {
         self.session_version = version;
     }
 
-    pub fn set_remote_identity_key(&mut self, identity_key: Arc<IdentityKey>) {
+    pub fn set_remote_identity_key(&mut self, identity_key: IdentityKey) {
         self.remote_identity_public = identity_key;
     }
 
-    pub fn set_local_identity_key(&mut self, identity_key: Arc<IdentityKey>) {
+    pub fn set_local_identity_key(&mut self, identity_key: IdentityKey) {
         self.local_identity_public = identity_key;
     }
 
@@ -179,11 +180,14 @@ impl SessionState {
         their_ephemeral: Arc<dyn EcPublicKey>,
         chain_key: ChainKey,
     ) {
+        // Downcast their_ephemeral to DjbEcPublicKey if possible
+        let public_key = their_ephemeral
+            .as_any()
+            .downcast_ref::<crate::signal::ecc::keys::DjbEcPublicKey>()
+            .expect("Expected DjbEcPublicKey")
+            .clone();
         let chain = Chain::new(
-            EcKeyPair::new(
-                their_ephemeral.clone(),
-                Arc::new(DjbEcPrivateKey::new([0; 32])),
-            ),
+            EcKeyPair::new(public_key, DjbEcPrivateKey::new([0; 32])),
             chain_key,
         );
         self.receiver_chains

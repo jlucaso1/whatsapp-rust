@@ -28,7 +28,10 @@ pub struct Device {
     // Abstracted storage via trait objects
     pub identities: Arc<dyn IdentityStore>,
     pub sessions: Arc<dyn SessionStore>,
-    // Add other store traits here as needed
+    pub app_state_store: Arc<dyn AppStateStore>,
+    pub app_state_keys: Arc<dyn AppStateKeyStore>,
+    pub pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
+    pub signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
 }
 
 impl Device {
@@ -36,7 +39,10 @@ impl Device {
     pub fn new(
         identities: Arc<dyn IdentityStore>,
         sessions: Arc<dyn SessionStore>,
-        // Add other Arc<dyn Store> parameters as needed
+        app_state_store: Arc<dyn AppStateStore>,
+        app_state_keys: Arc<dyn AppStateKeyStore>,
+        pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
+        signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
     ) -> Self {
         let identity_key = KeyPair::new();
         let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
@@ -52,7 +58,10 @@ impl Device {
             adv_secret_key,
             identities,
             sessions,
-            // ... assign other stores ...
+            app_state_store,
+            app_state_keys,
+            pre_keys,
+            signed_pre_keys,
         }
     }
 

@@ -1,15 +1,15 @@
-use super::keys::{EcPrivateKey, EcPublicKey};
-use std::sync::Arc;
+use super::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+use serde::{Deserialize, Serialize};
 
-// Corresponds to ECKeyPair
-#[derive(Clone)]
+// Refactored to use concrete key types for serialization
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EcKeyPair {
-    pub public_key: Arc<dyn EcPublicKey>,
-    pub private_key: Arc<dyn EcPrivateKey>,
+    pub public_key: DjbEcPublicKey,
+    pub private_key: DjbEcPrivateKey,
 }
 
 impl EcKeyPair {
-    pub fn new(public_key: Arc<dyn EcPublicKey>, private_key: Arc<dyn EcPrivateKey>) -> Self {
+    pub fn new(public_key: DjbEcPublicKey, private_key: DjbEcPrivateKey) -> Self {
         Self {
             public_key,
             private_key,
