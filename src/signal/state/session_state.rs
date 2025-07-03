@@ -1,4 +1,3 @@
-// src/signal/state/session_state.rs
 use crate::signal::chain_key::ChainKey;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::DjbEcPublicKey;
@@ -72,8 +71,42 @@ impl SessionState {
         }
     }
 
-    // We will add many methods here later, like:
-    // - set_sender_chain
-    // - add_receiver_chain
-    // - sender_chain_key, etc.
+    // --- Begin port stubs for SessionCipher integration ---
+
+    pub fn sender_chain_key(&self) -> &ChainKey {
+        self.sender_chain
+            .as_ref()
+            .map(|chain| &chain.chain_key)
+            .expect("sender_chain not set")
+    }
+
+    pub fn set_sender_chain_key(&mut self, new_chain_key: ChainKey) {
+        if let Some(chain) = self.sender_chain.as_mut() {
+            chain.chain_key = new_chain_key;
+        } else {
+            panic!("sender_chain not set");
+        }
+    }
+
+    pub fn sender_ratchet_key(&self) -> Arc<dyn EcPublicKey> {
+        self.sender_chain
+            .as_ref()
+            .map(|chain| chain.sender_ratchet_key_pair.public_key.clone())
+            .expect("sender_chain not set")
+    }
+
+    pub fn previous_counter(&self) -> u32 {
+        self.previous_counter
+    }
+
+    pub fn has_unacknowledged_prekey_message(&self) -> bool {
+        false // stub: implement logic as needed
+    }
+
+    // --- End port stubs ---
 }
+
+// We will add many methods here later, like:
+// - set_sender_chain
+// - add_receiver_chain
+// - sender_chain_key, etc.
