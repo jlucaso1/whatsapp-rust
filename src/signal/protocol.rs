@@ -5,6 +5,67 @@ use hmac::{Hmac, Mac};
 use prost::Message;
 use sha2::Sha256;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    #[error("bad MAC")]
+    BadMac,
+    #[error("invalid message version: {0}")]
+    InvalidVersion(u8),
+    #[error("incomplete message")]
+    IncompleteMessage,
+    #[error("invalid proto message: {0}")]
+    Proto(#[from] prost::DecodeError),
+    #[error("invalid key: {0}")]
+    InvalidKey(#[from] super::ecc::curve::CurveError),
+}
+
+// Standalone function for deserialization and verification
+pub fn signal_message_deserialize_and_verify(
+    serialized: &[u8],
+    mac_key: &[u8],
+    sender_identity: &IdentityKey,
+    receiver_identity: &IdentityKey,
+) -> Result<SignalMessage, ProtocolError> {
+    if serialized.len() < 1 + MAC_LENGTH {
+        return Err(ProtocolError::IncompleteMessage);
+    }
+
+    let version_byte = serialized[0];
+    let message_version = version_byte >> 4;
+    if message_version != CURRENT_VERSION {
+        return Err(ProtocolError::InvalidVersion(message_version));
+    }
+
+    let serialized_proto = &serialized[1..serialized.len() - MAC_LENGTH];
+    let their_mac = &serialized[serialized.len() - MAC_LENGTH..];
+
+    let our_mac = SignalMessage::get_mac(
+        sender_identity,
+        receiver_identity,
+        mac_key,
+        &[version_byte],
+        serialized_proto,
+    );
+
+    if our_mac.ct_eq(their_mac).unwrap_u8() != 1 {
+        return Err(ProtocolError::BadMac);
+    }
+
+    let proto = protos::SignalMessage::decode(serialized_proto)?;
+    let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
+    let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
+
+    Ok(SignalMessage {
+        sender_ratchet_key: ratchet_key,
+        counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
+        previous_counter: proto.previous_counter.unwrap_or(0),
+        ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
+        serialized_form: serialized.to_vec(),
+    })
+}
 
 pub trait CiphertextMessage {
     fn serialize(&self) -> Vec<u8>;
@@ -89,6 +150,52 @@ impl SignalMessage {
     pub fn serialize(&self) -> Vec<u8> {
         self.serialized_form.clone()
     }
+
+    pub fn deserialize_and_verify(
+        serialized: &[u8],
+        mac_key: &[u8],
+        sender_identity: &IdentityKey,
+        receiver_identity: &IdentityKey,
+    ) -> Result<Self, ProtocolError> {
+        if serialized.len() < 1 + MAC_LENGTH {
+            return Err(ProtocolError::IncompleteMessage);
+        }
+
+        let version_byte = serialized[0];
+        let message_version = version_byte >> 4;
+        if message_version != CURRENT_VERSION {
+            return Err(ProtocolError::InvalidVersion(message_version));
+        }
+
+        let serialized_proto = &serialized[1..serialized.len() - MAC_LENGTH];
+        let their_mac = &serialized[serialized.len() - MAC_LENGTH..];
+
+        let our_mac = Self::get_mac(
+            sender_identity,
+            receiver_identity,
+            mac_key,
+            &[version_byte],
+            serialized_proto,
+        );
+
+        if our_mac.ct_eq(their_mac).unwrap_u8() != 1 {
+            return Err(ProtocolError::BadMac);
+        }
+
+        let proto =
+            protos::SignalMessage::decode(serialized_proto).map_err(ProtocolError::Proto)?;
+        let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
+        let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)
+            .map_err(ProtocolError::InvalidKey)?;
+
+        Ok(Self {
+            sender_ratchet_key: ratchet_key,
+            counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
+            previous_counter: proto.previous_counter.unwrap_or(0),
+            ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
+            serialized_form: serialized.to_vec(),
+        })
+    }
 }
 
 impl CiphertextMessage for SignalMessage {
@@ -100,7 +207,6 @@ impl CiphertextMessage for SignalMessage {
     }
 }
 
-// --- PreKeySignalMessage ---
 pub struct PreKeySignalMessage {
     pub registration_id: u32,
     pub pre_key_id: Option<u32>,

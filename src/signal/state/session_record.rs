@@ -1,4 +1,3 @@
-// src/signal/state/session_record.rs
 use super::session_state::SessionState;
 use std::collections::VecDeque;
 
@@ -18,6 +17,10 @@ impl SessionRecord {
         }
     }
 
+    pub fn is_fresh(&self) -> bool {
+        self.session_state.is_fresh() && self.previous_states.is_empty()
+    }
+
     pub fn session_state(&self) -> &SessionState {
         &self.session_state
     }
@@ -34,6 +37,25 @@ impl SessionRecord {
             self.previous_states.pop_front();
         }
         self.previous_states.push_back(old_state);
+    }
+
+    pub fn previous_states(&self) -> &VecDeque<SessionState> {
+        &self.previous_states
+    }
+
+    pub fn previous_states_mut(&mut self) -> &mut VecDeque<SessionState> {
+        &mut self.previous_states
+    }
+
+    pub fn promote_state(&mut self, index: usize) {
+        let promoted_state = self.previous_states.remove(index).unwrap();
+
+        let old_current_state = std::mem::replace(&mut self.session_state, promoted_state);
+
+        if self.previous_states.len() >= MAX_ARCHIVED_STATES {
+            self.previous_states.pop_back();
+        }
+        self.previous_states.push_front(old_current_state);
     }
 }
 

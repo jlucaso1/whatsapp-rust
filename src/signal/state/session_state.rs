@@ -16,6 +16,18 @@ pub struct Chain {
     pub message_keys: VecDeque<MessageKeys>,
 }
 
+#[derive(Clone)]
+pub struct SessionState {
+    session_version: u32,
+    local_identity_public: Arc<IdentityKey>,
+    remote_identity_public: Arc<IdentityKey>,
+    root_key: RootKey,
+    previous_counter: u32,
+    sender_chain: Option<Chain>,
+    receiver_chains: HashMap<[u8; 32], Chain>,
+    pub pending_pre_key: Option<PendingPreKey>,
+}
+
 impl Chain {
     pub fn new(sender_ratchet_key_pair: EcKeyPair, chain_key: ChainKey) -> Self {
         Self {
@@ -31,6 +43,22 @@ impl Chain {
         }
         self.message_keys.push_back(keys);
     }
+
+    pub fn has_message_keys(&self, counter: u32) -> bool {
+        self.message_keys.iter().any(|mk| mk.index() == counter)
+    }
+
+    pub fn remove_message_keys(&mut self, counter: u32) -> Option<MessageKeys> {
+        if let Some(pos) = self
+            .message_keys
+            .iter()
+            .position(|mk| mk.index() == counter)
+        {
+            Some(self.message_keys.remove(pos).unwrap())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -42,17 +70,6 @@ pub struct PendingPreKey {
 
 pub struct PendingKeyExchange {
     // ...
-}
-
-pub struct SessionState {
-    session_version: u32,
-    local_identity_public: Arc<IdentityKey>,
-    remote_identity_public: Arc<IdentityKey>,
-    root_key: RootKey,
-    previous_counter: u32,
-    sender_chain: Option<Chain>,
-    receiver_chains: HashMap<Vec<u8>, Chain>,
-    pub pending_pre_key: Option<PendingPreKey>,
 }
 
 impl SessionState {
@@ -73,8 +90,24 @@ impl SessionState {
         }
     }
 
+    pub fn is_fresh(&self) -> bool {
+        self.sender_chain.is_none() && self.receiver_chains.is_empty()
+    }
+
+    pub fn root_key(&self) -> &RootKey {
+        &self.root_key
+    }
+
     pub fn sender_chain(&self) -> &Chain {
         self.sender_chain.as_ref().expect("sender_chain is not set")
+    }
+
+    pub fn sender_chain_opt(&self) -> Option<&Chain> {
+        self.sender_chain.as_ref()
+    }
+
+    pub fn sender_chain_opt_mut(&mut self) -> Option<&mut Chain> {
+        self.sender_chain.as_mut()
     }
 
     pub fn sender_chain_key(&self) -> ChainKey {
@@ -154,6 +187,28 @@ impl SessionState {
             chain_key,
         );
         self.receiver_chains
-            .insert(their_ephemeral.serialize(), chain);
+            .insert(their_ephemeral.public_key(), chain); // Changed to public_key()
+    }
+
+    pub fn receiver_chains(&self) -> &HashMap<[u8; 32], Chain> {
+        &self.receiver_chains
+    }
+
+    pub fn receiver_chains_mut(&mut self) -> &mut HashMap<[u8; 32], Chain> {
+        &mut self.receiver_chains
+    }
+
+    pub fn set_receiver_chain_key(
+        &mut self,
+        sender_ephemeral: Arc<dyn EcPublicKey>,
+        chain_key: ChainKey,
+    ) {
+        if let Some(chain) = self.receiver_chains.get_mut(&sender_ephemeral.public_key()) {
+            chain.chain_key = chain_key;
+        }
+    }
+
+    pub fn sender_ratchet_key_pair(&self) -> &EcKeyPair {
+        &self.sender_chain().sender_ratchet_key_pair
     }
 }

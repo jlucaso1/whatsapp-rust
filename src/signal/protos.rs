@@ -22,10 +22,10 @@ pub struct PreKeySignalMessage {
     pub pre_key_id: Option<u32>,
     #[prost(uint32, optional, tag = "6")]
     pub signed_pre_key_id: Option<u32>,
-    #[prost(bytes="vec", optional, tag="2")]
+    #[prost(bytes = "vec", optional, tag = "2")]
     pub base_key: Option<Vec<u8>>,
-    #[prost(bytes="vec", optional, tag="3")]
+    #[prost(bytes = "vec", optional, tag = "3")]
     pub identity_key: Option<Vec<u8>>,
-    #[prost(bytes="vec", optional, tag="4")]
+    #[prost(bytes = "vec", optional, tag = "4")]
     pub message: Option<Vec<u8>>, // This will contain a serialized SignalMessage
 }

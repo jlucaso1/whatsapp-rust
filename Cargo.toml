@@ -50,6 +50,7 @@ md5 = "0.7.0"
 async-trait = "0.1.88"
 scopeguard = "1.2"
 xeddsa = "1.0.2"
+subtle = "2.6.1"
  
 [build-dependencies]
 prost-build = "0.14.1"

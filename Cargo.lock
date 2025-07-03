@@ -1831,6 +1831,7 @@ dependencies = [
  "serde_bytes",
  "serde_with",
  "sha2",
+ "subtle",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
