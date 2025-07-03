@@ -49,6 +49,7 @@ urlencoding = "2.1"
 md5 = "0.7.0"
 async-trait = "0.1.88"
 scopeguard = "1.2"
+xeddsa = "1.0.2"
  
 [build-dependencies]
 prost-build = "0.14.1"
@@ -58,4 +59,5 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
 

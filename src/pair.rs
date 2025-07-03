@@ -1,6 +1,6 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
-use crate::crypto::xed25519::xed25519::verify;
+use crate::crypto::xed25519::verify_dalek;
 use crate::proto::whatsapp as wa;
 use crate::types::events::{Event, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
@@ -311,11 +311,13 @@ async fn do_pair_crypto(
         });
     };
 
-    if !verify(
+    if verify_dalek(
         account_sig_key_bytes.try_into().unwrap(),
         &msg_to_verify,
         &signature,
-    ) {
+    )
+    .is_err()
+    {
         return Err(PairCryptoError {
             code: 401,
             text: "signature-mismatch",
@@ -330,10 +332,7 @@ async fn do_pair_crypto(
         &store.identity_key.public_key,
         account_sig_key_bytes,
     ]);
-    let device_signature = store
-        .identity_key
-        .sign_message(&msg_to_sign)
-        .to_vec();
+    let device_signature = store.identity_key.sign_message(&msg_to_sign).to_vec();
     signed_identity.device_signature = Some(device_signature);
 
     // 4. Unmarshal final details to get key_index
