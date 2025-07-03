@@ -9,6 +9,7 @@ use prost::Message;
 use std::sync::Arc;
 
 pub struct Processor {
+    #[allow(dead_code)] // TODO: This will be used when hash calculation is implemented
     store: Arc<dyn AppStateStore>,
     key_store: Arc<dyn AppStateKeyStore>,
 }
@@ -41,6 +42,7 @@ impl Processor {
     ) -> Result<(Vec<Mutation>, HashState)> {
         let mut current_state = initial_state;
         let mut new_mutations: Vec<Mutation> = Vec::new();
+        let missing_keys: Vec<Vec<u8>> = Vec::new();
 
         if let Some(snapshot) = &list.snapshot {
             // TODO: Implement snapshot decoding. This involves:
@@ -89,6 +91,10 @@ impl Processor {
             }
         }
 
+        if !missing_keys.is_empty() {
+            return Err(AppStateError::KeysNotFound(missing_keys));
+        }
+
         Ok((new_mutations, current_state))
     }
 
@@ -98,20 +104,23 @@ impl Processor {
         mutation: &wa::SyncdMutation,
         out: &mut Vec<Mutation>,
     ) -> Result<()> {
-        let record = mutation.record.as_ref().ok_or(AppStateError::KeyNotFound)?;
+        let record = mutation
+            .record
+            .as_ref()
+            .ok_or(AppStateError::KeysNotFound(vec![]))?;
         let key_id_bytes = record
             .key_id
             .as_ref()
             .and_then(|k| k.id.as_deref())
-            .ok_or(AppStateError::KeyNotFound)?;
+            .ok_or(AppStateError::KeysNotFound(vec![]))?;
 
         let value_blob = record
             .value
             .as_ref()
             .and_then(|v| v.blob.as_deref())
-            .ok_or(AppStateError::KeyNotFound)?;
+            .ok_or(AppStateError::KeysNotFound(vec![]))?;
         if value_blob.len() < 32 {
-            return Err(AppStateError::KeyNotFound);
+            return Err(AppStateError::KeysNotFound(vec![]));
         }
         let (content, value_mac) = value_blob.split_at(value_blob.len() - 32);
 
@@ -128,7 +137,7 @@ impl Processor {
         }
 
         if content.len() < 16 {
-            return Err(AppStateError::KeyNotFound);
+            return Err(AppStateError::KeysNotFound(vec![]));
         }
         let (iv, ciphertext) = content.split_at(16);
 
@@ -141,13 +150,13 @@ impl Processor {
             .index
             .as_ref()
             .and_then(|i| i.blob.as_deref())
-            .ok_or(AppStateError::KeyNotFound)?;
+            .ok_or(AppStateError::KeysNotFound(vec![]))?;
         // TODO: Verify index_mac with `hash::concat_and_hmac`
 
         let index_json = sync_action
             .index
             .as_deref()
-            .ok_or(AppStateError::KeyNotFound)?;
+            .ok_or(AppStateError::KeysNotFound(vec![]))?;
         let index: Vec<String> = serde_json::from_slice(&index_json)?;
 
         let new_mutation = Mutation {

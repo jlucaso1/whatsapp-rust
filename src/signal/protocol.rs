@@ -67,7 +67,7 @@ pub fn signal_message_deserialize_and_verify(
     })
 }
 
-pub trait CiphertextMessage {
+pub trait CiphertextMessage: Send {
     fn serialize(&self) -> Vec<u8>;
     fn q_type(&self) -> u32;
 }

@@ -12,8 +12,8 @@ pub enum AppStateError {
     MismatchingContentMAC,
     #[error("mismatching index MAC")]
     MismatchingIndexMAC,
-    #[error("app state sync key not found")]
-    KeyNotFound,
+    #[error("app state sync key(s) not found")]
+    KeysNotFound(Vec<Vec<u8>>),
     #[error("failed to get app state key {0:?}: {1}")]
     GetKeyFailed(Vec<u8>, Box<dyn std::error::Error + Send + Sync>),
     #[error("failed to decrypt mutation: {0}")]

@@ -36,11 +36,20 @@ pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
         if data.is_empty() {
             return Err(CbcError::InvalidPadding);
         }
-        let pad_len = data[data.len() - 1] as usize;
-        if pad_len > data.len() {
+        let pad_len_byte = data[data.len() - 1];
+        let pad_len = pad_len_byte as usize;
+
+        if pad_len == 0 || pad_len > data.len() {
             return Err(CbcError::InvalidPadding);
         }
-        Ok(&data[..data.len() - pad_len])
+
+        let (unpadded_data, padding) = data.split_at(data.len() - pad_len);
+        for &byte in padding {
+            if byte != pad_len_byte {
+                return Err(CbcError::InvalidPadding);
+            }
+        }
+        Ok(unpadded_data)
     }
 
     unpad(&buf).map(|d| d.to_vec())

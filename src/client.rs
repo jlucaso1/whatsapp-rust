@@ -197,6 +197,33 @@ impl Client {
         *self.frames_rx.lock().await = None;
     }
 
+    async fn request_app_state_keys(&self, keys: Vec<Vec<u8>>) {
+        use crate::proto::whatsapp::message::protocol_message;
+
+        let key_ids = keys
+            .into_iter()
+            .map(|id| wa::message::AppStateSyncKeyId { key_id: Some(id) })
+            .collect();
+
+        let msg = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                r#type: Some(protocol_message::Type::AppStateSyncKeyRequest as i32),
+                app_state_sync_key_request: Some(wa::message::AppStateSyncKeyRequest { key_ids }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        if let Some(own_jid) = self.store.read().await.id.clone() {
+            let own_non_ad = own_jid.to_non_ad();
+            if let Err(e) = self.send_message(own_non_ad, msg).await {
+                warn!("Failed to send app state key request: {:?}", e);
+            }
+        } else {
+            warn!("Can't request app state keys, not logged in.");
+        }
+    }
+
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         info!(target: "Client", "Starting message processing loop...");
 
@@ -492,8 +519,18 @@ impl Client {
                             // TODO: Dispatch these mutations as events
                         }
                         Err(e) => {
-                            error!("Failed to decode patches for {}: {:?}", name, e);
-                            has_more = false; // Stop on error
+                            if let crate::appstate::errors::AppStateError::KeysNotFound(missing) = e
+                            {
+                                info!(
+                                    "Requesting {} missing app state keys for sync of '{}'",
+                                    missing.len(),
+                                    name
+                                );
+                                self.request_app_state_keys(missing).await;
+                            } else {
+                                error!("Failed to decode patches for {}: {:?}", name, e);
+                                has_more = false; // Stop on error
+                            }
                         }
                     };
                 } else {
@@ -833,6 +870,11 @@ impl Client {
 
                 // The decrypted plaintext is ALWAYS a wa::Message
                 if let Ok(mut msg) = wa::Message::decode(plaintext.as_slice()) {
+                    log::debug!(
+                        target: "Client/Recv",
+                        "Decrypted message content: {:?}",
+                        msg
+                    );
                     // Now, check for specific message types within the wa::Message container
                     if let Some(protocol_msg) = msg.protocol_message.take() {
                         if protocol_msg.r#type()
