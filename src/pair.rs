@@ -2,6 +2,7 @@ use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::crypto::xed25519::verify_dalek;
 use crate::proto::whatsapp as wa;
+use crate::proto::whatsapp::AdvEncryptionType;
 use crate::types::events::{Event, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -14,6 +15,8 @@ use sha2::Sha256;
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
 const ADV_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 0];
 const ADV_PREFIX_DEVICE_SIGNATURE_GENERATE: &[u8] = &[6, 1];
+const ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 5];
+const ADV_HOSTED_PREFIX_DEVICE_SIGNATURE_VERIFICATION: &[u8] = &[6, 6];
 
 // Aliases for HMAC-SHA256
 type HmacSha256 = Hmac<Sha256>;
@@ -256,8 +259,11 @@ async fn do_pair_crypto(
             }
         })?;
 
+    // Determine if this is a hosted account
+    let is_hosted_account = hmac_container.account_type.is_some()
+        && hmac_container.account_type() == AdvEncryptionType::Hosted;
+
     let mut mac = HmacSha256::new_from_slice(&store.adv_secret_key).unwrap();
-    // In the future, we might need to handle is_hosted_account and use a different prefix
     // Get details and hmac as slices, handling potential None values
     let details_bytes = hmac_container
         .details
@@ -276,7 +282,9 @@ async fn do_pair_crypto(
             source: anyhow::anyhow!("HMAC container missing hmac"),
         })?;
 
-    mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
+    if is_hosted_account {
+        mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
+    }
     mac.update(details_bytes);
     if mac.verify_slice(hmac_bytes).is_err() {
         return Err(PairCryptoError {
@@ -297,8 +305,15 @@ async fn do_pair_crypto(
     let account_sig_key_bytes = signed_identity.account_signature_key();
     let account_sig_bytes = signed_identity.account_signature();
     let inner_details_bytes = signed_identity.details().to_vec();
+
+    let account_sig_prefix = if is_hosted_account {
+        ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE
+    } else {
+        ADV_PREFIX_ACCOUNT_SIGNATURE
+    };
+
     let msg_to_verify = concat_bytes(&[
-        ADV_PREFIX_ACCOUNT_SIGNATURE,
+        account_sig_prefix,
         &inner_details_bytes,
         &store.identity_key.public_key,
     ]);
@@ -326,8 +341,14 @@ async fn do_pair_crypto(
     }
 
     // 3. Generate our device signature
+    let device_sig_prefix = if is_hosted_account {
+        ADV_HOSTED_PREFIX_DEVICE_SIGNATURE_VERIFICATION
+    } else {
+        ADV_PREFIX_DEVICE_SIGNATURE_GENERATE
+    };
+
     let msg_to_sign = concat_bytes(&[
-        ADV_PREFIX_DEVICE_SIGNATURE_GENERATE,
+        device_sig_prefix,
         &inner_details_bytes,
         &store.identity_key.public_key,
         account_sig_key_bytes,
