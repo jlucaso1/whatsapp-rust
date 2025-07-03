@@ -5,3 +5,5 @@ pub mod identity;
 pub mod kdf;
 pub mod message_key;
 pub mod root_key;
+pub mod state;
+pub mod store;
