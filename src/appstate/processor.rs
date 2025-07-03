@@ -2,6 +2,7 @@ use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
 use crate::crypto::cbc;
+use crate::crypto::hmac_sha512;
 use crate::proto::whatsapp as wa;
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use prost::Message;
@@ -98,27 +99,33 @@ impl Processor {
         out: &mut Vec<Mutation>,
     ) -> Result<()> {
         let record = mutation.record.as_ref().ok_or(AppStateError::KeyNotFound)?;
-        let _key_id = record
+        let key_id_bytes = record
             .key_id
             .as_ref()
-            .ok_or(AppStateError::KeyNotFound)?
-            .id
-            .as_ref()
-            .unwrap();
+            .and_then(|k| k.id.as_deref())
+            .ok_or(AppStateError::KeyNotFound)?;
 
         let value_blob = record
             .value
             .as_ref()
-            .ok_or(AppStateError::KeyNotFound)?
-            .blob
-            .as_ref()
-            .unwrap();
+            .and_then(|v| v.blob.as_deref())
+            .ok_or(AppStateError::KeyNotFound)?;
         if value_blob.len() < 32 {
             return Err(AppStateError::KeyNotFound);
         }
         let (content, value_mac) = value_blob.split_at(value_blob.len() - 32);
 
-        // TODO: Verify value_mac with `hash::generate_content_mac`
+        // Verify the content MAC before attempting decryption.
+        let expected_value_mac = hmac_sha512::generate_content_mac(
+            mutation.operation(),
+            content,
+            key_id_bytes,
+            &keys.value_mac,
+        );
+
+        if &expected_value_mac != value_mac {
+            return Err(AppStateError::MismatchingContentMAC);
+        }
 
         if content.len() < 16 {
             return Err(AppStateError::KeyNotFound);
@@ -127,12 +134,20 @@ impl Processor {
 
         let plaintext = cbc::decrypt(&keys.value_encryption, iv, ciphertext)?;
 
-        let mut sync_action = wa::SyncActionData::decode(&plaintext[..])?;
+        let mut sync_action =
+            wa::SyncActionData::decode(plaintext.as_slice()).map_err(AppStateError::Unmarshal)?;
 
-        let index_mac = record.index.as_ref().unwrap().blob.as_ref().unwrap();
+        let index_mac = record
+            .index
+            .as_ref()
+            .and_then(|i| i.blob.as_deref())
+            .ok_or(AppStateError::KeyNotFound)?;
         // TODO: Verify index_mac with `hash::concat_and_hmac`
 
-        let index_json = sync_action.index.take().unwrap();
+        let index_json = sync_action
+            .index
+            .as_deref()
+            .ok_or(AppStateError::KeyNotFound)?;
         let index: Vec<String> = serde_json::from_slice(&index_json)?;
 
         let new_mutation = Mutation {

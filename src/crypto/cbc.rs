@@ -1,6 +1,9 @@
 use aes::Aes256;
 use cbc::{Decryptor, Encryptor};
-use cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use cipher::{
+    block_padding::{NoPadding, Pkcs7},
+    BlockDecryptMut, BlockEncryptMut, KeyIvInit,
+};
 use thiserror::Error;
 
 type Aes256CbcEnc = Encryptor<Aes256>;
@@ -20,16 +23,13 @@ type Result<T> = std::result::Result<T, CbcError>;
 
 /// Decrypts ciphertext using AES-256-CBC with manual padding removal.
 pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
-    if ciphertext.len() % 16 != 0 {
-        return Err(CbcError::InvalidPadding);
+    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+        return Err(CbcError::InvalidLength(cipher::InvalidLength));
     }
-    let mut dec = Aes256CbcDec::new_from_slices(key, iv)?;
     let mut buf = ciphertext.to_vec();
-    use cipher::BlockDecryptMut;
-    // Decrypt in-place, block-aligned (no bytemuck)
-    for chunk in buf.chunks_exact_mut(16) {
-        dec.decrypt_block_mut(chunk.into());
-    }
+    Aes256CbcDec::new_from_slices(key, iv)?
+        .decrypt_padded_mut::<NoPadding>(&mut buf)
+        .map_err(|_| CbcError::CipherError)?;
 
     // Manual unpad (Signal/WhatsApp compatible)
     fn unpad(data: &[u8]) -> Result<&[u8]> {
@@ -37,8 +37,14 @@ pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
             return Err(CbcError::InvalidPadding);
         }
         let pad_len = data[data.len() - 1] as usize;
-        if pad_len == 0 || pad_len > data.len() {
+        if pad_len == 0 || pad_len > data.len() || pad_len > 16 {
             return Err(CbcError::InvalidPadding);
+        }
+        // Verify padding bytes
+        for &b in &data[data.len() - pad_len..data.len() - 1] {
+            if b != pad_len as u8 {
+                return Err(CbcError::InvalidPadding);
+            }
         }
         Ok(&data[..data.len() - pad_len])
     }
