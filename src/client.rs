@@ -208,31 +208,49 @@ impl Client {
 
         loop {
             tokio::select! {
-                biased;
-                _ = self.shutdown_notifier.notified() => {
-                    info!(target: "Client", "Shutdown signaled. Exiting message loop.");
-                    return Ok(());
-                },
-                frame_opt = frames_rx.recv() => {
-                    match frame_opt {
-                        Some(encrypted_frame) => {
-                            self.process_encrypted_frame(&encrypted_frame).await;
-                        },
-                        None => {
-                            // The channel is closed, meaning the socket is dead.
-                            self.cleanup_connection_state().await;
-                             if !self.expected_disconnect.load(Ordering::Relaxed) {
-                                self.dispatch_event(Event::Disconnected(crate::types::events::Disconnected)).await;
-                                info!("Socket disconnected unexpectedly.");
-                                return Err(anyhow::anyhow!("Socket disconnected unexpectedly"));
-                            } else {
-                                info!("Socket disconnected as expected.");
-                                return Ok(());
+                    biased;
+                    _ = self.shutdown_notifier.notified() => {
+                        info!(target: "Client", "Shutdown signaled. Exiting message loop.");
+                        return Ok(());
+                    },
+                    frame_opt = frames_rx.recv() => {
+                        match frame_opt {
+                            Some(encrypted_frame) => {
+                                self.process_encrypted_frame(&encrypted_frame).await;
+                            },
+                            None => {
+                                // The channel is closed, meaning the socket is dead.
+                                self.cleanup_connection_state().await;
+                                 if !self.expected_disconnect.load(Ordering::Relaxed) {
+                                    self.dispatch_event(Event::Disconnected(crate::types::events::Disconnected)).await;
+                                    info!("Socket disconnected unexpectedly.");
+                                    return Err(anyhow::anyhow!("Socket disconnected unexpectedly"));
+                                } else {
+                                    info!("Socket disconnected as expected.");
+                                    return Ok(());
+                                }
                             }
-                        }
                     }
                 }
             }
+        }
+    }
+
+    /// Removes padding from a decrypted message based on the wire protocol version.
+    /// v2 messages use PKCS#7-like padding, where the last byte indicates the padding length.
+    /// v3 and later messages do not have padding.
+    fn unpad_message(plaintext: &[u8], version: u8) -> Result<Vec<u8>, anyhow::Error> {
+        if version < 3 {
+            if plaintext.is_empty() {
+                return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
+            }
+            let pad_len = plaintext[plaintext.len() - 1] as usize;
+            if pad_len == 0 || pad_len > plaintext.len() {
+                return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
+            }
+            Ok(plaintext[..plaintext.len() - pad_len].to_vec())
+        } else {
+            Ok(plaintext.to_vec())
         }
     }
 
@@ -758,6 +776,13 @@ impl Client {
             }
         };
 
+        let enc_version = enc_node
+            .attrs()
+            .optional_string("v")
+            .unwrap_or("2")
+            .parse::<u8>()
+            .unwrap_or(2);
+
         let signal_address = SignalAddress::new(
             info.source.sender.user.clone(),
             info.source.sender.device as u32,
@@ -791,55 +816,73 @@ impl Client {
         };
 
         match cipher.decrypt(ciphertext_enum).await {
-            Ok(plaintext) => {
+            Ok(padded_plaintext) => {
+                let plaintext = match Self::unpad_message(&padded_plaintext, enc_version) {
+                    Ok(pt) => pt,
+                    Err(e) => {
+                        log::error!("Failed to unpad message from {}: {}", info.source.sender, e);
+                        return;
+                    }
+                };
+
                 log::info!(
-                    "Successfully decrypted message from {}: {} bytes of plaintext",
+                    "Successfully decrypted and unpadded message from {}: {} bytes",
                     info.source.sender,
                     plaintext.len()
                 );
 
-                if let Ok(protocol_msg) = wa::message::ProtocolMessage::decode(&*plaintext) {
-                    if protocol_msg.r#type() == wa::message::protocol_message::Type::AppStateSyncKeyShare {
-                        if let Some(key_share) = protocol_msg.app_state_sync_key_share.as_ref() {
-                            log::info!(
-                                "Found AppStateSyncKeyShare with {} keys. Storing them now.",
-                                key_share.keys.len()
-                            );
-                            self.handle_app_state_sync_key_share(key_share).await;
+                // The decrypted plaintext is ALWAYS a wa::Message
+                if let Ok(mut msg) = wa::Message::decode(plaintext.as_slice()) {
+                    // Now, check for specific message types within the wa::Message container
+                    if let Some(protocol_msg) = msg.protocol_message.take() {
+                        if protocol_msg.r#type()
+                            == wa::message::protocol_message::Type::AppStateSyncKeyShare
+                        {
+                            if let Some(key_share) = protocol_msg.app_state_sync_key_share.as_ref()
+                            {
+                                log::info!(
+                                    "Found AppStateSyncKeyShare with {} keys. Storing them now.",
+                                    key_share.keys.len()
+                                );
+                                self.handle_app_state_sync_key_share(key_share).await;
 
-                            let self_clone = self.clone();
-                            tokio::spawn(async move {
-                                for name in ALL_PATCH_NAMES {
-                                    self_clone.app_state_sync(name, false).await;
-                                }
-                            });
+                                let self_clone = self.clone();
+                                tokio::spawn(async move {
+                                    for name in ALL_PATCH_NAMES {
+                                        self_clone.app_state_sync(name, false).await;
+                                    }
+                                });
+                            }
+                        } else {
+                            log::warn!(
+                                "Received unhandled protocol message of type: {:?}",
+                                protocol_msg.r#type()
+                            );
                         }
+                    } else if msg.sender_key_distribution_message.is_some() {
+                        // TODO: handle SKDM
+                        log::warn!("Received unhandled SenderKeyDistributionMessage");
                     } else {
-                        log::warn!(
-                            "Received unhandled protocol message of type: {:?}",
-                            protocol_msg.r#type()
-                        );
-                    }
-                } else if let Ok(msg) = wa::Message::decode(&*plaintext) {
-                    // Handle regular messages (not protocol messages)
-                    if msg.protocol_message.is_none() {
-                        let event = crate::types::events::Message {
+                        // It's a regular chat message
+                        let mut event = crate::types::events::Message {
                             info: info.clone(),
-                            message: Box::new(msg.clone()),
+                            message: Box::new(wa::Message::default()), // will be replaced by unwrap_raw
                             is_ephemeral: false,
                             is_view_once: false,
                             is_view_once_v2: false,
                             is_document_with_caption: false,
                             is_edit: false,
-                            raw_message: Box::new(msg.clone()),
+                            raw_message: Box::new(msg),
                         };
-                        if let Some(conversation) = msg.conversation.as_ref() {
+                        event.unwrap_raw(); // This will populate event.message and the flags
+
+                        if let Some(conversation) = event.message.conversation.as_ref() {
                             log::info!("Received message: {}", conversation);
                         }
                         let _ = self.dispatch_event(Event::Message(event)).await;
                     }
                 } else {
-                    log::warn!("Failed to unmarshal decrypted plaintext into any known protobuf (ProtocolMessage or Message)");
+                    log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");
                 }
             }
             Err(e) => {
