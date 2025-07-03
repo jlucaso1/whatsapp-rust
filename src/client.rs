@@ -8,7 +8,6 @@ use crate::store;
 use crate::appstate::keys::ALL_PATCH_NAMES;
 use crate::binary;
 use crate::proto::whatsapp as wa;
-use crate::proto::whatsapp::message::AppStateSyncKeyShare;
 use crate::qrcode;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
@@ -491,23 +490,43 @@ impl Client {
         info!(target: "Client/AppState", "Finished AppState sync for '{}'", name);
     }
 
+    pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
+        use crate::binary::node::Node;
+        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::types::jid::SERVER_JID;
+
+        let tag = if passive { "passive" } else { "active" };
+
+        let query = InfoQuery {
+            namespace: "passive",
+            query_type: InfoQueryType::Set,
+            to: SERVER_JID.parse().unwrap(),
+            target: None,
+            id: None,
+            content: Some(crate::binary::node::NodeContent::Nodes(vec![Node {
+                tag: tag.to_string(),
+                ..Default::default()
+            }])),
+            timeout: None,
+        };
+
+        self.send_iq(query).await.map(|_| ())
+    }
+
     async fn handle_success(self: &Arc<Self>, _node: &Node) {
         info!("Successfully authenticated with WhatsApp servers!");
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
-        self.dispatch_event(Event::Connected(crate::types::events::Connected))
-            .await;
 
-        // After logging in, we need to do a full sync of our state.
-        let self_clone = Arc::clone(self);
+        let client_clone = self.clone();
         tokio::spawn(async move {
-            self_clone.app_state_sync("critical_block", true).await;
-            self_clone
-                .app_state_sync("critical_unblock_low", true)
+            if let Err(e) = client_clone.set_passive(false).await {
+                warn!("Failed to send post-connect passive IQ: {:?}", e);
+            }
+            client_clone
+                .dispatch_event(Event::Connected(crate::types::events::Connected))
                 .await;
-            self_clone.app_state_sync("regular", true).await;
-            // Add other states as needed, e.g., "regular_high", "regular_low"
         });
     }
 
@@ -779,19 +798,15 @@ impl Client {
                     plaintext.len()
                 );
 
-                // Now, check if this plaintext contains the AppStateSyncKeyShare
-                if let Ok(msg) = wa::Message::decode(&*plaintext) {
-                    if let Some(protocol_message) = msg.protocol_message.as_ref() {
-                        if let Some(key_share) = protocol_message.app_state_sync_key_share.as_ref()
-                        {
+                if let Ok(protocol_msg) = wa::message::ProtocolMessage::decode(&*plaintext) {
+                    if protocol_msg.r#type() == wa::message::protocol_message::Type::AppStateSyncKeyShare {
+                        if let Some(key_share) = protocol_msg.app_state_sync_key_share.as_ref() {
                             log::info!(
                                 "Found AppStateSyncKeyShare with {} keys. Storing them now.",
                                 key_share.keys.len()
                             );
-                            // This is the crucial call
                             self.handle_app_state_sync_key_share(key_share).await;
 
-                            // Now that we have keys, trigger a sync
                             let self_clone = self.clone();
                             tokio::spawn(async move {
                                 for name in ALL_PATCH_NAMES {
@@ -799,12 +814,16 @@ impl Client {
                                 }
                             });
                         }
+                    } else {
+                        log::warn!(
+                            "Received unhandled protocol message of type: {:?}",
+                            protocol_msg.r#type()
+                        );
                     }
+                } else if let Ok(msg) = wa::Message::decode(&*plaintext) {
                     // Handle regular messages (not protocol messages)
                     if msg.protocol_message.is_none() {
-                        // Unwrap raw message if needed
-                        // Unwrap ephemeral/view_once wrappers if needed
-                        let mut event = crate::types::events::Message {
+                        let event = crate::types::events::Message {
                             info: info.clone(),
                             message: Box::new(msg.clone()),
                             is_ephemeral: false,
@@ -814,15 +833,13 @@ impl Client {
                             is_edit: false,
                             raw_message: Box::new(msg.clone()),
                         };
-                        // Log conversation if present
                         if let Some(conversation) = msg.conversation.as_ref() {
                             log::info!("Received message: {}", conversation);
                         }
-                        // Dispatch the event
                         let _ = self.dispatch_event(Event::Message(event)).await;
                     }
                 } else {
-                    log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");
+                    log::warn!("Failed to unmarshal decrypted plaintext into any known protobuf (ProtocolMessage or Message)");
                 }
             }
             Err(e) => {
@@ -972,7 +989,7 @@ impl Client {
         }
     }
     /// Store AppStateSyncKey(s) received from a protocol message.
-    pub async fn handle_app_state_sync_key_share(&self, keys: &AppStateSyncKeyShare) {
+    pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
         let key_store = self.store.read().await.app_state_keys.clone();
         for key in &keys.keys {
             if let Some(key_id_proto) = &key.key_id {

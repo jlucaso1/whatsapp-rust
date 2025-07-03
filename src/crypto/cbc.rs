@@ -1,6 +1,6 @@
 use aes::Aes256;
 use cbc::{Decryptor, Encryptor};
-use cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
 use thiserror::Error;
 
 type Aes256CbcEnc = Encryptor<Aes256>;
@@ -12,18 +12,38 @@ pub enum CbcError {
     InvalidLength(#[from] cipher::InvalidLength),
     #[error("Cipher operation failed during padding/unpadding")]
     CipherError,
+    #[error("Invalid padding")]
+    InvalidPadding,
 }
 
 type Result<T> = std::result::Result<T, CbcError>;
 
-/// Decrypts ciphertext using AES-256-CBC with PKCS#7 padding.
+/// Decrypts ciphertext using AES-256-CBC with manual padding removal.
 pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
-    let dec = Aes256CbcDec::new_from_slices(key, iv)?;
+    if ciphertext.len() % 16 != 0 {
+        return Err(CbcError::InvalidPadding);
+    }
+    let mut dec = Aes256CbcDec::new_from_slices(key, iv)?;
     let mut buf = ciphertext.to_vec();
-    let pt = dec
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| CbcError::CipherError)?;
-    Ok(pt.to_vec())
+    use cipher::BlockDecryptMut;
+    // Decrypt in-place, block-aligned (no bytemuck)
+    for chunk in buf.chunks_exact_mut(16) {
+        dec.decrypt_block_mut(chunk.into());
+    }
+
+    // Manual unpad (Signal/WhatsApp compatible)
+    fn unpad(data: &[u8]) -> Result<&[u8]> {
+        if data.is_empty() {
+            return Err(CbcError::InvalidPadding);
+        }
+        let pad_len = data[data.len() - 1] as usize;
+        if pad_len == 0 || pad_len > data.len() {
+            return Err(CbcError::InvalidPadding);
+        }
+        Ok(&data[..data.len() - pad_len])
+    }
+
+    unpad(&buf).map(|d| d.to_vec())
 }
 
 /// Encrypts plaintext using AES-256-CBC with PKCS#7 padding.

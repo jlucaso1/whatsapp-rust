@@ -5,7 +5,7 @@ use crate::signal::identity::IdentityKey;
 use crate::signal::message_key::MessageKeys;
 use crate::signal::root_key::RootKey;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 const MAX_MESSAGE_KEYS: usize = 2000;
@@ -27,7 +27,7 @@ pub struct SessionState {
     root_key: RootKey,
     previous_counter: u32,
     sender_chain: Option<Chain>,
-    receiver_chains: HashMap<[u8; 32], Chain>,
+    receiver_chains: Vec<Chain>,
     pub pending_pre_key: Option<PendingPreKey>,
 }
 
@@ -84,13 +84,67 @@ impl SessionState {
             root_key: RootKey::new([0; 32]),
             previous_counter: 0,
             sender_chain: None,
-            receiver_chains: HashMap::new(),
+            receiver_chains: Vec::new(),
             pending_pre_key: None,
         }
     }
 
     pub fn is_fresh(&self) -> bool {
         self.sender_chain.is_none() && self.receiver_chains.is_empty()
+    }
+
+    pub fn add_receiver_chain(
+        &mut self,
+        their_ephemeral: Arc<dyn EcPublicKey>,
+        chain_key: ChainKey,
+    ) {
+        let public_key = their_ephemeral
+            .as_any()
+            .downcast_ref::<DjbEcPublicKey>()
+            .expect("Expected DjbEcPublicKey")
+            .clone();
+
+        let chain = Chain::new(
+            EcKeyPair::new(public_key, DjbEcPrivateKey::new([0; 32])),
+            chain_key,
+        );
+
+        self.receiver_chains.push(chain);
+
+        const MAX_RECEIVER_CHAINS: usize = 5;
+        if self.receiver_chains.len() > MAX_RECEIVER_CHAINS {
+            self.receiver_chains.remove(0);
+        }
+    }
+
+    pub fn receiver_chains_mut(&mut self) -> &mut Vec<Chain> {
+        &mut self.receiver_chains
+    }
+
+    pub fn receiver_chains(&self) -> &Vec<Chain> {
+        &self.receiver_chains
+    }
+
+    pub fn find_receiver_chain_mut(&mut self, key: &[u8; 32]) -> Option<&mut Chain> {
+        self.receiver_chains
+            .iter_mut()
+            .find(|c| c.sender_ratchet_key_pair.public_key.public_key == *key)
+    }
+
+    pub fn find_receiver_chain(&self, key: &[u8; 32]) -> Option<&Chain> {
+        self.receiver_chains
+            .iter()
+            .find(|c| c.sender_ratchet_key_pair.public_key.public_key == *key)
+    }
+
+    pub fn set_receiver_chain_key(
+        &mut self,
+        sender_ephemeral: Arc<dyn EcPublicKey>,
+        chain_key: ChainKey,
+    ) {
+        if let Some(chain) = self.find_receiver_chain_mut(&sender_ephemeral.public_key()) {
+            chain.chain_key = chain_key;
+        }
     }
 
     pub fn root_key(&self) -> &RootKey {
@@ -173,43 +227,6 @@ impl SessionState {
 
     pub fn set_root_key(&mut self, root_key: RootKey) {
         self.root_key = root_key;
-    }
-
-    pub fn add_receiver_chain(
-        &mut self,
-        their_ephemeral: Arc<dyn EcPublicKey>,
-        chain_key: ChainKey,
-    ) {
-        // Downcast their_ephemeral to DjbEcPublicKey if possible
-        let public_key = their_ephemeral
-            .as_any()
-            .downcast_ref::<crate::signal::ecc::keys::DjbEcPublicKey>()
-            .expect("Expected DjbEcPublicKey")
-            .clone();
-        let chain = Chain::new(
-            EcKeyPair::new(public_key, DjbEcPrivateKey::new([0; 32])),
-            chain_key,
-        );
-        self.receiver_chains
-            .insert(their_ephemeral.public_key(), chain); // Changed to public_key()
-    }
-
-    pub fn receiver_chains(&self) -> &HashMap<[u8; 32], Chain> {
-        &self.receiver_chains
-    }
-
-    pub fn receiver_chains_mut(&mut self) -> &mut HashMap<[u8; 32], Chain> {
-        &mut self.receiver_chains
-    }
-
-    pub fn set_receiver_chain_key(
-        &mut self,
-        sender_ephemeral: Arc<dyn EcPublicKey>,
-        chain_key: ChainKey,
-    ) {
-        if let Some(chain) = self.receiver_chains.get_mut(&sender_ephemeral.public_key()) {
-            chain.chain_key = chain_key;
-        }
     }
 
     pub fn sender_ratchet_key_pair(&self) -> &EcKeyPair {

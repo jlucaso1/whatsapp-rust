@@ -92,6 +92,28 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
+        // First, check if the requested ID matches the one we hold directly.
+        if signed_prekey_id == self.signed_pre_key.key_id {
+            let key_pair = crate::signal::ecc::key_pair::EcKeyPair::new(
+                crate::signal::ecc::keys::DjbEcPublicKey::new(
+                    self.signed_pre_key.key_pair.public_key,
+                ),
+                crate::signal::ecc::keys::DjbEcPrivateKey::new(
+                    self.signed_pre_key.key_pair.private_key,
+                ),
+            );
+            let record = crate::signal::state::signed_prekey_record::SignedPreKeyRecord::new(
+                self.signed_pre_key.key_id,
+                key_pair,
+                self.signed_pre_key
+                    .signature
+                    .clone()
+                    .ok_or("Signature missing from device's signed pre-key")?,
+                chrono::Utc::now(),
+            );
+            return Ok(Some(record));
+        }
+        // Otherwise, delegate to the underlying store.
         self.signed_pre_keys
             .load_signed_prekey(signed_prekey_id)
             .await
@@ -136,8 +158,11 @@ impl SessionStore for Device {
         address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(data) = self.sessions.get_session(&address.to_string()).await? {
-            // TODO: Deserialize SessionRecord from data
-            Ok(SessionRecord::new()) // Placeholder
+            if !data.is_empty() {
+                let record: SessionRecord = serde_json::from_slice(&data)?;
+                return Ok(record);
+            }
+            Ok(SessionRecord::new())
         } else {
             Ok(SessionRecord::new())
         }
@@ -148,8 +173,7 @@ impl SessionStore for Device {
         address: &SignalAddress,
         record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: Serialize SessionRecord to Vec<u8>
-        let data = vec![]; // Placeholder
+        let data = serde_json::to_vec(record)?;
         self.sessions
             .put_session(&address.to_string(), &data)
             .await
