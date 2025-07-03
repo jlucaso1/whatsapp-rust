@@ -37,14 +37,8 @@ pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
             return Err(CbcError::InvalidPadding);
         }
         let pad_len = data[data.len() - 1] as usize;
-        if pad_len == 0 || pad_len > data.len() || pad_len > 16 {
+        if pad_len > data.len() {
             return Err(CbcError::InvalidPadding);
-        }
-        // Verify padding bytes
-        for &b in &data[data.len() - pad_len..data.len() - 1] {
-            if b != pad_len as u8 {
-                return Err(CbcError::InvalidPadding);
-            }
         }
         Ok(&data[..data.len() - pad_len])
     }
