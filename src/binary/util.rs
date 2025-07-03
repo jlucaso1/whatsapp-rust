@@ -42,32 +42,42 @@ fn fmt_node(node: &Node, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Resu
         write!(f, " {}=\"{}\"", k, v)?;
     }
 
-    match &node.content {
-        Some(content) => {
-            write!(f, ">")?;
-            match content {
-                NodeContent::Nodes(nodes) => {
-                    for child in nodes {
-                        fmt_node(child, f, indent + 1)?;
-                    }
-                    write!(f, "\n{}</{}>", indentation, node.tag)?;
-                }
-                NodeContent::Bytes(bytes) => {
-                    if let Ok(s) = std::str::from_utf8(bytes) {
-                        if s.len() > 512 {
-                            write!(f, "[{} bytes]", bytes.len())?;
-                        } else {
-                            write!(f, "{}", s)?;
+    if node.tag == "enc" {
+        if let Some(NodeContent::Bytes(bytes)) = &node.content {
+            // Special handling for <enc> tags to avoid printing large byte arrays
+            write!(f, ">length: {}</{}>", bytes.len(), node.tag)?;
+        } else {
+            // If <enc> has no content or non-byte content, just self-close it
+            write!(f, "/>")?;
+        }
+    } else {
+        match &node.content {
+            Some(content) => {
+                write!(f, ">")?;
+                match content {
+                    NodeContent::Nodes(nodes) => {
+                        for child in nodes {
+                            fmt_node(child, f, indent + 1)?;
                         }
-                    } else {
-                        write!(f, "{}", hex::encode(bytes))?;
+                        write!(f, "\n{}</{}>", indentation, node.tag)?;
                     }
-                    write!(f, "</{}>", node.tag)?;
+                    NodeContent::Bytes(bytes) => {
+                        if let Ok(s) = std::str::from_utf8(bytes) {
+                            if s.len() > 512 {
+                                write!(f, "[{} bytes]", bytes.len())?;
+                            } else {
+                                write!(f, "{}", s)?;
+                            }
+                        } else {
+                            write!(f, "{}", hex::encode(bytes))?;
+                        }
+                        write!(f, "</{}>", node.tag)?;
+                    }
                 }
             }
-        }
-        None => {
-            write!(f, "/>")?;
+            None => {
+                write!(f, "/>")?;
+            }
         }
     }
     if indent == 0 {
