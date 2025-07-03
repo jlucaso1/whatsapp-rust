@@ -12,6 +12,7 @@ use log::{debug, error, info, warn};
 use prost::Message;
 use sha2::Sha256;
 
+use std::sync::atomic::Ordering;
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
 const ADV_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 0];
 const ADV_PREFIX_DEVICE_SIGNATURE_GENERATE: &[u8] = &[6, 1];
@@ -196,6 +197,9 @@ async fn handle_pair_success(client: &mut Client, request_node: &Node, success_n
                 // Optionally: state cleanup here.
                 return;
             }
+
+            // Tell the client that the upcoming disconnect is expected and part of the flow.
+            client.expected_disconnect.store(true, Ordering::Relaxed);
 
             info!("Successfully paired {}", jid);
             client.store.id = Some(jid.clone());
