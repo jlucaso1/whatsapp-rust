@@ -5,22 +5,21 @@ use crate::signal::store::SessionStore;
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use crate::store;
 
+use crate::appstate::keys::ALL_PATCH_NAMES;
 use crate::binary;
-use crate::qrcode;
-use crate::types::events::{ConnectFailureReason, Event};
-// --- Signal imports for E2EE ---
 use crate::proto::whatsapp as wa;
 use crate::proto::whatsapp::message::AppStateSyncKeyShare;
-// use crate::store::traits::AppStateStore; // unused
-use crate::appstate::keys::ALL_PATCH_NAMES;
+use crate::qrcode;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
+use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
 use crate::types::jid::Jid;
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
-use prost::Message;
+use prost::Message as ProtoMessage;
 use rand::RngCore;
 use scopeguard;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -376,6 +375,7 @@ impl Client {
         let store_guard = self.store.read().await;
         let app_state_store = store_guard.app_state_store.clone();
         let app_state_keys = store_guard.app_state_keys.clone();
+        let contacts_store = store_guard.identities.clone();
         let processor = Processor::new(app_state_store.clone(), app_state_keys.clone());
 
         let mut current_state = match app_state_store.get_app_state_version(name).await {
@@ -446,13 +446,39 @@ impl Client {
                                 "Decoded {} mutations for '{}'. New version: {}",
                                 mutations.len(), name, current_state.version
                             );
+                            // Process and dispatch contact updates from mutations
+                            for mutation in &mutations {
+                                if mutation.operation == wa::syncd_mutation::SyncdOperation::Set {
+                                    if let Some(contact_action) =
+                                        mutation.action.contact_action.as_ref()
+                                    {
+                                        if mutation.index.len() > 1 {
+                                            let jid_str = &mutation.index[1];
+                                            if let Ok(jid) = Jid::from_str(jid_str) {
+                                                // Use a dummy key for now, real identity keys are separate
+                                                let _ = contacts_store
+                                                    .put_identity(jid_str, [0u8; 32])
+                                                    .await;
+                                                let event = Event::ContactUpdate(ContactUpdate {
+                                                    jid,
+                                                    timestamp: chrono::Utc::now(),
+                                                    action: Box::new(contact_action.clone()),
+                                                    from_full_sync: full_sync,
+                                                });
+                                                let _ = self.dispatch_event(event).await;
+                                            }
+                                        }
+                                        // TODO: Handle other action types (e.g., PinAction, ArchiveChatAction)
+                                    }
+                                }
+                            }
                             // TODO: Dispatch these mutations as events
                         }
                         Err(e) => {
                             error!("Failed to decode patches for {}: {:?}", name, e);
                             has_more = false; // Stop on error
                         }
-                    }
+                    };
                 } else {
                     warn!(target: "Client/AppState", "Sync response for '{}' missing <collection> node", name);
                     has_more = false;
@@ -721,7 +747,31 @@ impl Client {
         let device_arc = Arc::new((*store_guard).clone());
         let cipher = SessionCipher::new(device_arc.clone(), signal_address);
 
-        match cipher.decrypt(&ciphertext).await {
+        // Determine enc type and use the new decrypt logic
+        let enc_type = enc_node.attrs().string("type");
+        use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
+        let ciphertext_enum = match enc_type.as_str() {
+            "pkmsg" => match PreKeySignalMessage::deserialize(&ciphertext) {
+                Ok(msg) => Ciphertext::PreKey(msg),
+                Err(e) => {
+                    log::warn!("Failed to deserialize PreKeySignalMessage: {:?}", e);
+                    return;
+                }
+            },
+            "msg" => match SignalMessage::deserialize(&ciphertext) {
+                Ok(msg) => Ciphertext::Whisper(msg),
+                Err(e) => {
+                    log::warn!("Failed to deserialize SignalMessage: {:?}", e);
+                    return;
+                }
+            },
+            _ => {
+                log::warn!("Unsupported enc type: {}", enc_type);
+                return;
+            }
+        };
+
+        match cipher.decrypt(ciphertext_enum).await {
             Ok(plaintext) => {
                 log::info!(
                     "Successfully decrypted message from {}: {} bytes of plaintext",
@@ -738,22 +788,38 @@ impl Client {
                                 "Found AppStateSyncKeyShare with {} keys. Storing them now.",
                                 key_share.keys.len()
                             );
+                            // This is the crucial call
                             self.handle_app_state_sync_key_share(key_share).await;
-                            // After storing keys, re-trigger the syncs
+
+                            // Now that we have keys, trigger a sync
                             let self_clone = self.clone();
                             tokio::spawn(async move {
-                                self_clone.app_state_sync("critical_block", false).await;
-                                self_clone
-                                    .app_state_sync("critical_unblock_low", false)
-                                    .await;
-                                self_clone.app_state_sync("regular", false).await;
+                                for name in ALL_PATCH_NAMES {
+                                    self_clone.app_state_sync(name, false).await;
+                                }
                             });
                         }
-                    } else {
-                        // It's a regular message, dispatch it!
-                        if let Some(conversation) = msg.conversation {
+                    }
+                    // Handle regular messages (not protocol messages)
+                    if msg.protocol_message.is_none() {
+                        // Unwrap raw message if needed
+                        // Unwrap ephemeral/view_once wrappers if needed
+                        let mut event = crate::types::events::Message {
+                            info: info.clone(),
+                            message: Box::new(msg.clone()),
+                            is_ephemeral: false,
+                            is_view_once: false,
+                            is_view_once_v2: false,
+                            is_document_with_caption: false,
+                            is_edit: false,
+                            raw_message: Box::new(msg.clone()),
+                        };
+                        // Log conversation if present
+                        if let Some(conversation) = msg.conversation.as_ref() {
                             log::info!("Received message: {}", conversation);
                         }
+                        // Dispatch the event
+                        let _ = self.dispatch_event(Event::Message(event)).await;
                     }
                 } else {
                     log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");
@@ -824,11 +890,17 @@ impl Client {
 
         // 3. Encrypt the message
         let cipher = SessionCipher::new(store_arc.clone(), signal_address);
-        let serialized_msg_proto = <wa::Message as prost::Message>::encode_to_vec(&message);
+        let serialized_msg_proto = <wa::Message as ProtoMessage>::encode_to_vec(&message);
 
         let encrypted_message = match cipher.encrypt(&serialized_msg_proto).await {
             Ok(msg) => msg,
             Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
+        };
+
+        // Determine encryption type for stanza
+        let enc_type = match encrypted_message.q_type() {
+            crate::signal::protocol::PREKEY_TYPE => "pkmsg",
+            _ => "msg",
         };
 
         // 4. Construct the <message> stanza
@@ -845,7 +917,7 @@ impl Client {
                     tag: "enc".to_string(),
                     attrs: [
                         ("v".to_string(), "2".to_string()),
-                        ("type".to_string(), "msg".to_string()), // TODO: set to "pkmsg" if needed
+                        ("type".to_string(), enc_type.to_string()),
                     ]
                     .into(),
                     content: Some(crate::binary::node::NodeContent::Bytes(

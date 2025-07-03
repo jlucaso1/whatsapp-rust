@@ -3,7 +3,7 @@ use super::ecc::keys::{DjbEcPublicKey, EcPublicKey};
 use serde::{Deserialize, Serialize};
 
 // Corresponds to keys/identity/IdentityKey.go
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityKey {
     public_key: DjbEcPublicKey,
 }

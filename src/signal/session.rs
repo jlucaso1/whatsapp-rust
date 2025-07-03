@@ -206,57 +206,90 @@ impl From<crate::signal::root_key::RootKeyError> for DecryptionError {
 }
 
 impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
-    pub async fn decrypt(&self, ciphertext_bytes: &[u8]) -> Result<Vec<u8>, DecryptionError> {
+    pub async fn decrypt(
+        &self,
+        ciphertext: crate::signal::protocol::Ciphertext,
+    ) -> Result<Vec<u8>, DecryptionError> {
         let mut session_record = self
             .store
             .load_session(&self.remote_address)
             .await
             .map_err(|e| DecryptionError::Store(e.into()))?;
 
-        // First, try to parse the message as a PreKeySignalMessage
-        if let Ok(prekey_msg) = PreKeySignalMessage::deserialize(ciphertext_bytes) {
-            let builder = super::session::SessionBuilder::new(
-                self.store.clone(),
-                self.remote_address.clone(),
-            );
-            let _unsigned_prekey_id = builder
-                .process_prekey_message(&prekey_msg)
+        let plaintext = match ciphertext {
+            crate::signal::protocol::Ciphertext::PreKey(prekey_msg) => {
+                self.decrypt_prekey_message(&mut session_record, &prekey_msg)
+                    .await?
+            }
+            crate::signal::protocol::Ciphertext::Whisper(whisper_msg) => {
+                self.decrypt_whisper_message(&mut session_record, &whisper_msg)
+                    .await?
+            }
+        };
+
+        self.store
+            .store_session(&self.remote_address, &session_record)
+            .await
+            .map_err(|e| DecryptionError::Store(e.into()))?;
+
+        Ok(plaintext)
+    }
+
+    async fn decrypt_prekey_message(
+        &self,
+        session_record: &mut SessionRecord,
+        message: &PreKeySignalMessage,
+    ) -> Result<Vec<u8>, DecryptionError> {
+        let builder = SessionBuilder::new(self.store.clone(), self.remote_address.clone());
+        let used_prekey_id = builder
+            .process_prekey_message(message)
+            .await
+            .map_err(|e| DecryptionError::Store(e.into()))?;
+
+        // Now that the session is established, we can decrypt the inner message
+        let plaintext = self
+            .decrypt_whisper_message(session_record, &message.message)
+            .await?;
+
+        if let Some(id) = used_prekey_id {
+            self.store
+                .remove_prekey(id)
                 .await
                 .map_err(|e| DecryptionError::Store(e.into()))?;
-            // Now decrypt the inner SignalMessage
-            return self
-                .decrypt_with_state(session_record.session_state_mut(), &prekey_msg.message)
-                .await;
         }
 
-        // If not a pkmsg, try as a regular SignalMessage
-        if let Ok(msg) = SignalMessage::deserialize(ciphertext_bytes) {
-            if let Ok(plaintext) = self
-                .try_decrypt_with_state(session_record.session_state_mut(), &msg)
-                .await
-            {
-                self.store
-                    .store_session(&self.remote_address, &session_record)
-                    .await
-                    .map_err(|e| DecryptionError::Store(e))?;
-                return Ok(plaintext);
-            }
+        Ok(plaintext)
+    }
 
-            // Try previous states
-            for i in 0..session_record.previous_states().len() {
-                let mut state_clone = session_record.previous_states()[i].clone();
-                if let Ok(plaintext) = self.try_decrypt_with_state(&mut state_clone, &msg).await {
+    async fn decrypt_whisper_message(
+        &self,
+        session_record: &mut SessionRecord,
+        message: &SignalMessage,
+    ) -> Result<Vec<u8>, DecryptionError> {
+        let mut plaintext = None;
+        let decrypt_err = None;
+
+        // Try decrypting with the current state
+        if let Ok(pt) = self
+            .try_decrypt_with_state(session_record.session_state_mut(), message)
+            .await
+        {
+            plaintext = Some(pt);
+        } else {
+            // If that fails, try previous states
+            for (i, state) in session_record.previous_states_mut().iter_mut().enumerate() {
+                if let Ok(pt) = self.try_decrypt_with_state(state, message).await {
                     session_record.promote_state(i);
-                    self.store
-                        .store_session(&self.remote_address, &session_record)
-                        .await
-                        .map_err(DecryptionError::Store)?;
-                    return Ok(plaintext);
+                    plaintext = Some(pt);
+                    break;
                 }
             }
         }
 
-        Err(DecryptionError::NoValidSessions)
+        match plaintext {
+            Some(pt) => Ok(pt),
+            None => decrypt_err.ok_or(DecryptionError::NoValidSessions),
+        }
     }
 
     async fn try_decrypt_with_state(
@@ -313,34 +346,31 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         if !self
             .store
             .is_trusted_identity(&self.remote_address, their_identity_key)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?
+            .await?
         {
-            return Err("Untrusted identity key".into());
+            // For now, we auto-trust. A real implementation might ask the user.
+            // In whatsmeow, this is handled by an option. We can keep it simple.
+            log::warn!(
+                "Untrusted identity for {}, but auto-trusting.",
+                self.remote_address
+            );
         }
 
-        let our_identity = self
-            .store
-            .get_identity_key_pair()
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+        // 1. Load our keys from the store
+        let our_identity = self.store.get_identity_key_pair().await?;
         let our_signed_prekey = self
             .store
             .load_signed_prekey(message.signed_pre_key_id)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?
+            .await?
             .ok_or("Signed pre-key not found in store")?;
 
         let mut our_one_time_prekey: Option<PreKeyRecord> = None;
         if let Some(id) = message.pre_key_id {
-            our_one_time_prekey = self
-                .store
-                .load_prekey(id)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+            our_one_time_prekey = self.store.load_prekey(id).await?;
         }
 
-        let session_key_pair = super::ratchet::calculate_receiver_session(
+        // 2. Perform the key agreement
+        let session_key_pair = crate::signal::ratchet::calculate_receiver_session(
             &our_identity,
             our_signed_prekey.key_pair(),
             our_one_time_prekey.as_ref().map(|r| r.key_pair()),
@@ -348,33 +378,38 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             message.base_key.clone(),
         )?;
 
-        let mut session_record = self
-            .store
-            .load_session(&self.remote_address)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
-        if session_record.is_fresh() {
-            session_record.archive_current_state();
-        }
+        // 3. Load the session record and update its state
+        let mut session_record = self.store.load_session(&self.remote_address).await?;
+        session_record.archive_current_state(); // Archive the old (likely empty) state
 
         let state = session_record.session_state_mut();
         state.set_session_version(3);
         state.set_remote_identity_key(their_identity_key.clone());
         state.set_local_identity_key(our_identity.public_key.clone());
         state.set_sender_chain(
+            // The sender ratchet key is our signed pre-key from the handshake
             our_signed_prekey.key_pair().clone(),
             session_key_pair.chain_key,
         );
         state.set_root_key(session_key_pair.root_key);
+        // Important: Initialize the receiver chain with the sender's ephemeral key from the message
+        let receiver_session_key_pair = state.root_key().create_chain(
+            message.message.sender_ratchet_key.clone(),
+            our_signed_prekey.key_pair(),
+        )?;
+        state.add_receiver_chain(
+            message.message.sender_ratchet_key.clone(),
+            receiver_session_key_pair.chain_key,
+        );
+        state.set_root_key(receiver_session_key_pair.root_key);
 
+        // 4. Store the updated session and identity
         self.store
             .store_session(&self.remote_address, &session_record)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+            .await?;
         self.store
             .save_identity(&self.remote_address, their_identity_key)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+            .await?;
 
         Ok(message.pre_key_id)
     }

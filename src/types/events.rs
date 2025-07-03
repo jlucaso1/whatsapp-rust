@@ -36,6 +36,7 @@ pub enum Event {
 
     JoinedGroup(JoinedGroup),
     GroupInfoUpdate(GroupInfoUpdate),
+    ContactUpdate(ContactUpdate),
 
     PushNameUpdate(PushNameUpdate),
     PinUpdate(PinUpdate),

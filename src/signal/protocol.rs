@@ -72,6 +72,11 @@ pub trait CiphertextMessage {
     fn q_type(&self) -> u32;
 }
 
+pub enum Ciphertext {
+    PreKey(PreKeySignalMessage),
+    Whisper(SignalMessage),
+}
+
 pub const WHISPER_TYPE: u32 = 2;
 pub const PREKEY_TYPE: u32 = 3;
 const MAC_LENGTH: usize = 8;
