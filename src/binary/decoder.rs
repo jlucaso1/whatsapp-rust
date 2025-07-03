@@ -207,6 +207,7 @@ impl<'a> Decoder<'a> {
                 0..=9 => Ok(('0' as u8 + value) as char),
                 10 => Ok('-'),
                 11 => Ok('.'),
+                15 => Ok('\x00'),
                 _ => Err(BinaryError::InvalidToken(value)),
             },
             token::HEX_8 => match value {
