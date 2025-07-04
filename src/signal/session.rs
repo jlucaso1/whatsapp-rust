@@ -1,6 +1,7 @@
 use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
+use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::protocol::ProtocolError;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::state::record::PreKeyRecord;
@@ -92,8 +93,9 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     fn get_or_create_message_keys(
         &self,
-        session_state: &mut crate::signal::state::session_state::SessionState,
-        ciphertext: &SignalMessage,
+        session_state: &mut SessionState,
+        their_ephemeral: &crate::signal::ecc::keys::DjbEcPublicKey,
+        counter: u32,
     ) -> Result<
         (
             crate::signal::chain_key::ChainKey,
@@ -101,77 +103,55 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         ),
         DecryptionError,
     > {
-        if let Some(chain) = session_state.receiver_chains_mut().iter_mut().find(
-            |c: &&mut crate::signal::state::session_state::Chain| {
-                c.sender_ratchet_key_pair.public_key.public_key
-                    == ciphertext.sender_ratchet_key.public_key()
-            },
-        ) {
+        if let Some(chain) = session_state.find_receiver_chain_mut(&their_ephemeral.public_key()) {
             let mut chain_key = chain.chain_key.clone();
-            if chain_key.index() > ciphertext.counter {
-                if let Some(keys) = chain.remove_message_keys(ciphertext.counter) {
+
+            if chain_key.index() > counter {
+                if let Some(keys) = chain.remove_message_keys(counter) {
                     return Ok((chain_key, keys));
                 }
                 return Err(DecryptionError::OldCounter {
                     current: chain_key.index(),
-                    received: ciphertext.counter,
+                    received: counter,
                 });
             }
 
-            if ciphertext.counter > chain_key.index() + 2000 {
+            if counter > chain_key.index() + 2000 {
                 return Err(DecryptionError::TooFarInFuture);
             }
 
-            while chain_key.index() < ciphertext.counter {
+            while chain_key.index() < counter {
                 chain.add_message_keys(chain_key.message_keys());
                 chain_key = chain_key.next_key();
             }
 
             let message_keys = chain_key.message_keys();
-            chain_key = chain_key.next_key();
             return Ok((chain_key, message_keys));
         } else {
             // This is the DH ratchet step for the receiver.
-            let their_ephemeral = ciphertext.sender_ratchet_key.clone();
-
             let root_key = session_state.root_key().clone();
             let our_ephemeral = session_state.sender_ratchet_key_pair().clone();
+            let their_ephemeral_arc = std::sync::Arc::new(their_ephemeral.clone())
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>;
 
-            // This calculates the new root and chain key for the receiving chain
             let receiver_chain_pair =
-                root_key.create_chain(their_ephemeral.clone(), &our_ephemeral)?;
+                root_key.create_chain(their_ephemeral_arc.clone(), &our_ephemeral)?;
 
-            // We must also calculate a new sending chain for ourselves
-            let new_our_ephemeral = super::ecc::curve::generate_key_pair();
+            let new_our_ephemeral = crate::signal::ecc::curve::generate_key_pair();
             let sender_chain_pair = receiver_chain_pair
                 .root_key
-                .create_chain(their_ephemeral.clone(), &new_our_ephemeral)?;
+                .create_chain(their_ephemeral_arc.clone(), &new_our_ephemeral)?;
 
-            // Update the state with the new keys
             session_state.set_root_key(sender_chain_pair.root_key);
-            session_state.add_receiver_chain(their_ephemeral, receiver_chain_pair.chain_key);
+            session_state.add_receiver_chain(
+                their_ephemeral_arc.clone(),
+                receiver_chain_pair.chain_key.clone(),
+            );
+            session_state.set_previous_counter(session_state.sender_chain_key().index());
             session_state.set_sender_chain(new_our_ephemeral, sender_chain_pair.chain_key);
 
-            // Now that the new chain exists, get the keys from it.
-            // This logic is the same as the `if` block above.
-            let chain = session_state
-                .receiver_chains_mut()
-                .iter_mut()
-                .find(|c: &&mut crate::signal::state::session_state::Chain| {
-                    c.sender_ratchet_key_pair.public_key.public_key
-                        == ciphertext.sender_ratchet_key.public_key()
-                })
-                .unwrap();
-            let mut chain_key = chain.chain_key.clone();
-
-            while chain_key.index() < ciphertext.counter {
-                chain.add_message_keys(chain_key.message_keys());
-                chain_key = chain_key.next_key();
-            }
-
-            let message_keys = chain_key.message_keys();
-            chain_key = chain_key.next_key();
-            Ok((chain_key, message_keys))
+            // Now we can get the keys from the newly created chain
+            self.get_or_create_message_keys(session_state, their_ephemeral, counter)
         }
     }
 
@@ -314,23 +294,66 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     async fn decrypt_with_state(
         &self,
         session_state: &mut SessionState,
-        ciphertext: &SignalMessage,
+        message: &SignalMessage,
     ) -> Result<Vec<u8>, DecryptionError> {
-        if session_state.sender_chain_opt().is_none() {
+        if !session_state.has_sender_chain() {
             return Err(DecryptionError::UninitializedSession);
         }
+
+        // Downcast Arc<dyn EcPublicKey> to &DjbEcPublicKey
+        let their_ephemeral = message
+            .sender_ratchet_key
+            .as_any()
+            .downcast_ref::<crate::signal::ecc::keys::DjbEcPublicKey>()
+            .expect("Expected DjbEcPublicKey in sender_ratchet_key");
         let (chain_key, message_keys) =
-            self.get_or_create_message_keys(session_state, ciphertext)?;
+            self.get_or_create_message_keys(session_state, their_ephemeral, message.counter)?;
+
         // MAC verification
         crate::signal::protocol::signal_message_deserialize_and_verify(
-            &ciphertext.serialized_form,
+            &message.serialized_form,
             message_keys.mac_key(),
             session_state.remote_identity_public().as_ref(),
             session_state.local_identity_public().as_ref(),
         )?;
-        let decrypted_plaintext = self.decrypt_internal(&message_keys, &ciphertext.ciphertext)?;
-        session_state.set_receiver_chain_key(ciphertext.sender_ratchet_key.clone(), chain_key);
+
+        let decrypted_plaintext = self.decrypt_internal(&message_keys, &message.ciphertext)?;
+
+        // Update state
+        session_state
+            .set_receiver_chain_key(message.sender_ratchet_key.clone(), chain_key.next_key());
+
         Ok(decrypted_plaintext)
+    }
+}
+
+use std::error::Error;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BuilderError {
+    #[error("Store error: {0}")]
+    Store(Box<dyn Error + Send + Sync>),
+    #[error("Untrusted identity key")]
+    UntrustedIdentity,
+    #[error("Invalid signature on prekey bundle")]
+    InvalidSignature,
+    #[error("No signed prekey found in bundle")]
+    NoSignedPreKey,
+    #[error("No one-time prekey found for ID {0}")]
+    NoOneTimePreKeyFound(u32),
+    #[error("Session setup error: {0}")]
+    SessionSetup(Box<dyn Error + Send + Sync>),
+}
+
+impl From<Box<dyn Error + Send + Sync>> for BuilderError {
+    fn from(err: Box<dyn Error + Send + Sync>) -> Self {
+        BuilderError::Store(err)
+    }
+}
+
+impl From<crate::signal::root_key::RootKeyError> for BuilderError {
+    fn from(e: crate::signal::root_key::RootKeyError) -> Self {
+        BuilderError::SessionSetup(Box::new(e))
     }
 }
 
@@ -353,17 +376,15 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         &self,
         session_record: &mut SessionRecord,
         message: &PreKeySignalMessage,
-    ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<u32>, BuilderError> {
         let their_identity_key = &message.identity_key;
         if !self
             .store
             .is_trusted_identity(&self.remote_address, their_identity_key)
-            .await?
+            .await
+            .map_err(|e| BuilderError::Store(e.into()))?
         {
-            log::warn!(
-                "Untrusted identity for {}, but auto-trusting.",
-                self.remote_address
-            );
+            return Err(BuilderError::UntrustedIdentity);
         }
 
         let our_identity = self.store.get_identity_key_pair().await?;
@@ -371,11 +392,14 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .store
             .load_signed_prekey(message.signed_pre_key_id)
             .await?
-            .ok_or("Signed pre-key not found in store")?;
+            .ok_or_else(|| BuilderError::NoSignedPreKey)?;
 
         let mut our_one_time_prekey: Option<PreKeyRecord> = None;
         if let Some(id) = message.pre_key_id {
-            our_one_time_prekey = self.store.load_prekey(id).await?;
+            match self.store.load_prekey(id).await? {
+                Some(record) => our_one_time_prekey = Some(record),
+                None => return Err(BuilderError::NoOneTimePreKeyFound(id)),
+            }
         }
 
         let session_key_pair = crate::signal::ratchet::calculate_receiver_session(
@@ -384,9 +408,12 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             our_one_time_prekey.as_ref().map(|r| r.key_pair()),
             their_identity_key,
             message.base_key.clone(),
-        )?;
+        )
+        .map_err(|e| BuilderError::SessionSetup(e.into()))?;
 
-        session_record.archive_current_state();
+        if !session_record.is_fresh() {
+            session_record.archive_current_state();
+        }
 
         let state = session_record.session_state_mut();
         state.set_session_version(3);
@@ -397,10 +424,12 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             our_signed_prekey.key_pair().clone(),
             session_key_pair.chain_key.clone(),
         );
+        state.set_sender_base_key(message.base_key.public_key());
 
         self.store
             .save_identity(&self.remote_address, their_identity_key)
-            .await?;
+            .await
+            .map_err(|e| BuilderError::Store(e.into()))?;
 
         Ok(message.pre_key_id)
     }
@@ -409,7 +438,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         &self,
         session_record: &mut SessionRecord,
         bundle: &PreKeyBundle,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), BuilderError> {
         let our_identity = self.store.get_identity_key_pair().await?;
         let our_base_key = crate::signal::ecc::curve::generate_key_pair();
 
@@ -419,32 +448,33 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .is_trusted_identity(&self.remote_address, their_identity_key)
             .await?
         {
-            // For now, auto-trusting.
-            log::warn!(
-                "Untrusted identity for {}, but auto-trusting.",
-                self.remote_address
-            );
+            return Err(BuilderError::UntrustedIdentity);
         }
         // Signature verification
+        let signed_pre_key_public = crate::signal::ecc::keys::DjbEcPublicKey::new(
+            bundle.signed_pre_key_public.public_key(),
+        );
+
         if !crate::signal::ecc::curve::verify_signature(
             their_identity_key.public_key(),
-            &bundle.signed_pre_key_public.as_bytes(),
+            &signed_pre_key_public.serialize(),
             &bundle.signed_pre_key_signature,
         ) {
-            return Err("Invalid signature on pre-key bundle".into());
+            return Err(BuilderError::InvalidSignature);
         }
 
         let session_key_pair = crate::signal::ratchet::calculate_sender_session(
             &our_identity,
             &our_base_key,
             their_identity_key,
-            Arc::new(bundle.signed_pre_key_public.clone())
-                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
+            std::sync::Arc::new(bundle.signed_pre_key_public.clone())
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
             bundle
                 .pre_key_public
                 .clone()
-                .map(|k| k as Arc<dyn crate::signal::ecc::keys::EcPublicKey>),
-        )?;
+                .map(|k| k as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>),
+        )
+        .map_err(|e| BuilderError::SessionSetup(e.into()))?;
 
         if !session_record.is_fresh() {
             session_record.archive_current_state();
@@ -457,14 +487,14 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
 
         let sending_ratchet_key = crate::signal::ecc::curve::generate_key_pair();
         let sending_chain = session_key_pair.root_key.create_chain(
-            Arc::new(bundle.signed_pre_key_public.clone())
-                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
+            std::sync::Arc::new(bundle.signed_pre_key_public.clone())
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
             &sending_ratchet_key,
         )?;
 
         state.add_receiver_chain(
-            Arc::new(bundle.signed_pre_key_public.clone())
-                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
+            std::sync::Arc::new(bundle.signed_pre_key_public.clone())
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
             session_key_pair.chain_key,
         );
         state.set_sender_chain(sending_ratchet_key, sending_chain.chain_key);
@@ -478,7 +508,8 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
 
         self.store
             .save_identity(&self.remote_address, their_identity_key)
-            .await?;
+            .await
+            .map_err(|e| BuilderError::Store(e.into()))?;
 
         Ok(())
     }

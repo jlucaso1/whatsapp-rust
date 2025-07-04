@@ -48,6 +48,8 @@ pub fn generate_sender_key() -> Vec<u8> {
 pub fn generate_sender_key_id() -> u32 {
     thread_rng().gen::<u32>()
 }
+/// Generates a registration ID. Clients should only do this once, at install time.
 pub fn generate_registration_id() -> u32 {
+    // The valid range is 1-16380
     thread_rng().gen_range(1..=16380)
 }

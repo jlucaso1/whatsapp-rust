@@ -27,6 +27,7 @@ pub struct SessionState {
     local_identity_public: IdentityKey,
     remote_identity_public: IdentityKey,
     root_key: RootKey,
+    sender_base_key: Option<DjbEcPublicKey>,
     previous_counter: u32,
     sender_chain: Option<Chain>,
     receiver_chains: Vec<Chain>,
@@ -82,6 +83,7 @@ impl SessionState {
             remote_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
             pending_key_exchange: None,
             root_key: RootKey::new([0; 32]),
+            sender_base_key: None,
             previous_counter: 0,
             sender_chain: None,
             receiver_chains: Vec::new(),
@@ -190,6 +192,15 @@ impl SessionState {
 
     pub fn previous_counter(&self) -> u32 {
         self.previous_counter
+    }
+
+    pub fn set_previous_counter(&mut self, counter: u32) {
+        self.previous_counter = counter;
+    }
+
+    pub fn set_sender_base_key(&mut self, key_bytes: [u8; 32]) {
+        let public_key = DjbEcPublicKey::new(key_bytes);
+        self.sender_base_key = Some(public_key);
     }
 
     pub fn local_identity_public(&self) -> Arc<IdentityKey> {

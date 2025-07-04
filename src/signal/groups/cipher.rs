@@ -1,6 +1,7 @@
 // Corresponds to libsignal-protocol-go/groups/GroupCipher.go
 
 use super::builder::GroupSessionBuilder;
+use super::ratchet::get_sender_key;
 use crate::crypto::cbc;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
@@ -31,7 +32,7 @@ impl<S: SenderKeyStore> GroupCipher<S> {
     pub async fn encrypt(
         &self,
         plaintext: &[u8],
-    ) -> Result<SenderKeyMessage, Box<dyn Error + Send + Sync>> {
+    ) -> Result<SenderKeyMessage, Box<dyn Error + Send + Sync + 'static>> {
         let mut key_record = self
             .sender_key_store
             .load_sender_key(&self.sender_key_id)
@@ -47,7 +48,9 @@ impl<S: SenderKeyStore> GroupCipher<S> {
             state.key_id(),
             sender_key.iteration(),
             ciphertext.clone(),
-            vec![], // TODO: Add signature logic
+            // TODO: Signature logic needs the private key to be available and implemented
+            // For now, an empty signature will be sent.
+            vec![],
         );
 
         state.set_sender_chain_key(state.sender_chain_key().next());
@@ -61,17 +64,16 @@ impl<S: SenderKeyStore> GroupCipher<S> {
     pub async fn decrypt(
         &self,
         sender_key_message: &SenderKeyMessage,
-    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>> {
         let mut key_record = self
             .sender_key_store
             .load_sender_key(&self.sender_key_id)
             .await?;
         let state = key_record
             .get_sender_key_state_by_id_mut(sender_key_message.key_id())
-            .ok_or("No sender key state")?;
+            .ok_or("No sender key state for given key ID")?;
         // TODO: Implement signature verification if needed
-        let sender_key =
-            crate::signal::groups::ratchet::get_sender_key(state, sender_key_message.iteration())?;
+        let sender_key = get_sender_key(state, sender_key_message.iteration())?;
         let plaintext = cbc::decrypt(
             sender_key.cipher_key(),
             sender_key.iv(),

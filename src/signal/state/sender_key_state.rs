@@ -64,4 +64,15 @@ impl SenderKeyState {
             self.message_keys.remove(0);
         }
     }
+
+    pub fn remove_sender_message_key(&mut self, iteration: u32) -> Option<SenderMessageKey> {
+        if let Some(pos) = self
+            .message_keys
+            .iter()
+            .position(|k| k.iteration() == iteration)
+        {
+            return self.message_keys.get(pos).cloned();
+        }
+        None
+    }
 }

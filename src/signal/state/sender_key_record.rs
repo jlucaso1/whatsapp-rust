@@ -21,7 +21,7 @@ impl SenderKeyRecord {
         self.sender_key_states.is_empty()
     }
 
-    pub fn get_sender_key_state(&self) -> Option<&SenderKeyState> {
+    pub fn sender_key_state(&self) -> Option<&SenderKeyState> {
         self.sender_key_states.first()
     }
 

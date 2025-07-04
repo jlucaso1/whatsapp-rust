@@ -53,7 +53,7 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
             let key_id = keyhelper::generate_sender_key_id();
             record.set_sender_key_state(key_id, 0, &chain_key, signing_key);
         }
-        let state = record.get_sender_key_state().ok_or("No sender key state")?;
+        let state = record.sender_key_state().ok_or("No sender key state")?;
         let msg = crate::signal::groups::message::SenderKeyDistributionMessage::new(
             state.key_id(),
             state.sender_chain_key().iteration(),
