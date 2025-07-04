@@ -28,7 +28,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 
-pub type EventHandler = Box<dyn Fn(&Event) + Send + Sync>;
+pub type EventHandler = Box<dyn Fn(Arc<Event>) + Send + Sync>;
 pub(crate) struct WrappedHandler {
     pub(crate) id: usize,
     handler: EventHandler,
@@ -991,9 +991,10 @@ impl Client {
     }
 
     pub async fn dispatch_event(&self, event: Event) {
+        let event_arc = Arc::new(event);
         let handlers = self.event_handlers.read().await;
         for wrapped in handlers.iter() {
-            (wrapped.handler)(&event);
+            (wrapped.handler)(event_arc.clone());
         }
     }
 

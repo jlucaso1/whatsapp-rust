@@ -116,7 +116,7 @@ pub(crate) async fn get_qr_channel_logic(
         let stop_emitter_tx = stop_emitter_tx.clone();
         let handler_id_arc = handler_id_arc.clone();
 
-        Box::new(move |event: &Event| {
+        Box::new(move |event_arc: Arc<Event>| {
             if closed.load(Ordering::Relaxed) {
                 return;
             }
@@ -126,14 +126,14 @@ pub(crate) async fn get_qr_channel_logic(
             let stop_emitter_tx = stop_emitter_tx.clone();
             let event_handlers_weak = event_handlers_weak.clone();
             let handler_id_arc = handler_id_arc.clone();
-            let event = event.clone();
+            let event_clone_arc = event_arc.clone();
             let stop_emitter_rx = stop_emitter_rx.clone();
 
             tokio::spawn(async move {
                 let mut terminal_event = None;
                 let mut non_terminal_event = None;
 
-                match &event {
+                match &*event_clone_arc {
                     Event::Qr(qr_data) => {
                         debug!("Received QR event, starting emitter task");
                         tokio::spawn(emit_codes(
