@@ -19,6 +19,7 @@ use crate::types::jid::{Jid, SERVER_JID};
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
 use prost::Message as ProtoMessage;
+use rand::Rng;
 use rand::RngCore;
 use scopeguard;
 use std::collections::HashMap;
@@ -46,6 +47,19 @@ pub enum ClientError {
     AlreadyConnected,
     #[error("client is not logged in")]
     NotLoggedIn,
+}
+
+fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    // Generate a random padding length from 1-15 bytes.
+    let mut pad_val = rng.gen::<u8>() & 0x0F;
+    if pad_val == 0 {
+        pad_val = 0x0F;
+    }
+    // Append `pad_val` bytes with the value of `pad_val`.
+    let padding = vec![pad_val; pad_val as usize];
+    plaintext.extend_from_slice(&padding);
+    plaintext
 }
 
 pub struct Client {
@@ -1246,10 +1260,9 @@ impl Client {
         let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
         let serialized_msg_proto = <wa::Message as ProtoMessage>::encode_to_vec(&message);
 
-        let encrypted_message = match cipher
-            .encrypt(&mut session_record, &serialized_msg_proto)
-            .await
-        {
+        let padded_plaintext = pad_message_v2(serialized_msg_proto);
+
+        let encrypted_message = match cipher.encrypt(&mut session_record, &padded_plaintext).await {
             Ok(msg) => msg,
             Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
         };
