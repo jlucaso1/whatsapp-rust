@@ -1,8 +1,8 @@
 use crate::crypto::xed25519::sign_dalek;
 use ed25519_dalek::{Signature, SigningKey};
 use rand::rngs::OsRng;
-use thiserror::Error;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Debug, Error)]

@@ -79,13 +79,11 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
     info!(target: "Client/AppState", "Starting AppState sync for '{}' (full_sync: {})", name, full_sync);
 
     let store_guard = client.store.read().await;
-    let app_state_store = store_guard.app_state_store.clone();
-    let app_state_keys = store_guard.app_state_keys.clone();
-    let contacts_store = store_guard.identities.clone();
-    let processor = Processor::new(app_state_store.clone(), app_state_keys.clone());
+    let backend = store_guard.backend.clone();
+    let processor = Processor::new(backend.clone(), backend.clone());
     drop(store_guard);
 
-    let mut current_state = match app_state_store.get_app_state_version(name).await {
+    let mut current_state = match backend.get_app_state_version(name).await {
         Ok(s) => s,
         Err(e) => {
             error!("Failed to get app state version for {}: {:?}", name, e);
@@ -164,9 +162,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                     if mutation.index.len() > 1 {
                                         let jid_str = &mutation.index[1];
                                         if let Ok(jid) = Jid::from_str(jid_str) {
-                                            let _ = contacts_store
-                                                .put_identity(jid_str, [0u8; 32])
-                                                .await;
+                                            let _ = backend.put_identity(jid_str, [0u8; 32]).await;
                                             let event = Event::ContactUpdate(ContactUpdate {
                                                 jid,
                                                 timestamp: chrono::Utc::now(),

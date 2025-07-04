@@ -16,8 +16,8 @@ pub mod memory;
 pub mod traits;
 
 use crate::store::traits::*;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SerializableDevice {
@@ -42,27 +42,12 @@ pub struct Device {
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
 
-    // Abstracted storage via trait objects
-    pub identities: Arc<dyn IdentityStore>,
-    pub sessions: Arc<dyn SessionStore>,
-    pub app_state_store: Arc<dyn AppStateStore>,
-    pub app_state_keys: Arc<dyn AppStateKeyStore>,
-    pub pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
-    pub signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
-    pub sender_keys: Arc<dyn crate::signal::store::SenderKeyStore>,
+    pub backend: Arc<dyn Backend>,
 }
 
 impl Device {
     /// Creates a new, unregistered device with fresh keys and abstracted stores.
-    pub fn new(
-        identities: Arc<dyn IdentityStore>,
-        sessions: Arc<dyn SessionStore>,
-        app_state_store: Arc<dyn AppStateStore>,
-        app_state_keys: Arc<dyn AppStateKeyStore>,
-        pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
-        signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
-        sender_keys: Arc<dyn crate::signal::store::SenderKeyStore>,
-    ) -> Self {
+    pub fn new(backend: Arc<dyn Backend>) -> Self {
         let identity_key = KeyPair::new();
         let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
         let mut adv_secret_key = [0u8; 32];
@@ -77,14 +62,7 @@ impl Device {
             adv_secret_key,
             account: None,
             push_name: "".to_string(),
-
-            identities,
-            sessions,
-            app_state_store,
-            app_state_keys,
-            pre_keys,
-            signed_pre_keys,
-            sender_keys,
+            backend,
         }
     }
 

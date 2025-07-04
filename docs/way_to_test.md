@@ -49,14 +49,14 @@ mod tests {
             // For this example, we'll use in-memory stores for simplicity.
             // A real implementation would have a `setup_master_client()` function.
             let master_store_backend = Arc::new(MemoryStore::new());
-            let master_store = Device::new(master_store_backend.clone(), master_store_backend.clone());
+            let master_store = Device::new(master_store_backend.clone());
             // In a real test, you'd load the master JID here or perform a one-time pairing
             // and save the session. For now, we'll skip this and focus on the DUT.
             let master_client = Arc::new(Client::new(master_store));
 
             // Setup the Device Under Test (DUT) with a fresh store
             let dut_store_backend = Arc::new(MemoryStore::new());
-            let dut_store = Device::new(dut_store_backend.clone(), dut_store_backend.clone());
+            let dut_store = Device::new(dut_store_backend.clone());
             let dut_client = Arc::new(Client::new(dut_store));
 
             // Create an event channel for the DUT

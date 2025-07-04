@@ -15,28 +15,12 @@ async fn main() -> Result<(), anyhow::Error> {
     // Try to load an existing device session
     let device = if let Some(loaded_data) = store_backend.load_device_data().await? {
         info!("Loaded existing device from store.");
-        let mut dev = store::Device::new(
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-        );
+        let mut dev = store::Device::new(store_backend.clone());
         dev.load_from_serializable(loaded_data);
         dev
     } else {
         info!("No existing device found, creating a new one.");
-        let dev = store::Device::new(
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-            store_backend.clone(),
-        );
+        let dev = store::Device::new(store_backend.clone());
         // The device will be saved after a successful pairing
         dev
     };

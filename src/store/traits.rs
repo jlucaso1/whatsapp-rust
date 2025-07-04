@@ -1,3 +1,4 @@
+use crate::signal;
 use crate::store::error::Result;
 use async_trait::async_trait;
 
@@ -43,14 +44,28 @@ pub trait AppStateKeyStore: Send + Sync {
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
 }
 
-// TODO: Define PreKeyStore, SenderKeyStore, ContactStore, etc.
-
-pub trait AllStores:
-    IdentityStore + SessionStore + AppStateStore + AppStateKeyStore + Send + Sync
+pub trait Backend:
+    IdentityStore
+    + SessionStore
+    + AppStateStore
+    + AppStateKeyStore
+    + signal::store::PreKeyStore
+    + signal::store::SignedPreKeyStore
+    + signal::store::SenderKeyStore
+    + Send
+    + Sync
 {
 }
 
-impl<T: IdentityStore + SessionStore + AppStateStore + AppStateKeyStore + Send + Sync> AllStores
-    for T
+impl<T> Backend for T where
+    T: IdentityStore
+        + SessionStore
+        + AppStateStore
+        + AppStateKeyStore
+        + signal::store::PreKeyStore
+        + signal::store::SignedPreKeyStore
+        + signal::store::SenderKeyStore
+        + Send
+        + Sync
 {
 }

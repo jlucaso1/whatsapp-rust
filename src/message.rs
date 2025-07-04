@@ -243,7 +243,7 @@ impl Client {
 
     /// Stores app state sync keys received from a key share message.
     pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
-        let key_store = self.store.read().await.app_state_keys.clone();
+        let key_store = self.store.read().await.backend.clone();
         for key in &keys.keys {
             if let Some(key_id_proto) = &key.key_id {
                 if let Some(key_id) = &key_id_proto.key_id {

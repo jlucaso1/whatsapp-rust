@@ -38,7 +38,7 @@ impl IdentityKeyStore for Device {
         address: &SignalAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.identities
+        self.backend
             .put_identity(&address.to_string(), identity_key.public_key().public_key)
             .await
             .map_err(|e| e.into())
@@ -61,26 +61,26 @@ impl PreKeyStore for Device {
         &self,
         prekey_id: u32,
     ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.pre_keys.load_prekey(prekey_id).await
+        self.backend.load_prekey(prekey_id).await
     }
     async fn store_prekey(
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.pre_keys.store_prekey(prekey_id, record).await
+        self.backend.store_prekey(prekey_id, record).await
     }
     async fn contains_prekey(
         &self,
         prekey_id: u32,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.pre_keys.contains_prekey(prekey_id).await
+        self.backend.contains_prekey(prekey_id).await
     }
     async fn remove_prekey(
         &self,
         prekey_id: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.pre_keys.remove_prekey(prekey_id).await
+        self.backend.remove_prekey(prekey_id).await
     }
 }
 
@@ -113,21 +113,19 @@ impl SignedPreKeyStore for Device {
             return Ok(Some(record));
         }
         // Otherwise, delegate to the underlying store.
-        self.signed_pre_keys
-            .load_signed_prekey(signed_prekey_id)
-            .await
+        self.backend.load_signed_prekey(signed_prekey_id).await
     }
     async fn load_signed_prekeys(
         &self,
     ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.signed_pre_keys.load_signed_prekeys().await
+        self.backend.load_signed_prekeys().await
     }
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.signed_pre_keys
+        self.backend
             .store_signed_prekey(signed_prekey_id, record)
             .await
     }
@@ -135,17 +133,13 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.signed_pre_keys
-            .contains_signed_prekey(signed_prekey_id)
-            .await
+        self.backend.contains_signed_prekey(signed_prekey_id).await
     }
     async fn remove_signed_prekey(
         &self,
         signed_prekey_id: u32,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.signed_pre_keys
-            .remove_signed_prekey(signed_prekey_id)
-            .await
+        self.backend.remove_signed_prekey(signed_prekey_id).await
     }
 }
 
@@ -156,7 +150,7 @@ impl SessionStore for Device {
         &self,
         address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(data) = self.sessions.get_session(&address.to_string()).await? {
+        if let Some(data) = self.backend.get_session(&address.to_string()).await? {
             if !data.is_empty() {
                 let record: SessionRecord = serde_json::from_slice(&data)?;
                 return Ok(record);
@@ -173,7 +167,7 @@ impl SessionStore for Device {
         record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let data = serde_json::to_vec(record)?;
-        self.sessions
+        self.backend
             .put_session(&address.to_string(), &data)
             .await
             .map_err(|e| e.into())
@@ -189,7 +183,7 @@ impl SessionStore for Device {
         &self,
         address: &SignalAddress,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.sessions
+        self.backend
             .has_session(&address.to_string())
             .await
             .map_err(|e| e.into())
@@ -198,7 +192,7 @@ impl SessionStore for Device {
         &self,
         address: &SignalAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.sessions
+        self.backend
             .delete_session(&address.to_string())
             .await
             .map_err(|e| e.into())

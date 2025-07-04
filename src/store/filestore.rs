@@ -50,11 +50,9 @@ impl FileStore {
     }
 
     async fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
-        let data =
-            serde_json::to_vec_pretty(value).map_err(|e| StoreError::Serialization(e.to_string()))?;
-        fs::write(path, data)
-            .await
-            .map_err(|e| StoreError::Io(e))
+        let data = serde_json::to_vec_pretty(value)
+            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+        fs::write(path, data).await.map_err(|e| StoreError::Io(e))
     }
 
     fn device_path(&self) -> PathBuf {
@@ -166,7 +164,10 @@ impl signal::store::PreKeyStore for FileStore {
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> std::result::Result<bool, SignalStoreError> {
-        Ok(self.path_for("prekeys").join(prekey_id.to_string()).exists())
+        Ok(self
+            .path_for("prekeys")
+            .join(prekey_id.to_string())
+            .exists())
     }
 
     async fn remove_prekey(&self, prekey_id: u32) -> std::result::Result<(), SignalStoreError> {
@@ -267,16 +268,12 @@ impl signal::store::SenderKeyStore for FileStore {
 #[async_trait]
 impl AppStateKeyStore for FileStore {
     async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
-        let path = self
-            .path_for("appstate/keys")
-            .join(hex::encode(key_id));
+        let path = self.path_for("appstate/keys").join(hex::encode(key_id));
         self.read_json(&path).await
     }
 
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
-        let path = self
-            .path_for("appstate/keys")
-            .join(hex::encode(key_id));
+        let path = self.path_for("appstate/keys").join(hex::encode(key_id));
         self.write_json(&path, &key).await
     }
 }
