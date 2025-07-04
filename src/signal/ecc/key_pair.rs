@@ -2,7 +2,7 @@ use super::keys::{DjbEcPrivateKey, DjbEcPublicKey};
 use serde::{Deserialize, Serialize};
 
 // Refactored to use concrete key types for serialization
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EcKeyPair {
     pub public_key: DjbEcPublicKey,
     pub private_key: DjbEcPrivateKey,

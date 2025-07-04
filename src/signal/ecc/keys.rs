@@ -48,7 +48,7 @@ impl EcPublicKey for DjbEcPublicKey {
 }
 
 // Corresponds to DjbECPrivateKey
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DjbEcPrivateKey {
     private_key: [u8; 32],
 }

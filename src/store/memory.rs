@@ -1,4 +1,5 @@
 // src/store/memory.rs
+use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::Result;
 use crate::store::traits::*;
 use async_trait::async_trait;
@@ -14,6 +15,9 @@ pub struct MemoryStore {
     // --- Signal Protocol fields ---
     pre_keys: Mutex<HashMap<u32, crate::signal::state::record::PreKeyRecord>>,
     signed_pre_keys: Mutex<HashMap<u32, crate::signal::state::record::SignedPreKeyRecord>>,
+    sender_keys: Mutex<
+        std::collections::HashMap<crate::signal::sender_key_name::SenderKeyName, SenderKeyRecord>,
+    >,
 }
 
 impl MemoryStore {
@@ -44,6 +48,31 @@ impl IdentityStore for MemoryStore {
         } else {
             Ok(false)
         }
+    }
+}
+
+// --- SenderKeyStore implementation for MemoryStore ---
+#[async_trait]
+impl crate::signal::store::SenderKeyStore for MemoryStore {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &crate::signal::sender_key_name::SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut sender_keys = self.sender_keys.lock().await;
+        sender_keys.insert(sender_key_name.clone(), record);
+        Ok(())
+    }
+
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &crate::signal::sender_key_name::SenderKeyName,
+    ) -> std::result::Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        let sender_keys = self.sender_keys.lock().await;
+        Ok(sender_keys
+            .get(sender_key_name)
+            .cloned()
+            .unwrap_or_default())
     }
 }
 

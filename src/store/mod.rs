@@ -32,6 +32,7 @@ pub struct Device {
     pub app_state_keys: Arc<dyn AppStateKeyStore>,
     pub pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
     pub signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
+    pub sender_keys: Arc<dyn crate::signal::store::SenderKeyStore>,
 }
 
 impl Device {
@@ -43,6 +44,7 @@ impl Device {
         app_state_keys: Arc<dyn AppStateKeyStore>,
         pre_keys: Arc<dyn crate::signal::store::PreKeyStore>,
         signed_pre_keys: Arc<dyn crate::signal::store::SignedPreKeyStore>,
+        sender_keys: Arc<dyn crate::signal::store::SenderKeyStore>,
     ) -> Self {
         let identity_key = KeyPair::new();
         let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
@@ -62,6 +64,7 @@ impl Device {
             app_state_keys,
             pre_keys,
             signed_pre_keys,
+            sender_keys,
         }
     }
 

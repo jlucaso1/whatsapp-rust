@@ -1,3 +1,6 @@
+use crate::signal::groups::ratchet::sender_message_key::SenderMessageKey;
+use crate::signal::state::sender_key_state::SenderKeyState;
+
 use super::ecc::curve;
 use super::ecc::key_pair::EcKeyPair;
 use super::ecc::keys::{EcPrivateKey, EcPublicKey};
@@ -5,6 +8,14 @@ use super::identity::{IdentityKey, IdentityKeyPair};
 use super::kdf;
 use super::root_key::{RootKey, SessionKeyPair};
 use std::sync::Arc;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RatchetError {
+    #[error("Old counter: current={current}, received={received}")]
+    OldCounter { current: u32, received: u32 },
+    #[error("Message is too far in the future")]
+    TooFarInFuture,
+}
 
 // Corresponds to ratchet.CalculateAliceSession
 pub fn calculate_sender_session(
@@ -106,4 +117,28 @@ pub fn calculate_receiver_session(
         root_key,
         chain_key,
     })
+}
+
+pub fn get_sender_key(
+    state: &mut SenderKeyState,
+    iteration: u32,
+) -> Result<SenderMessageKey, RatchetError> {
+    let mut sender_chain_key = state.sender_chain_key().clone();
+    if sender_chain_key.iteration() > iteration {
+        // We don't support message keys cache yet, so this is always an error.
+        return Err(RatchetError::OldCounter {
+            current: sender_chain_key.iteration(),
+            received: iteration,
+        });
+    }
+
+    if iteration - sender_chain_key.iteration() > 2000 {
+        return Err(RatchetError::TooFarInFuture);
+    }
+
+    while sender_chain_key.iteration() < iteration {
+        sender_chain_key = sender_chain_key.next();
+    }
+
+    Ok(sender_chain_key.sender_message_key())
 }

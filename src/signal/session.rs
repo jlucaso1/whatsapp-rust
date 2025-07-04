@@ -2,6 +2,7 @@ use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
 use crate::signal::protocol::ProtocolError;
+use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::state::record::PreKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
@@ -23,15 +24,15 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     pub async fn encrypt(
         &self,
         plaintext: &[u8],
-    ) -> Result<Box<dyn CiphertextMessage>, Box<dyn std::error::Error>> {
+    ) -> Result<Box<dyn CiphertextMessage>, Box<dyn std::error::Error + Send + Sync>> {
         let mut session_record: SessionRecord = self
             .store
             .load_session(&self.remote_address)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| e)?;
         let session_state = session_record.session_state_mut();
 
-        let chain_key = session_state.sender_chain_key();
+        let mut chain_key = session_state.sender_chain_key();
         let message_keys = chain_key.message_keys();
 
         let ciphertext = self.encrypt_internal(&message_keys, plaintext)?;
@@ -39,7 +40,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         let signal_message = SignalMessage::new(
             message_keys.mac_key(),
             session_state.sender_ratchet_key(),
-            chain_key.index(),
+            message_keys.index(),
             session_state.previous_counter(),
             ciphertext,
             &*session_state.local_identity_public(),
@@ -48,21 +49,18 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
         let final_message: Box<dyn CiphertextMessage> =
             if session_state.has_unacknowledged_prekey_message() {
-                let pending = session_state
-                    .pending_pre_key
-                    .as_ref()
-                    .ok_or("Pending pre-key not found")?;
+                let pending = session_state.unack_pre_key_message_items().unwrap();
                 let local_reg_id = self
                     .store
                     .get_local_registration_id()
                     .await
-                    .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+                    .map_err(|e| e)?;
 
                 Box::new(PreKeySignalMessage::new(
                     local_reg_id,
-                    pending.pre_key_id,
-                    pending.signed_pre_key_id,
-                    Arc::new(pending.base_key.clone())
+                    pending.pre_key_id(),
+                    pending.signed_pre_key_id(),
+                    Arc::new(pending.base_key().clone())
                         as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
                     session_state.local_identity_public().as_ref().clone(),
                     signal_message,
@@ -71,11 +69,12 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                 Box::new(signal_message)
             };
 
-        session_state.set_sender_chain_key(chain_key.next_key());
+        chain_key = chain_key.next_key();
+        session_state.set_sender_chain_key(chain_key);
         self.store
             .store_session(&self.remote_address, &session_record)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            .map_err(|e| e)?;
 
         Ok(final_message)
     }
@@ -84,7 +83,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         &self,
         message_keys: &super::message_key::MessageKeys,
         plaintext: &[u8],
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::crypto::cbc;
         cbc::encrypt(message_keys.cipher_key(), message_keys.iv(), plaintext).map_err(|e| e.into())
     }
@@ -404,5 +403,79 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .await?;
 
         Ok(message.pre_key_id)
+    }
+    /// Build a session from a PreKeyBundle (for outgoing messages)
+    pub async fn process_bundle(
+        &self,
+        session_record: &mut SessionRecord,
+        bundle: &PreKeyBundle,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let our_identity = self.store.get_identity_key_pair().await?;
+        let our_base_key = crate::signal::ecc::curve::generate_key_pair();
+
+        let their_identity_key = &bundle.identity_key;
+        if !self
+            .store
+            .is_trusted_identity(&self.remote_address, their_identity_key)
+            .await?
+        {
+            // For now, auto-trusting.
+            log::warn!(
+                "Untrusted identity for {}, but auto-trusting.",
+                self.remote_address
+            );
+        }
+        // Signature verification
+        if !crate::signal::ecc::curve::verify_signature(
+            their_identity_key.public_key(),
+            &bundle.signed_pre_key_public.serialize(),
+            &bundle.signed_pre_key_signature,
+        ) {
+            return Err("Invalid signature on pre-key bundle".into());
+        }
+
+        let session_key_pair = crate::signal::ratchet::calculate_sender_session(
+            &our_identity,
+            &our_base_key,
+            their_identity_key,
+            bundle.signed_pre_key_public.clone(),
+            bundle
+                .pre_key_public
+                .clone()
+                .map(|k| k as Arc<dyn crate::signal::ecc::keys::EcPublicKey>),
+        )?;
+
+        if !session_record.is_fresh() {
+            session_record.archive_current_state();
+        }
+
+        let state = session_record.session_state_mut();
+        state.set_session_version(3);
+        state.set_remote_identity_key(their_identity_key.clone());
+        state.set_local_identity_key(our_identity.public_key.clone());
+
+        let sending_ratchet_key = crate::signal::ecc::curve::generate_key_pair();
+        let sending_chain = session_key_pair
+            .root_key
+            .create_chain(bundle.signed_pre_key_public.clone(), &sending_ratchet_key)?;
+
+        state.add_receiver_chain(
+            bundle.signed_pre_key_public.clone(),
+            session_key_pair.chain_key,
+        );
+        state.set_sender_chain(sending_ratchet_key, sending_chain.chain_key);
+        state.set_root_key(sending_chain.root_key);
+
+        state.set_unacknowledged_prekey_message(
+            bundle.pre_key_id,
+            bundle.signed_pre_key_id,
+            our_base_key.public_key,
+        );
+
+        self.store
+            .save_identity(&self.remote_address, their_identity_key)
+            .await?;
+
+        Ok(())
     }
 }

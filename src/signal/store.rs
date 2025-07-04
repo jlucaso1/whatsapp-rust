@@ -1,3 +1,6 @@
+use crate::signal::sender_key_name::SenderKeyName;
+use crate::signal::state::sender_key_record::SenderKeyRecord;
+
 // src/signal/store.rs
 use super::address::SignalAddress;
 use super::identity::{IdentityKey, IdentityKeyPair};
@@ -66,6 +69,19 @@ pub trait SessionStore: Send + Sync {
     async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError>;
     async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError>;
     async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError>;
+}
+
+#[async_trait]
+pub trait SenderKeyStore: Send + Sync {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), StoreError>;
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, StoreError>;
 }
 
 // Corresponds to state/store/SignalProtocolStore.go

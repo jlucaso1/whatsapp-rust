@@ -22,6 +22,7 @@ async fn main() -> Result<(), anyhow::Error> {
         store_backend.clone(),
         store_backend.clone(),
         store_backend.clone(),
+        store_backend.clone(),
     );
 
     info!("Creating client...");

@@ -38,7 +38,7 @@ impl IdentityKey {
 }
 
 // Corresponds to keys/identity/IdentityKeyPair.go
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IdentityKeyPair {
     pub public_key: IdentityKey,
     pub private_key: EcKeyPair,

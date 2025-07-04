@@ -1,6 +1,9 @@
 use crate::binary::node::Node;
+use crate::binary::node::NodeContent;
 use crate::handshake;
 use crate::pair;
+use crate::signal::session::SessionBuilder;
+use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::store::SessionStore;
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use crate::store;
@@ -72,6 +75,181 @@ pub struct Client {
 }
 
 impl Client {
+    /// Fetch pre-keys for a list of JIDs from the server.
+    pub async fn fetch_pre_keys(
+        &self,
+        jids: &[Jid],
+    ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {
+        let mut user_nodes = Vec::with_capacity(jids.len());
+        for jid in jids {
+            user_nodes.push(Node {
+                tag: "user".into(),
+                attrs: [("jid".to_string(), jid.to_string())].into(),
+                content: None,
+            });
+        }
+
+        let resp_node = self
+            .send_iq(crate::request::InfoQuery {
+                namespace: "encrypt",
+                query_type: crate::request::InfoQueryType::Get,
+                to: "server@c.us".parse().unwrap(),
+                content: Some(NodeContent::Nodes(vec![Node {
+                    tag: "key".into(),
+                    attrs: Default::default(),
+                    content: Some(NodeContent::Nodes(user_nodes)),
+                }])),
+                id: None,
+                target: None,
+                timeout: None,
+            })
+            .await?;
+
+        let list_node = resp_node
+            .get_optional_child("list")
+            .ok_or_else(|| anyhow::anyhow!("<list> not found in pre-key response"))?;
+
+        let mut bundles = HashMap::new();
+        for user_node in list_node.children().unwrap_or_default() {
+            if user_node.tag != "user" {
+                continue;
+            }
+            let mut attrs = user_node.attrs();
+            let jid = attrs.jid("jid");
+            let bundle = match self.node_to_pre_key_bundle(&jid, user_node) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!("Failed to parse pre-key bundle for {}: {}", jid, e);
+                    continue;
+                }
+            };
+            bundles.insert(jid, bundle);
+        }
+
+        Ok(bundles)
+    }
+
+    fn node_to_pre_key_bundle(
+        &self,
+        jid: &Jid,
+        node: &Node,
+    ) -> Result<PreKeyBundle, anyhow::Error> {
+        fn extract_bytes(node: Option<&Node>) -> Result<Vec<u8>, anyhow::Error> {
+            match node.and_then(|n| n.content.as_ref()) {
+                Some(NodeContent::Bytes(b)) => Ok(b.clone()),
+                _ => Err(anyhow::anyhow!("Expected bytes in node content")),
+            }
+        }
+
+        if let Some(error_node) = node.get_optional_child("error") {
+            return Err(anyhow::anyhow!(
+                "Error getting prekeys: {}",
+                error_node.to_string()
+            ));
+        }
+
+        let reg_id_bytes = extract_bytes(node.get_optional_child("registration"))?;
+        if reg_id_bytes.len() != 4 {
+            return Err(anyhow::anyhow!("Invalid registration ID length"));
+        }
+        let registration_id = u32::from_be_bytes(reg_id_bytes.try_into().unwrap());
+
+        let keys_node = node.get_optional_child("keys").unwrap_or(node);
+
+        let identity_key_bytes = extract_bytes(keys_node.get_optional_child("identity"))?;
+        let identity_key = crate::signal::identity::IdentityKey::deserialize(&identity_key_bytes)?;
+
+        let mut pre_key_id = None;
+        let mut pre_key_public = None;
+        if let Some(pre_key_node) = keys_node.get_optional_child("key") {
+            let (id, key) = self.node_to_pre_key(pre_key_node)?;
+            pre_key_id = Some(id);
+            pre_key_public = Some(std::sync::Arc::new(key)
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey + Send + Sync>);
+        }
+
+        let signed_pre_key_node = keys_node
+            .get_optional_child("skey")
+            .ok_or(anyhow::anyhow!("Missing signed prekey"))?;
+        let (signed_pre_key_id, signed_pre_key_public, signed_pre_key_signature) =
+            self.node_to_signed_pre_key(signed_pre_key_node)?;
+
+        Ok(PreKeyBundle {
+            registration_id,
+            device_id: jid.device as u32,
+            pre_key_id,
+            pre_key_public,
+            signed_pre_key_id,
+            signed_pre_key_public: std::sync::Arc::new(signed_pre_key_public)
+                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey + Send + Sync>,
+            signed_pre_key_signature,
+            identity_key,
+        })
+    }
+
+    fn node_to_pre_key(
+        &self,
+        node: &Node,
+    ) -> Result<(u32, crate::signal::ecc::keys::DjbEcPublicKey), anyhow::Error> {
+        let id_bytes = node
+            .get_optional_child("id")
+            .and_then(|n| n.content.as_ref())
+            .and_then(|c| {
+                if let NodeContent::Bytes(b) = c {
+                    Some(b.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or(anyhow::anyhow!("Missing pre-key ID"))?;
+        if id_bytes.len() != 3 {
+            return Err(anyhow::anyhow!("Invalid pre-key ID length"));
+        }
+        let id = u32::from_be_bytes([0, id_bytes[0], id_bytes[1], id_bytes[2]]);
+
+        let value_bytes = node
+            .get_optional_child("value")
+            .and_then(|n| n.content.as_ref())
+            .and_then(|c| {
+                if let NodeContent::Bytes(b) = c {
+                    Some(b.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or(anyhow::anyhow!("Missing pre-key value"))?;
+        if value_bytes.len() != 32 {
+            return Err(anyhow::anyhow!("Invalid pre-key value length"));
+        }
+
+        Ok((
+            id,
+            crate::signal::ecc::keys::DjbEcPublicKey::new(value_bytes.try_into().unwrap()),
+        ))
+    }
+
+    fn node_to_signed_pre_key(
+        &self,
+        node: &Node,
+    ) -> Result<(u32, crate::signal::ecc::keys::DjbEcPublicKey, [u8; 64]), anyhow::Error> {
+        let (id, public_key) = self.node_to_pre_key(node)?;
+        let signature_bytes = node
+            .get_optional_child("signature")
+            .and_then(|n| n.content.as_ref())
+            .and_then(|c| {
+                if let NodeContent::Bytes(b) = c {
+                    Some(b.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or(anyhow::anyhow!("Missing signed pre-key signature"))?;
+        if signature_bytes.len() != 64 {
+            return Err(anyhow::anyhow!("Invalid signature length"));
+        }
+
+        Ok((id, public_key, signature_bytes.try_into().unwrap()))
+    }
     pub fn new(store: store::Device) -> Self {
         let mut unique_id_bytes = [0u8; 2];
         rand::thread_rng().fill_bytes(&mut unique_id_bytes);
@@ -869,12 +1047,8 @@ impl Client {
                 );
 
                 // The decrypted plaintext is ALWAYS a wa::Message
+
                 if let Ok(mut msg) = wa::Message::decode(plaintext.as_slice()) {
-                    log::debug!(
-                        target: "Client/Recv",
-                        "Decrypted message content: {:?}",
-                        msg
-                    );
                     // Now, check for specific message types within the wa::Message container
                     if let Some(protocol_msg) = msg.protocol_message.take() {
                         if protocol_msg.r#type()
@@ -918,8 +1092,35 @@ impl Client {
                         };
                         event.unwrap_raw(); // This will populate event.message and the flags
 
-                        if let Some(conversation) = event.message.conversation.as_ref() {
-                            log::info!("Received message: {}", conversation);
+                        log::debug!(
+                            target: "Client/Recv",
+                            "Decrypted message content: {:?}",
+                            &event.message
+                        );
+
+                        if let Some(text) = event.message.conversation.as_ref() {
+                            log::info!(r#"Received message from {}: "{}""#, info.push_name, text);
+                        } else if let Some(ext_text) = event.message.extended_text_message.as_ref()
+                        {
+                            if let Some(text) = ext_text.text.as_ref() {
+                                log::info!(
+                                    r#"Received extended text message from {}: "{}""#,
+                                    info.push_name,
+                                    text
+                                );
+
+                                // compare text if is equal to "send"
+                                if text == "send" {
+                                    log::info!("Received 'send' command, sending a response.");
+                                    let response_text = "Hello from Signal E2EE!";
+                                    if let Err(e) = self
+                                        .send_text_message(info.source.chat.clone(), response_text)
+                                        .await
+                                    {
+                                        log::error!("Failed to send response message: {:?}", e);
+                                    }
+                                }
+                            }
                         }
                         let _ = self.dispatch_event(Event::Message(event)).await;
                     }
@@ -981,13 +1182,22 @@ impl Client {
             };
         if !session_exists {
             info!("No session found for {}, building a new one.", to);
-            // TODO: Fetch prekey bundle from server
-            // let bundle = self.fetch_prekey_bundle(to).await?;
-            // let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
-            // builder.process_bundle(bundle).await?;
-            return Err(anyhow::anyhow!(
-                "Session building not yet implemented. Cannot send message."
-            ));
+            // Fetch prekey bundle from server
+            let bundles = self.fetch_pre_keys(&[to.clone()]).await?;
+            let bundle = bundles
+                .get(&to)
+                .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", to))?;
+            let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+            let mut session = match store.load_session(&signal_address).await {
+                Ok(s) => s,
+                Err(e) => return Err(anyhow::anyhow!(e.to_string())),
+            };
+            if let Err(e) = builder.process_bundle(&mut session, bundle).await {
+                return Err(anyhow::anyhow!(e.to_string()));
+            }
+            if let Err(e) = store_arc.store_session(&signal_address, &session).await {
+                return Err(anyhow::anyhow!(e.to_string()));
+            }
         }
 
         // 3. Encrypt the message

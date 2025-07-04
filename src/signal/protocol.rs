@@ -100,7 +100,7 @@ impl SignalMessage {
         ciphertext: Vec<u8>,
         sender_identity_key: &IdentityKey,
         receiver_identity_key: &IdentityKey,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
         let proto = protos::SignalMessage {
             ratchet_key: Some(sender_ratchet_key.serialize()),
@@ -247,7 +247,7 @@ impl PreKeySignalMessage {
         base_key: Arc<dyn EcPublicKey>,
         identity_key: IdentityKey,
         message: SignalMessage,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
 
         let proto = protos::PreKeySignalMessage {

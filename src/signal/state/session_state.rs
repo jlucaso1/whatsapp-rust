@@ -4,6 +4,8 @@ use crate::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPublicKey};
 use crate::signal::identity::IdentityKey;
 use crate::signal::message_key::MessageKeys;
 use crate::signal::root_key::RootKey;
+use crate::signal::state::pending_key_exchange_state::PendingKeyExchange;
+use crate::signal::state::unacknowledged_prekey::UnacknowledgedPreKeyMessageItems;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -28,7 +30,8 @@ pub struct SessionState {
     previous_counter: u32,
     sender_chain: Option<Chain>,
     receiver_chains: Vec<Chain>,
-    pub pending_pre_key: Option<PendingPreKey>,
+    pending_pre_key: Option<PendingPreKey>,
+    pending_key_exchange: Option<PendingKeyExchange>,
 }
 
 impl Chain {
@@ -71,16 +74,13 @@ pub struct PendingPreKey {
     pub base_key: DjbEcPublicKey,
 }
 
-pub struct PendingKeyExchange {
-    // ...
-}
-
 impl SessionState {
     pub fn new() -> Self {
         Self {
             session_version: 3,
             local_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
             remote_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
+            pending_key_exchange: None,
             root_key: RootKey::new([0; 32]),
             previous_counter: 0,
             sender_chain: None,
@@ -207,6 +207,16 @@ impl SessionState {
 
     pub fn has_unacknowledged_prekey_message(&self) -> bool {
         self.pending_pre_key.is_some()
+    }
+
+    pub fn unack_pre_key_message_items(&self) -> Option<UnacknowledgedPreKeyMessageItems> {
+        self.pending_pre_key.as_ref().map(|p| {
+            UnacknowledgedPreKeyMessageItems::new(
+                p.pre_key_id,
+                p.signed_pre_key_id,
+                p.base_key.clone(),
+            )
+        })
     }
 
     pub fn set_session_version(&mut self, version: u32) {
