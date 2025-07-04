@@ -1,6 +1,7 @@
+use crate::proto::whatsapp;
+
 use super::ecc::keys::EcPublicKey;
 use super::identity::IdentityKey;
-use super::protos;
 use hmac::{Hmac, Mac};
 use prost::Message;
 use sha2::Sha256;
@@ -62,7 +63,7 @@ impl SignalMessage {
         receiver_identity_key: &IdentityKey,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
-        let proto = protos::SignalMessage {
+        let proto = whatsapp::SignalMessage {
             ratchet_key: Some(sender_ratchet_key.serialize()),
             counter: Some(counter),
             previous_counter: Some(previous_counter),
@@ -101,7 +102,7 @@ impl SignalMessage {
             return Err(ProtocolError::InvalidVersion(message_version));
         }
         let serialized_proto = &serialized[1..serialized.len() - MAC_LENGTH];
-        let proto = protos::SignalMessage::decode(serialized_proto)?;
+        let proto = whatsapp::SignalMessage::decode(serialized_proto)?;
         let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
         let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
         Ok(SignalMessage {
@@ -167,7 +168,7 @@ impl SignalMessage {
         }
 
         let proto =
-            protos::SignalMessage::decode(serialized_proto).map_err(ProtocolError::Proto)?;
+            whatsapp::SignalMessage::decode(serialized_proto).map_err(ProtocolError::Proto)?;
         let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
         let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)
             .map_err(ProtocolError::InvalidKey)?;
@@ -213,7 +214,7 @@ impl PreKeySignalMessage {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
 
-        let proto = protos::PreKeySignalMessage {
+        let proto = whatsapp::PreKeySignalMessage {
             registration_id: Some(registration_id),
             pre_key_id,
             signed_pre_key_id: Some(signed_pre_key_id),
@@ -254,8 +255,8 @@ impl PreKeySignalMessage {
         if message_version != CURRENT_VERSION {
             return Err(ProtocolError::InvalidVersion(message_version));
         }
-        let proto =
-            protos::PreKeySignalMessage::decode(&serialized[1..]).map_err(ProtocolError::Proto)?;
+        let proto = whatsapp::PreKeySignalMessage::decode(&serialized[1..])
+            .map_err(ProtocolError::Proto)?;
         let registration_id = proto
             .registration_id
             .ok_or(ProtocolError::IncompleteMessage)?;
@@ -283,8 +284,8 @@ impl PreKeySignalMessage {
 
 // --- Move these impls to module scope ---
 
-impl From<protos::SignalMessage> for SignalMessage {
-    fn from(proto: protos::SignalMessage) -> Self {
+impl From<whatsapp::SignalMessage> for SignalMessage {
+    fn from(proto: whatsapp::SignalMessage) -> Self {
         Self {
             counter: proto.counter.unwrap_or_default(),
             previous_counter: proto.previous_counter.unwrap_or_default(),

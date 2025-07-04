@@ -14,5 +14,4 @@ pub mod state;
 pub mod store;
 pub mod util;
 
-mod protos;
 pub use session::{SessionBuilder, SessionCipher};
