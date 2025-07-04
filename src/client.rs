@@ -1194,7 +1194,14 @@ impl Client {
         Ok(MessageInfo {
             source: crate::types::message::MessageSource {
                 chat: attrs.jid("from"),
-                sender: attrs.jid("participant"),
+                sender: {
+                    let from = attrs.jid("from");
+                    if from.is_group() {
+                        attrs.jid("participant")
+                    } else {
+                        from
+                    }
+                },
                 is_from_me: false,
                 is_group: attrs.jid("from").is_group(),
                 ..Default::default()
