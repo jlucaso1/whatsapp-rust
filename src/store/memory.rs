@@ -1,4 +1,4 @@
-// src/store/memory.rs
+use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::Result;
 use crate::store::traits::*;
@@ -13,8 +13,8 @@ pub struct MemoryStore {
     app_state_versions: Mutex<HashMap<String, crate::appstate::hash::HashState>>,
     app_state_keys: Mutex<HashMap<Vec<u8>, AppStateSyncKey>>,
     // --- Signal Protocol fields ---
-    pre_keys: Mutex<HashMap<u32, crate::signal::state::record::PreKeyRecord>>,
-    signed_pre_keys: Mutex<HashMap<u32, crate::signal::state::record::SignedPreKeyRecord>>,
+    pre_keys: Mutex<HashMap<u32, PreKeyRecordStructure>>,
+    signed_pre_keys: Mutex<HashMap<u32, SignedPreKeyRecordStructure>>,
     sender_keys: Mutex<
         std::collections::HashMap<crate::signal::sender_key_name::SenderKeyName, SenderKeyRecord>,
     >,
@@ -134,10 +134,8 @@ impl crate::signal::store::PreKeyStore for MemoryStore {
     async fn load_prekey(
         &self,
         prekey_id: u32,
-    ) -> std::result::Result<
-        Option<crate::signal::state::record::PreKeyRecord>,
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> std::result::Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>>
+    {
         let keys = self.pre_keys.lock().await;
         Ok(keys.get(&prekey_id).cloned())
     }
@@ -145,7 +143,7 @@ impl crate::signal::store::PreKeyStore for MemoryStore {
     async fn store_prekey(
         &self,
         prekey_id: u32,
-        record: crate::signal::state::record::PreKeyRecord,
+        record: PreKeyRecordStructure,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut keys = self.pre_keys.lock().await;
         keys.insert(prekey_id, record);
@@ -176,7 +174,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
         &self,
         signed_prekey_id: u32,
     ) -> std::result::Result<
-        Option<crate::signal::state::record::SignedPreKeyRecord>,
+        Option<SignedPreKeyRecordStructure>,
         Box<dyn std::error::Error + Send + Sync>,
     > {
         let keys = self.signed_pre_keys.lock().await;
@@ -186,7 +184,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
     async fn load_signed_prekeys(
         &self,
     ) -> std::result::Result<
-        Vec<crate::signal::state::record::SignedPreKeyRecord>,
+        Vec<SignedPreKeyRecordStructure>,
         Box<dyn std::error::Error + Send + Sync>,
     > {
         let keys = self.signed_pre_keys.lock().await;
@@ -196,7 +194,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
-        record: crate::signal::state::record::SignedPreKeyRecord,
+        record: SignedPreKeyRecordStructure,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut keys = self.signed_pre_keys.lock().await;
         keys.insert(signed_prekey_id, record);

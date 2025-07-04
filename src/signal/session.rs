@@ -1,13 +1,13 @@
 use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
+use crate::proto::whatsapp::PreKeyRecordStructure;
 use crate::signal::ecc::{
     curve,
     keys::{DjbEcPublicKey, EcPublicKey},
 };
 use crate::signal::protocol::ProtocolError;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
-use crate::signal::state::record::PreKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
 use std::sync::Arc;
@@ -405,7 +405,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .await?
             .ok_or_else(|| BuilderError::NoSignedPreKey)?;
 
-        let mut our_one_time_prekey: Option<PreKeyRecord> = None;
+        let mut our_one_time_prekey: Option<PreKeyRecordStructure> = None;
         if let Some(id) = message.pre_key_id {
             match self.store.load_prekey(id).await? {
                 Some(record) => our_one_time_prekey = Some(record),
@@ -413,10 +413,13 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             }
         }
 
+        let our_signed_prekey_keypair = our_signed_prekey.key_pair();
+        let our_one_time_prekey_keypair = our_one_time_prekey.as_ref().map(|r| r.key_pair());
+
         let session_key_pair = crate::signal::ratchet::calculate_receiver_session(
             &our_identity,
-            our_signed_prekey.key_pair(),
-            our_one_time_prekey.as_ref().map(|r| r.key_pair()),
+            &our_signed_prekey_keypair,
+            our_one_time_prekey_keypair.as_ref(),
             their_identity_key,
             message.base_key.clone(),
         )
@@ -432,7 +435,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         state.set_local_identity_key(our_identity.public_key().clone());
         state.set_root_key(session_key_pair.root_key);
         state.set_sender_chain(
-            our_signed_prekey.key_pair().clone(),
+            our_signed_prekey_keypair,
             session_key_pair.chain_key.clone(),
         );
         state.set_sender_base_key(message.base_key.public_key());

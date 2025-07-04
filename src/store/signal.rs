@@ -1,10 +1,9 @@
+use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 // src/store/signal.rs
 use crate::signal::address::SignalAddress;
 use crate::signal::ecc;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
-use crate::signal::state::prekey_record::PreKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
-use crate::signal::state::signed_prekey_record::SignedPreKeyRecord;
 use crate::signal::store::*;
 use crate::store::Device;
 use async_trait::async_trait;
@@ -61,13 +60,13 @@ impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
         prekey_id: u32,
-    ) -> Result<Option<PreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
         self.pre_keys.load_prekey(prekey_id).await
     }
     async fn store_prekey(
         &self,
         prekey_id: u32,
-        record: PreKeyRecord,
+        record: PreKeyRecordStructure,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.pre_keys.store_prekey(prekey_id, record).await
     }
@@ -91,7 +90,7 @@ impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
         // First, check if the requested ID matches the one we hold directly.
         if signed_prekey_id == self.signed_pre_key.key_id {
             let key_pair = crate::signal::ecc::key_pair::EcKeyPair::new(
@@ -102,7 +101,7 @@ impl SignedPreKeyStore for Device {
                     self.signed_pre_key.key_pair.private_key,
                 ),
             );
-            let record = crate::signal::state::signed_prekey_record::SignedPreKeyRecord::new(
+            let record = SignedPreKeyRecordStructure::new(
                 self.signed_pre_key.key_id,
                 key_pair,
                 self.signed_pre_key
@@ -120,13 +119,13 @@ impl SignedPreKeyStore for Device {
     }
     async fn load_signed_prekeys(
         &self,
-    ) -> Result<Vec<SignedPreKeyRecord>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
         self.signed_pre_keys.load_signed_prekeys().await
     }
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
-        record: SignedPreKeyRecord,
+        record: SignedPreKeyRecordStructure,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.signed_pre_keys
             .store_signed_prekey(signed_prekey_id, record)

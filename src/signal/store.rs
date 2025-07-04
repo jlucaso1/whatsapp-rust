@@ -1,12 +1,11 @@
+use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 
 // src/signal/store.rs
 use super::address::SignalAddress;
 use super::identity::{IdentityKey, IdentityKeyPair};
-use super::state::prekey_record::PreKeyRecord;
 use super::state::session_record::SessionRecord;
-use super::state::signed_prekey_record::SignedPreKeyRecord;
 use async_trait::async_trait;
 use std::error::Error;
 
@@ -33,8 +32,15 @@ pub trait IdentityKeyStore: Send + Sync {
 // Corresponds to state/store/PreKeyStore.go
 #[async_trait]
 pub trait PreKeyStore: Send + Sync {
-    async fn load_prekey(&self, prekey_id: u32) -> Result<Option<PreKeyRecord>, StoreError>;
-    async fn store_prekey(&self, prekey_id: u32, record: PreKeyRecord) -> Result<(), StoreError>;
+    async fn load_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError>;
+    async fn store_prekey(
+        &self,
+        prekey_id: u32,
+        record: PreKeyRecordStructure,
+    ) -> Result<(), StoreError>;
     async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError>;
     async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError>;
 }
@@ -45,12 +51,12 @@ pub trait SignedPreKeyStore: Send + Sync {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecord>, StoreError>;
-    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecord>, StoreError>;
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError>;
+    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError>;
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
-        record: SignedPreKeyRecord,
+        record: SignedPreKeyRecordStructure,
     ) -> Result<(), StoreError>;
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError>;
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError>;

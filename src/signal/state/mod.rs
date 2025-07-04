@@ -1,12 +1,10 @@
 pub mod chain_key;
 pub mod pending_key_exchange_state;
 pub mod prekey_bundle;
-pub mod prekey_record;
 pub mod record;
 pub mod sender_key_message;
 pub mod sender_key_record;
 pub mod sender_key_state;
 pub mod session_record;
 pub mod session_state;
-pub mod signed_prekey_record;
 pub mod unacknowledged_prekey;
