@@ -52,7 +52,7 @@ impl EcPublicKey for DjbEcPublicKey {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DjbEcPrivateKey {
-    private_key: [u8; 32],
+    pub private_key: [u8; 32],
 }
 
 impl DjbEcPrivateKey {

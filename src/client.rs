@@ -1223,41 +1223,43 @@ impl Client {
         // 1. Create a Signal Address for the recipient
         let signal_address = SignalAddress::new(to.user.clone(), to.device as u32);
 
-        // 2. Check if a session exists. If not, build one.
+        // 2. Load the session record, build if needed, and persist after encryption.
         let store_arc = Arc::new(store.clone());
-        let session_exists =
-            match SessionStore::contains_session(&*store_arc, &signal_address).await {
-                Ok(val) => val,
-                Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
-            };
+        let mut session_record = store
+            .load_session(&signal_address)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let session_exists = !session_record.is_fresh();
+
         if !session_exists {
             info!("No session found for {}, building a new one.", to);
-            // Fetch prekey bundle from server
             let bundles = self.fetch_pre_keys(&[to.clone()]).await?;
             let bundle = bundles
                 .get(&to)
                 .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", to))?;
             let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
-            let mut session = match store.load_session(&signal_address).await {
-                Ok(s) => s,
-                Err(e) => return Err(anyhow::anyhow!(e.to_string())),
-            };
-            if let Err(e) = builder.process_bundle(&mut session, bundle).await {
-                return Err(anyhow::anyhow!(e.to_string()));
-            }
-            if let Err(e) = store_arc.store_session(&signal_address, &session).await {
+            if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
                 return Err(anyhow::anyhow!(e.to_string()));
             }
         }
 
-        // 3. Encrypt the message
-        let cipher = SessionCipher::new(store_arc.clone(), signal_address);
+        // 3. Encrypt the message using the session record
+        let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
         let serialized_msg_proto = <wa::Message as ProtoMessage>::encode_to_vec(&message);
 
-        let encrypted_message = match cipher.encrypt(&serialized_msg_proto).await {
+        let encrypted_message = match cipher
+            .encrypt(&mut session_record, &serialized_msg_proto)
+            .await
+        {
             Ok(msg) => msg,
             Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
         };
+
+        // Save the updated session record
+        store_arc
+            .store_session(&signal_address, &session_record)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Determine encryption type for stanza
         let enc_type = match encrypted_message.q_type() {

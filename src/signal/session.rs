@@ -27,13 +27,9 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
     pub async fn encrypt(
         &self,
+        session_record: &mut SessionRecord,
         plaintext: &[u8],
     ) -> Result<Box<dyn CiphertextMessage>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut session_record: SessionRecord = self
-            .store
-            .load_session(&self.remote_address)
-            .await
-            .map_err(|e| e)?;
         let session_state = session_record.session_state_mut();
 
         let mut chain_key = session_state.sender_chain_key();
@@ -75,10 +71,6 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
         chain_key = chain_key.next_key();
         session_state.set_sender_chain_key(chain_key);
-        self.store
-            .store_session(&self.remote_address, &session_record)
-            .await
-            .map_err(|e| e)?;
 
         Ok(final_message)
     }
