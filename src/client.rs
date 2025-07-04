@@ -1016,7 +1016,7 @@ impl Client {
 
     // --- Signal E2EE: Handle incoming encrypted message ---
     pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
-        let info = match self.parse_message_info(node.clone()).await {
+        let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
             Err(e) => {
                 log::warn!("Failed to parse message info: {:?}", e);
@@ -1189,7 +1189,7 @@ impl Client {
     }
 
     // --- Signal E2EE: Dummy parse_message_info ---
-    pub async fn parse_message_info(&self, node: Node) -> Result<MessageInfo, anyhow::Error> {
+    pub async fn parse_message_info(&self, node: &Node) -> Result<MessageInfo, anyhow::Error> {
         let mut attrs = node.attrs();
         Ok(MessageInfo {
             source: crate::types::message::MessageSource {
