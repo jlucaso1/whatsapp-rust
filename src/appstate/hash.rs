@@ -1,6 +1,10 @@
-#[derive(Debug, Clone)]
+use serde::{Serialize, Deserialize};
+use serde_big_array::BigArray;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashState {
     pub version: u64,
+    #[serde(with = "BigArray")]
     pub hash: [u8; 128],
 }
 

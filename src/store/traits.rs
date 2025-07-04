@@ -1,7 +1,9 @@
 use crate::store::error::Result;
 use async_trait::async_trait;
 
-#[derive(Debug, Clone, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppStateSyncKey {
     pub key_data: Vec<u8>,
     pub fingerprint: Vec<u8>,

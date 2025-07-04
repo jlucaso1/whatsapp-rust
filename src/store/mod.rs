@@ -1,3 +1,4 @@
+pub mod filestore;
 mod signal;
 /// The public key for verifying the server's intermediate certificate.
 pub const WA_CERT_PUB_KEY: [u8; 32] = [
@@ -16,6 +17,19 @@ pub mod traits;
 
 use crate::store::traits::*;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SerializableDevice {
+    pub id: Option<Jid>,
+    pub registration_id: u32,
+    pub noise_key: KeyPair,
+    pub identity_key: KeyPair,
+    pub signed_pre_key: PreKey,
+    pub adv_secret_key: [u8; 32],
+    pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub push_name: String,
+}
 
 #[derive(Clone)]
 pub struct Device {
@@ -26,6 +40,7 @@ pub struct Device {
     pub signed_pre_key: PreKey,
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub push_name: String,
 
     // Abstracted storage via trait objects
     pub identities: Arc<dyn IdentityStore>,
@@ -61,6 +76,8 @@ impl Device {
             signed_pre_key,
             adv_secret_key,
             account: None,
+            push_name: "".to_string(),
+
             identities,
             sessions,
             app_state_store,
@@ -71,6 +88,29 @@ impl Device {
         }
     }
 
+    pub fn to_serializable(&self) -> SerializableDevice {
+        SerializableDevice {
+            id: self.id.clone(),
+            registration_id: self.registration_id,
+            noise_key: self.noise_key.clone(),
+            identity_key: self.identity_key.clone(),
+            signed_pre_key: self.signed_pre_key.clone(),
+            adv_secret_key: self.adv_secret_key,
+            account: self.account.clone(),
+            push_name: self.push_name.clone(),
+        }
+    }
+
+    pub fn load_from_serializable(&mut self, loaded: SerializableDevice) {
+        self.id = loaded.id;
+        self.registration_id = loaded.registration_id;
+        self.noise_key = loaded.noise_key;
+        self.identity_key = loaded.identity_key;
+        self.signed_pre_key = loaded.signed_pre_key;
+        self.adv_secret_key = loaded.adv_secret_key;
+        self.account = loaded.account;
+        self.push_name = loaded.push_name;
+    }
     pub fn get_client_payload(&self) -> wa::ClientPayload {
         match &self.id {
             Some(jid) => clientpayload::get_login_payload(jid),

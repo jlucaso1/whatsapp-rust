@@ -1,58 +1,89 @@
 use log::{error, info, warn};
 use std::sync::Arc;
 use whatsapp_rust::client::Client;
-use whatsapp_rust::qrcode;
 use whatsapp_rust::store;
-use whatsapp_rust::store::memory::MemoryStore;
+use whatsapp_rust::store::filestore::FileStore;
+use whatsapp_rust::types::events::Event;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    info!("Initializing a new in-memory store...");
-    let store_backend = Arc::new(MemoryStore::new());
+    info!("Initializing the filesystem store...");
+    let store_backend = Arc::new(FileStore::new("./whatsapp_store").await?);
 
-    info!("Initializing a new device with the store...");
-    let store = store::Device::new(
-        store_backend.clone(),
-        store_backend.clone(),
-        store_backend.clone(),
-        store_backend.clone(),
-        store_backend.clone(),
-        store_backend.clone(),
-        store_backend.clone(),
-    );
+    // Try to load an existing device session
+    let device = if let Some(loaded_data) = store_backend.load_device_data().await? {
+        info!("Loaded existing device from store.");
+        let mut dev = store::Device::new(
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+        );
+        dev.load_from_serializable(loaded_data);
+        dev
+    } else {
+        info!("No existing device found, creating a new one.");
+        let dev = store::Device::new(
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+            store_backend.clone(),
+        );
+        // The device will be saved after a successful pairing
+        dev
+    };
 
     info!("Creating client...");
-    let client = Arc::new(Client::new(store));
+    let client = Arc::new(Client::new(device));
 
     // If not logged in, start the QR pairing process
     if client.store.read().await.id.is_none() {
         let client_clone = client.clone();
+        let store_backend_clone = store_backend.clone();
         tokio::spawn(async move {
             let mut qr_rx = client_clone.get_qr_channel().await.unwrap();
             info!("QR Channel listener started. Waiting for events...");
             while let Some(event) = qr_rx.recv().await {
+                use whatsapp_rust::qrcode::QrCodeEvent;
                 match event {
-                    qrcode::QrCodeEvent::Code { code, .. } => {
+                    QrCodeEvent::Code { code, .. } => {
                         info!("----------------------------------------");
                         info!("Got new QR Code. Scan with your WhatsApp app.");
                         let qr_url = format!(
                             "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={}",
                             urlencoding::encode(&code)
                         );
-                        info!("Scan this URL in a browser to see the QR code:\n{}", qr_url);
+                        info!(
+                            "Scan this URL in a browser to see the QR code:\n  {}",
+                            qr_url
+                        );
                         info!("----------------------------------------");
                     }
-                    qrcode::QrCodeEvent::Success => {
+                    QrCodeEvent::Success => {
                         info!("✅ Pairing successful! The client will now connect.");
+                        // Save the newly paired device to disk
+                        let store_guard = client_clone.store.read().await;
+                        if let Err(e) = store_backend_clone
+                            .save_device_data(&store_guard.to_serializable())
+                            .await
+                        {
+                            error!("Failed to save new device state after pairing: {}", e);
+                        }
                         break;
                     }
-                    qrcode::QrCodeEvent::Error(e) => {
+                    QrCodeEvent::Error(e) => {
                         error!("❌ Pairing failed: {:?}", e);
                         break;
                     }
-                    qrcode::QrCodeEvent::Timeout => {
+                    QrCodeEvent::Timeout => {
                         warn!("⌛ Pairing timed out. Please restart the application.");
                         break;
                     }
@@ -64,6 +95,16 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("QR Channel listener finished.");
         });
     }
+
+    client
+        .add_event_handler(Box::new(|event: Arc<Event>| {
+            tokio::spawn(async move {
+                if let Event::LoggedOut(logout_event) = &*event {
+                    info!("Received logout event: {:?}", logout_event.reason);
+                }
+            });
+        }))
+        .await;
 
     // The main run loop
     client.run().await;

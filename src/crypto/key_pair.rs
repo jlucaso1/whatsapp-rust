@@ -2,6 +2,7 @@ use crate::crypto::xed25519::sign_dalek;
 use ed25519_dalek::{Signature, SigningKey};
 use rand::rngs::OsRng;
 use thiserror::Error;
+use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Debug, Error)]
@@ -11,7 +12,7 @@ pub enum KeyPairError {}
 const DJB_TYPE: u8 = 5;
 
 /// An X25519 key pair for cryptographic operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyPair {
     pub public_key: [u8; 32],
     pub private_key: [u8; 32],
@@ -73,10 +74,11 @@ impl Default for KeyPair {
 }
 
 /// A pre-key used in the Signal protocol handshake, with an optional signature.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreKey {
     pub key_pair: KeyPair,
     pub key_id: u32,
+    #[serde(with = "serde_bytes")]
     pub signature: Option<[u8; 64]>,
 }
 
