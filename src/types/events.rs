@@ -279,63 +279,6 @@ pub struct UndecryptableMessage {
     pub decrypt_fail_mode: DecryptFailMode,
 }
 
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub info: MessageInfo,
-    pub message: Box<wa::Message>,
-    pub is_ephemeral: bool,
-    pub is_view_once: bool,
-    pub is_view_once_v2: bool,
-    pub is_document_with_caption: bool,
-    pub is_edit: bool,
-    pub raw_message: Box<wa::Message>,
-}
-
-impl Message {
-    pub fn unwrap_raw(&mut self) {
-        let mut current_msg = self.raw_message.clone();
-
-        if let Some(device_sent) = current_msg.device_sent_message.as_ref() {
-            if let Some(msg) = device_sent.message.as_ref() {
-                current_msg = msg.clone();
-            }
-        }
-        if let Some(ephemeral) = current_msg.ephemeral_message.as_ref() {
-            if let Some(msg) = ephemeral.message.as_ref() {
-                current_msg = msg.clone();
-                self.is_ephemeral = true;
-            }
-        }
-        if let Some(view_once) = current_msg.view_once_message.as_ref() {
-            if let Some(msg) = view_once.message.as_ref() {
-                current_msg = msg.clone();
-                self.is_view_once = true;
-            }
-        }
-        if let Some(view_once_v2) = current_msg.view_once_message_v2.as_ref() {
-            if let Some(msg) = view_once_v2.message.as_ref() {
-                current_msg = msg.clone();
-                self.is_view_once = true;
-                self.is_view_once_v2 = true;
-            }
-        }
-
-        if let Some(doc_caption) = current_msg.document_with_caption_message.as_ref() {
-            if let Some(msg) = doc_caption.message.as_ref() {
-                current_msg = msg.clone();
-                self.is_document_with_caption = true;
-            }
-        }
-        if let Some(edited) = current_msg.edited_message.as_ref() {
-            if let Some(msg) = edited.message.as_ref() {
-                current_msg = msg.clone();
-                self.is_edit = true;
-            }
-        }
-
-        self.message = current_msg;
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Receipt {

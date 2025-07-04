@@ -2,6 +2,7 @@ use crate::binary::node::Node;
 use crate::binary::node::NodeContent;
 use crate::handshake;
 use crate::pair;
+use crate::proto_helpers::MessageExt;
 use crate::signal::session::SessionBuilder;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::store::SessionStore;
@@ -15,7 +16,6 @@ use crate::qrcode;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
 use crate::types::jid::{Jid, SERVER_JID};
-use crate::types::message::get_base_message;
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
 use prost::Message as ProtoMessage;
@@ -1131,8 +1131,7 @@ impl Client {
                         // TODO: handle SKDM
                         log::warn!("Received unhandled SenderKeyDistributionMessage");
                     } else {
-                        // It's a regular chat message
-                        let base_msg = get_base_message(&msg);
+                        let base_msg = (&msg).get_base_message();
 
                         log::debug!(
                             target: "Client/Recv",
