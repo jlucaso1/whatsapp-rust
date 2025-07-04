@@ -93,6 +93,14 @@ impl SessionState {
         self.sender_chain.is_none() && self.receiver_chains.is_empty()
     }
 
+    pub fn has_sender_chain(&self) -> bool {
+        self.sender_chain.is_some()
+    }
+
+    pub fn has_receiver_chain(&self, key: &[u8; 32]) -> bool {
+        self.find_receiver_chain(key).is_some()
+    }
+
     pub fn add_receiver_chain(
         &mut self,
         their_ephemeral: Arc<dyn EcPublicKey>,

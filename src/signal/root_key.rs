@@ -6,7 +6,7 @@ use super::kdf;
 use std::sync::Arc;
 use thiserror::Error;
 
-const DERIVED_SECRETS_SIZE: usize = 64;
+pub const ROOT_KEY_DERIVED_SECRETS_SIZE: usize = 64;
 const KDF_INFO: &str = "WhisperRatchet";
 
 #[derive(Debug, Error)]
@@ -58,7 +58,7 @@ impl RootKey {
             &shared_secret,
             Some(&self.key),
             KDF_INFO.as_bytes(),
-            DERIVED_SECRETS_SIZE,
+            ROOT_KEY_DERIVED_SECRETS_SIZE,
         )?;
 
         let derived = DerivedSecrets {

@@ -180,8 +180,7 @@ impl Client {
             pre_key_id,
             pre_key_public,
             signed_pre_key_id,
-            signed_pre_key_public: std::sync::Arc::new(signed_pre_key_public)
-                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey + Send + Sync>,
+            signed_pre_key_public,
             signed_pre_key_signature,
             identity_key,
         })
@@ -1007,7 +1006,7 @@ impl Client {
         let cipher = SessionCipher::new(device_arc.clone(), signal_address);
 
         // Determine enc type and use the new decrypt logic
-        let enc_type = enc_node.attrs().string("type");
+        let enc_type = enc_node.attrs().string("type"); // pkmsg or msg
         use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
         let ciphertext_enum = match enc_type.as_str() {
             "pkmsg" => match PreKeySignalMessage::deserialize(&ciphertext) {
@@ -1018,6 +1017,7 @@ impl Client {
                 }
             },
             "msg" => match SignalMessage::deserialize(&ciphertext) {
+                // Note: This doesn't verify MAC yet
                 Ok(msg) => Ciphertext::Whisper(msg),
                 Err(e) => {
                     log::warn!("Failed to deserialize SignalMessage: {:?}", e);

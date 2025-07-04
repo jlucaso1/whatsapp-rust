@@ -428,7 +428,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         // Signature verification
         if !crate::signal::ecc::curve::verify_signature(
             their_identity_key.public_key(),
-            &bundle.signed_pre_key_public.serialize(),
+            &bundle.signed_pre_key_public.as_bytes(),
             &bundle.signed_pre_key_signature,
         ) {
             return Err("Invalid signature on pre-key bundle".into());
@@ -438,7 +438,8 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             &our_identity,
             &our_base_key,
             their_identity_key,
-            bundle.signed_pre_key_public.clone(),
+            Arc::new(bundle.signed_pre_key_public.clone())
+                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
             bundle
                 .pre_key_public
                 .clone()
@@ -455,12 +456,15 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         state.set_local_identity_key(our_identity.public_key.clone());
 
         let sending_ratchet_key = crate::signal::ecc::curve::generate_key_pair();
-        let sending_chain = session_key_pair
-            .root_key
-            .create_chain(bundle.signed_pre_key_public.clone(), &sending_ratchet_key)?;
+        let sending_chain = session_key_pair.root_key.create_chain(
+            Arc::new(bundle.signed_pre_key_public.clone())
+                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
+            &sending_ratchet_key,
+        )?;
 
         state.add_receiver_chain(
-            bundle.signed_pre_key_public.clone(),
+            Arc::new(bundle.signed_pre_key_public.clone())
+                as Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
             session_key_pair.chain_key,
         );
         state.set_sender_chain(sending_ratchet_key, sending_chain.chain_key);

@@ -1,5 +1,6 @@
 use super::sender_key_state::SenderKeyState;
 use crate::signal::ecc;
+use crate::signal::ecc::key_pair::EcKeyPair;
 use serde::{Deserialize, Serialize};
 
 const MAX_STATES: usize = 5;
@@ -49,5 +50,17 @@ impl SenderKeyRecord {
             SenderKeyState::new_from_public_key(id, iteration, chain_key, signature_key);
         self.sender_key_states.insert(0, new_state);
         self.sender_key_states.truncate(MAX_STATES);
+    }
+
+    pub fn set_sender_key_state(
+        &mut self,
+        id: u32,
+        iteration: u32,
+        chain_key: &[u8],
+        signature_key: EcKeyPair,
+    ) {
+        let new_state = SenderKeyState::new(id, iteration, chain_key, signature_key);
+        self.sender_key_states.clear();
+        self.sender_key_states.push(new_state);
     }
 }

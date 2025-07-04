@@ -25,6 +25,9 @@ impl DjbEcPublicKey {
     pub fn new(public_key: [u8; 32]) -> Self {
         Self { public_key }
     }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.public_key
+    }
 }
 
 impl EcPublicKey for DjbEcPublicKey {

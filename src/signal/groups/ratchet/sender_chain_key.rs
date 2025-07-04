@@ -37,4 +37,8 @@ impl SenderChainKey {
         mac.update(seed);
         mac.finalize().into_bytes().into()
     }
+
+    pub fn chain_key_bytes(&self) -> &[u8; 32] {
+        &self.chain_key
+    }
 }
