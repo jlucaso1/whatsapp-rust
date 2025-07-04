@@ -12,14 +12,14 @@ use std::sync::Arc;
 
 const MAX_MESSAGE_KEYS: usize = 2000;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Chain {
     pub sender_ratchet_key_pair: EcKeyPair,
     pub chain_key: ChainKey,
     pub message_keys: VecDeque<MessageKeys>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SessionState {
     session_version: u32,
     // TODO: Arc<IdentityKey> is not serializable by default.
@@ -68,7 +68,7 @@ impl Chain {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PendingPreKey {
     pub pre_key_id: Option<u32>,
     pub signed_pre_key_id: u32,

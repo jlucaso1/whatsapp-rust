@@ -28,7 +28,7 @@ pub fn calculate_sender_session(
 
     // DH1: our identity key & their signed pre-key (IK_A, SPK_B)
     let dh1 = curve::calculate_shared_secret(
-        our_identity_key_pair.private_key.private_key.serialize(),
+        our_identity_key_pair.private_key().private_key.serialize(),
         their_signed_pre_key.public_key(),
     );
     master_secret.extend_from_slice(&dh1);
@@ -89,7 +89,7 @@ pub fn calculate_receiver_session(
 
     // DH2: our identity key & their base key (IK_B, EK_A)
     let dh2 = curve::calculate_shared_secret(
-        our_identity_key_pair.private_key.private_key.serialize(),
+        our_identity_key_pair.private_key().private_key.serialize(),
         their_base_key.public_key(),
     );
     master_secret.extend_from_slice(&dh2);

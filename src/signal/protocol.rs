@@ -6,15 +6,6 @@ use prost::Message;
 use sha2::Sha256;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
-/// Temporary stub to allow compilation
-pub fn signal_message_deserialize_and_verify(
-    _serialized: &[u8],
-    _mac_key: &[u8],
-    _sender_identity: &IdentityKey,
-    _receiver_identity: &IdentityKey,
-) -> Result<SignalMessage, ProtocolError> {
-    Err(ProtocolError::BadMac)
-}
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -29,6 +20,10 @@ pub enum ProtocolError {
     Proto(#[from] prost::DecodeError),
     #[error("invalid key: {0}")]
     InvalidKey(#[from] super::ecc::curve::CurveError),
+    #[error("untrusted identity")]
+    UntrustedIdentity,
+    #[error("old counter: current={0}, received={1}")]
+    OldCounter(u32, u32),
 }
 
 pub trait CiphertextMessage: Send {
@@ -322,5 +317,17 @@ impl From<crate::signal::root_key::RootKeyError> for ProtocolError {
             "{:?}",
             e
         ))))
+    }
+}
+impl From<super::ratchet::RatchetError> for ProtocolError {
+    fn from(e: super::ratchet::RatchetError) -> Self {
+        match e {
+            super::ratchet::RatchetError::OldCounter { current, received } => {
+                Self::OldCounter(current, received)
+            }
+            super::ratchet::RatchetError::TooFarInFuture => {
+                Self::Proto(prost::DecodeError::new("message too far in future"))
+            }
+        }
     }
 }

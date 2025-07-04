@@ -5,7 +5,7 @@ use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::identity::IdentityKeyPair;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PendingKeyExchange {
     sequence: u32,
     local_base_key_pair: EcKeyPair,

@@ -2,7 +2,7 @@ pub const DJB_TYPE: u8 = 0x05;
 
 use serde::{Deserialize, Serialize};
 // Corresponds to ECPublicKeyable
-pub trait EcPublicKey: Send + Sync {
+pub trait EcPublicKey: Send + Sync + std::fmt::Debug {
     fn serialize(&self) -> Vec<u8>;
     fn q_type(&self) -> u8;
     fn as_any(&self) -> &dyn std::any::Any;
@@ -10,7 +10,7 @@ pub trait EcPublicKey: Send + Sync {
 }
 
 // Corresponds to ECPrivateKeyable
-pub trait EcPrivateKey: Send + Sync {
+pub trait EcPrivateKey: Send + Sync + std::fmt::Debug {
     fn serialize(&self) -> [u8; 32];
     fn q_type(&self) -> u8;
 }
@@ -50,8 +50,7 @@ impl EcPublicKey for DjbEcPublicKey {
     }
 }
 
-// Corresponds to DjbECPrivateKey
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DjbEcPrivateKey {
     private_key: [u8; 32],
 }

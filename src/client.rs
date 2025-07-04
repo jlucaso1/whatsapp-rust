@@ -164,8 +164,7 @@ impl Client {
         if let Some(pre_key_node) = keys_node.get_optional_child("key") {
             let (id, key) = self.node_to_pre_key(pre_key_node)?;
             pre_key_id = Some(id);
-            pre_key_public = Some(std::sync::Arc::new(key)
-                as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey + Send + Sync>);
+            pre_key_public = Some(key);
         }
 
         let signed_pre_key_node = keys_node

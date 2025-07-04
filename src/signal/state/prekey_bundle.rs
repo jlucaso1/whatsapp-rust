@@ -1,14 +1,12 @@
-use crate::signal::ecc::keys::EcPublicKey;
-use crate::signal::identity::IdentityKey;
-use std::sync::Arc;
-
 use crate::signal::ecc::keys::DjbEcPublicKey;
+use crate::signal::identity::IdentityKey;
 
+#[derive(Debug)]
 pub struct PreKeyBundle {
     pub registration_id: u32,
     pub device_id: u32,
     pub pre_key_id: Option<u32>,
-    pub pre_key_public: Option<Arc<dyn EcPublicKey + Send + Sync>>,
+    pub pre_key_public: Option<DjbEcPublicKey>,
     pub signed_pre_key_id: u32,
     pub signed_pre_key_public: DjbEcPublicKey,
     pub signed_pre_key_signature: [u8; 64],
@@ -20,7 +18,7 @@ impl PreKeyBundle {
         registration_id: u32,
         device_id: u32,
         pre_key_id: Option<u32>,
-        pre_key_public: Option<Arc<dyn EcPublicKey + Send + Sync>>,
+        pre_key_public: Option<DjbEcPublicKey>,
         signed_pre_key_id: u32,
         signed_pre_key_public: DjbEcPublicKey,
         signed_pre_key_signature: [u8; 64],

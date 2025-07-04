@@ -29,8 +29,11 @@ pub fn generate_signed_pre_key(
     signed_pre_key_id: u32,
 ) -> SignedPreKeyRecord {
     let key_pair = ecc::curve::generate_key_pair();
+    use crate::signal::ecc::keys::{DjbEcPrivateKey, EcPrivateKey};
     let signature = ecc::curve::calculate_signature(
-        identity_key_pair.private_key.private_key.clone(),
+        DjbEcPrivateKey::new(EcPrivateKey::serialize(
+            &identity_key_pair.private_key().private_key,
+        )),
         &EcPublicKey::serialize(&key_pair.public_key),
     );
     let timestamp = Utc::now();

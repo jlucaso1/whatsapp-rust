@@ -2,8 +2,7 @@ use super::ecc::key_pair::EcKeyPair;
 use super::ecc::keys::{DjbEcPublicKey, EcPublicKey};
 use serde::{Deserialize, Serialize};
 
-// Corresponds to keys/identity/IdentityKey.go
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct IdentityKey {
     public_key: DjbEcPublicKey,
 }
@@ -37,18 +36,23 @@ impl IdentityKey {
     }
 }
 
-// Corresponds to keys/identity/IdentityKeyPair.go
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct IdentityKeyPair {
-    pub public_key: IdentityKey,
-    pub private_key: EcKeyPair,
+    public_key: IdentityKey,
+    private_key: EcKeyPair,
 }
 
 impl IdentityKeyPair {
     pub fn new(public_key: IdentityKey, private_key: EcKeyPair) -> Self {
         Self {
-            public_key,
+            public_key: public_key,
             private_key,
         }
+    }
+    pub fn public_key(&self) -> &IdentityKey {
+        &self.public_key
+    }
+    pub fn private_key(&self) -> &EcKeyPair {
+        &self.private_key
     }
 }
