@@ -45,18 +45,18 @@ impl<S: SenderKeyStore> GroupCipher<S> {
         let sender_key = state.sender_chain_key().sender_message_key();
         let ciphertext = cbc::encrypt(sender_key.cipher_key(), sender_key.iv(), plaintext)?;
 
-        // Create a temporary message to get the bytes that need to be signed.
-        let temp_msg_to_sign = SenderKeyMessage::new(
-            state.key_id(),
-            sender_key.iteration(),
-            ciphertext.clone(),
-            vec![], // Empty signature for serialization
-        );
-        let bytes_to_sign = temp_msg_to_sign.serialize_for_signature();
-        let signature = ecc::curve::calculate_signature(
-            state.signing_key().private_key.clone(),
-            &bytes_to_sign,
-        );
+        // Efficiently serialize the message components for signing without creating an intermediate struct
+        let mut buf = Vec::with_capacity(128);
+        buf.push((3 << 4) | 3); // version byte
+        let proto_msg = crate::proto::whatsapp::SenderKeyMessage {
+            id: Some(state.key_id()),
+            iteration: Some(sender_key.iteration()),
+            ciphertext: Some(ciphertext.clone()),
+        };
+        prost::Message::encode(&proto_msg, &mut buf).unwrap();
+
+        let signature =
+            ecc::curve::calculate_signature(state.signing_key().private_key.clone(), &buf);
 
         let sender_key_message = SenderKeyMessage::new(
             state.key_id(),
