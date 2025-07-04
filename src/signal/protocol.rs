@@ -45,6 +45,7 @@ const CURRENT_VERSION: u8 = 3;
 pub struct SignalMessage {
     pub sender_ratchet_key: Arc<dyn EcPublicKey>,
     pub counter: u32,
+    pub message_version: u8,
     pub previous_counter: u32,
     pub ciphertext: Vec<u8>,
     pub serialized_form: Vec<u8>,
@@ -83,6 +84,7 @@ impl SignalMessage {
         Ok(Self {
             sender_ratchet_key,
             counter,
+            message_version: CURRENT_VERSION,
             previous_counter,
             ciphertext,
             serialized_form,
@@ -105,6 +107,7 @@ impl SignalMessage {
         Ok(SignalMessage {
             sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
+            message_version,
             previous_counter: proto.previous_counter.unwrap_or(0),
             ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
             serialized_form: serialized.to_vec(),
@@ -172,6 +175,7 @@ impl SignalMessage {
         Ok(Self {
             sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
+            message_version,
             previous_counter: proto.previous_counter.unwrap_or(0),
             ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
             serialized_form: serialized.to_vec(),
@@ -294,6 +298,7 @@ impl Default for SignalMessage {
     fn default() -> Self {
         Self {
             sender_ratchet_key: Arc::new(super::ecc::keys::DjbEcPublicKey::new([0; 32])),
+            message_version: CURRENT_VERSION,
             counter: 0,
             previous_counter: 0,
             ciphertext: Vec::new(),

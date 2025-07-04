@@ -106,34 +106,29 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         ),
         DecryptionError,
     > {
-        // Avoid multiple mutable borrows by using index
         let key = their_ephemeral.public_key();
         let chain_index = session_state
             .receiver_chains_mut()
             .iter()
             .position(|c| c.sender_ratchet_key_pair.public_key.public_key == key);
         if let Some(idx) = chain_index {
-            // Split borrow: get chain_key, then operate
             let chain_key_index;
             {
                 let chain = &mut session_state.receiver_chains_mut()[idx];
                 chain_key_index = chain.chain_key.index();
             }
             if chain_key_index > counter {
-                let keys = session_state.receiver_chains_mut()[idx].remove_message_keys(counter);
-                if let Some(keys) = keys {
+                if let Some(keys) =
+                    session_state.receiver_chains_mut()[idx].remove_message_keys(counter)
+                {
                     let chain_key = session_state.receiver_chains_mut()[idx].chain_key.clone();
                     return Ok((chain_key, keys));
                 }
-                return Err(DecryptionError::OldCounter {
-                    current: chain_key_index,
-                    received: counter,
-                });
+                return Err(ProtocolError::OldCounter(chain_key_index, counter).into());
             }
             if counter > chain_key_index + 2000 {
                 return Err(DecryptionError::TooFarInFuture);
             }
-            // Advance chain_key and add message keys as needed
             while session_state.receiver_chains_mut()[idx].chain_key.index() < counter {
                 let mk = session_state.receiver_chains_mut()[idx]
                     .chain_key
@@ -146,9 +141,9 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             }
             let chain_key = session_state.receiver_chains_mut()[idx].chain_key.clone();
             let message_keys = chain_key.message_keys();
+            session_state.receiver_chains_mut()[idx].chain_key = chain_key.next_key();
             return Ok((chain_key, message_keys));
         } else {
-            // This is the DH ratchet step for the receiver.
             let root_key = session_state.root_key().clone();
             let our_ephemeral = session_state.sender_ratchet_key_pair().clone();
             let their_ephemeral_arc =
@@ -167,11 +162,17 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                 their_ephemeral_arc.clone(),
                 receiver_chain_pair.chain_key.clone(),
             );
-            session_state.set_previous_counter(session_state.sender_chain_key().index());
+            session_state
+                .set_previous_counter(session_state.sender_chain_key().index().saturating_sub(1));
             session_state.set_sender_chain(new_our_ephemeral, sender_chain_pair.chain_key);
 
-            // Now we can get the keys from the newly created chain
-            self.get_or_create_message_keys(session_state, their_ephemeral, counter)
+            let chain_key = receiver_chain_pair.chain_key;
+            let message_keys = chain_key.message_keys();
+            if let Some(chain) = session_state.find_receiver_chain_mut(&their_ephemeral.public_key)
+            {
+                chain.chain_key = chain_key.next_key();
+            }
+            return Ok((chain_key, message_keys));
         }
     }
 
@@ -198,8 +199,6 @@ pub enum DecryptionError {
     NoValidSessions,
     #[error("uninitialized session")]
     UninitializedSession,
-    #[error("old counter (current: {current}, received: {received})")]
-    OldCounter { current: u32, received: u32 },
     #[error("message is too far in the future")]
     TooFarInFuture,
 }
@@ -277,29 +276,27 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         session_record: &mut SessionRecord,
         message: &SignalMessage,
     ) -> Result<Vec<u8>, DecryptionError> {
-        let mut plaintext = None;
-        let decrypt_err = None;
-
-        // Try decrypting with the current state
-        if let Ok(pt) = self
+        // Try with current session state
+        let pt_result = self
             .try_decrypt_with_state(session_record.session_state_mut(), message)
-            .await
-        {
-            plaintext = Some(pt);
-        } else {
-            // If that fails, try previous states
-            for (i, state) in session_record.previous_states_mut().iter_mut().enumerate() {
-                if let Ok(pt) = self.try_decrypt_with_state(state, message).await {
-                    session_record.promote_state(i);
-                    plaintext = Some(pt);
-                    break;
-                }
+            .await;
+
+        if pt_result.is_ok() {
+            return pt_result;
+        }
+
+        // If that fails, try with previous states
+        for (i, state) in session_record.previous_states_mut().iter_mut().enumerate() {
+            if let Ok(pt) = self.try_decrypt_with_state(state, message).await {
+                session_record.promote_state(i);
+                return Ok(pt);
             }
         }
 
-        match plaintext {
-            Some(pt) => Ok(pt),
-            None => decrypt_err.ok_or(DecryptionError::NoValidSessions),
+        // If all states failed, return the error from the original attempt
+        match pt_result {
+            Err(e) => Err(e),
+            Ok(_) => Err(DecryptionError::NoValidSessions),
         }
     }
 
@@ -319,8 +316,12 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         if !session_state.has_sender_chain() {
             return Err(DecryptionError::UninitializedSession);
         }
+        if message.message_version != session_state.session_version() as u8 {
+            return Err(DecryptionError::Protocol(ProtocolError::InvalidVersion(
+                message.message_version,
+            )));
+        }
 
-        // Downcast Arc<dyn EcPublicKey> to &DjbEcPublicKey
         let their_ephemeral = message
             .sender_ratchet_key
             .as_any()
@@ -329,7 +330,6 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         let (chain_key, message_keys) =
             self.get_or_create_message_keys(session_state, their_ephemeral, message.counter)?;
 
-        // MAC verification
         crate::signal::protocol::SignalMessage::deserialize_and_verify(
             &message.serialized_form,
             message_keys.mac_key(),
@@ -339,7 +339,6 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
         let decrypted_plaintext = self.decrypt_internal(&message_keys, &message.ciphertext)?;
 
-        // ** CRITICAL FIX: Update the chain key after successful decryption **
         session_state
             .set_receiver_chain_key(message.sender_ratchet_key.clone(), chain_key.next_key());
 

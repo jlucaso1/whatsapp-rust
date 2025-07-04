@@ -35,6 +35,12 @@ pub struct SessionState {
     pending_key_exchange: Option<PendingKeyExchange>,
 }
 
+impl SessionState {
+    pub fn session_version(&self) -> u32 {
+        self.session_version
+    }
+}
+
 impl Chain {
     pub fn new(sender_ratchet_key_pair: EcKeyPair, chain_key: ChainKey) -> Self {
         Self {
