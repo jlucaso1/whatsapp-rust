@@ -1,6 +1,5 @@
 use crate::proto::whatsapp as wa;
 use crate::types::jid::{Jid, MessageId, MessageServerId};
-use crate::types::user::ProfilePictureInfo;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -93,8 +92,8 @@ pub struct NewsletterThreadMetadata {
     pub subscriber_count: i32,
     #[serde(rename = "verification")]
     pub verification_state: NewsletterVerificationState,
-    pub picture: Option<ProfilePictureInfo>,
-    pub preview: ProfilePictureInfo,
+    pub picture_url: Option<String>,
+    pub preview_url: Option<String>,
     pub settings: NewsletterSettings,
 }
 

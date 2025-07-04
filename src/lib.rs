@@ -6,6 +6,7 @@ pub mod handshake;
 pub mod keepalive;
 pub mod pair;
 pub mod proto;
+pub mod proto_helpers;
 pub mod qrcode;
 pub mod request;
 pub mod socket;

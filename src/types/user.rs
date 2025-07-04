@@ -10,33 +10,6 @@ pub struct VerifiedName {
     pub details: Box<wa::verified_name_certificate::Details>,
 }
 
-#[derive(Debug, Clone)]
-pub struct UserInfo {
-    pub verified_name: Option<VerifiedName>,
-    pub status: Option<String>,
-    pub picture_id: Option<String>,
-    pub devices: Vec<Jid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfilePictureInfo {
-    pub url: String,
-    pub id: String,
-    #[serde(rename = "type")]
-    pub r#type: String,
-    #[serde(default)]
-    pub direct_path: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ContactInfo {
-    pub found: bool,
-    pub first_name: Option<String>,
-    pub full_name: Option<String>,
-    pub push_name: Option<String>,
-    pub business_name: Option<String>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct LocalChatSettings {
     pub found: bool,

@@ -15,6 +15,7 @@ use crate::qrcode;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
 use crate::types::jid::{Jid, SERVER_JID};
+use crate::types::message::get_base_message;
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
 use prost::Message as ProtoMessage;
@@ -1131,28 +1132,17 @@ impl Client {
                         log::warn!("Received unhandled SenderKeyDistributionMessage");
                     } else {
                         // It's a regular chat message
-                        let mut event = crate::types::events::Message {
-                            info: info.clone(),
-                            message: Box::new(wa::Message::default()), // will be replaced by unwrap_raw
-                            is_ephemeral: false,
-                            is_view_once: false,
-                            is_view_once_v2: false,
-                            is_document_with_caption: false,
-                            is_edit: false,
-                            raw_message: Box::new(msg),
-                        };
-                        event.unwrap_raw(); // This will populate event.message and the flags
+                        let base_msg = get_base_message(&msg);
 
                         log::debug!(
                             target: "Client/Recv",
                             "Decrypted message content: {:?}",
-                            &event.message
+                            base_msg
                         );
 
-                        if let Some(text) = event.message.conversation.as_ref() {
+                        if let Some(text) = base_msg.conversation.as_ref() {
                             log::info!(r#"Received message from {}: "{}""#, info.push_name, text);
-                        } else if let Some(ext_text) = event.message.extended_text_message.as_ref()
-                        {
+                        } else if let Some(ext_text) = base_msg.extended_text_message.as_ref() {
                             if let Some(text) = ext_text.text.as_ref() {
                                 log::info!(
                                     r#"Received extended text message from {}: "{}""#,
@@ -1173,7 +1163,9 @@ impl Client {
                                 }
                             }
                         }
-                        let _ = self.dispatch_event(Event::Message(event)).await;
+                        let _ = self
+                            .dispatch_event(Event::Message(Box::new(msg), info.clone()))
+                            .await;
                     }
                 } else {
                     log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");

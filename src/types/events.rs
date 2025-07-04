@@ -1,11 +1,5 @@
-// src/types/events.rs
-
 use crate::binary::node::Node;
 use crate::proto::whatsapp as wa;
-use crate::types::group::{
-    GroupAnnounce, GroupDelete, GroupEphemeral, GroupInfo, GroupLocked,
-    GroupMembershipApprovalMode, GroupName, GroupTopic,
-};
 use crate::types::jid::{Jid, MessageId};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
@@ -25,7 +19,7 @@ pub enum Event {
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
-    Message(Message),
+    Message(Box<wa::Message>, MessageInfo),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     Notification(Node),
@@ -35,8 +29,11 @@ pub enum Event {
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
 
-    JoinedGroup(JoinedGroup),
-    GroupInfoUpdate(GroupInfoUpdate),
+    JoinedGroup(Box<wa::Conversation>),
+    GroupInfoUpdate {
+        jid: Jid,
+        update: Box<wa::SyncActionValue>,
+    },
     ContactUpdate(ContactUpdate),
 
     PushNameUpdate(PushNameUpdate),
@@ -364,43 +361,11 @@ pub struct PresenceUpdate {
 }
 
 #[derive(Debug, Clone)]
-pub struct JoinedGroup {
-    pub reason: String,
-    pub r#type: String,
-    pub create_key: Option<MessageId>,
-    pub sender: Option<Jid>,
-    pub sender_pn: Option<Jid>,
-    pub notify: String,
-    pub group_info: GroupInfo,
-}
-
-#[derive(Debug, Clone)]
-pub struct GroupInfoUpdate {
-    pub jid: Jid,
-    pub sender: Option<Jid>,
-    pub sender_pn: Option<Jid>,
-    pub timestamp: DateTime<Utc>,
-    pub name: Option<GroupName>,
-    pub topic: Option<GroupTopic>,
-    pub locked: Option<GroupLocked>,
-    pub announce: Option<GroupAnnounce>,
-    pub ephemeral: Option<GroupEphemeral>,
-    pub membership_approval_mode: Option<GroupMembershipApprovalMode>,
-    pub delete: Option<GroupDelete>,
-
-    pub join: Vec<Jid>,
-    pub leave: Vec<Jid>,
-    pub promote: Vec<Jid>,
-    pub demote: Vec<Jid>,
-}
-
-#[derive(Debug, Clone)]
 pub struct PictureUpdate {
     pub jid: Jid,
     pub author: Jid,
     pub timestamp: DateTime<Utc>,
-    pub remove: bool,
-    pub picture_id: Option<String>,
+    pub photo_change: Option<wa::PhotoChange>,
 }
 
 #[derive(Debug, Clone)]

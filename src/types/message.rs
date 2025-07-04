@@ -103,3 +103,35 @@ pub struct MessageInfo {
     pub verified_name: Option<wa::VerifiedNameCertificate>,
     pub device_sent_meta: Option<DeviceSentMeta>,
 }
+
+pub fn get_base_message(mut message: &wa::Message) -> &wa::Message {
+    if let Some(device_sent) = message
+        .device_sent_message
+        .as_ref()
+        .and_then(|d| d.message.as_ref())
+    {
+        message = device_sent;
+    }
+    if let Some(ephemeral) = message
+        .ephemeral_message
+        .as_ref()
+        .and_then(|e| e.message.as_ref())
+    {
+        message = ephemeral;
+    }
+    if let Some(view_once) = message
+        .view_once_message
+        .as_ref()
+        .and_then(|v| v.message.as_ref())
+    {
+        message = view_once;
+    }
+    if let Some(view_once_v2) = message
+        .view_once_message_v2
+        .as_ref()
+        .and_then(|v| v.message.as_ref())
+    {
+        message = view_once_v2;
+    }
+    message
+}
