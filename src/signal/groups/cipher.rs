@@ -3,6 +3,7 @@
 use super::builder::GroupSessionBuilder;
 use super::ratchet::get_sender_key;
 use crate::crypto::cbc;
+use crate::signal::ecc;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
@@ -44,13 +45,24 @@ impl<S: SenderKeyStore> GroupCipher<S> {
         let sender_key = state.sender_chain_key().sender_message_key();
         let ciphertext = cbc::encrypt(sender_key.cipher_key(), sender_key.iv(), plaintext)?;
 
+        // Create a temporary message to get the bytes that need to be signed.
+        let temp_msg_to_sign = SenderKeyMessage::new(
+            state.key_id(),
+            sender_key.iteration(),
+            ciphertext.clone(),
+            vec![], // Empty signature for serialization
+        );
+        let bytes_to_sign = temp_msg_to_sign.serialize_for_signature();
+        let signature = ecc::curve::calculate_signature(
+            state.signing_key().private_key.clone(),
+            &bytes_to_sign,
+        );
+
         let sender_key_message = SenderKeyMessage::new(
             state.key_id(),
             sender_key.iteration(),
             ciphertext.clone(),
-            // TODO: Signature logic needs the private key to be available and implemented
-            // For now, an empty signature will be sent.
-            vec![],
+            signature.to_vec(),
         );
 
         state.set_sender_chain_key(state.sender_chain_key().next());

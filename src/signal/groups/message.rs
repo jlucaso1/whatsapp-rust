@@ -1,4 +1,5 @@
 use crate::signal::ecc::keys::DjbEcPublicKey;
+use prost::Message;
 
 #[derive(Clone)]
 pub struct SenderKeyDistributionMessage {
@@ -61,11 +62,15 @@ impl SenderKeyMessage {
         &self.signature
     }
     pub fn serialize_for_signature(&self) -> Vec<u8> {
-        // Implement actual serialization logic as needed
-        let mut out = Vec::new();
-        out.extend(&self.key_id.to_be_bytes());
-        out.extend(&self.iteration.to_be_bytes());
-        out.extend(&self.ciphertext);
-        out
+        let mut buf = Vec::with_capacity(128);
+        // Version byte: high 4 bits are current version, low 4 bits are legacy version
+        buf.push((3 << 4) | 3);
+        let proto_msg = crate::proto::whatsapp::SenderKeyMessage {
+            id: Some(self.key_id),
+            iteration: Some(self.iteration),
+            ciphertext: Some(self.ciphertext.clone()),
+        };
+        proto_msg.encode(&mut buf).unwrap();
+        buf
     }
 }

@@ -28,6 +28,7 @@ pub enum Event {
     Message(Message),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
+    Notification(Node),
 
     ChatPresence(ChatPresenceUpdate),
     Presence(PresenceUpdate),

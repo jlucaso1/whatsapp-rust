@@ -14,7 +14,7 @@ use crate::proto::whatsapp as wa;
 use crate::qrcode;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
-use crate::types::jid::Jid;
+use crate::types::jid::{Jid, SERVER_JID};
 use crate::types::message::MessageInfo;
 use log::{debug, error, info, warn};
 use prost::Message as ProtoMessage;
@@ -93,7 +93,7 @@ impl Client {
             .send_iq(crate::request::InfoQuery {
                 namespace: "encrypt",
                 query_type: crate::request::InfoQueryType::Get,
-                to: "server@c.us".parse().unwrap(),
+                to: SERVER_JID.parse().unwrap(),
                 content: Some(NodeContent::Nodes(vec![Node {
                     tag: "key".into(),
                     attrs: Default::default(),
@@ -157,7 +157,15 @@ impl Client {
         let keys_node = node.get_optional_child("keys").unwrap_or(node);
 
         let identity_key_bytes = extract_bytes(keys_node.get_optional_child("identity"))?;
-        let identity_key = crate::signal::identity::IdentityKey::deserialize(&identity_key_bytes)?;
+        if identity_key_bytes.len() != 32 {
+            return Err(anyhow::anyhow!(
+                "Invalid identity key length: got {}, expected 32",
+                identity_key_bytes.len()
+            ));
+        }
+        let identity_key = crate::signal::identity::IdentityKey::new(
+            crate::signal::ecc::keys::DjbEcPublicKey::new(identity_key_bytes.try_into().unwrap()),
+        );
 
         let mut pre_key_id = None;
         let mut pre_key_public = None;
@@ -527,9 +535,9 @@ impl Client {
                     warn!(target: "Client", "Received unhandled IQ: {}", node);
                 }
             }
-            "receipt" | "notification" | "call" | "presence" | "chatstate" => {
-                warn!(target: "Client", "TODO: Implement handler for <{}>", node.tag);
-            }
+            "receipt" => self.handle_receipt(&node).await,
+            "notification" => self.handle_notification(node).await,
+            "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
                 tokio::spawn(async move {
@@ -541,6 +549,49 @@ impl Client {
                 warn!(target: "Client", "Received unknown top-level node: {}", node);
             }
         }
+    }
+
+    async fn handle_unimplemented(&self, tag: &str) {
+        warn!(target: "Client", "TODO: Implement handler for <{}>", tag);
+    }
+
+    async fn handle_receipt(&self, node: &Node) {
+        let mut attrs = node.attrs();
+        let from = attrs.jid("from");
+        let id = attrs.string("id");
+        let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
+
+        use crate::types::presence::ReceiptType;
+        let receipt_type = match receipt_type_str {
+            "read" => ReceiptType::Read,
+            "played" => ReceiptType::Played,
+            _ => ReceiptType::Delivered,
+        };
+
+        info!(
+            "Received receipt type '{:?}' for message {} from {}",
+            receipt_type, id, from
+        );
+
+        self.dispatch_event(Event::Receipt(crate::types::events::Receipt {
+            message_ids: vec![id],
+            source: crate::types::message::MessageSource {
+                chat: from.clone(),
+                sender: from.clone(),
+                ..Default::default()
+            },
+            timestamp: chrono::Utc::now(),
+            r#type: receipt_type,
+            message_sender: from,
+        }))
+        .await;
+    }
+
+    async fn handle_notification(&self, node: Node) {
+        // This will be a dispatcher for different notification types.
+        // For now, we'll just log it as a TODO.
+        self.handle_unimplemented(&node.tag).await;
+        self.dispatch_event(Event::Notification(node)).await;
     }
 
     // --- App State Sync Logic ---
