@@ -1280,6 +1280,35 @@ impl Client {
         };
 
         // 4. Construct the <message> stanza
+        let mut message_content_nodes = vec![
+            crate::binary::node::Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), enc_type.to_string()),
+                ]
+                .into(),
+                content: Some(crate::binary::node::NodeContent::Bytes(
+                    encrypted_message.serialize(),
+                )),
+            }
+        ];
+
+        // If it's a pre-key message, include our device identity
+        if enc_type == "pkmsg" {
+            if let Some(account) = &store.account {
+                let device_identity_bytes = account.encode_to_vec();
+                let identity_node = crate::binary::node::Node {
+                    tag: "device-identity".to_string(),
+                    attrs: Default::default(),
+                    content: Some(crate::binary::node::NodeContent::Bytes(device_identity_bytes)),
+                };
+                message_content_nodes.push(identity_node);
+            } else {
+                return Err(anyhow::anyhow!("Cannot send pre-key message: device account identity is missing from store. Please re-pair."));
+            }
+        }
+
         let stanza = crate::binary::node::Node {
             tag: "message".to_string(),
             attrs: [
@@ -1288,19 +1317,7 @@ impl Client {
                 ("type".to_string(), "text".to_string()),
             ]
             .into(),
-            content: Some(crate::binary::node::NodeContent::Nodes(vec![
-                crate::binary::node::Node {
-                    tag: "enc".to_string(),
-                    attrs: [
-                        ("v".to_string(), "2".to_string()),
-                        ("type".to_string(), enc_type.to_string()),
-                    ]
-                    .into(),
-                    content: Some(crate::binary::node::NodeContent::Bytes(
-                        encrypted_message.serialize(),
-                    )),
-                },
-            ])),
+            content: Some(crate::binary::node::NodeContent::Nodes(message_content_nodes)),
         };
 
         // 5. Send it

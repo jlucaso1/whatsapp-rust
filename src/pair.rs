@@ -3,7 +3,7 @@ use crate::client::Client;
 use crate::crypto::xed25519::verify_dalek;
 use crate::proto::whatsapp as wa;
 use crate::proto::whatsapp::AdvEncryptionType;
-use crate::types::events::{Event, PairSuccess, Qr};
+use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -171,6 +171,33 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     match result {
         Ok((self_signed_identity_bytes, key_index)) => {
+            let signed_identity = match wa::AdvSignedDeviceIdentity::decode(
+                self_signed_identity_bytes.as_slice(),
+            ) {
+                Ok(identity) => Some(identity),
+                Err(e) => {
+                    error!("FATAL: Failed to re-decode self-signed identity for storage, pairing cannot complete: {}", e);
+                    client
+                        .dispatch_event(Event::PairError(PairError {
+                            id: jid.clone(),
+                            lid: lid.clone(),
+                            business_name: business_name.clone(),
+                            platform: platform.clone(),
+                            error: format!(
+                                "internal error: failed to decode identity for storage: {}",
+                                e
+                            ),
+                        }))
+                        .await;
+                    return;
+                }
+            };
+
+            let mut store_guard = client.store.write().await;
+            store_guard.id = Some(jid.clone());
+            store_guard.account = signed_identity;
+            drop(store_guard);
+
             let response_content = Node {
                 tag: "pair-device-sign".into(),
                 attrs: [].into(),

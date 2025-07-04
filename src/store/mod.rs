@@ -25,6 +25,7 @@ pub struct Device {
     pub identity_key: KeyPair,
     pub signed_pre_key: PreKey,
     pub adv_secret_key: [u8; 32],
+    pub account: Option<wa::AdvSignedDeviceIdentity>,
 
     // Abstracted storage via trait objects
     pub identities: Arc<dyn IdentityStore>,
@@ -59,6 +60,7 @@ impl Device {
             identity_key,
             signed_pre_key,
             adv_secret_key,
+            account: None,
             identities,
             sessions,
             app_state_store,
