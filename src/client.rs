@@ -4,15 +4,13 @@ use crate::pair;
 use crate::qrcode;
 use crate::store;
 
-use crate::appstate::keys::ALL_PATCH_NAMES;
-use crate::proto::whatsapp as wa;
-use crate::types::events::{ConnectFailureReason, ContactUpdate, Event};
+use crate::handlers;
+use crate::types::events::{ConnectFailureReason, Event};
 
 use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -20,7 +18,6 @@ use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
-use crate::types::jid::Jid;
 
 pub type EventHandler = Box<dyn Fn(Arc<Event>) + Send + Sync>;
 pub(crate) struct WrappedHandler {
@@ -185,33 +182,6 @@ impl Client {
         *self.frames_rx.lock().await = None;
     }
 
-    async fn request_app_state_keys(&self, keys: Vec<Vec<u8>>) {
-        use crate::proto::whatsapp::message::protocol_message;
-
-        let key_ids = keys
-            .into_iter()
-            .map(|id| wa::message::AppStateSyncKeyId { key_id: Some(id) })
-            .collect();
-
-        let msg = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                r#type: Some(protocol_message::Type::AppStateSyncKeyRequest as i32),
-                app_state_sync_key_request: Some(wa::message::AppStateSyncKeyRequest { key_ids }),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-
-        if let Some(own_jid) = self.store.read().await.id.clone() {
-            let own_non_ad = own_jid.to_non_ad();
-            if let Err(e) = self.send_message(own_non_ad, msg).await {
-                warn!("Failed to send app state key request: {:?}", e);
-            }
-        } else {
-            warn!("Can't request app state keys, not logged in.");
-        }
-    }
-
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         info!(target: "Client", "Starting message processing loop...");
 
@@ -234,7 +204,6 @@ impl Client {
                                 self.process_encrypted_frame(&encrypted_frame).await;
                             },
                             None => {
-
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.dispatch_event(Event::Disconnected(crate::types::events::Disconnected)).await;
@@ -281,7 +250,7 @@ impl Client {
             "success" => self.handle_success(&node).await,
             "failure" => self.handle_connect_failure(&node).await,
             "stream:error" => self.handle_stream_error(&node).await,
-            "ib" => self.clone().handle_ib(&node).await,
+            "ib" => handlers::ib::handle_ib(self.clone(), &node).await,
             "iq" => {
                 if !self.handle_iq(&node).await {
                     warn!(target: "Client", "Received unhandled IQ: {}", node);
@@ -342,178 +311,6 @@ impl Client {
     async fn handle_notification(&self, node: Node) {
         self.handle_unimplemented(&node.tag).await;
         self.dispatch_event(Event::Notification(node)).await;
-    }
-
-    async fn fetch_app_state_patches(
-        &self,
-        name: &str,
-        version: u64,
-        is_full_sync: bool,
-    ) -> Result<Node, crate::request::IqError> {
-        use crate::binary::node::{Attrs, Node, NodeContent};
-        use crate::request::{InfoQuery, InfoQueryType};
-        use crate::types::jid;
-
-        let mut attrs = Attrs::new();
-        attrs.insert("name".to_string(), name.to_string());
-        attrs.insert("return_snapshot".to_string(), is_full_sync.to_string());
-        if !is_full_sync {
-            attrs.insert("version".to_string(), version.to_string());
-        }
-
-        let collection_node = Node {
-            tag: "collection".to_string(),
-            attrs,
-            content: None,
-        };
-
-        let sync_node = Node {
-            tag: "sync".to_string(),
-            attrs: Attrs::new(),
-            content: Some(NodeContent::Nodes(vec![collection_node])),
-        };
-
-        let iq = InfoQuery {
-            namespace: "w:sync:app:state",
-            query_type: InfoQueryType::Set,
-            to: jid::SERVER_JID.parse().unwrap(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![sync_node])),
-            timeout: None,
-        };
-
-        self.send_iq(iq).await
-    }
-
-    pub async fn app_state_sync(&self, name: &str, full_sync: bool) {
-        use crate::appstate::processor::{PatchList, Processor};
-        use prost::Message;
-
-        info!(target: "Client/AppState", "Starting AppState sync for '{}' (full_sync: {})", name, full_sync);
-
-        let store_guard = self.store.read().await;
-        let app_state_store = store_guard.app_state_store.clone();
-        let app_state_keys = store_guard.app_state_keys.clone();
-        let contacts_store = store_guard.identities.clone();
-        let processor = Processor::new(app_state_store.clone(), app_state_keys.clone());
-
-        let mut current_state = match app_state_store.get_app_state_version(name).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to get app state version for {}: {:?}", name, e);
-                return;
-            }
-        };
-        if full_sync {
-            current_state.version = 0;
-            current_state.hash = [0; 128];
-        }
-
-        let mut has_more = true;
-        let mut is_first_sync = full_sync;
-
-        while has_more {
-            let resp_node = match self
-                .fetch_app_state_patches(name, current_state.version, is_first_sync)
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!(target: "Client/AppState", "Failed to fetch patches for {}: {:?}", name, e);
-                    return;
-                }
-            };
-            is_first_sync = false;
-
-            if let Some(sync_node) = resp_node.get_optional_child("sync") {
-                if let Some(collection_node) = sync_node.get_optional_child("collection") {
-                    let mut attrs = collection_node.attrs();
-                    has_more = attrs.optional_bool("has_more_patches");
-
-                    let mut patches = Vec::new();
-                    if let Some(patches_node) = collection_node.get_optional_child("patches") {
-                        for patch_child in patches_node.children().unwrap_or_default() {
-                            if let Some(crate::binary::node::NodeContent::Bytes(b)) =
-                                &patch_child.content
-                            {
-                                if let Ok(patch) = wa::SyncdPatch::decode(b.as_slice()) {
-                                    patches.push(patch);
-                                }
-                            }
-                        }
-                    }
-
-                    let snapshot = None;
-
-                    let patch_list = PatchList {
-                        name: name.to_string(),
-                        has_more_patches: has_more,
-                        patches,
-                        snapshot,
-                    };
-
-                    match processor
-                        .decode_patches(&patch_list, current_state.clone())
-                        .await
-                    {
-                        Ok((mutations, new_state)) => {
-                            current_state = new_state;
-                            info!(
-                                target: "Client/AppState",
-                                "Decoded {} mutations for '{}'. New version: {}",
-                                mutations.len(), name, current_state.version
-                            );
-
-                            for mutation in &mutations {
-                                if mutation.operation == wa::syncd_mutation::SyncdOperation::Set {
-                                    if let Some(contact_action) =
-                                        mutation.action.contact_action.as_ref()
-                                    {
-                                        if mutation.index.len() > 1 {
-                                            let jid_str = &mutation.index[1];
-                                            if let Ok(jid) = Jid::from_str(jid_str) {
-                                                let _ = contacts_store
-                                                    .put_identity(jid_str, [0u8; 32])
-                                                    .await;
-                                                let event = Event::ContactUpdate(ContactUpdate {
-                                                    jid,
-                                                    timestamp: chrono::Utc::now(),
-                                                    action: Box::new(contact_action.clone()),
-                                                    from_full_sync: full_sync,
-                                                });
-                                                let _ = self.dispatch_event(event).await;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            if let crate::appstate::errors::AppStateError::KeysNotFound(missing) = e
-                            {
-                                info!(
-                                    "Requesting {} missing app state keys for sync of '{}'",
-                                    missing.len(),
-                                    name
-                                );
-                                self.request_app_state_keys(missing).await;
-                            } else {
-                                error!("Failed to decode patches for {}: {:?}", name, e);
-                                has_more = false;
-                            }
-                        }
-                    };
-                } else {
-                    warn!(target: "Client/AppState", "Sync response for '{}' missing <collection> node", name);
-                    has_more = false;
-                }
-            } else {
-                warn!(target: "Client/AppState", "Sync response for '{}' missing <sync> node", name);
-                has_more = false;
-            }
-        }
-        info!(target: "Client/AppState", "Finished AppState sync for '{}'", name);
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
@@ -745,44 +542,5 @@ impl Client {
         })?;
 
         noise_socket.send_frame(&payload).await.map_err(Into::into)
-    }
-
-    async fn handle_ib(self: Arc<Self>, node: &Node) {
-        for child in node.children().unwrap_or_default() {
-            match child.tag.as_str() {
-                "dirty" => {
-                    let mut attrs = child.attrs();
-                    let dirty_type = attrs.string("type");
-                    if dirty_type == "account_sync" {
-                        info!(
-                            target: "Client",
-                            "Received 'account_sync' dirty state notification. Triggering sync for all app state categories."
-                        );
-                        let client_clone = self.clone();
-                        tokio::spawn(async move {
-                            for name in ALL_PATCH_NAMES {
-                                client_clone.app_state_sync(name, false).await;
-                            }
-                        });
-                    } else {
-                        info!(
-                            target: "Client",
-                            "Received dirty state notification for type: '{}'. Triggering App State Sync.",
-                            dirty_type
-                        );
-                        let client_clone = self.clone();
-                        tokio::spawn(async move {
-                            client_clone.app_state_sync(&dirty_type, false).await;
-                        });
-                    }
-                }
-                "edge_routing" => {
-                    info!(target: "Client", "Received edge routing info, ignoring for now.");
-                }
-                _ => {
-                    warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
-                }
-            }
-        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::appstate::keys::ALL_PATCH_NAMES;
+use crate::appstate_sync::app_state_sync;
 use crate::binary;
 use crate::binary::node::Node;
 use crate::client::Client;
@@ -157,7 +158,7 @@ impl Client {
                                 let self_clone = self.clone();
                                 tokio::spawn(async move {
                                     for name in ALL_PATCH_NAMES {
-                                        self_clone.app_state_sync(name, false).await;
+                                        app_state_sync(&self_clone, name, false).await;
                                     }
                                 });
                             }

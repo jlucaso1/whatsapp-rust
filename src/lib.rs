@@ -1,7 +1,9 @@
 pub mod appstate;
+pub mod appstate_sync;
 pub mod binary;
 pub mod client;
 pub mod crypto;
+pub mod handlers;
 pub mod handshake;
 pub mod keepalive;
 pub mod message;
