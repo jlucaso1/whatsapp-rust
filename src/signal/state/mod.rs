@@ -1,4 +1,3 @@
-pub mod chain_key;
 pub mod pending_key_exchange_state;
 pub mod prekey_bundle;
 pub mod record;
