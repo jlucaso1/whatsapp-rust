@@ -10,6 +10,7 @@ use crate::types::jid::Jid;
 use rand::RngCore;
 pub mod clientpayload;
 pub mod error;
+pub mod generic;
 pub mod memory;
 pub mod traits;
 

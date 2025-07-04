@@ -103,4 +103,3 @@ pub struct MessageInfo {
     pub verified_name: Option<wa::VerifiedNameCertificate>,
     pub device_sent_meta: Option<DeviceSentMeta>,
 }
-

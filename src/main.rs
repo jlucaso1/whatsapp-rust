@@ -1,5 +1,3 @@
-// src/main.rs
-
 use log::{error, info, warn};
 use std::sync::Arc;
 use whatsapp_rust::client::Client;

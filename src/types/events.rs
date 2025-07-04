@@ -279,7 +279,6 @@ pub struct UndecryptableMessage {
     pub decrypt_fail_mode: DecryptFailMode,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct Receipt {
     pub source: crate::types::message::MessageSource,

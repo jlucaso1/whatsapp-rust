@@ -1,50 +1,60 @@
 use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::Result;
+use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
+
+type IdentityMap = GenericMemoryStore<String, [u8; 32]>;
+type SessionMap = GenericMemoryStore<String, Vec<u8>>;
+type AppStateVersionMap = GenericMemoryStore<String, crate::appstate::hash::HashState>;
+type AppStateKeyMap = GenericMemoryStore<Vec<u8>, AppStateSyncKey>;
+type PreKeyMap = GenericMemoryStore<u32, PreKeyRecordStructure>;
+type SignedPreKeyMap = GenericMemoryStore<u32, SignedPreKeyRecordStructure>;
+type SenderKeyMap =
+    GenericMemoryStore<crate::signal::sender_key_name::SenderKeyName, SenderKeyRecord>;
 
 #[derive(Default)]
 pub struct MemoryStore {
-    identities: Mutex<HashMap<String, [u8; 32]>>,
-    sessions: Mutex<HashMap<String, Vec<u8>>>,
-    app_state_versions: Mutex<HashMap<String, crate::appstate::hash::HashState>>,
-    app_state_keys: Mutex<HashMap<Vec<u8>, AppStateSyncKey>>,
+    identities: IdentityMap,
+    sessions: SessionMap,
+    app_state_versions: AppStateVersionMap,
+    app_state_keys: AppStateKeyMap,
     // --- Signal Protocol fields ---
-    pre_keys: Mutex<HashMap<u32, PreKeyRecordStructure>>,
-    signed_pre_keys: Mutex<HashMap<u32, SignedPreKeyRecordStructure>>,
-    sender_keys: Mutex<
-        std::collections::HashMap<crate::signal::sender_key_name::SenderKeyName, SenderKeyRecord>,
-    >,
+    pre_keys: PreKeyMap,
+    signed_pre_keys: SignedPreKeyMap,
+    sender_keys: SenderKeyMap,
 }
 
 impl MemoryStore {
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            identities: IdentityMap::new(),
+            sessions: SessionMap::new(),
+            app_state_versions: AppStateVersionMap::new(),
+            app_state_keys: AppStateKeyMap::new(),
+            pre_keys: PreKeyMap::new(),
+            signed_pre_keys: SignedPreKeyMap::new(),
+            sender_keys: SenderKeyMap::new(),
+        }
     }
 }
 
 #[async_trait]
 impl IdentityStore for MemoryStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
-        let mut identities = self.identities.lock().await;
-        identities.insert(address.to_string(), key);
+        self.identities.put(address.to_string(), key).await;
         Ok(())
     }
 
     async fn delete_identity(&self, address: &str) -> Result<()> {
-        let mut identities = self.identities.lock().await;
-        identities.remove(address);
+        self.identities.remove(&address.to_string()).await;
         Ok(())
     }
 
     async fn is_trusted_identity(&self, address: &str, key: &[u8; 32]) -> Result<bool> {
-        let identities = self.identities.lock().await;
-
-        if let Some(stored_key) = identities.get(address) {
-            Ok(stored_key == key)
+        if let Some(stored_key) = self.identities.get(&address.to_string()).await {
+            Ok(stored_key == *key)
         } else {
             Ok(false)
         }
@@ -59,8 +69,7 @@ impl crate::signal::store::SenderKeyStore for MemoryStore {
         sender_key_name: &crate::signal::sender_key_name::SenderKeyName,
         record: SenderKeyRecord,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut sender_keys = self.sender_keys.lock().await;
-        sender_keys.insert(sender_key_name.clone(), record);
+        self.sender_keys.put(sender_key_name.clone(), record).await;
         Ok(())
     }
 
@@ -68,10 +77,10 @@ impl crate::signal::store::SenderKeyStore for MemoryStore {
         &self,
         sender_key_name: &crate::signal::sender_key_name::SenderKeyName,
     ) -> std::result::Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        let sender_keys = self.sender_keys.lock().await;
-        Ok(sender_keys
+        Ok(self
+            .sender_keys
             .get(sender_key_name)
-            .cloned()
+            .await
             .unwrap_or_default())
     }
 }
@@ -79,50 +88,45 @@ impl crate::signal::store::SenderKeyStore for MemoryStore {
 #[async_trait]
 impl SessionStore for MemoryStore {
     async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        let sessions = self.sessions.lock().await;
-        Ok(sessions.get(address).cloned())
+        Ok(self.sessions.get(&address.to_string()).await)
     }
 
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
-        let mut sessions = self.sessions.lock().await;
-        sessions.insert(address.to_string(), session.to_vec());
+        self.sessions
+            .put(address.to_string(), session.to_vec())
+            .await;
         Ok(())
     }
 
     async fn delete_session(&self, address: &str) -> Result<()> {
-        let mut sessions = self.sessions.lock().await;
-        sessions.remove(address);
+        self.sessions.remove(&address.to_string()).await;
         Ok(())
     }
 
     async fn has_session(&self, address: &str) -> Result<bool> {
-        let sessions = self.sessions.lock().await;
-        Ok(sessions.contains_key(address))
+        Ok(self.sessions.contains(&address.to_string()).await)
     }
 }
 
 #[async_trait]
 impl AppStateStore for MemoryStore {
     async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState> {
-        let versions = self.app_state_versions.lock().await;
-        Ok(versions
-            .get(name)
-            .cloned()
+        Ok(self
+            .app_state_versions
+            .get(&name.to_string())
+            .await
             .unwrap_or(crate::appstate::hash::HashState {
                 version: 0,
                 hash: [0; 128],
             }))
     }
 
-    // --- Existing Trait Implementations (IdentityStore, AppStateStore, etc.) ---
-
     async fn set_app_state_version(
         &self,
         name: &str,
         state: crate::appstate::hash::HashState,
     ) -> Result<()> {
-        let mut versions = self.app_state_versions.lock().await;
-        versions.insert(name.to_string(), state);
+        self.app_state_versions.put(name.to_string(), state).await;
         Ok(())
     }
 }
@@ -136,8 +140,7 @@ impl crate::signal::store::PreKeyStore for MemoryStore {
         prekey_id: u32,
     ) -> std::result::Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>>
     {
-        let keys = self.pre_keys.lock().await;
-        Ok(keys.get(&prekey_id).cloned())
+        Ok(self.pre_keys.get(&prekey_id).await)
     }
 
     async fn store_prekey(
@@ -145,8 +148,7 @@ impl crate::signal::store::PreKeyStore for MemoryStore {
         prekey_id: u32,
         record: PreKeyRecordStructure,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut keys = self.pre_keys.lock().await;
-        keys.insert(prekey_id, record);
+        self.pre_keys.put(prekey_id, record).await;
         Ok(())
     }
 
@@ -154,16 +156,14 @@ impl crate::signal::store::PreKeyStore for MemoryStore {
         &self,
         prekey_id: u32,
     ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        let keys = self.pre_keys.lock().await;
-        Ok(keys.contains_key(&prekey_id))
+        Ok(self.pre_keys.contains(&prekey_id).await)
     }
 
     async fn remove_prekey(
         &self,
         prekey_id: u32,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut keys = self.pre_keys.lock().await;
-        keys.remove(&prekey_id);
+        self.pre_keys.remove(&prekey_id).await;
         Ok(())
     }
 }
@@ -177,8 +177,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
         Option<SignedPreKeyRecordStructure>,
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        let keys = self.signed_pre_keys.lock().await;
-        Ok(keys.get(&signed_prekey_id).cloned())
+        Ok(self.signed_pre_keys.get(&signed_prekey_id).await)
     }
 
     async fn load_signed_prekeys(
@@ -187,8 +186,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
         Vec<SignedPreKeyRecordStructure>,
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        let keys = self.signed_pre_keys.lock().await;
-        Ok(keys.values().cloned().collect())
+        Ok(self.signed_pre_keys.values().await)
     }
 
     async fn store_signed_prekey(
@@ -196,8 +194,7 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut keys = self.signed_pre_keys.lock().await;
-        keys.insert(signed_prekey_id, record);
+        self.signed_pre_keys.put(signed_prekey_id, record).await;
         Ok(())
     }
 
@@ -205,16 +202,14 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
         &self,
         signed_prekey_id: u32,
     ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        let keys = self.signed_pre_keys.lock().await;
-        Ok(keys.contains_key(&signed_prekey_id))
+        Ok(self.signed_pre_keys.contains(&signed_prekey_id).await)
     }
 
     async fn remove_signed_prekey(
         &self,
         signed_prekey_id: u32,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut keys = self.signed_pre_keys.lock().await;
-        keys.remove(&signed_prekey_id);
+        self.signed_pre_keys.remove(&signed_prekey_id).await;
         Ok(())
     }
 }
@@ -222,12 +217,10 @@ impl crate::signal::store::SignedPreKeyStore for MemoryStore {
 #[async_trait]
 impl AppStateKeyStore for MemoryStore {
     async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
-        let keys = self.app_state_keys.lock().await;
-        Ok(keys.get(key_id).cloned())
+        Ok(self.app_state_keys.get(&key_id.to_vec()).await)
     }
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
-        let mut keys = self.app_state_keys.lock().await;
-        keys.insert(key_id.to_vec(), key);
+        self.app_state_keys.put(key_id.to_vec(), key).await;
         Ok(())
     }
 }
