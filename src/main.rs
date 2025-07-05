@@ -20,7 +20,7 @@ async fn main() -> Result<(), anyhow::Error> {
         dev
     } else {
         info!("No existing device found, creating a new one.");
-        
+
         // The device will be saved after a successful pairing
         store::Device::new(store_backend.clone())
     };
@@ -45,9 +45,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={}",
                             urlencoding::encode(&code)
                         );
-                        info!(
-                            "Scan this URL in a browser to see the QR code:\n  {qr_url}"
-                        );
+                        info!("Scan this URL in a browser to see the QR code:\n  {qr_url}");
                         info!("----------------------------------------");
                     }
                     QrCodeEvent::Success => {

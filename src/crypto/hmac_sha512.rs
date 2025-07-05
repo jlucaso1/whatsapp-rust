@@ -1,6 +1,6 @@
-use whatsapp_proto::whatsapp as wa;
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
+use whatsapp_proto::whatsapp as wa;
 
 pub fn generate_content_mac(
     operation: wa::syncd_mutation::SyncdOperation,

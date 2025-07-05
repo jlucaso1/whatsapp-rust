@@ -64,8 +64,7 @@ impl<'a> Decoder<'a> {
 
     fn read_string(&mut self, len: usize) -> Result<String> {
         let bytes = self.read_bytes(len)?;
-        String::from_utf8(bytes.to_vec())
-            .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
+        String::from_utf8(bytes.to_vec()).map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
     }
 
     fn read_list_size(&mut self, tag: u8) -> Result<usize> {

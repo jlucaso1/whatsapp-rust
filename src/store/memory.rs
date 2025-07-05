@@ -1,9 +1,9 @@
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::Result;
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type IdentityMap = GenericMemoryStore<String, [u8; 32]>;
 type SessionMap = GenericMemoryStore<String, Vec<u8>>;

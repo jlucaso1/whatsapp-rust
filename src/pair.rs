@@ -1,8 +1,6 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::crypto::xed25519::verify_dalek;
-use whatsapp_proto::whatsapp as wa;
-use whatsapp_proto::whatsapp::AdvEncryptionType;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -12,6 +10,8 @@ use log::{debug, error, info, warn};
 use prost::Message;
 use sha2::Sha256;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp as wa;
+use whatsapp_proto::whatsapp::AdvEncryptionType;
 
 use std::sync::atomic::Ordering;
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
@@ -82,9 +82,7 @@ async fn acknowledge_request(client: &Client, request_node: &Node) {
             content: None,
         };
         if let Err(e) = client.send_node(ack).await {
-            warn!(
-                "Failed to send acknowledgement for request ID {id}: {e:?}"
-            );
+            warn!("Failed to send acknowledgement for request ID {id}: {e:?}");
         }
     }
 }

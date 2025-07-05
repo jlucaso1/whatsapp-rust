@@ -1340,5 +1340,6 @@ pub fn get_single_token(index: u8) -> Option<&'static str> {
 pub fn get_double_token(dict: u8, index: u8) -> Option<&'static str> {
     DOUBLE_BYTE_TOKENS
         .get(dict as usize)
-        .and_then(|d| d.get(index as usize)).copied()
+        .and_then(|d| d.get(index as usize))
+        .copied()
 }

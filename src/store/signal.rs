@@ -1,5 +1,3 @@
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
-// src/store/signal.rs
 use crate::signal::address::SignalAddress;
 use crate::signal::ecc;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
@@ -8,11 +6,7 @@ use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::*;
 use crate::store::Device;
 use async_trait::async_trait;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-#[error("In-memory store error: {0}")]
-pub struct StoreError(String);
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 // --- IdentityKeyStore ---
 #[async_trait]

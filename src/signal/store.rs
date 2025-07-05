@@ -1,6 +1,6 @@
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::state::sender_key_record::SenderKeyRecord;
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 // src/signal/store.rs
 use super::address::SignalAddress;

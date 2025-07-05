@@ -1,4 +1,3 @@
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal;
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::{Result, StoreError};
@@ -8,6 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use super::SerializableDevice;
 
@@ -122,9 +122,7 @@ impl SessionStore for FileStore {
         let path = self
             .path_for("sessions")
             .join(Self::sanitize_filename(address));
-        fs::write(path, session)
-            .await
-            .map_err(StoreError::Io)
+        fs::write(path, session).await.map_err(StoreError::Io)
     }
 
     async fn delete_session(&self, address: &str) -> Result<()> {

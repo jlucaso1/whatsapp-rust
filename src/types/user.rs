@@ -1,8 +1,8 @@
-use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::Jid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use whatsapp_proto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
 pub struct VerifiedName {

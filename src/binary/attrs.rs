@@ -45,8 +45,7 @@ impl<'a> AttrParser<'a> {
     }
 
     pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true).cloned()
-            .unwrap_or_default()
+        self.get_raw(key, true).cloned().unwrap_or_default()
     }
 
     // --- JID ---

@@ -3,10 +3,10 @@ use super::hash::HashState;
 use super::keys;
 use crate::crypto::cbc;
 use crate::crypto::hmac_sha512;
-use whatsapp_proto::whatsapp as wa;
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use prost::Message;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp as wa;
 
 pub struct Processor {
     #[allow(dead_code)] // TODO: This will be used when hash calculation is implemented
@@ -160,7 +160,7 @@ impl Processor {
         let index: Vec<String> = serde_json::from_slice(index_json)?;
 
         let new_mutation = Mutation {
-            operation: wa::syncd_mutation::SyncdOperation::try_from(mutation.operation()).unwrap(),
+            operation: mutation.operation(),
             action: sync_action.value.take().unwrap(),
             index,
             index_mac: index_mac.to_vec(),

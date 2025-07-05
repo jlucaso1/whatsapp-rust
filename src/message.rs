@@ -4,12 +4,12 @@ use crate::binary;
 use crate::binary::node::Node;
 use crate::client::Client;
 use crate::proto_helpers::MessageExt;
-use whatsapp_proto::whatsapp as wa;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp as wa;
 
 // Helper to unpad messages after decryption
 fn unpad_message(plaintext: &[u8], version: u8) -> Result<Vec<u8>, anyhow::Error> {

@@ -1,6 +1,5 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
-use whatsapp_proto::whatsapp as wa;
 use crate::signal::address::SignalAddress;
 use crate::signal::session::SessionBuilder;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
@@ -9,6 +8,7 @@ use crate::signal::SessionCipher;
 use crate::types::jid::{Jid, SERVER_JID};
 use prost::Message as ProtoMessage;
 use rand::Rng;
+use whatsapp_proto::whatsapp as wa;
 
 // Helper function to pad messages for encryption
 fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
@@ -53,7 +53,7 @@ impl Client {
 
         if !session_exists {
             log::info!("No session found for {to}, building a new one.");
-            let bundles = self.fetch_pre_keys(&[to.clone()]).await?;
+            let bundles = self.fetch_pre_keys(std::slice::from_ref(&to)).await?;
             let bundle = bundles
                 .get(&to)
                 .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", to))?;

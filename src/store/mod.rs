@@ -6,9 +6,9 @@ pub const WA_CERT_PUB_KEY: [u8; 32] = [
     0xc4, 0xa2, 0x8b, 0x73, 0xe3, 0x69, 0x5c, 0x6c, 0xe1, 0xf7, 0xf9, 0x54, 0x5d, 0xa8, 0xee, 0x6b,
 ];
 use crate::crypto::key_pair::{KeyPair, PreKey};
-use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::Jid;
 use rand::RngCore;
+use whatsapp_proto::whatsapp as wa;
 pub mod clientpayload;
 pub mod error;
 pub mod generic;

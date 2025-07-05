@@ -1,6 +1,6 @@
-use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::Jid;
 use std::str::FromStr;
+use whatsapp_proto::whatsapp as wa;
 
 /// Extension trait for wa::Message
 pub trait MessageExt {

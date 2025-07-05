@@ -1,6 +1,6 @@
-use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::{Jid, MessageId, MessageServerId};
 use chrono::{DateTime, Utc};
+use whatsapp_proto::whatsapp as wa;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressingMode {
@@ -32,8 +32,7 @@ pub struct DeviceSentMeta {
     pub phash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum EditAttribute {
     #[default]
     Empty,
@@ -44,7 +43,6 @@ pub enum EditAttribute {
     AdminRevoke,
     Unknown(String),
 }
-
 
 impl From<String> for EditAttribute {
     fn from(s: String) -> Self {

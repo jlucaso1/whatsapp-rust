@@ -1,7 +1,6 @@
 use crate::appstate::processor::{PatchList, Processor};
 use crate::binary::node::{Attrs, Node, NodeContent};
 use crate::client::Client;
-use whatsapp_proto::whatsapp as wa;
 use crate::request::{InfoQuery, InfoQueryType};
 use crate::types::events::{ContactUpdate, Event};
 use crate::types::jid::{self, Jid};
@@ -9,6 +8,7 @@ use log::{error, info, warn};
 use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp as wa;
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
     use whatsapp_proto::whatsapp::message::protocol_message;
@@ -99,20 +99,15 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
     let mut is_first_sync = full_sync;
 
     while has_more {
-        let resp_node = match fetch_app_state_patches(
-            client,
-            name,
-            current_state.version,
-            is_first_sync,
-        )
-        .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!(target: "Client/AppState", "Failed to fetch patches for {name}: {e:?}");
-                return;
-            }
-        };
+        let resp_node =
+            match fetch_app_state_patches(client, name, current_state.version, is_first_sync).await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!(target: "Client/AppState", "Failed to fetch patches for {name}: {e:?}");
+                    return;
+                }
+            };
         is_first_sync = false;
 
         if let Some(sync_node) = resp_node.get_optional_child("sync") {

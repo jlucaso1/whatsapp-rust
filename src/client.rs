@@ -292,9 +292,7 @@ impl Client {
             _ => ReceiptType::Delivered,
         };
 
-        info!(
-            "Received receipt type '{receipt_type:?}' for message {id} from {from}"
-        );
+        info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
         self.dispatch_event(Event::Receipt(crate::types::events::Receipt {
             message_ids: vec![id],

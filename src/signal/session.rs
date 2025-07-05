@@ -1,7 +1,6 @@
 use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
-use whatsapp_proto::whatsapp::PreKeyRecordStructure;
 use crate::signal::ecc::{
     curve,
     keys::{DjbEcPublicKey, EcPublicKey},
@@ -12,6 +11,7 @@ use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordS
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp::PreKeyRecordStructure;
 
 pub struct SessionCipher<S: SignalProtocolStore> {
     store: Arc<S>,
@@ -51,10 +51,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         let final_message: Box<dyn CiphertextMessage> =
             if session_state.has_unacknowledged_prekey_message() {
                 let pending = session_state.unack_pre_key_message_items().unwrap();
-                let local_reg_id = self
-                    .store
-                    .get_local_registration_id()
-                    .await?;
+                let local_reg_id = self.store.get_local_registration_id().await?;
 
                 Box::new(PreKeySignalMessage::new(
                     local_reg_id,

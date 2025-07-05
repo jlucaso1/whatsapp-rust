@@ -1,6 +1,4 @@
 use crate::crypto::key_pair::KeyPair;
-use whatsapp_proto::whatsapp::cert_chain::noise_certificate;
-use whatsapp_proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 use crate::socket::{consts, FrameSocket, NoiseHandshake, NoiseSocket};
 use crate::store::WA_CERT_PUB_KEY;
 use curve25519_dalek::montgomery::MontgomeryPoint;
@@ -11,6 +9,8 @@ use prost::Message;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{timeout, Duration};
+use whatsapp_proto::whatsapp::cert_chain::noise_certificate;
+use whatsapp_proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 const WA_CERT_ISSUER_SERIAL: i64 = 0;
@@ -246,9 +246,7 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
             &intermediate_sig,
         )
         .map_err(|e| {
-            HandshakeError::CertVerification(format!(
-                "Intermediate cert verification failed: {e}"
-            ))
+            HandshakeError::CertVerification(format!("Intermediate cert verification failed: {e}"))
         })?;
 
     // Unmarshal details and perform further checks

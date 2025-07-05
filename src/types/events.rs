@@ -1,5 +1,4 @@
 use crate::binary::node::Node;
-use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::{Jid, MessageId};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
@@ -7,6 +6,7 @@ use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
 use std::fmt;
+use whatsapp_proto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
 pub enum Event {
