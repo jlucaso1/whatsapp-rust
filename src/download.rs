@@ -118,14 +118,27 @@ impl Client {
         media_key: &[u8],
         app_info: MediaType,
     ) -> Result<Vec<u8>> {
-        let http_client = reqwest::Client::new();
-        let resp = http_client.get(url).send().await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!("Download failed with status: {}", resp.status()));
-        }
-
-        let encrypted_data = resp.bytes().await?.to_vec();
+        let url_clone = url.to_string();
+        let encrypted_data = tokio::task::spawn_blocking(move || {
+            let resp = ureq::get(&url_clone).call()?;
+            let len = resp
+                .headers()
+                .iter()
+                .find_map(|(k, v)| {
+                    if k.as_str().eq_ignore_ascii_case("Content-Length") {
+                        v.to_str().ok()?.parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let mut bytes: Vec<u8> = Vec::with_capacity(len);
+            let mut body = resp.into_body();
+            let mut reader = body.as_reader();
+            std::io::Read::read_to_end(&mut reader, &mut bytes)?;
+            Ok::<_, anyhow::Error>(bytes)
+        })
+        .await??;
 
         // The last 10 bytes are the MAC
         if encrypted_data.len() < 10 {

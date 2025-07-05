@@ -58,7 +58,7 @@ async-trait = "0.1.88"
 scopeguard = "1.2"
 xeddsa = "1.0.2"
 subtle = "2.6.1"
-reqwest = { version = "0.12", features = ["json"] }
+ureq = "3.0.12"
 
 [profile.release]
 lto = "fat"
