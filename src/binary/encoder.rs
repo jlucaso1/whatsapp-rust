@@ -98,7 +98,7 @@ impl Encoder {
 
     fn pack_hex(value: char) -> u8 {
         match value {
-            c if ('0'..='9').contains(&c) => c as u8 - b'0',
+            c if c.is_ascii_digit() => c as u8 - b'0',
             c if ('A'..='F').contains(&c) => 10 + (c as u8 - b'A'),
             '\x00' => 15, // Handle null padding
             _ => panic!("Invalid char for hex packing: {value}"),

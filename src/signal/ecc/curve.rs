@@ -41,7 +41,7 @@ pub fn decode_point(bytes: &[u8]) -> Result<DjbEcPublicKey, CurveError> {
 pub fn calculate_signature(signing_key: DjbEcPrivateKey, message: &[u8]) -> [u8; 64] {
     let private_key_bytes = signing_key.serialize();
     let priv_key = PrivateKey(private_key_bytes);
-    let mut rng = OsRng;
+    let rng = OsRng;
     priv_key.sign(message, rng)
 }
 
