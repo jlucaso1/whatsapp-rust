@@ -1,5 +1,5 @@
 use crate::binary::node::Node;
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::{Jid, MessageId};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};

@@ -48,7 +48,7 @@ impl<S: SenderKeyStore> GroupCipher<S> {
         // Efficiently serialize the message components for signing without creating an intermediate struct
         let mut buf = Vec::with_capacity(128);
         buf.push((3 << 4) | 3); // version byte
-        let proto_msg = crate::proto::whatsapp::SenderKeyMessage {
+        let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
             id: Some(state.key_id()),
             iteration: Some(sender_key.iteration()),
             ciphertext: Some(ciphertext.clone()),

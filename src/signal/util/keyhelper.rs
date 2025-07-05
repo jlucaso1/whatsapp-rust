@@ -1,10 +1,11 @@
 // Corresponds to libsignal-protocol-go/util/keyhelper.go
 
-use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::ecc;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
+use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordStructureExt};
 use chrono::Utc;
 use rand::{thread_rng, Rng};
 

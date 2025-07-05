@@ -65,7 +65,7 @@ impl SenderKeyMessage {
         let mut buf = Vec::with_capacity(128);
         // Version byte: high 4 bits are current version, low 4 bits are legacy version
         buf.push((3 << 4) | 3);
-        let proto_msg = crate::proto::whatsapp::SenderKeyMessage {
+        let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
             id: Some(self.key_id),
             iteration: Some(self.iteration),
             ciphertext: Some(self.ciphertext.clone()),

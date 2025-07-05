@@ -1,4 +1,4 @@
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
 

@@ -1,6 +1,6 @@
 use crate::crypto::key_pair::KeyPair;
-use crate::proto::whatsapp::cert_chain::noise_certificate;
-use crate::proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
+use whatsapp_proto::whatsapp::cert_chain::noise_certificate;
+use whatsapp_proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 use crate::socket::{consts, FrameSocket, NoiseHandshake, NoiseSocket};
 use crate::store::WA_CERT_PUB_KEY;
 use curve25519_dalek::montgomery::MontgomeryPoint;

@@ -1,13 +1,14 @@
 use super::address::SignalAddress;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
-use crate::proto::whatsapp::PreKeyRecordStructure;
+use whatsapp_proto::whatsapp::PreKeyRecordStructure;
 use crate::signal::ecc::{
     curve,
     keys::{DjbEcPublicKey, EcPublicKey},
 };
 use crate::signal::protocol::ProtocolError;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
+use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordStructureExt};
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
 use std::sync::Arc;

@@ -3,7 +3,7 @@ use super::hash::HashState;
 use super::keys;
 use crate::crypto::cbc;
 use crate::crypto::hmac_sha512;
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use prost::Message;
 use std::sync::Arc;

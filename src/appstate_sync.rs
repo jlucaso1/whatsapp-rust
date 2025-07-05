@@ -1,7 +1,7 @@
 use crate::appstate::processor::{PatchList, Processor};
 use crate::binary::node::{Attrs, Node, NodeContent};
 use crate::client::Client;
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use crate::request::{InfoQuery, InfoQueryType};
 use crate::types::events::{ContactUpdate, Event};
 use crate::types::jid::{self, Jid};
@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
-    use crate::proto::whatsapp::message::protocol_message;
+    use whatsapp_proto::whatsapp::message::protocol_message;
 
     let key_ids = keys
         .into_iter()

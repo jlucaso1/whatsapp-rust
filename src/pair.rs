@@ -1,8 +1,8 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::crypto::xed25519::verify_dalek;
-use crate::proto::whatsapp as wa;
-use crate::proto::whatsapp::AdvEncryptionType;
+use whatsapp_proto::whatsapp as wa;
+use whatsapp_proto::whatsapp::AdvEncryptionType;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::engine::general_purpose::STANDARD as B64;

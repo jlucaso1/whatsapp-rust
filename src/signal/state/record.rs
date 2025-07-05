@@ -1,10 +1,18 @@
-use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
 use chrono::Utc;
+// Correctly import from the new crate
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-impl PreKeyRecordStructure {
-    pub fn new(id: u32, key_pair: EcKeyPair) -> Self {
+// 1. Define the extension trait for PreKeyRecordStructure
+pub trait PreKeyRecordStructureExt {
+    fn new(id: u32, key_pair: EcKeyPair) -> Self;
+    fn key_pair(&self) -> EcKeyPair;
+}
+
+// 2. Implement the trait for the foreign type
+impl PreKeyRecordStructureExt for PreKeyRecordStructure {
+    fn new(id: u32, key_pair: EcKeyPair) -> Self {
         Self {
             id: Some(id),
             public_key: Some(key_pair.public_key.public_key.to_vec()),
@@ -12,7 +20,7 @@ impl PreKeyRecordStructure {
         }
     }
 
-    pub fn key_pair(&self) -> EcKeyPair {
+    fn key_pair(&self) -> EcKeyPair {
         let public_bytes: [u8; 32] = self
             .public_key()
             .try_into()
@@ -30,8 +38,19 @@ impl PreKeyRecordStructure {
     }
 }
 
-impl SignedPreKeyRecordStructure {
-    pub fn new(
+// 3. Do the same for SignedPreKeyRecordStructure
+pub trait SignedPreKeyRecordStructureExt {
+    fn new(
+        id: u32,
+        key_pair: EcKeyPair,
+        signature: [u8; 64],
+        timestamp: chrono::DateTime<Utc>,
+    ) -> Self;
+    fn key_pair(&self) -> EcKeyPair;
+}
+
+impl SignedPreKeyRecordStructureExt for SignedPreKeyRecordStructure {
+    fn new(
         id: u32,
         key_pair: EcKeyPair,
         signature: [u8; 64],
@@ -46,7 +65,7 @@ impl SignedPreKeyRecordStructure {
         }
     }
 
-    pub fn key_pair(&self) -> EcKeyPair {
+    fn key_pair(&self) -> EcKeyPair {
         let public_bytes: [u8; 32] = self
             .public_key()
             .try_into()
@@ -63,6 +82,3 @@ impl SignedPreKeyRecordStructure {
         )
     }
 }
-
-pub use super::session_record::*;
-pub use super::session_state::*;

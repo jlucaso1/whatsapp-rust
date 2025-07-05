@@ -1,4 +1,4 @@
-use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 

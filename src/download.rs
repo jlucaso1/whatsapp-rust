@@ -1,12 +1,13 @@
+use crate::client::Client;
 use crate::crypto::cbc;
 use crate::crypto::hkdf;
-use crate::{client::Client, proto::whatsapp as wa};
 use async_trait::async_trait;
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use whatsapp_proto::whatsapp::ExternalBlobReference;
 
 /// The app_info string is used in HKDF to derive the decryption keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +46,7 @@ pub trait Downloadable: Sync + Send {
 
 // Implement the trait for the struct we care about right now.
 #[async_trait]
-impl Downloadable for wa::ExternalBlobReference {
+impl Downloadable for ExternalBlobReference {
     fn direct_path(&self) -> Option<&str> {
         self.direct_path.as_deref()
     }

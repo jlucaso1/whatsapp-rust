@@ -45,7 +45,7 @@ pub struct IdentityKeyPair {
 impl IdentityKeyPair {
     pub fn new(public_key: IdentityKey, private_key: EcKeyPair) -> Self {
         Self {
-            public_key: public_key,
+            public_key,
             private_key,
         }
     }

@@ -1,4 +1,4 @@
-use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 use crate::signal;
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::{Result, StoreError};

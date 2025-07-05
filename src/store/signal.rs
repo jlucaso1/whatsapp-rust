@@ -1,8 +1,9 @@
-use crate::proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 // src/store/signal.rs
 use crate::signal::address::SignalAddress;
 use crate::signal::ecc;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
+use crate::signal::state::record::SignedPreKeyRecordStructureExt;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::*;
 use crate::store::Device;

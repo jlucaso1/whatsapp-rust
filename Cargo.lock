@@ -2432,6 +2432,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "whatsapp-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-build",
+ "serde",
+]
+
+[[package]]
 name = "whatsapp-rust"
 version = "0.1.0"
 dependencies = [
@@ -2457,7 +2466,6 @@ dependencies = [
  "md5",
  "once_cell",
  "prost",
- "prost-build",
  "rand 0.8.5",
  "reqwest",
  "scopeguard",
@@ -2472,6 +2480,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "urlencoding",
+ "whatsapp-proto",
  "x25519-dalek",
  "xeddsa",
 ]

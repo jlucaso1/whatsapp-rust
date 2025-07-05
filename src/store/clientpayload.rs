@@ -1,6 +1,6 @@
 // src/store/clientpayload.rs
 
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use crate::types::jid::Jid;
 use md5;
 use once_cell::sync::Lazy;

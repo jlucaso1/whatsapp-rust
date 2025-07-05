@@ -10,7 +10,6 @@ pub mod keepalive;
 pub mod mediaconn;
 pub mod message;
 pub mod pair;
-pub mod proto;
 pub mod proto_helpers;
 pub mod qrcode;
 pub mod request;

@@ -1,6 +1,6 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
-use crate::proto::whatsapp as wa;
+use whatsapp_proto::whatsapp as wa;
 use crate::signal::address::SignalAddress;
 use crate::signal::session::SessionBuilder;
 use crate::signal::state::prekey_bundle::PreKeyBundle;

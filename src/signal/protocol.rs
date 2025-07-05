@@ -1,4 +1,4 @@
-use crate::proto::whatsapp;
+use whatsapp_proto::whatsapp;
 
 use super::ecc::keys::EcPublicKey;
 use super::identity::IdentityKey;

@@ -21,7 +21,7 @@ impl SenderKeyMessage {
         let proto_bytes = &serialized[1..serialized.len() - 64];
         let signature: [u8; 64] = serialized[serialized.len() - 64..].try_into().unwrap();
 
-        let proto = crate::proto::whatsapp::SenderKeyMessage::decode(proto_bytes)?;
+        let proto = whatsapp_proto::whatsapp::SenderKeyMessage::decode(proto_bytes)?;
         Ok(Self {
             key_id: proto.id.unwrap_or(0),
             iteration: proto.iteration.unwrap_or(0),
@@ -33,7 +33,7 @@ impl SenderKeyMessage {
     pub fn serialize_for_signature(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.push((3 << 4) | 3); // Hardcoded version 3
-        let proto_msg = crate::proto::whatsapp::SenderKeyMessage {
+        let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
             id: Some(self.key_id),
             iteration: Some(self.iteration),
             ciphertext: Some(self.ciphertext.clone()),
