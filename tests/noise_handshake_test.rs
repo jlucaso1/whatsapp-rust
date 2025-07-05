@@ -1,5 +1,4 @@
 use aes_gcm::aead::{Aead, Payload};
-use hex;
 use whatsapp_rust::crypto::{gcm, hkdf};
 use whatsapp_rust::socket::consts;
 use x25519_dalek::{x25519, StaticSecret};

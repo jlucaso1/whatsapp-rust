@@ -18,10 +18,12 @@ use tokio_tungstenite::{
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WsStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
+type OnDisconnectCallback = Box<dyn Fn(bool) + Send>;
+
 pub struct FrameSocket {
     ws_sink: Arc<Mutex<Option<WsSink>>>,
     frames_tx: Sender<bytes::Bytes>,
-    on_disconnect: Arc<Mutex<Option<Box<dyn Fn(bool) + Send>>>>,
+    on_disconnect: Arc<Mutex<Option<OnDisconnectCallback>>>,
     is_connected: Arc<Mutex<bool>>,
     header: Arc<Mutex<Option<Vec<u8>>>>,
 }
@@ -43,7 +45,7 @@ impl FrameSocket {
         *self.is_connected.lock().await
     }
 
-    pub async fn set_on_disconnect(&self, cb: Box<dyn Fn(bool) + Send>) {
+    pub async fn set_on_disconnect(&self, cb: OnDisconnectCallback) {
         *self.on_disconnect.lock().await = Some(cb);
     }
 
@@ -107,7 +109,7 @@ impl FrameSocket {
         mut stream: WsStream,
         frames_tx: mpsc::Sender<bytes::Bytes>,
         is_connected: Arc<Mutex<bool>>,
-        on_disconnect: Arc<Mutex<Option<Box<dyn Fn(bool) + Send>>>>,
+        on_disconnect: Arc<Mutex<Option<OnDisconnectCallback>>>,
     ) {
         let mut buffer = BytesMut::new();
 

@@ -32,7 +32,7 @@ impl Node {
         }
     }
 
-    pub fn attrs(&self) -> AttrParser {
+    pub fn attrs(&self) -> AttrParser<'_> {
         AttrParser::new(self)
     }
 

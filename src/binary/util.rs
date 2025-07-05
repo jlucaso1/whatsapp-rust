@@ -6,7 +6,7 @@ use std::fmt;
 use std::io::Read;
 
 /// Unpacks the potentially compressed frame data.
-pub fn unpack(data: &[u8]) -> Result<Cow<[u8]>> {
+pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>> {
     if data.is_empty() {
         return Err(BinaryError::Eof);
     }

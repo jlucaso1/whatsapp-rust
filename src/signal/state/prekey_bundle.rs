@@ -12,27 +12,3 @@ pub struct PreKeyBundle {
     pub signed_pre_key_signature: [u8; 64],
     pub identity_key: IdentityKey,
 }
-
-impl PreKeyBundle {
-    pub fn new(
-        registration_id: u32,
-        device_id: u32,
-        pre_key_id: Option<u32>,
-        pre_key_public: Option<DjbEcPublicKey>,
-        signed_pre_key_id: u32,
-        signed_pre_key_public: DjbEcPublicKey,
-        signed_pre_key_signature: [u8; 64],
-        identity_key: IdentityKey,
-    ) -> Self {
-        Self {
-            registration_id,
-            device_id,
-            pre_key_id,
-            pre_key_public,
-            signed_pre_key_id,
-            signed_pre_key_public,
-            signed_pre_key_signature,
-            identity_key,
-        }
-    }
-}

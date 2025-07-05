@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-prost = "0.14.1"
+prost = { version = "0.14.1", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 
 [build-dependencies]
-prost-build = "0.14.1"
+prost-build = { version = "0.14.1", default-features = false }
