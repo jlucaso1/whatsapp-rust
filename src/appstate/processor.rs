@@ -75,7 +75,7 @@ impl Processor {
                     continue;
                 }
                 Err(e) => {
-                    log::warn!(target: "AppState", "Failed to fetch app state sync key: {:?}", e);
+                    log::warn!(target: "AppState", "Failed to fetch app state sync key: {e:?}");
                     continue;
                 }
             };
@@ -86,7 +86,7 @@ impl Processor {
                     .decode_mutation(&keys, mutation, &mut new_mutations)
                     .await
                 {
-                    log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {:?}", e);
+                    log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {e:?}");
                 }
             }
         }
@@ -132,7 +132,7 @@ impl Processor {
             &keys.value_mac,
         );
 
-        if &expected_value_mac != value_mac {
+        if expected_value_mac != value_mac {
             return Err(AppStateError::MismatchingContentMAC);
         }
 
@@ -157,7 +157,7 @@ impl Processor {
             .index
             .as_deref()
             .ok_or(AppStateError::KeysNotFound(vec![]))?;
-        let index: Vec<String> = serde_json::from_slice(&index_json)?;
+        let index: Vec<String> = serde_json::from_slice(index_json)?;
 
         let new_mutation = Mutation {
             operation: wa::syncd_mutation::SyncdOperation::try_from(mutation.operation()).unwrap(),

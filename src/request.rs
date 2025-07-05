@@ -76,13 +76,13 @@ impl Client {
             .insert(req_id.clone(), tx);
 
         let mut attrs = Attrs::new();
-        attrs.insert("id".into(), req_id.clone().into());
+        attrs.insert("id".into(), req_id.clone());
         attrs.insert("xmlns".into(), query.namespace.into());
         attrs.insert("type".into(), query.query_type.as_str().into());
-        attrs.insert("to".into(), query.to.to_string().into());
+        attrs.insert("to".into(), query.to.to_string());
         if let Some(target) = query.target {
             if !target.is_empty() {
-                attrs.insert("target".into(), target.to_string().into());
+                attrs.insert("target".into(), target.to_string());
             }
         }
 
@@ -147,7 +147,7 @@ impl Client {
         if let Some(id) = id_opt {
             if let Some(waiter) = self.response_waiters.lock().await.remove(&id) {
                 if waiter.send(node).is_err() {
-                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {}. Receiver was likely dropped.", id);
+                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");
                 }
                 return true;
             }

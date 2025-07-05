@@ -29,7 +29,7 @@ impl NoiseHandshake {
 
     pub fn new(pattern: &str, header: &[u8]) -> Result<Self> {
         // This logic now matches the Go implementation one-to-one.
-        let h: [u8; 32] = if pattern.as_bytes().len() == 32 {
+        let h: [u8; 32] = if pattern.len() == 32 {
             // If the pattern is exactly 32 bytes, use it directly as the hash.
             pattern.as_bytes().try_into().unwrap() // Should not fail as we've checked the length
         } else {
@@ -87,7 +87,7 @@ impl NoiseHandshake {
         let plaintext = self
             .key
             .decrypt(iv.as_ref().into(), payload)
-            .map_err(|e| SocketError::Crypto(format!("Noise decrypt failed: {}", e)))?;
+            .map_err(|e| SocketError::Crypto(format!("Noise decrypt failed: {e}")))?;
         // Only after successful decryption, update the handshake hash
         self.authenticate(ciphertext);
         Ok(plaintext)

@@ -52,7 +52,7 @@ impl Client {
         let session_exists = !session_record.is_fresh();
 
         if !session_exists {
-            log::info!("No session found for {}, building a new one.", to);
+            log::info!("No session found for {to}, building a new one.");
             let bundles = self.fetch_pre_keys(&[to.clone()]).await?;
             let bundle = bundles
                 .get(&to)
@@ -173,7 +173,7 @@ impl Client {
             let bundle = match self.node_to_pre_key_bundle(&jid, user_node) {
                 Ok(b) => b,
                 Err(e) => {
-                    log::warn!("Failed to parse pre-key bundle for {}: {}", jid, e);
+                    log::warn!("Failed to parse pre-key bundle for {jid}: {e}");
                     continue;
                 }
             };

@@ -64,8 +64,8 @@ impl<'a> Decoder<'a> {
 
     fn read_string(&mut self, len: usize) -> Result<String> {
         let bytes = self.read_bytes(len)?;
-        Ok(String::from_utf8(bytes.to_vec())
-            .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))?)
+        String::from_utf8(bytes.to_vec())
+            .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
     }
 
     fn read_list_size(&mut self, tag: u8) -> Result<usize> {
@@ -204,15 +204,15 @@ impl<'a> Decoder<'a> {
     fn unpack_byte(tag: u8, value: u8) -> Result<char> {
         match tag {
             token::NIBBLE_8 => match value {
-                0..=9 => Ok(('0' as u8 + value) as char),
+                0..=9 => Ok((b'0' + value) as char),
                 10 => Ok('-'),
                 11 => Ok('.'),
                 15 => Ok('\x00'),
                 _ => Err(BinaryError::InvalidToken(value)),
             },
             token::HEX_8 => match value {
-                0..=9 => Ok(('0' as u8 + value) as char),
-                10..=15 => Ok(('A' as u8 + value - 10) as char),
+                0..=9 => Ok((b'0' + value) as char),
+                10..=15 => Ok((b'A' + value - 10) as char),
                 _ => Err(BinaryError::InvalidToken(value)),
             },
             _ => Err(BinaryError::InvalidToken(tag)),
@@ -274,7 +274,7 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
 
         let attr_count = (list_size - 1) / 2;
-        let has_content = list_size % 2 == 0;
+        let has_content = list_size.is_multiple_of(2);
 
         let attrs = self.read_attributes(attr_count)?;
         let content = if has_content {

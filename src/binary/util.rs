@@ -39,7 +39,7 @@ fn fmt_node(node: &Node, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Resu
     let mut sorted_attrs: Vec<_> = node.attrs.iter().collect();
     sorted_attrs.sort_by_key(|(k, _)| *k);
     for (k, v) in sorted_attrs {
-        write!(f, " {}=\"{}\"", k, v)?;
+        write!(f, " {k}=\"{v}\"")?;
     }
 
     if node.tag == "enc" {
@@ -66,7 +66,7 @@ fn fmt_node(node: &Node, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Resu
                             if s.len() > 512 {
                                 write!(f, "[{} bytes]", bytes.len())?;
                             } else {
-                                write!(f, "{}", s)?;
+                                write!(f, "{s}")?;
                             }
                         } else {
                             write!(f, "{}", hex::encode(bytes))?;

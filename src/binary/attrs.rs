@@ -33,8 +33,7 @@ impl<'a> AttrParser<'a> {
         let val = self.attrs.get(key);
         if require && val.is_none() {
             self.errors.push(BinaryError::AttrParse(format!(
-                "Required attribute '{}' not found",
-                key
+                "Required attribute '{key}' not found"
             )));
         }
         val
@@ -46,8 +45,7 @@ impl<'a> AttrParser<'a> {
     }
 
     pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true)
-            .map(|s| s.clone())
+        self.get_raw(key, true).cloned()
             .unwrap_or_default()
     }
 
@@ -75,8 +73,7 @@ impl<'a> AttrParser<'a> {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(
-                        "Failed to parse bool from '{}' for key '{}': {}",
-                        s, key, e
+                        "Failed to parse bool from '{s}' for key '{key}': {e}"
                     )));
                     None
                 }
@@ -98,8 +95,7 @@ impl<'a> AttrParser<'a> {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(
-                        "Failed to parse u64 from '{}' for key '{}': {}",
-                        s, key, e
+                        "Failed to parse u64 from '{s}' for key '{key}': {e}"
                     )));
                     None
                 }
@@ -138,8 +134,7 @@ impl<'a> AttrParser<'a> {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(
-                        "Failed to parse i64 from '{}' for key '{}': {}",
-                        s, key, e
+                        "Failed to parse i64 from '{s}' for key '{key}': {e}"
                     )));
                     None
                 }

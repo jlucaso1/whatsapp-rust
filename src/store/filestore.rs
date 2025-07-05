@@ -52,7 +52,7 @@ impl FileStore {
     async fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
         let data = serde_json::to_vec_pretty(value)
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        fs::write(path, data).await.map_err(|e| StoreError::Io(e))
+        fs::write(path, data).await.map_err(StoreError::Io)
     }
 
     fn device_path(&self) -> PathBuf {
@@ -124,7 +124,7 @@ impl SessionStore for FileStore {
             .join(Self::sanitize_filename(address));
         fs::write(path, session)
             .await
-            .map_err(|e| StoreError::Io(e))
+            .map_err(StoreError::Io)
     }
 
     async fn delete_session(&self, address: &str) -> Result<()> {

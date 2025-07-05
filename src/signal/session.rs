@@ -44,8 +44,8 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             message_keys.index(),
             session_state.previous_counter(),
             ciphertext,
-            &*session_state.local_identity_public(),
-            &*session_state.remote_identity_public(),
+            &session_state.local_identity_public(),
+            &session_state.remote_identity_public(),
         )?;
 
         let final_message: Box<dyn CiphertextMessage> =
@@ -54,8 +54,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                 let local_reg_id = self
                     .store
                     .get_local_registration_id()
-                    .await
-                    .map_err(|e| e)?;
+                    .await?;
 
                 Box::new(PreKeySignalMessage::new(
                     local_reg_id,
@@ -135,7 +134,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             let chain_key = session_state.receiver_chains_mut()[idx].chain_key.clone();
             let message_keys = chain_key.message_keys();
             session_state.receiver_chains_mut()[idx].chain_key = chain_key.next_key();
-            return Ok((chain_key, message_keys));
+            Ok((chain_key, message_keys))
         } else {
             let root_key = session_state.root_key().clone();
             let our_ephemeral = session_state.sender_ratchet_key_pair().clone();
@@ -165,7 +164,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             {
                 chain.chain_key = chain_key.next_key();
             }
-            return Ok((chain_key, message_keys));
+            Ok((chain_key, message_keys))
         }
     }
 
@@ -176,7 +175,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     ) -> Result<Vec<u8>, DecryptionError> {
         use crate::crypto::cbc;
         cbc::decrypt(message_keys.cipher_key(), message_keys.iv(), ciphertext)
-            .map_err(|e| DecryptionError::Cbc(e)) // Mapped to CbcError
+            .map_err(DecryptionError::Cbc) // Mapped to CbcError
     }
 }
 
@@ -216,14 +215,14 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                     .store
                     .load_session(&self.remote_address)
                     .await
-                    .map_err(|e| DecryptionError::Store(e.into()))?;
+                    .map_err(|e| DecryptionError::Store(e))?;
                 let plaintext = self
                     .decrypt_whisper_message(&mut session_record, &whisper_msg)
                     .await?;
                 self.store
                     .store_session(&self.remote_address, &session_record)
                     .await
-                    .map_err(|e| DecryptionError::Store(e.into()))?;
+                    .map_err(|e| DecryptionError::Store(e))?;
                 Ok(plaintext)
             }
         }
@@ -237,7 +236,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             .store
             .load_session(&self.remote_address)
             .await
-            .map_err(|e| DecryptionError::Store(e.into()))?;
+            .map_err(|e| DecryptionError::Store(e))?;
 
         let builder = SessionBuilder::new(self.store.clone(), self.remote_address.clone());
         let used_prekey_id = builder
@@ -253,13 +252,13 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             self.store
                 .remove_prekey(id)
                 .await
-                .map_err(|e| DecryptionError::Store(e.into()))?;
+                .map_err(|e| DecryptionError::Store(e))?;
         }
 
         self.store
             .store_session(&self.remote_address, &session_record)
             .await
-            .map_err(|e| DecryptionError::Store(e.into()))?;
+            .map_err(|e| DecryptionError::Store(e))?;
 
         Ok(plaintext)
     }
@@ -394,7 +393,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             .store
             .is_trusted_identity(&self.remote_address, their_identity_key)
             .await
-            .map_err(|e| BuilderError::Store(e.into()))?
+            .map_err(|e| BuilderError::Store(e))?
         {
             return Err(BuilderError::UntrustedIdentity);
         }
@@ -424,7 +423,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             their_identity_key,
             message.base_key.clone(),
         )
-        .map_err(|e| BuilderError::SessionSetup(e.into()))?;
+        .map_err(|e| BuilderError::SessionSetup(e))?;
 
         if !session_record.is_fresh() {
             session_record.archive_current_state();
@@ -444,7 +443,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         self.store
             .save_identity(&self.remote_address, their_identity_key)
             .await
-            .map_err(|e| BuilderError::Store(e.into()))?;
+            .map_err(|e| BuilderError::Store(e))?;
 
         Ok(message.pre_key_id)
     }
@@ -489,7 +488,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
                 .clone()
                 .map(|k| Arc::new(k) as Arc<dyn crate::signal::ecc::keys::EcPublicKey>),
         )
-        .map_err(|e| BuilderError::SessionSetup(e.into()))?;
+        .map_err(|e| BuilderError::SessionSetup(e))?;
 
         if !session_record.is_fresh() {
             session_record.archive_current_state();
@@ -524,7 +523,7 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         self.store
             .save_identity(&self.remote_address, their_identity_key)
             .await
-            .map_err(|e| BuilderError::Store(e.into()))?;
+            .map_err(|e| BuilderError::Store(e))?;
 
         Ok(())
     }

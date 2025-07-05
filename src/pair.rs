@@ -83,8 +83,7 @@ async fn acknowledge_request(client: &Client, request_node: &Node) {
         };
         if let Err(e) = client.send_node(ack).await {
             warn!(
-                "Failed to send acknowledgement for request ID {}: {:?}",
-                id, e
+                "Failed to send acknowledgement for request ID {id}: {e:?}"
             );
         }
     }
@@ -112,7 +111,7 @@ async fn send_pair_error(client: &Client, req_id: &str, code: u16, text: &str) {
         content: Some(NodeContent::Nodes(vec![error_node])),
     };
     if let Err(e) = client.send_node(iq_error).await {
-        error!("Failed to send pair error node: {:?}", e);
+        error!("Failed to send pair error node: {e:?}");
     }
 }
 
@@ -157,7 +156,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         let parsed_lid = parser.optional_jid("lid").unwrap_or_default();
 
         if let Err(e) = parser.finish() {
-            warn!(target: "Client/Pair", "Error parsing device node attributes: {:?}", e);
+            warn!(target: "Client/Pair", "Error parsing device node attributes: {e:?}");
             (Jid::default(), Jid::default()) // Return defaults on parsing error
         } else {
             (parsed_jid, parsed_lid)
@@ -176,7 +175,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             ) {
                 Ok(identity) => Some(identity),
                 Err(e) => {
-                    error!("FATAL: Failed to re-decode self-signed identity for storage, pairing cannot complete: {}", e);
+                    error!("FATAL: Failed to re-decode self-signed identity for storage, pairing cannot complete: {e}");
                     client
                         .dispatch_event(Event::PairError(PairError {
                             id: jid.clone(),
@@ -184,8 +183,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                             business_name: business_name.clone(),
                             platform: platform.clone(),
                             error: format!(
-                                "internal error: failed to decode identity for storage: {}",
-                                e
+                                "internal error: failed to decode identity for storage: {e}"
                             ),
                         }))
                         .await;
@@ -219,7 +217,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             };
 
             if let Err(e) = client.send_node(response_node).await {
-                error!("Failed to send pair-device-sign: {}", e);
+                error!("Failed to send pair-device-sign: {e}");
                 // Optionally: state cleanup here.
                 return;
             }
@@ -227,7 +225,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             // Tell the client that the upcoming disconnect is expected and part of the flow.
             client.expected_disconnect.store(true, Ordering::Relaxed);
 
-            info!("Successfully paired {}", jid);
+            info!("Successfully paired {jid}");
             client.store.write().await.id = Some(jid.clone());
             // Optionally: persist lid, business_name, platform, etc.
 
@@ -242,7 +240,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 .await;
         }
         Err(e) => {
-            error!("Pairing crypto failed: {}", e);
+            error!("Pairing crypto failed: {e}");
             send_pair_error(client, &req_id, e.code, e.text).await;
             // Optionally dispatch a PairError event
             let pair_error_event = crate::types::events::PairError {
@@ -404,9 +402,9 @@ async fn do_pair_crypto(
 
 /// Constructs the full QR code string from the ref and the client's keys.
 fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
-    let noise_b64 = B64.encode(&store.noise_key.public_key);
-    let identity_b64 = B64.encode(&store.identity_key.public_key);
-    let adv_b64 = B64.encode(&store.adv_secret_key);
+    let noise_b64 = B64.encode(store.noise_key.public_key);
+    let identity_b64 = B64.encode(store.identity_key.public_key);
+    let adv_b64 = B64.encode(store.adv_secret_key);
 
     [ref_str, noise_b64, identity_b64, adv_b64].join(",")
 }

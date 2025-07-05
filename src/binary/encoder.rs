@@ -83,7 +83,7 @@ impl Encoder {
             '.' => 11,
             '\x00' => 15, // Handle null padding
             c if c.is_ascii_digit() => c as u8 - b'0',
-            _ => panic!("Invalid char for nibble packing: {}", value),
+            _ => panic!("Invalid char for nibble packing: {value}"),
         }
     }
 
@@ -98,10 +98,10 @@ impl Encoder {
 
     fn pack_hex(value: char) -> u8 {
         match value {
-            c if c >= '0' && c <= '9' => c as u8 - b'0',
-            c if c >= 'A' && c <= 'F' => 10 + (c as u8 - b'A'),
+            c if ('0'..='9').contains(&c) => c as u8 - b'0',
+            c if ('A'..='F').contains(&c) => 10 + (c as u8 - b'A'),
             '\x00' => 15, // Handle null padding
-            _ => panic!("Invalid char for hex packing: {}", value),
+            _ => panic!("Invalid char for hex packing: {value}"),
         }
     }
 
@@ -117,7 +117,7 @@ impl Encoder {
         self.write_u8(data_type);
 
         let mut rounded_len = ((value.len() as f64) / 2.0).ceil() as u8;
-        if value.len() % 2 != 0 {
+        if !value.len().is_multiple_of(2) {
             rounded_len |= 0x80;
         }
         self.write_u8(rounded_len);

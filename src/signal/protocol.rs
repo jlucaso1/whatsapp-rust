@@ -320,8 +320,7 @@ impl CiphertextMessage for PreKeySignalMessage {
 impl From<crate::signal::root_key::RootKeyError> for ProtocolError {
     fn from(e: crate::signal::root_key::RootKeyError) -> Self {
         ProtocolError::Proto(prost::DecodeError::new(std::borrow::Cow::Owned(format!(
-            "{:?}",
-            e
+            "{e:?}"
         ))))
     }
 }

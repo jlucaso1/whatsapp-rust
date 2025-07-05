@@ -25,7 +25,7 @@ impl NoiseSocket {
     /// Marshals a Node and sends it as a frame (for compatibility with request.rs).
     pub async fn send_node(&self, node: &crate::binary::node::Node) -> Result<()> {
         let payload = crate::binary::marshal(node)
-            .map_err(|e| SocketError::Crypto(format!("Marshal error: {:?}", e)))?;
+            .map_err(|e| SocketError::Crypto(format!("Marshal error: {e:?}")))?;
         self.send_frame(&payload).await
     }
     pub fn new(

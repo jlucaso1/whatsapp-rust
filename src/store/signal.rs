@@ -107,7 +107,6 @@ impl SignedPreKeyStore for Device {
                 key_pair,
                 self.signed_pre_key
                     .signature
-                    .clone()
                     .ok_or("Signature missing from device's signed pre-key")?,
                 chrono::Utc::now(),
             );

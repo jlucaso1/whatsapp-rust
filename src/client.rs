@@ -228,15 +228,15 @@ impl Client {
             if let Some(sync_node) = node.get_optional_child("sync") {
                 if let Some(collection_node) = sync_node.get_optional_child("collection") {
                     let name = collection_node.attrs().string("name");
-                    debug!(target: "Client/Recv", "Received app state sync response for '{}' (hiding content).", name);
+                    debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
                 } else {
-                    debug!(target: "Client/Recv", "{}", node);
+                    debug!(target: "Client/Recv", "{node}");
                 }
             } else {
-                debug!(target: "Client/Recv", "{}", node);
+                debug!(target: "Client/Recv", "{node}");
             }
         } else {
-            debug!(target: "Client/Recv", "{}", node);
+            debug!(target: "Client/Recv", "{node}");
         }
 
         if node.tag == "xmlstreamend" {
@@ -256,7 +256,7 @@ impl Client {
             "ib" => handlers::ib::handle_ib(self.clone(), &node).await,
             "iq" => {
                 if !self.handle_iq(&node).await {
-                    warn!(target: "Client", "Received unhandled IQ: {}", node);
+                    warn!(target: "Client", "Received unhandled IQ: {node}");
                 }
             }
             "receipt" => self.handle_receipt(&node).await,
@@ -270,13 +270,13 @@ impl Client {
             }
             "ack" => {}
             _ => {
-                warn!(target: "Client", "Received unknown top-level node: {}", node);
+                warn!(target: "Client", "Received unknown top-level node: {node}");
             }
         }
     }
 
     async fn handle_unimplemented(&self, tag: &str) {
-        warn!(target: "Client", "TODO: Implement handler for <{}>", tag);
+        warn!(target: "Client", "TODO: Implement handler for <{tag}>");
     }
 
     async fn handle_receipt(&self, node: &Node) {
@@ -293,8 +293,7 @@ impl Client {
         };
 
         info!(
-            "Received receipt type '{:?}' for message {} from {}",
-            receipt_type, id, from
+            "Received receipt type '{receipt_type:?}' for message {id} from {from}"
         );
 
         self.dispatch_event(Event::Receipt(crate::types::events::Receipt {
@@ -348,7 +347,7 @@ impl Client {
         let client_clone = self.clone();
         tokio::spawn(async move {
             if let Err(e) = client_clone.set_passive(false).await {
-                warn!("Failed to send post-connect passive IQ: {:?}", e);
+                warn!("Failed to send post-connect passive IQ: {e:?}");
             }
             client_clone
                 .dispatch_event(Event::Connected(crate::types::events::Connected))
@@ -393,7 +392,7 @@ impl Client {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
             }
             _ => {
-                error!(target: "Client", "Unknown stream error: {}", node);
+                error!(target: "Client", "Unknown stream error: {node}");
                 self.expect_disconnect().await;
                 self.dispatch_event(Event::StreamError(crate::types::events::StreamError {
                     code: code.to_string(),
@@ -421,7 +420,7 @@ impl Client {
         }
 
         if reason.is_logged_out() {
-            info!(target: "Client", "Got {:?} connect failure, logging out.", reason);
+            info!(target: "Client", "Got {reason:?} connect failure, logging out.");
             self.dispatch_event(Event::LoggedOut(crate::types::events::LoggedOut {
                 on_connect: true,
                 reason,
@@ -432,7 +431,7 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!(target: "Client", "Temporary ban connect failure: {}", node);
+            warn!(target: "Client", "Temporary ban connect failure: {node}");
             self.dispatch_event(Event::TemporaryBan(crate::types::events::TemporaryBan {
                 code: crate::types::events::TempBanReason::from(ban_code),
                 expire: expire_duration,
@@ -443,7 +442,7 @@ impl Client {
             self.dispatch_event(Event::ClientOutdated(crate::types::events::ClientOutdated))
                 .await;
         } else {
-            warn!(target: "Client", "Unknown connect failure: {}", node);
+            warn!(target: "Client", "Unknown connect failure: {node}");
             self.dispatch_event(Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
@@ -475,7 +474,7 @@ impl Client {
                     content: None,
                 };
                 if let Err(e) = self.send_node(pong).await {
-                    warn!("Failed to send pong: {:?}", e);
+                    warn!("Failed to send pong: {e:?}");
                 }
                 return true;
             }
@@ -515,7 +514,7 @@ impl Client {
     pub fn is_connected(&self) -> bool {
         self.noise_socket
             .try_lock()
-            .map_or(false, |guard| guard.is_some())
+            .is_ok_and(|guard| guard.is_some())
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -537,10 +536,10 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "{}", node);
+        debug!(target: "Client/Send", "{node}");
 
         let payload = crate::binary::marshal(&node).map_err(|e| {
-            error!("Failed to marshal node: {:?}", e);
+            error!("Failed to marshal node: {e:?}");
             SocketError::Crypto("Marshal error".to_string())
         })?;
 

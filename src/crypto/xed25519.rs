@@ -21,7 +21,7 @@ pub fn sign(private_key_bytes: &[u8; 32], message: &[u8]) -> [u8; 64] {
     let priv_key = PrivateKey(*private_key_bytes);
     let mut rng = OsRng;
     <PrivateKey as xeddsa::xeddsa::Sign<[u8; 64], [u8; 32], [u8; 32]>>::sign(
-        &priv_key, message, &mut rng,
+        &priv_key, message, rng,
     )
 }
 

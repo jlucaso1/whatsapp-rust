@@ -1334,12 +1334,11 @@ pub fn index_of_double_byte_token(token: &str) -> Option<(u8, u8)> {
 }
 
 pub fn get_single_token(index: u8) -> Option<&'static str> {
-    SINGLE_BYTE_TOKENS.get(index as usize).map(|s| *s)
+    SINGLE_BYTE_TOKENS.get(index as usize).copied()
 }
 
 pub fn get_double_token(dict: u8, index: u8) -> Option<&'static str> {
     DOUBLE_BYTE_TOKENS
         .get(dict as usize)
-        .and_then(|d| d.get(index as usize))
-        .map(|s| *s)
+        .and_then(|d| d.get(index as usize)).copied()
 }

@@ -135,7 +135,7 @@ pub async fn do_handshake(
     // 5. Decrypt server static key
     let static_decrypted = nh
         .decrypt(&server_static_ciphertext)
-        .map_err(|e| HandshakeError::Crypto(format!("Failed to decrypt server static: {}", e)))?;
+        .map_err(|e| HandshakeError::Crypto(format!("Failed to decrypt server static: {e}")))?;
 
     if static_decrypted.len() != 32 {
         return Err(HandshakeError::InvalidLength {
@@ -156,7 +156,7 @@ pub async fn do_handshake(
     // 6. Decrypt and verify server certificate
     let cert_decrypted = nh
         .decrypt(&certificate_ciphertext)
-        .map_err(|e| HandshakeError::Crypto(format!("Failed to decrypt certificate: {}", e)))?;
+        .map_err(|e| HandshakeError::Crypto(format!("Failed to decrypt certificate: {e}")))?;
 
     debug!("Successfully decrypted certificate, verifying...");
     verify_server_cert(&cert_decrypted, &static_decrypted_arr)?;
@@ -236,7 +236,7 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
             .as_ref()
             .ok_or_else(|| HandshakeError::CertVerification("Missing intermediate sig".into()))?,
     )
-    .map_err(|e| HandshakeError::CertVerification(format!("Invalid intermediate sig: {}", e)))?;
+    .map_err(|e| HandshakeError::CertVerification(format!("Invalid intermediate sig: {e}")))?;
 
     wa_root_pk
         .verify(
@@ -247,8 +247,7 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
         )
         .map_err(|e| {
             HandshakeError::CertVerification(format!(
-                "Intermediate cert verification failed: {}",
-                e
+                "Intermediate cert verification failed: {e}"
             ))
         })?;
 
@@ -290,7 +289,7 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
             .as_ref()
             .ok_or_else(|| HandshakeError::CertVerification("Missing leaf sig".into()))?,
     )
-    .map_err(|e| HandshakeError::CertVerification(format!("Invalid leaf sig: {}", e)))?;
+    .map_err(|e| HandshakeError::CertVerification(format!("Invalid leaf sig: {e}")))?;
 
     intermediate_pk
         .verify(
@@ -300,7 +299,7 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
             &leaf_sig,
         )
         .map_err(|e| {
-            HandshakeError::CertVerification(format!("Leaf cert verification failed: {}", e))
+            HandshakeError::CertVerification(format!("Leaf cert verification failed: {e}"))
         })?;
 
     let leaf_details =

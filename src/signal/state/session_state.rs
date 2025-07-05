@@ -81,6 +81,12 @@ pub struct PendingPreKey {
     pub base_key: DjbEcPublicKey,
 }
 
+impl Default for SessionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionState {
     pub fn new() -> Self {
         Self {

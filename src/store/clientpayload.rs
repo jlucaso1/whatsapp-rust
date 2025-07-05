@@ -89,7 +89,7 @@ pub fn get_registration_payload(
         e_regid: Some(reg_id.to_be_bytes().to_vec()),
         e_keytype: Some(vec![5]), // DJB_TYPE
         e_ident: Some(identity_key_pub.to_vec()),
-        e_skey_id: Some((signed_pre_key.key_id as u32).to_be_bytes()[1..].to_vec()), // 3-byte ID
+        e_skey_id: Some({ signed_pre_key.key_id }.to_be_bytes()[1..].to_vec()), // 3-byte ID
         e_skey_val: Some(signed_pre_key.key_pair.public_key.to_vec()),
         e_skey_sig: Some(signed_pre_key.signature.unwrap().to_vec()),
         build_hash: Some(build_hash.to_vec()),

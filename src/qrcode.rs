@@ -179,7 +179,7 @@ pub(crate) async fn get_qr_channel_logic(
                         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
                     {
-                        debug!("Closing QR channel with status: {:?}", final_event);
+                        debug!("Closing QR channel with status: {final_event:?}");
                         if tx.send(final_event).await.is_err() {
                             warn!("QR channel receiver was dropped before final event.");
                         }
@@ -188,7 +188,7 @@ pub(crate) async fn get_qr_channel_logic(
                             (event_handlers_weak.upgrade(), *handler_id_arc.lock().await)
                         {
                             tokio::spawn(async move {
-                                debug!("Removing QR event handler with ID {}", id);
+                                debug!("Removing QR event handler with ID {id}");
                                 handlers_arc.write().await.retain(|h| h.id != id);
                             });
                         }

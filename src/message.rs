@@ -43,7 +43,7 @@ impl Client {
         let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
             Ok(p) => p,
             Err(e) => {
-                log::error!(target: "Client", "Failed to decrypt frame: {}", e);
+                log::error!(target: "Client", "Failed to decrypt frame: {e}");
                 return;
             }
         };
@@ -51,14 +51,14 @@ impl Client {
         let unpacked_data_cow = match binary::util::unpack(&decrypted_payload) {
             Ok(data) => data,
             Err(e) => {
-                log::warn!(target: "Client/Recv", "Failed to decompress frame: {}", e);
+                log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
                 return;
             }
         };
 
         match binary::unmarshal(unpacked_data_cow.as_ref()) {
             Ok(node) => self.process_node(node).await,
-            Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {}", e),
+            Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
         };
     }
 
@@ -67,7 +67,7 @@ impl Client {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
             Err(e) => {
-                log::warn!("Failed to parse message info: {:?}", e);
+                log::warn!("Failed to parse message info: {e:?}");
                 return;
             }
         };
@@ -109,19 +109,19 @@ impl Client {
             "pkmsg" => match PreKeySignalMessage::deserialize(&ciphertext) {
                 Ok(msg) => Ciphertext::PreKey(msg),
                 Err(e) => {
-                    log::warn!("Failed to deserialize PreKeySignalMessage: {:?}", e);
+                    log::warn!("Failed to deserialize PreKeySignalMessage: {e:?}");
                     return;
                 }
             },
             "msg" => match SignalMessage::deserialize(&ciphertext) {
                 Ok(msg) => Ciphertext::Whisper(msg),
                 Err(e) => {
-                    log::warn!("Failed to deserialize SignalMessage: {:?}", e);
+                    log::warn!("Failed to deserialize SignalMessage: {e:?}");
                     return;
                 }
             },
             _ => {
-                log::warn!("Unsupported enc type: {}", enc_type);
+                log::warn!("Unsupported enc type: {enc_type}");
                 return;
             }
         };
@@ -171,12 +171,11 @@ impl Client {
                     } else if msg.sender_key_distribution_message.is_some() {
                         log::warn!("Received unhandled SenderKeyDistributionMessage");
                     } else {
-                        let base_msg = (&msg).get_base_message();
+                        let base_msg = msg.get_base_message();
 
                         log::debug!(
                             target: "Client/Recv",
-                            "Decrypted message content: {:?}",
-                            base_msg
+                            "Decrypted message content: {base_msg:?}"
                         );
 
                         if let Some(text) = base_msg.conversation.as_ref() {
@@ -196,7 +195,7 @@ impl Client {
                                         .send_text_message(info.source.chat.clone(), response_text)
                                         .await
                                     {
-                                        log::error!("Failed to send response message: {:?}", e);
+                                        log::error!("Failed to send response message: {e:?}");
                                     }
                                 }
                             }

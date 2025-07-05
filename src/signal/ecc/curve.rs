@@ -14,7 +14,7 @@ pub enum CurveError {
 
 // Corresponds to GenerateKeyPair()
 pub fn generate_key_pair() -> EcKeyPair {
-    let private = StaticSecret::random_from_rng(&mut OsRng);
+    let private = StaticSecret::random_from_rng(OsRng);
     let public = PublicKey::from(&private);
     EcKeyPair::new(
         DjbEcPublicKey::new(*public.as_bytes()),
@@ -42,7 +42,7 @@ pub fn calculate_signature(signing_key: DjbEcPrivateKey, message: &[u8]) -> [u8;
     let private_key_bytes = signing_key.serialize();
     let priv_key = PrivateKey(private_key_bytes);
     let mut rng = OsRng;
-    priv_key.sign(message, &mut rng)
+    priv_key.sign(message, rng)
 }
 
 // Corresponds to VerifySignature()

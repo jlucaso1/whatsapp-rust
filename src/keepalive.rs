@@ -43,8 +43,8 @@ impl Client {
                 true
             }
             Err(e) => {
-                warn!(target: "Client/Keepalive", "Keepalive ping failed: {:?}", e);
-                matches!(e, IqError::Socket(_) | IqError::Disconnected(_)) == false
+                warn!(target: "Client/Keepalive", "Keepalive ping failed: {e:?}");
+                !matches!(e, IqError::Socket(_) | IqError::Disconnected(_))
             }
         }
     }
@@ -77,7 +77,7 @@ impl Client {
                         last_success = chrono::Utc::now();
                     } else {
                         error_count += 1;
-                        warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {}", error_count);
+                        warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {error_count}");
 
                         // If auto-reconnect is enabled and we haven't had a successful ping in a while,
                         // force a disconnect so the main `run` loop can handle reconnecting.

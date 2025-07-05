@@ -25,8 +25,7 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
                 } else {
                     info!(
                         target: "Client",
-                        "Received dirty state notification for type: '{}'. Triggering App State Sync.",
-                        dirty_type
+                        "Received dirty state notification for type: '{dirty_type}'. Triggering App State Sync."
                     );
                     let client_clone = client.clone();
                     tokio::spawn(async move {

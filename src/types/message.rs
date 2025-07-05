@@ -33,7 +33,9 @@ pub struct DeviceSentMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum EditAttribute {
+    #[default]
     Empty,
     MessageEdit,
     PinInChat,
@@ -43,11 +45,6 @@ pub enum EditAttribute {
     Unknown(String),
 }
 
-impl Default for EditAttribute {
-    fn default() -> Self {
-        EditAttribute::Empty
-    }
-}
 
 impl From<String> for EditAttribute {
     fn from(s: String) -> Self {

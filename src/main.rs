@@ -20,9 +20,9 @@ async fn main() -> Result<(), anyhow::Error> {
         dev
     } else {
         info!("No existing device found, creating a new one.");
-        let dev = store::Device::new(store_backend.clone());
+        
         // The device will be saved after a successful pairing
-        dev
+        store::Device::new(store_backend.clone())
     };
 
     info!("Creating client...");
@@ -46,8 +46,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             urlencoding::encode(&code)
                         );
                         info!(
-                            "Scan this URL in a browser to see the QR code:\n  {}",
-                            qr_url
+                            "Scan this URL in a browser to see the QR code:\n  {qr_url}"
                         );
                         info!("----------------------------------------");
                     }
@@ -59,12 +58,12 @@ async fn main() -> Result<(), anyhow::Error> {
                             .save_device_data(&store_guard.to_serializable())
                             .await
                         {
-                            error!("Failed to save new device state after pairing: {}", e);
+                            error!("Failed to save new device state after pairing: {e}");
                         }
                         break;
                     }
                     QrCodeEvent::Error(e) => {
-                        error!("❌ Pairing failed: {:?}", e);
+                        error!("❌ Pairing failed: {e:?}");
                         break;
                     }
                     QrCodeEvent::Timeout => {
@@ -72,7 +71,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         break;
                     }
                     _ => {
-                        info!("[QR Event] Received other state: {:?}", event);
+                        info!("[QR Event] Received other state: {event:?}");
                     }
                 }
             }

@@ -23,7 +23,7 @@ type Result<T> = std::result::Result<T, CbcError>;
 
 /// Decrypts ciphertext using AES-256-CBC with manual padding removal.
 pub fn decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return Err(CbcError::InvalidLength(cipher::InvalidLength));
     }
     let mut buf = ciphertext.to_vec();

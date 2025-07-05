@@ -52,7 +52,7 @@ impl FrameSocket {
             return Err(SocketError::SocketAlreadyOpen);
         }
 
-        info!("Dialing {}", URL);
+        info!("Dialing {URL}");
         // Let tokio-tungstenite handle the handshake headers
         let (ws_stream, _response) = connect_async(URL).await?;
 
@@ -141,7 +141,7 @@ impl FrameSocket {
                     }
                 }
                 Some(Err(e)) => {
-                    error!("Error reading from websocket: {}", e);
+                    error!("Error reading from websocket: {e}");
                     break;
                 }
                 None => {

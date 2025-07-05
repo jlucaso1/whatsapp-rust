@@ -30,7 +30,7 @@ async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
     if let Some(own_jid) = client.store.read().await.id.clone() {
         let own_non_ad = own_jid.to_non_ad();
         if let Err(e) = client.send_message(own_non_ad, msg).await {
-            warn!("Failed to send app state key request: {:?}", e);
+            warn!("Failed to send app state key request: {e:?}");
         }
     } else {
         warn!("Can't request app state keys, not logged in.");
@@ -76,7 +76,7 @@ pub async fn fetch_app_state_patches(
 }
 
 pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
-    info!(target: "Client/AppState", "Starting AppState sync for '{}' (full_sync: {})", name, full_sync);
+    info!(target: "Client/AppState", "Starting AppState sync for '{name}' (full_sync: {full_sync})");
 
     let store_guard = client.store.read().await;
     let backend = store_guard.backend.clone();
@@ -86,7 +86,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
     let mut current_state = match backend.get_app_state_version(name).await {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to get app state version for {}: {:?}", name, e);
+            error!("Failed to get app state version for {name}: {e:?}");
             return;
         }
     };
@@ -109,7 +109,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
         {
             Ok(resp) => resp,
             Err(e) => {
-                error!(target: "Client/AppState", "Failed to fetch patches for {}: {:?}", name, e);
+                error!(target: "Client/AppState", "Failed to fetch patches for {name}: {e:?}");
                 return;
             }
         };
@@ -141,13 +141,13 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                                         downloaded_mutations.mutations;
                                                 }
                                                 Err(e) => {
-                                                    error!("Failed to parse downloaded mutations blob: {}. Skipping patch.", e);
+                                                    error!("Failed to parse downloaded mutations blob: {e}. Skipping patch.");
                                                     continue; // Skip this patch
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Failed to download external mutations: {}. Skipping patch.", e);
+                                            error!("Failed to download external mutations: {e}. Skipping patch.");
                                             continue; // Skip this patch
                                         }
                                     }
@@ -210,19 +210,19 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             );
                             request_app_state_keys(client, missing).await;
                         } else {
-                            error!("Failed to decode patches for {}: {:?}", name, e);
+                            error!("Failed to decode patches for {name}: {e:?}");
                             has_more = false;
                         }
                     }
                 };
             } else {
-                warn!(target: "Client/AppState", "Sync response for '{}' missing <collection> node", name);
+                warn!(target: "Client/AppState", "Sync response for '{name}' missing <collection> node");
                 has_more = false;
             }
         } else {
-            warn!(target: "Client/AppState", "Sync response for '{}' missing <sync> node", name);
+            warn!(target: "Client/AppState", "Sync response for '{name}' missing <sync> node");
             has_more = false;
         }
     }
-    info!(target: "Client/AppState", "Finished AppState sync for '{}'", name);
+    info!(target: "Client/AppState", "Finished AppState sync for '{name}'");
 }
