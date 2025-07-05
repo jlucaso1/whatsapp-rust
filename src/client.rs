@@ -41,6 +41,8 @@ pub enum ClientError {
 pub struct Client {
     pub store: tokio::sync::RwLock<store::Device>,
 
+    pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
+
     pub(crate) is_logged_in: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
@@ -68,6 +70,7 @@ impl Client {
 
         Self {
             store: tokio::sync::RwLock::new(store),
+            media_conn: Arc::new(Mutex::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),

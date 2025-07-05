@@ -126,7 +126,32 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                         if let Some(crate::binary::node::NodeContent::Bytes(b)) =
                             &patch_child.content
                         {
-                            if let Ok(patch) = wa::SyncdPatch::decode(b.as_slice()) {
+                            if let Ok(mut patch) = wa::SyncdPatch::decode(b.as_slice()) {
+                                // --- External blob integration ---
+                                if let Some(external_ref) = patch.external_mutations.take() {
+                                    info!("Found patch with external mutations. Attempting download...");
+                                    match client.download(&external_ref).await {
+                                        Ok(decrypted_blob) => {
+                                            match wa::SyncdMutations::decode(
+                                                decrypted_blob.as_slice(),
+                                            ) {
+                                                Ok(downloaded_mutations) => {
+                                                    info!("Successfully downloaded and parsed {} external mutations.", downloaded_mutations.mutations.len());
+                                                    patch.mutations =
+                                                        downloaded_mutations.mutations;
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to parse downloaded mutations blob: {}. Skipping patch.", e);
+                                                    continue; // Skip this patch
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to download external mutations: {}. Skipping patch.", e);
+                                            continue; // Skip this patch
+                                        }
+                                    }
+                                }
                                 patches.push(patch);
                             }
                         }
