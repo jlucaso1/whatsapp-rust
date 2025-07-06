@@ -1,10 +1,13 @@
 // Corresponds to libsignal-protocol-go/groups/GroupCipher.go
 
 use super::builder::GroupSessionBuilder;
-use super::ratchet::get_sender_key;
+use super::ratchet::{
+    derive_message_key_material, get_next_sender_chain_key, get_sender_message_key,
+};
 use crate::crypto::cbc;
 use crate::signal::ecc;
 use crate::signal::groups::message::SenderKeyMessage;
+use crate::signal::groups::ratchet::get_sender_key;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
 use std::error::Error;
@@ -42,30 +45,47 @@ impl<S: SenderKeyStore> GroupCipher<S> {
             .get_sender_key_state_mut()
             .ok_or("No sender key state")?;
 
-        let sender_key = state.sender_chain_key().sender_message_key();
-        let ciphertext = cbc::encrypt(sender_key.cipher_key(), sender_key.iv(), plaintext)?;
+        let chain_key = state
+            .sender_chain_key
+            .as_ref()
+            .ok_or("SenderKeyState has no chain key")?;
+        let sender_key = get_sender_message_key(chain_key);
+        let (iv, cipher_key) = derive_message_key_material(&sender_key);
+        let ciphertext = cbc::encrypt(&cipher_key, &iv, plaintext)?;
 
         // Efficiently serialize the message components for signing without creating an intermediate struct
         let mut buf = Vec::with_capacity(128);
         buf.push((3 << 4) | 3); // version byte
         let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
-            id: Some(state.key_id()),
-            iteration: Some(sender_key.iteration()),
+            id: state.sender_key_id,
+            iteration: sender_key.iteration,
             ciphertext: Some(ciphertext.clone()),
         };
         prost::Message::encode(&proto_msg, &mut buf).unwrap();
 
-        let signature =
-            ecc::curve::calculate_signature(state.signing_key().private_key.clone(), &buf);
+        let signing_key_proto = state
+            .sender_signing_key
+            .as_ref()
+            .ok_or("Missing signing key")?;
+        let private_key_bytes: [u8; 32] = signing_key_proto
+            .private
+            .as_deref()
+            .ok_or("No private key")?
+            .try_into()
+            .map_err(|_| "Invalid private key length")?;
+        let private_key = ecc::keys::DjbEcPrivateKey::new(private_key_bytes);
+        let signature = ecc::curve::calculate_signature(private_key, &buf);
 
         let sender_key_message = SenderKeyMessage::new(
-            state.key_id(),
-            sender_key.iteration(),
+            state.sender_key_id.unwrap_or(0),
+            sender_key.iteration.unwrap_or(0),
             ciphertext.clone(),
             signature.to_vec(),
         );
 
-        state.set_sender_chain_key(state.sender_chain_key().next());
+        let next_chain_key = get_next_sender_chain_key(chain_key);
+        state.sender_chain_key = Some(next_chain_key);
+
         self.sender_key_store
             .store_sender_key(&self.sender_key_id, key_record)
             .await?;
@@ -86,11 +106,8 @@ impl<S: SenderKeyStore> GroupCipher<S> {
             .ok_or("No sender key state for given key ID")?;
         // TODO: Implement signature verification if needed
         let sender_key = get_sender_key(state, sender_key_message.iteration())?;
-        let plaintext = cbc::decrypt(
-            sender_key.cipher_key(),
-            sender_key.iv(),
-            sender_key_message.ciphertext(),
-        )?;
+        let (iv, cipher_key) = super::ratchet::derive_message_key_material(&sender_key);
+        let plaintext = cbc::decrypt(&cipher_key, &iv, sender_key_message.ciphertext())?;
         self.sender_key_store
             .store_sender_key(&self.sender_key_id, key_record)
             .await?;

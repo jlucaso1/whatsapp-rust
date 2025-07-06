@@ -1,5 +1,6 @@
 // Corresponds to libsignal-protocol-go/groups/GroupSessionBuilder.go
 
+use crate::signal::ecc::keys::DjbEcPublicKey;
 use crate::signal::groups::message::SenderKeyDistributionMessage;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
@@ -54,17 +55,23 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
             record.set_sender_key_state(key_id, 0, &chain_key, signing_key);
         }
         let state = record.sender_key_state().ok_or("No sender key state")?;
+        let signing_key_proto = state.sender_signing_key.as_ref().ok_or("No signing key")?;
+        let signing_key_pub_bytes: [u8; 32] = signing_key_proto
+            .public
+            .as_deref()
+            .ok_or("No public key")?
+            .try_into()
+            .map_err(|_| "Invalid public key length")?;
+        let chain_key_proto = state.sender_chain_key.as_ref().ok_or("No chain key")?;
         let msg = crate::signal::groups::message::SenderKeyDistributionMessage::new(
-            state.key_id(),
-            state.sender_chain_key().iteration(),
-            state.sender_chain_key().chain_key_bytes().to_vec(),
-            state.signing_key().public_key.clone(),
+            state.sender_key_id.unwrap_or(0),
+            chain_key_proto.iteration.unwrap_or(0),
+            chain_key_proto.seed.as_deref().unwrap_or(&[]).to_vec(),
+            DjbEcPublicKey::new(signing_key_pub_bytes),
         );
-        if record.is_empty() {
-            self.sender_key_store
-                .store_sender_key(sender_key_name, record)
-                .await?;
-        }
+        self.sender_key_store
+            .store_sender_key(sender_key_name, record)
+            .await?;
         Ok(msg)
     }
 }
