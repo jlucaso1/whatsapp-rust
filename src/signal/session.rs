@@ -413,14 +413,15 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
         let our_signed_prekey_keypair = our_signed_prekey.key_pair();
         let our_one_time_prekey_keypair = our_one_time_prekey.as_ref().map(|r| r.key_pair());
 
-        let session_key_pair = crate::signal::ratchet::calculate_receiver_session(
-            &our_identity,
-            &our_signed_prekey_keypair,
-            our_one_time_prekey_keypair.as_ref(),
-            their_identity_key,
-            message.base_key.clone(),
-        )
-        .map_err(BuilderError::SessionSetup)?;
+        let receiver_params = crate::signal::ratchet::parameters::ReceiverParameters {
+            our_identity_key_pair: our_identity.clone(),
+            our_signed_pre_key: our_signed_prekey_keypair.clone(),
+            our_one_time_pre_key: our_one_time_prekey_keypair.as_ref(),
+            their_identity_key: their_identity_key.clone(),
+            their_base_key: message.base_key.clone(),
+        };
+        let session_key_pair = crate::signal::ratchet::calculate_receiver_session(&receiver_params)
+            .map_err(BuilderError::SessionSetup)?;
 
         if !session_record.is_fresh() {
             session_record.archive_current_state();
@@ -474,18 +475,19 @@ impl<S: SignalProtocolStore> SessionBuilder<S> {
             return Err(BuilderError::InvalidSignature);
         }
 
-        let session_key_pair = crate::signal::ratchet::calculate_sender_session(
-            &our_identity,
-            &our_base_key,
-            their_identity_key,
-            std::sync::Arc::new(bundle.signed_pre_key_public.clone())
+        let sender_params = crate::signal::ratchet::parameters::SenderParameters {
+            our_identity_key_pair: our_identity.clone(),
+            our_base_key: our_base_key.clone(),
+            their_identity_key: their_identity_key.clone(),
+            their_signed_pre_key: std::sync::Arc::new(bundle.signed_pre_key_public.clone())
                 as std::sync::Arc<dyn crate::signal::ecc::keys::EcPublicKey>,
-            bundle
+            their_one_time_pre_key: bundle
                 .pre_key_public
                 .clone()
                 .map(|k| Arc::new(k) as Arc<dyn crate::signal::ecc::keys::EcPublicKey>),
-        )
-        .map_err(BuilderError::SessionSetup)?;
+        };
+        let session_key_pair = crate::signal::ratchet::calculate_sender_session(&sender_params)
+            .map_err(BuilderError::SessionSetup)?;
 
         if !session_record.is_fresh() {
             session_record.archive_current_state();
