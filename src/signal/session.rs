@@ -1,4 +1,5 @@
 use super::address::SignalAddress;
+use super::kdf;
 use super::protocol::{CiphertextMessage, PreKeySignalMessage, SignalMessage};
 use super::store::SignalProtocolStore;
 use crate::signal::ecc::{
@@ -10,7 +11,10 @@ use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordStructureExt};
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp::session_structure::chain::{ChainKey, MessageKey};
 use whatsapp_proto::whatsapp::PreKeyRecordStructure;
 
 pub struct SessionCipher<S: SignalProtocolStore> {
@@ -34,14 +38,14 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         let session_state = session_record.session_state_mut();
 
         let mut chain_key = session_state.sender_chain_key();
-        let message_keys = chain_key.message_keys();
+        let message_keys = get_message_keys(&chain_key);
 
         let ciphertext = self.encrypt_internal(&message_keys, plaintext)?;
 
         let signal_message = SignalMessage::new(
-            message_keys.mac_key(),
+            message_keys.mac_key.as_deref().unwrap_or_default(),
             session_state.sender_ratchet_key(),
-            message_keys.index(),
+            message_keys.index.unwrap_or(0),
             session_state.previous_counter(),
             ciphertext,
             &session_state.local_identity_public(),
@@ -66,7 +70,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                 Box::new(signal_message)
             };
 
-        chain_key = chain_key.next_key();
+        chain_key = get_next_chain_key(&chain_key);
         session_state.set_sender_chain_key(chain_key);
 
         Ok(final_message)
@@ -74,11 +78,13 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
     fn encrypt_internal(
         &self,
-        message_keys: &super::message_key::MessageKeys,
+        message_keys: &MessageKey,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::crypto::cbc;
-        cbc::encrypt(message_keys.cipher_key(), message_keys.iv(), plaintext).map_err(|e| e.into())
+        let cipher_key = message_keys.cipher_key.as_deref().unwrap_or_default();
+        let iv = message_keys.iv.as_deref().unwrap_or_default();
+        cbc::encrypt(cipher_key, iv, plaintext).map_err(|e| e.into())
     }
 }
 
@@ -88,13 +94,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         session_state: &mut SessionState,
         their_ephemeral: &DjbEcPublicKey,
         counter: u32,
-    ) -> Result<
-        (
-            crate::signal::chain_key::ChainKey,
-            crate::signal::message_key::MessageKeys,
-        ),
-        DecryptionError,
-    > {
+    ) -> Result<(ChainKey, MessageKey), DecryptionError> {
         let key = their_ephemeral.public_key();
         let chain_index = session_state
             .receiver_chains_mut()
@@ -104,7 +104,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             let chain_key_index;
             {
                 let chain = &mut session_state.receiver_chains_mut()[idx];
-                chain_key_index = chain.chain_key.index();
+                chain_key_index = chain.chain_key.index.unwrap_or(0);
             }
             if chain_key_index > counter {
                 if let Some(keys) =
@@ -118,19 +118,21 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
             if counter > chain_key_index + 2000 {
                 return Err(DecryptionError::TooFarInFuture);
             }
-            while session_state.receiver_chains_mut()[idx].chain_key.index() < counter {
-                let mk = session_state.receiver_chains_mut()[idx]
-                    .chain_key
-                    .message_keys();
+            while session_state.receiver_chains_mut()[idx]
+                .chain_key
+                .index
+                .unwrap_or(0)
+                < counter
+            {
+                let chain_key_clone = session_state.receiver_chains_mut()[idx].chain_key.clone();
+                let mk = get_message_keys(&chain_key_clone);
                 session_state.receiver_chains_mut()[idx].add_message_keys(mk);
-                let next = session_state.receiver_chains_mut()[idx]
-                    .chain_key
-                    .next_key();
+                let next = get_next_chain_key(&chain_key_clone);
                 session_state.receiver_chains_mut()[idx].chain_key = next;
             }
             let chain_key = session_state.receiver_chains_mut()[idx].chain_key.clone();
-            let message_keys = chain_key.message_keys();
-            session_state.receiver_chains_mut()[idx].chain_key = chain_key.next_key();
+            let message_keys = get_message_keys(&chain_key);
+            session_state.receiver_chains_mut()[idx].chain_key = get_next_chain_key(&chain_key);
             Ok((chain_key, message_keys))
         } else {
             let root_key = session_state.root_key().clone();
@@ -151,15 +153,20 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
                 their_ephemeral_arc.clone(),
                 receiver_chain_pair.chain_key.clone(),
             );
-            session_state
-                .set_previous_counter(session_state.sender_chain_key().index().saturating_sub(1));
+            session_state.set_previous_counter(
+                session_state
+                    .sender_chain_key()
+                    .index
+                    .unwrap_or(0)
+                    .saturating_sub(1),
+            );
             session_state.set_sender_chain(new_our_ephemeral, sender_chain_pair.chain_key);
 
             let chain_key = receiver_chain_pair.chain_key;
-            let message_keys = chain_key.message_keys();
+            let message_keys = get_message_keys(&chain_key);
             if let Some(chain) = session_state.find_receiver_chain_mut(&their_ephemeral.public_key)
             {
-                chain.chain_key = chain_key.next_key();
+                chain.chain_key = get_next_chain_key(&chain_key);
             }
             Ok((chain_key, message_keys))
         }
@@ -167,12 +174,13 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
     fn decrypt_internal(
         &self,
-        message_keys: &super::message_key::MessageKeys,
+        message_keys: &MessageKey,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
         use crate::crypto::cbc;
-        cbc::decrypt(message_keys.cipher_key(), message_keys.iv(), ciphertext)
-            .map_err(DecryptionError::Cbc) // Mapped to CbcError
+        let cipher_key = message_keys.cipher_key.as_deref().unwrap_or_default();
+        let iv = message_keys.iv.as_deref().unwrap_or_default();
+        cbc::decrypt(cipher_key, iv, ciphertext).map_err(DecryptionError::Cbc)
     }
 }
 
@@ -321,15 +329,17 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
 
         crate::signal::protocol::SignalMessage::deserialize_and_verify(
             &message.serialized_form,
-            message_keys.mac_key(),
+            message_keys.mac_key.as_deref().unwrap_or_default(),
             session_state.remote_identity_public().as_ref(),
             session_state.local_identity_public().as_ref(),
         )?;
 
         let decrypted_plaintext = self.decrypt_internal(&message_keys, &message.ciphertext)?;
 
-        session_state
-            .set_receiver_chain_key(message.sender_ratchet_key.clone(), chain_key.next_key());
+        session_state.set_receiver_chain_key(
+            message.sender_ratchet_key.clone(),
+            get_next_chain_key(&chain_key),
+        );
 
         Ok(decrypted_plaintext)
     }
@@ -362,6 +372,44 @@ impl From<Box<dyn Error + Send + Sync>> for BuilderError {
 impl From<crate::signal::root_key::RootKeyError> for BuilderError {
     fn from(e: crate::signal::root_key::RootKeyError) -> Self {
         BuilderError::SessionSetup(Box::new(e))
+    }
+}
+
+const MESSAGE_KEY_SEED: &[u8] = &[0x01];
+const CHAIN_KEY_SEED: &[u8] = &[0x02];
+const KDF_SALT: &str = "WhisperMessageKeys";
+const DERIVED_SECRETS_SIZE: usize = 80;
+
+fn get_next_chain_key(current: &ChainKey) -> ChainKey {
+    let current_key = current.key.as_deref().unwrap_or_default();
+    let mut mac = Hmac::<Sha256>::new_from_slice(current_key).unwrap();
+    mac.update(CHAIN_KEY_SEED);
+    let next_key_bytes: [u8; 32] = mac.finalize().into_bytes().into();
+    ChainKey {
+        key: Some(next_key_bytes.to_vec()),
+        index: Some(current.index.unwrap_or(0) + 1),
+    }
+}
+
+fn get_message_keys(current: &ChainKey) -> MessageKey {
+    let current_key = current.key.as_deref().unwrap_or_default();
+    let mut mac = Hmac::<Sha256>::new_from_slice(current_key).unwrap();
+    mac.update(MESSAGE_KEY_SEED);
+    let input_key_material: [u8; 32] = mac.finalize().into_bytes().into();
+
+    let key_material_bytes = kdf::derive_secrets(
+        &input_key_material,
+        None,
+        KDF_SALT.as_bytes(),
+        DERIVED_SECRETS_SIZE,
+    )
+    .unwrap();
+
+    MessageKey {
+        index: current.index,
+        cipher_key: Some(key_material_bytes[0..32].to_vec()),
+        mac_key: Some(key_material_bytes[32..64].to_vec()),
+        iv: Some(key_material_bytes[64..80].to_vec()),
     }
 }
 

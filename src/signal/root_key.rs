@@ -1,4 +1,3 @@
-use super::chain_key::ChainKey;
 use super::ecc::curve::calculate_shared_secret;
 use super::ecc::key_pair::EcKeyPair;
 use super::ecc::keys::EcPublicKey;
@@ -16,6 +15,7 @@ pub enum RootKeyError {
 }
 
 use serde::{Deserialize, Serialize};
+use whatsapp_proto::whatsapp::session_structure::chain::ChainKey;
 // Corresponds to keys/root/RootKey.go
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RootKey {
@@ -67,7 +67,10 @@ impl RootKey {
         };
 
         let new_root_key = RootKey::new(derived.root_key);
-        let new_chain_key = ChainKey::new(derived.chain_key, 0);
+        let new_chain_key = ChainKey {
+            key: Some(derived.chain_key.to_vec()),
+            index: Some(0),
+        };
 
         Ok(SessionKeyPair {
             root_key: new_root_key,

@@ -1,14 +1,13 @@
-use crate::signal::chain_key::ChainKey;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPublicKey};
 use crate::signal::identity::IdentityKey;
-use crate::signal::message_key::MessageKeys;
 use crate::signal::root_key::RootKey;
 use crate::signal::state::pending_key_exchange_state::PendingKeyExchange;
 use crate::signal::state::unacknowledged_prekey::UnacknowledgedPreKeyMessageItems;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use whatsapp_proto::whatsapp::session_structure::chain::{ChainKey, MessageKey};
 
 const MAX_MESSAGE_KEYS: usize = 2000;
 
@@ -16,7 +15,7 @@ const MAX_MESSAGE_KEYS: usize = 2000;
 pub struct Chain {
     pub sender_ratchet_key_pair: EcKeyPair,
     pub chain_key: ChainKey,
-    pub message_keys: VecDeque<MessageKeys>,
+    pub message_keys: VecDeque<MessageKey>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -50,7 +49,7 @@ impl Chain {
         }
     }
 
-    pub fn add_message_keys(&mut self, keys: MessageKeys) {
+    pub fn add_message_keys(&mut self, keys: MessageKey) {
         if self.message_keys.len() >= MAX_MESSAGE_KEYS {
             self.message_keys.pop_front();
         }
@@ -58,14 +57,14 @@ impl Chain {
     }
 
     pub fn has_message_keys(&self, counter: u32) -> bool {
-        self.message_keys.iter().any(|mk| mk.index() == counter)
+        self.message_keys.iter().any(|mk| mk.index == Some(counter))
     }
 
-    pub fn remove_message_keys(&mut self, counter: u32) -> Option<MessageKeys> {
+    pub fn remove_message_keys(&mut self, counter: u32) -> Option<MessageKey> {
         if let Some(pos) = self
             .message_keys
             .iter()
-            .position(|mk| mk.index() == counter)
+            .position(|mk| mk.index == Some(counter))
         {
             Some(self.message_keys.remove(pos).unwrap())
         } else {

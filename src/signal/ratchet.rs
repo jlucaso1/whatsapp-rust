@@ -1,3 +1,5 @@
+use whatsapp_proto::whatsapp::session_structure::chain::ChainKey;
+
 use super::ecc::curve;
 use super::ecc::keys::{EcPrivateKey, EcPublicKey};
 use super::kdf;
@@ -64,8 +66,10 @@ pub fn calculate_sender_session(
         ROOT_KEY_DERIVED_SECRETS_SIZE,
     )?;
     let root_key = RootKey::new(derived_keys_bytes[0..32].try_into().unwrap());
-    let chain_key =
-        super::chain_key::ChainKey::new(derived_keys_bytes[32..64].try_into().unwrap(), 0);
+    let chain_key = ChainKey {
+        key: Some(derived_keys_bytes[32..64].to_vec()),
+        index: Some(0),
+    };
 
     Ok(SessionKeyPair {
         root_key,
@@ -120,8 +124,10 @@ pub fn calculate_receiver_session(
         ROOT_KEY_DERIVED_SECRETS_SIZE,
     )?;
     let root_key = RootKey::new(derived_keys_bytes[0..32].try_into().unwrap());
-    let chain_key =
-        super::chain_key::ChainKey::new(derived_keys_bytes[32..64].try_into().unwrap(), 0);
+    let chain_key = ChainKey {
+        key: Some(derived_keys_bytes[32..64].to_vec()),
+        index: Some(0),
+    };
 
     Ok(SessionKeyPair {
         root_key,
