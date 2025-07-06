@@ -1,4 +1,3 @@
-use self::parameters::SymmetricParameters;
 use super::ecc::curve;
 use super::ecc::keys::{EcPrivateKey, EcPublicKey};
 use super::kdf;
@@ -128,38 +127,4 @@ pub fn calculate_receiver_session(
         root_key,
         chain_key,
     })
-}
-
-// Determines if we are the sender in a symmetric session setup.
-fn is_sender(our_key: &dyn EcPublicKey, their_key: &dyn EcPublicKey) -> bool {
-    let our_key_bytes = our_key.public_key();
-    let their_key_bytes = their_key.public_key();
-    let our_key_int = u32::from_be_bytes(our_key_bytes[0..4].try_into().unwrap());
-    let their_key_int = u32::from_be_bytes(their_key_bytes[0..4].try_into().unwrap());
-    our_key_int < their_key_int
-}
-
-// Establishes a symmetric session between two online parties.
-pub fn calculate_symmetric_session(
-    params: &SymmetricParameters,
-) -> Result<SessionKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-    if is_sender(&params.our_base_key.public_key, &*params.their_base_key) {
-        let sender_params = SenderParameters {
-            our_identity_key_pair: params.our_identity_key_pair.clone(),
-            our_base_key: params.our_base_key.clone(),
-            their_identity_key: params.their_identity_key.clone(),
-            their_signed_pre_key: params.their_base_key.clone(),
-            their_one_time_pre_key: None,
-        };
-        calculate_sender_session(&sender_params)
-    } else {
-        let receiver_params = ReceiverParameters {
-            our_identity_key_pair: params.our_identity_key_pair.clone(),
-            our_signed_pre_key: params.our_base_key.clone(),
-            our_one_time_pre_key: None,
-            their_identity_key: params.their_identity_key.clone(),
-            their_base_key: params.their_base_key.clone(),
-        };
-        calculate_receiver_session(&receiver_params)
-    }
 }

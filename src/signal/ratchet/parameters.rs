@@ -3,16 +3,6 @@ use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
 use std::sync::Arc;
 
-/// Parameters for a symmetric session where both parties are online.
-pub struct SymmetricParameters {
-    pub our_base_key: EcKeyPair,
-    pub our_ratchet_key: EcKeyPair,
-    pub our_identity_key_pair: IdentityKeyPair,
-    pub their_base_key: Arc<dyn EcPublicKey>,
-    pub their_ratchet_key: Arc<dyn EcPublicKey>,
-    pub their_identity_key: IdentityKey,
-}
-
 /// Parameters when we are initiating the session (the "sender").
 pub struct SenderParameters {
     pub our_identity_key_pair: IdentityKeyPair,
