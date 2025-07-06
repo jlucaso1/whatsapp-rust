@@ -1,5 +1,5 @@
-use crate::crypto::xed25519::sign_dalek;
-use ed25519_dalek::{Signature, SigningKey};
+use crate::crypto::xed25519;
+use ed25519_dalek::Signature;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -52,8 +52,8 @@ impl KeyPair {
 
     /// Signs an arbitrary byte slice using this KeyPair's private key via the XEd25519 scheme.
     pub fn sign_message(&self, message: &[u8]) -> Signature {
-        let signing_key = SigningKey::from_bytes(&self.private_key);
-        sign_dalek(&signing_key, message)
+        let signature_bytes = xed25519::sign(&self.private_key, message);
+        Signature::from_bytes(&signature_bytes)
     }
 
     /// Creates a new `PreKey` and signs its public key with this `KeyPair`.

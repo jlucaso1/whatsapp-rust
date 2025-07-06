@@ -20,7 +20,7 @@ fn test_xeddsa_sign_verify_roundtrip() {
     // 3. Verify the signature using the clean wrapper function
     let verify_result = xed25519::verify(&pub_bytes, message, &signature);
     assert!(
-        verify_result.is_ok(),
+        verify_result,
         "Signature verification failed on a roundtrip test"
     );
 
@@ -28,7 +28,7 @@ fn test_xeddsa_sign_verify_roundtrip() {
     let wrong_message = b"This is not the message that was signed";
     let bad_result = xed25519::verify(&pub_bytes, wrong_message, &signature);
     assert!(
-        bad_result.is_err(),
+        !bad_result,
         "Signature verification succeeded with a wrong message"
     );
 }

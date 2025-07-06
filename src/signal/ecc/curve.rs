@@ -1,10 +1,9 @@
 use super::key_pair::EcKeyPair;
 use super::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPrivateKey, EcPublicKey, DJB_TYPE};
+use crate::crypto::xed25519;
 use rand::rngs::OsRng;
 use thiserror::Error;
 use x25519_dalek::{x25519, PublicKey, StaticSecret};
-use xeddsa::xed25519::{PrivateKey, PublicKey as XeddsaPublicKey};
-use xeddsa::{Sign, Verify};
 
 #[derive(Debug, Error)]
 pub enum CurveError {
@@ -39,17 +38,12 @@ pub fn decode_point(bytes: &[u8]) -> Result<DjbEcPublicKey, CurveError> {
 
 // Corresponds to CalculateSignature()
 pub fn calculate_signature(signing_key: DjbEcPrivateKey, message: &[u8]) -> [u8; 64] {
-    let private_key_bytes = signing_key.serialize();
-    let priv_key = PrivateKey(private_key_bytes);
-    let rng = OsRng;
-    priv_key.sign(message, rng)
+    xed25519::sign(&signing_key.serialize(), message)
 }
 
 // Corresponds to VerifySignature()
 pub fn verify_signature(signing_key: DjbEcPublicKey, message: &[u8], signature: &[u8; 64]) -> bool {
-    let public_key_bytes = signing_key.public_key();
-    let pub_key = XeddsaPublicKey(public_key_bytes);
-    pub_key.verify(message, signature).is_ok()
+    xed25519::verify(&signing_key.public_key(), message, signature)
 }
 
 // Corresponds to kdf.CalculateSharedSecret()

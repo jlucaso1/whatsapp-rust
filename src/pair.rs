@@ -1,6 +1,6 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
-use crate::crypto::xed25519::verify_dalek;
+use crate::crypto::xed25519;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -353,13 +353,11 @@ async fn do_pair_crypto(
         });
     };
 
-    if verify_dalek(
+    if !xed25519::verify(
         account_sig_key_bytes.try_into().unwrap(),
         &msg_to_verify,
-        &signature,
-    )
-    .is_err()
-    {
+        &signature.to_bytes(),
+    ) {
         return Err(PairCryptoError {
             code: 401,
             text: "signature-mismatch",

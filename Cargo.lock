@@ -280,6 +280,7 @@ dependencies = [
  "digest",
  "fiat-crypto",
  "rustc_version",
+ "serde",
  "subtle",
  "zeroize",
 ]
@@ -354,17 +355,6 @@ checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
 dependencies = [
  "powerfmt",
  "serde",
-]
-
-[[package]]
-name = "derive_more"
-version = "0.99.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1807,7 +1797,6 @@ dependencies = [
  "env_logger",
  "flate2",
  "futures-util",
- "getrandom 0.2.16",
  "hex",
  "hkdf",
  "hmac",
@@ -1831,7 +1820,6 @@ dependencies = [
  "urlencoding",
  "whatsapp-proto",
  "x25519-dalek",
- "xeddsa",
 ]
 
 [[package]]
@@ -2066,22 +2054,6 @@ dependencies = [
  "curve25519-dalek",
  "rand_core 0.6.4",
  "serde",
- "zeroize",
-]
-
-[[package]]
-name = "xeddsa"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2460c9a9c9d1331ff6801e87badb517faa6b6758e5fb585eb27daf7622c6d5ad"
-dependencies = [
- "curve25519-dalek",
- "derive_more",
- "ed25519",
- "ed25519-dalek",
- "rand 0.8.5",
- "sha2",
- "x25519-dalek",
  "zeroize",
 ]
 
