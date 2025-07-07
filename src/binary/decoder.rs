@@ -1,8 +1,9 @@
 use crate::binary::error::{BinaryError, Result};
-use crate::binary::node::{Attrs, Node, NodeContent};
+use crate::binary::node::{AttrsRef, Node, NodeContentRef, NodeRef};
 use crate::binary::token;
-use crate::types::jid::Jid;
+use crate::types::jid::JidRef;
 use bytes::Buf;
+use std::borrow::Cow;
 use std::io::Cursor;
 
 pub(crate) struct Decoder<'a> {
@@ -62,9 +63,17 @@ impl<'a> Decoder<'a> {
         Ok(&self.reader.get_ref()[start..start + len])
     }
 
-    fn read_string(&mut self, len: usize) -> Result<String> {
+    fn read_string(&mut self, len: usize) -> Result<Cow<'a, str>> {
         let bytes = self.read_bytes(len)?;
-        String::from_utf8(bytes.to_vec()).map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
+        match std::str::from_utf8(bytes) {
+            Ok(s) => Ok(Cow::Borrowed(s)),
+            Err(_) => {
+                // Fallback to owned string if not valid UTF-8
+                String::from_utf8(bytes.to_vec())
+                    .map(Cow::Owned)
+                    .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
+            }
+        }
     }
 
     fn read_list_size(&mut self, tag: u8) -> Result<usize> {
@@ -76,72 +85,80 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn read_jid_pair(&mut self) -> Result<Jid> {
+    fn read_jid_pair(&mut self) -> Result<JidRef<'a>> {
         let user_val = self.read_value_as_string()?;
-        let server = self.read_value_as_string()?.unwrap_or_default();
-        Ok(Jid::new(user_val.as_deref().unwrap_or(""), &server))
+        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        let user = user_val.unwrap_or(Cow::Borrowed(""));
+        Ok(JidRef {
+            user,
+            server,
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        })
     }
 
-    fn read_ad_jid(&mut self) -> Result<Jid> {
+    fn read_ad_jid(&mut self) -> Result<JidRef<'a>> {
         let agent = self.read_u8()?;
         let device = self.read_u8()? as u16;
         let user = self
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
-        let server = match agent {
-            0 => crate::types::jid::DEFAULT_USER_SERVER,
-            1 => crate::types::jid::HIDDEN_USER_SERVER,
-            _ => crate::types::jid::HOSTED_SERVER,
-        }
-        .to_string();
 
-        Ok(Jid {
+        let server = match agent {
+            0 => Cow::Borrowed(crate::types::jid::DEFAULT_USER_SERVER),
+            1 => Cow::Borrowed(crate::types::jid::HIDDEN_USER_SERVER),
+            _ => Cow::Borrowed(crate::types::jid::HOSTED_SERVER),
+        };
+
+        Ok(JidRef {
             user,
             server,
             agent,
             device,
-            ..Default::default()
+            integrator: 0,
         })
     }
 
-    fn read_interop_jid(&mut self) -> Result<Jid> {
+    fn read_interop_jid(&mut self) -> Result<JidRef<'a>> {
         let user = self
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
         let integrator = self.read_u16_be()?;
-        let server = self.read_value_as_string()?.unwrap_or_default();
+        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
         if server != crate::types::jid::INTEROP_SERVER {
             return Err(BinaryError::InvalidNode);
         }
-        Ok(Jid {
+        Ok(JidRef {
             user,
             server,
             device,
             integrator,
-            ..Default::default()
+            agent: 0,
         })
     }
 
-    fn read_fb_jid(&mut self) -> Result<Jid> {
+    fn read_fb_jid(&mut self) -> Result<JidRef<'a>> {
         let user = self
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
-        let server = self.read_value_as_string()?.unwrap_or_default();
+        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
         if server != crate::types::jid::MESSENGER_SERVER {
             return Err(BinaryError::InvalidNode);
         }
-        Ok(Jid {
+        Ok(JidRef {
             user,
             server,
             device,
-            ..Default::default()
+            agent: 0,
+            integrator: 0,
         })
     }
 
-    // Simplified read_value that only handles string-like things for now
-    fn read_value_as_string(&mut self) -> Result<Option<String>> {
+    // Zero-copy string parsing that returns Cow
+    fn read_value_as_string(&mut self) -> Result<Option<Cow<'a, str>>> {
         let tag = self.read_u8()?;
         match tag {
             token::LIST_EMPTY => Ok(None),
@@ -157,22 +174,24 @@ impl<'a> Decoder<'a> {
                 let size = self.read_u32_be()? as usize;
                 self.read_string(size).map(Some)
             }
-            token::JID_PAIR => self.read_jid_pair().map(|j| Some(j.to_string())),
-            token::AD_JID => self.read_ad_jid().map(|j| Some(j.to_string())),
-            token::INTEROP_JID => self.read_interop_jid().map(|j| Some(j.to_string())),
-            token::FB_JID => self.read_fb_jid().map(|j| Some(j.to_string())),
-            token::NIBBLE_8 | token::HEX_8 => self.read_packed(tag).map(Some),
+            token::JID_PAIR => self
+                .read_jid_pair()
+                .map(|j| Some(Cow::Owned(j.to_string()))),
+            token::AD_JID => self.read_ad_jid().map(|j| Some(Cow::Owned(j.to_string()))),
+            token::INTEROP_JID => self
+                .read_interop_jid()
+                .map(|j| Some(Cow::Owned(j.to_string()))),
+            token::FB_JID => self.read_fb_jid().map(|j| Some(Cow::Owned(j.to_string()))),
+            token::NIBBLE_8 | token::HEX_8 => self.read_packed(tag).map(|s| Some(Cow::Owned(s))),
             tag @ token::DICTIONARY_0..=token::DICTIONARY_3 => {
                 let index = self.read_u8()?;
                 token::get_double_token(tag - token::DICTIONARY_0, index)
-                    .map(|s| s.to_string())
-                    .map(Some)
+                    .map(|s| Some(Cow::Borrowed(s)))
                     .ok_or(BinaryError::InvalidToken(tag))
             }
-            // All other single-byte tokens
+            // All other single-byte tokens - these are from static dictionaries
             _ => token::get_single_token(tag)
-                .map(|s| s.to_string())
-                .map(Some)
+                .map(|s| Some(Cow::Borrowed(s)))
                 .ok_or(BinaryError::InvalidToken(tag)),
         }
     }
@@ -218,50 +237,50 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn read_attributes(&mut self, size: usize) -> Result<Attrs> {
+    fn read_attributes(&mut self, size: usize) -> Result<AttrsRef<'a>> {
         let mut attrs = std::collections::HashMap::new();
         for _ in 0..size {
             let key = self
                 .read_value_as_string()?
                 .ok_or(BinaryError::NonStringKey)?;
-            let value = self.read_value_as_string()?.unwrap_or_default();
+            let value = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
             attrs.insert(key, value);
         }
         Ok(attrs)
     }
 
-    fn read_content(&mut self) -> Result<Option<NodeContent>> {
+    fn read_content(&mut self) -> Result<Option<NodeContentRef<'a>>> {
         let tag = self.read_u8()?;
         match tag {
             token::LIST_EMPTY => Ok(None),
             token::BINARY_8 => {
                 let len = self.read_u8()? as usize;
-                self.read_bytes(len)
-                    .map(|b| Some(NodeContent::Bytes(b.to_vec())))
+                let bytes = self.read_bytes(len)?;
+                Ok(Some(NodeContentRef::Bytes(Cow::Borrowed(bytes))))
             }
             token::BINARY_20 => {
                 let len = self.read_u20_be()? as usize;
-                self.read_bytes(len)
-                    .map(|b| Some(NodeContent::Bytes(b.to_vec())))
+                let bytes = self.read_bytes(len)?;
+                Ok(Some(NodeContentRef::Bytes(Cow::Borrowed(bytes))))
             }
             token::BINARY_32 => {
                 let len = self.read_u32_be()? as usize;
-                self.read_bytes(len)
-                    .map(|b| Some(NodeContent::Bytes(b.to_vec())))
+                let bytes = self.read_bytes(len)?;
+                Ok(Some(NodeContentRef::Bytes(Cow::Borrowed(bytes))))
             }
             // It's a list of child nodes
             _ => {
                 let size = self.read_list_size(tag)?;
                 let mut nodes = Vec::with_capacity(size);
                 for _ in 0..size {
-                    nodes.push(self.read_node()?);
+                    nodes.push(self.read_node_ref()?);
                 }
-                Ok(Some(NodeContent::Nodes(nodes)))
+                Ok(Some(NodeContentRef::Nodes(nodes)))
             }
         }
     }
 
-    pub(crate) fn read_node(&mut self) -> Result<Node> {
+    fn read_node_ref(&mut self) -> Result<NodeRef<'a>> {
         let tag = self.read_u8()?;
         let list_size = self.read_list_size(tag)?;
         if list_size == 0 {
@@ -282,10 +301,15 @@ impl<'a> Decoder<'a> {
             None
         };
 
-        Ok(Node {
+        Ok(NodeRef {
             tag,
             attrs,
             content,
         })
+    }
+
+    pub(crate) fn read_node(&mut self) -> Result<Node> {
+        let node_ref = self.read_node_ref()?;
+        Ok(node_ref.to_owned())
     }
 }

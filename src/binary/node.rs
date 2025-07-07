@@ -1,7 +1,9 @@
 use crate::binary::attrs::AttrParser;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub type Attrs = HashMap<String, String>;
+pub type AttrsRef<'a> = HashMap<Cow<'a, str>, Cow<'a, str>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
@@ -9,11 +11,24 @@ pub enum NodeContent {
     Nodes(Vec<Node>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeContentRef<'a> {
+    Bytes(Cow<'a, [u8]>),
+    Nodes(Vec<NodeRef<'a>>),
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Node {
     pub tag: String,
     pub attrs: Attrs,
     pub content: Option<NodeContent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeRef<'a> {
+    pub tag: Cow<'a, str>,
+    pub attrs: AttrsRef<'a>,
+    pub content: Option<NodeContentRef<'a>>,
 }
 
 impl Node {
@@ -51,6 +66,7 @@ impl Node {
         }
         Some(current_node)
     }
+
     /// Returns a slice of direct children that have the specified tag.
     pub fn get_children_by_tag(&self, tag: &str) -> Vec<&Node> {
         if let Some(children) = self.children() {
@@ -64,6 +80,76 @@ impl Node {
     pub fn get_optional_child(&self, tag: &str) -> Option<&Node> {
         self.children()
             .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
+    }
+}
+
+impl<'a> NodeRef<'a> {
+    pub fn new(
+        tag: Cow<'a, str>,
+        attrs: AttrsRef<'a>,
+        content: Option<NodeContentRef<'a>>,
+    ) -> Self {
+        Self {
+            tag,
+            attrs,
+            content,
+        }
+    }
+
+    pub fn children(&self) -> Option<&[NodeRef<'a>]> {
+        match &self.content {
+            Some(NodeContentRef::Nodes(nodes)) => Some(nodes),
+            _ => None,
+        }
+    }
+
+    pub fn get_optional_child_by_tag(&self, tags: &[&str]) -> Option<&NodeRef<'a>> {
+        let mut current_node = self;
+        for &tag in tags {
+            if let Some(children) = current_node.children() {
+                if let Some(found) = children.iter().find(|c| c.tag == tag) {
+                    current_node = found;
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+        Some(current_node)
+    }
+
+    /// Returns a slice of direct children that have the specified tag.
+    pub fn get_children_by_tag(&self, tag: &str) -> Vec<&NodeRef<'a>> {
+        if let Some(children) = self.children() {
+            children.iter().filter(|c| c.tag == tag).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Finds the first direct child with the given tag and returns it.
+    pub fn get_optional_child(&self, tag: &str) -> Option<&NodeRef<'a>> {
+        self.children()
+            .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
+    }
+
+    /// Convert to owned Node
+    pub fn to_owned(&self) -> Node {
+        Node {
+            tag: self.tag.to_string(),
+            attrs: self
+                .attrs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            content: self.content.as_ref().map(|c| match c {
+                NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
+                NodeContentRef::Nodes(nodes) => {
+                    NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
+                }
+            }),
+        }
     }
 }
 

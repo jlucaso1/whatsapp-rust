@@ -1,4 +1,4 @@
-// src/types/jid.rs
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
@@ -29,11 +29,22 @@ pub enum JidError {
     Parse(#[from] std::num::ParseIntError),
 }
 
+// Owned version for public API
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Jid {
     pub user: String,
     pub server: String,
+    pub agent: u8,
+    pub device: u16,
+    pub integrator: u16,
+}
+
+// Zero-copy version for internal parsing
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JidRef<'a> {
+    pub user: Cow<'a, str>,
+    pub server: Cow<'a, str>,
     pub agent: u8,
     pub device: u16,
     pub integrator: u16,
@@ -54,6 +65,62 @@ impl Jid {
             server: self.server.clone(),
             integrator: self.integrator,
             ..Default::default()
+        }
+    }
+
+    pub fn is_ad(&self) -> bool {
+        self.device > 0
+            && (self.server == DEFAULT_USER_SERVER
+                || self.server == HIDDEN_USER_SERVER
+                || self.server == HOSTED_SERVER)
+    }
+
+    pub fn is_interop(&self) -> bool {
+        self.server == INTEROP_SERVER && self.integrator > 0
+    }
+
+    pub fn is_messenger(&self) -> bool {
+        self.server == MESSENGER_SERVER && self.device > 0
+    }
+
+    pub fn is_group(&self) -> bool {
+        self.server == GROUP_SERVER
+    }
+
+    pub fn is_broadcast_list(&self) -> bool {
+        self.server == BROADCAST_SERVER && self.user != STATUS_BROADCAST_USER
+    }
+
+    pub fn is_bot(&self) -> bool {
+        (self.server == DEFAULT_USER_SERVER
+            && self.device == 0
+            && (self.user.starts_with("1313555") || self.user.starts_with("131655500")))
+            || self.server == BOT_SERVER
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.server.is_empty()
+    }
+}
+
+impl<'a> JidRef<'a> {
+    pub fn new(user: Cow<'a, str>, server: Cow<'a, str>) -> Self {
+        Self {
+            user,
+            server,
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        }
+    }
+
+    pub fn to_owned(&self) -> Jid {
+        Jid {
+            user: self.user.to_string(),
+            server: self.server.to_string(),
+            agent: self.agent,
+            device: self.device,
+            integrator: self.integrator,
         }
     }
 
@@ -155,8 +222,33 @@ impl fmt::Display for Jid {
     }
 }
 
+impl<'a> fmt::Display for JidRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.user.is_empty() {
+            write!(f, "{}", self.server)
+        } else {
+            let mut user_part = self.user.to_string();
+            if self.agent > 0 {
+                user_part.push('.');
+                user_part.push_str(&self.agent.to_string());
+            }
+            if self.device > 0 {
+                user_part.push(':');
+                user_part.push_str(&self.device.to_string());
+            }
+            write!(f, "{}@{}", user_part, self.server)
+        }
+    }
+}
+
 impl From<Jid> for String {
     fn from(jid: Jid) -> Self {
+        jid.to_string()
+    }
+}
+
+impl<'a> From<JidRef<'a>> for String {
+    fn from(jid: JidRef<'a>) -> Self {
         jid.to_string()
     }
 }
