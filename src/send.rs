@@ -6,9 +6,9 @@ use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::signal::store::SessionStore;
 use crate::signal::SessionCipher;
 use crate::types::jid::{Jid, SERVER_JID};
-use prost::Message as ProtoMessage;
 use rand::Rng;
 use whatsapp_proto::whatsapp as wa;
+use whatsapp_proto::whatsapp::message::DeviceSentMessage;
 
 // Helper function to pad messages for encryption
 fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
@@ -35,98 +35,158 @@ impl Client {
     }
 
     /// Encrypts and sends a protobuf message to the given JID.
-    /// This is the core sending logic.
+    /// Multi-device compatible: builds <participants> node and syncs to own devices.
     pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+        use crate::binary::node::{Node, NodeContent};
+        use prost::Message as ProtoMessage;
+
         let store = self.store.read().await;
-        if store.id.is_none() {
-            return Err(anyhow::anyhow!("Not logged in"));
-        }
+        let own_jid = store
+            .id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
+        drop(store);
 
-        let signal_address = SignalAddress::new(to.user.clone(), to.device as u32);
+        let request_id = self.generate_request_id();
 
-        let store_arc = std::sync::Arc::new(store.clone());
-        let mut session_record = store
-            .load_session(&signal_address)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let session_exists = !session_record.is_fresh();
+        // Prepare two payloads
+        let message_plaintext = message.encode_to_vec();
+        let dsm = wa::Message {
+            device_sent_message: Some(Box::new(DeviceSentMessage {
+                destination_jid: Some(to.to_string()),
+                message: Some(Box::new(message.clone())),
+                phash: Some("".to_string()),
+            })),
+            ..Default::default()
+        };
+        let dsm_plaintext = dsm.encode_to_vec();
 
-        if !session_exists {
-            log::info!("No session found for {to}, building a new one.");
-            let bundles = self.fetch_pre_keys(std::slice::from_ref(&to)).await?;
-            let bundle = bundles
-                .get(&to)
-                .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", to))?;
-            let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
-            if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
-                return Err(anyhow::anyhow!(e.to_string()));
+        // Get all devices for both sender and recipient
+        let participants = vec![to.clone(), own_jid.clone()];
+        let all_devices = self.get_user_devices(&participants).await?;
+
+        let mut participant_nodes = Vec::new();
+        let mut includes_prekey_message = false;
+
+        let store = self.store.read().await.clone();
+        let store_arc = std::sync::Arc::new(store);
+
+        for device_jid in all_devices {
+            let is_own_device =
+                device_jid.user == own_jid.user && device_jid.device != own_jid.device;
+            let plaintext_to_encrypt = if is_own_device {
+                &dsm_plaintext
+            } else {
+                &message_plaintext
+            };
+
+            let padded_plaintext = pad_message_v2(plaintext_to_encrypt.clone());
+
+            let signal_address =
+                SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
+            let mut session_record = store_arc
+                .load_session(&signal_address)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let mut is_prekey_msg = false;
+
+            if session_record.is_fresh() {
+                let bundles = self.fetch_pre_keys(&[device_jid.clone()]).await?;
+                let bundle = bundles
+                    .get(&device_jid)
+                    .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", device_jid))?;
+                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+                builder.process_bundle(&mut session_record, bundle).await?;
+                is_prekey_msg = true;
             }
+
+            let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            let encrypted_message = cipher
+                .encrypt(&mut session_record, &padded_plaintext)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            store_arc
+                .store_session(&signal_address, &session_record)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            if is_prekey_msg
+                || matches!(
+                    encrypted_message.q_type(),
+                    crate::signal::protocol::PREKEY_TYPE
+                )
+            {
+                includes_prekey_message = true;
+            }
+
+            let enc_type = match encrypted_message.q_type() {
+                crate::signal::protocol::PREKEY_TYPE => "pkmsg",
+                _ => "msg",
+            };
+
+            let enc_node = Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), enc_type.to_string()),
+                ]
+                .into(),
+                content: Some(NodeContent::Bytes(encrypted_message.serialize())),
+            };
+
+            participant_nodes.push(Node {
+                tag: "to".to_string(),
+                attrs: [("jid".to_string(), device_jid.to_string())].into(),
+                content: Some(NodeContent::Nodes(vec![enc_node])),
+            });
         }
 
-        let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
-        let serialized_msg_proto = <wa::Message as ProtoMessage>::encode_to_vec(&message);
-
-        let padded_plaintext = pad_message_v2(serialized_msg_proto);
-
-        let encrypted_message = match cipher.encrypt(&mut session_record, &padded_plaintext).await {
-            Ok(msg) => msg,
-            Err(e) => return Err(anyhow::anyhow!(format!("{:?}", e))),
-        };
-
-        store_arc
-            .store_session(&signal_address, &session_record)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let enc_type = match encrypted_message.q_type() {
-            crate::signal::protocol::PREKEY_TYPE => "pkmsg",
-            _ => "msg",
-        };
-
-        let mut message_content_nodes = vec![crate::binary::node::Node {
-            tag: "enc".to_string(),
-            attrs: [
-                ("v".to_string(), "2".to_string()),
-                ("type".to_string(), enc_type.to_string()),
-            ]
-            .into(),
-            content: Some(crate::binary::node::NodeContent::Bytes(
-                encrypted_message.serialize(),
-            )),
+        let mut message_content_nodes = vec![Node {
+            tag: "participants".to_string(),
+            attrs: Default::default(),
+            content: Some(NodeContent::Nodes(participant_nodes)),
         }];
 
-        if enc_type == "pkmsg" {
-            if let Some(account) = &store.account {
+        if includes_prekey_message {
+            let store_guard = self.store.read().await;
+            if let Some(account) = &store_guard.account {
                 let device_identity_bytes = account.encode_to_vec();
-                let identity_node = crate::binary::node::Node {
+                message_content_nodes.push(Node {
                     tag: "device-identity".to_string(),
                     attrs: Default::default(),
-                    content: Some(crate::binary::node::NodeContent::Bytes(
-                        device_identity_bytes,
-                    )),
-                };
-                message_content_nodes.push(identity_node);
+                    content: Some(NodeContent::Bytes(device_identity_bytes)),
+                });
             } else {
-                return Err(anyhow::anyhow!("Cannot send pre-key message: device account identity is missing from store. Please re-pair."));
+                return Err(anyhow::anyhow!("Cannot send pre-key message: device account identity is missing. Please re-pair."));
             }
         }
 
-        let stanza = crate::binary::node::Node {
+        let stanza = Node {
             tag: "message".to_string(),
             attrs: [
                 ("to".to_string(), to.to_string()),
-                ("id".to_string(), self.generate_request_id()),
+                ("id".to_string(), request_id),
                 ("type".to_string(), "text".to_string()),
             ]
             .into(),
-            content: Some(crate::binary::node::NodeContent::Nodes(
-                message_content_nodes,
-            )),
+            content: Some(NodeContent::Nodes(message_content_nodes)),
         };
 
-        self.send_node(stanza).await?;
+        self.send_node(stanza).await.map_err(|e| e.into())
+    }
 
-        Ok(())
+    /// Fetch all devices for the given JIDs (stub, needs real usync IQ).
+    pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
+        // TODO: Replace this stub with a real usync IQ device fetch.
+        let mut devices = Vec::new();
+        for jid in jids {
+            if jid.device == 0 {
+                devices.push(jid.clone());
+            } else {
+                devices.push(jid.clone());
+            }
+        }
+        Ok(devices)
     }
 
     /// Fetches pre-key bundles for a list of JIDs.
