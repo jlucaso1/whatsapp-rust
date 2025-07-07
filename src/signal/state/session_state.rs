@@ -21,11 +21,13 @@ pub struct Chain {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SessionState {
     session_version: u32,
-    // TODO: Arc<IdentityKey> is not serializable by default.
-    // For now, replace with IdentityKey directly for serialization.
-    local_identity_public: IdentityKey,
-    remote_identity_public: IdentityKey,
-    root_key: RootKey,
+    // These are wrapped in Arc to enable cheap cloning
+    #[serde(with = "arc_serde")]
+    local_identity_public: Arc<IdentityKey>,
+    #[serde(with = "arc_serde")]
+    remote_identity_public: Arc<IdentityKey>,
+    #[serde(with = "arc_serde")]
+    root_key: Arc<RootKey>,
     sender_base_key: Option<DjbEcPublicKey>,
     previous_counter: u32,
     sender_chain: Option<Chain>,
@@ -90,10 +92,10 @@ impl SessionState {
     pub fn new() -> Self {
         Self {
             session_version: 3,
-            local_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
-            remote_identity_public: IdentityKey::new(DjbEcPublicKey::new([0; 32])),
+            local_identity_public: Arc::new(IdentityKey::new(DjbEcPublicKey::new([0; 32]))),
+            remote_identity_public: Arc::new(IdentityKey::new(DjbEcPublicKey::new([0; 32]))),
             pending_key_exchange: None,
-            root_key: RootKey::new([0; 32]),
+            root_key: Arc::new(RootKey::new([0; 32])),
             sender_base_key: None,
             previous_counter: 0,
             sender_chain: None,
@@ -215,11 +217,11 @@ impl SessionState {
     }
 
     pub fn local_identity_public(&self) -> Arc<IdentityKey> {
-        Arc::new(self.local_identity_public.clone())
+        Arc::clone(&self.local_identity_public)
     }
 
     pub fn remote_identity_public(&self) -> Arc<IdentityKey> {
-        Arc::new(self.remote_identity_public.clone())
+        Arc::clone(&self.remote_identity_public)
     }
 
     pub fn set_unacknowledged_prekey_message(
@@ -254,11 +256,11 @@ impl SessionState {
     }
 
     pub fn set_remote_identity_key(&mut self, identity_key: IdentityKey) {
-        self.remote_identity_public = identity_key;
+        self.remote_identity_public = Arc::new(identity_key);
     }
 
     pub fn set_local_identity_key(&mut self, identity_key: IdentityKey) {
-        self.local_identity_public = identity_key;
+        self.local_identity_public = Arc::new(identity_key);
     }
 
     pub fn set_sender_chain(&mut self, sender_ratchet_key_pair: EcKeyPair, chain_key: ChainKey) {
@@ -266,10 +268,32 @@ impl SessionState {
     }
 
     pub fn set_root_key(&mut self, root_key: RootKey) {
-        self.root_key = root_key;
+        self.root_key = Arc::new(root_key);
     }
 
     pub fn sender_ratchet_key_pair(&self) -> &EcKeyPair {
         &self.sender_chain().sender_ratchet_key_pair
+    }
+}
+
+// Custom serde module for Arc<T> serialization
+mod arc_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S, T>(arc: &Arc<T>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize,
+    {
+        arc.as_ref().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Arc<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        T::deserialize(deserializer).map(Arc::new)
     }
 }

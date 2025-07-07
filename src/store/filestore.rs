@@ -39,9 +39,9 @@ impl FileStore {
         key.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_")
     }
 
-    async fn read_json<T: DeserializeOwned>(&self, path: &Path) -> Result<Option<T>> {
+    async fn read_bincode<T: DeserializeOwned>(&self, path: &Path) -> Result<Option<T>> {
         match fs::read(path).await {
-            Ok(data) => serde_json::from_slice(&data)
+            Ok(data) => bincode::deserialize(&data)
                 .map(Some)
                 .map_err(|e| StoreError::Serialization(e.to_string())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -49,22 +49,22 @@ impl FileStore {
         }
     }
 
-    async fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
-        let data = serde_json::to_vec_pretty(value)
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+    async fn write_bincode<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
+        let data =
+            bincode::serialize(value).map_err(|e| StoreError::Serialization(e.to_string()))?;
         fs::write(path, data).await.map_err(StoreError::Io)
     }
 
     fn device_path(&self) -> PathBuf {
-        self.base_path.join("device.json")
+        self.base_path.join("device.bin")
     }
 
     pub async fn save_device_data(&self, device_data: &SerializableDevice) -> Result<()> {
-        self.write_json(&self.device_path(), device_data).await
+        self.write_bincode(&self.device_path(), device_data).await
     }
 
     pub async fn load_device_data(&self) -> Result<Option<SerializableDevice>> {
-        self.read_json(&self.device_path()).await
+        self.read_bincode(&self.device_path()).await
     }
 }
 
@@ -149,7 +149,7 @@ impl signal::store::PreKeyStore for FileStore {
         prekey_id: u32,
     ) -> std::result::Result<Option<PreKeyRecordStructure>, SignalStoreError> {
         let path = self.path_for("prekeys").join(prekey_id.to_string());
-        Ok(self.read_json(&path).await?)
+        Ok(self.read_bincode(&path).await?)
     }
 
     async fn store_prekey(
@@ -158,7 +158,7 @@ impl signal::store::PreKeyStore for FileStore {
         record: PreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
         let path = self.path_for("prekeys").join(prekey_id.to_string());
-        Ok(self.write_json(&path, &record).await?)
+        Ok(self.write_bincode(&path, &record).await?)
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> std::result::Result<bool, SignalStoreError> {
@@ -184,7 +184,7 @@ impl signal::store::SignedPreKeyStore for FileStore {
         let path = self
             .path_for("signed_prekeys")
             .join(signed_prekey_id.to_string());
-        Ok(self.read_json(&path).await?)
+        Ok(self.read_bincode(&path).await?)
     }
 
     async fn load_signed_prekeys(
@@ -193,7 +193,7 @@ impl signal::store::SignedPreKeyStore for FileStore {
         let mut result = Vec::new();
         let mut entries = fs::read_dir(self.path_for("signed_prekeys")).await?;
         while let Some(entry) = entries.next_entry().await? {
-            if let Some(record) = self.read_json(&entry.path()).await? {
+            if let Some(record) = self.read_bincode(&entry.path()).await? {
                 result.push(record);
             }
         }
@@ -208,7 +208,7 @@ impl signal::store::SignedPreKeyStore for FileStore {
         let path = self
             .path_for("signed_prekeys")
             .join(signed_prekey_id.to_string());
-        Ok(self.write_json(&path, &record).await?)
+        Ok(self.write_bincode(&path, &record).await?)
     }
 
     async fn contains_signed_prekey(
@@ -246,7 +246,7 @@ impl signal::store::SenderKeyStore for FileStore {
             sender_key_name.sender_id()
         ));
         let path = self.path_for("sender_keys").join(filename);
-        Ok(self.write_json(&path, &record).await?)
+        Ok(self.write_bincode(&path, &record).await?)
     }
 
     async fn load_sender_key(
@@ -259,7 +259,7 @@ impl signal::store::SenderKeyStore for FileStore {
             sender_key_name.sender_id()
         ));
         let path = self.path_for("sender_keys").join(filename);
-        Ok(self.read_json(&path).await?.unwrap_or_default())
+        Ok(self.read_bincode(&path).await?.unwrap_or_default())
     }
 }
 
@@ -267,12 +267,12 @@ impl signal::store::SenderKeyStore for FileStore {
 impl AppStateKeyStore for FileStore {
     async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
         let path = self.path_for("appstate/keys").join(hex::encode(key_id));
-        self.read_json(&path).await
+        self.read_bincode(&path).await
     }
 
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         let path = self.path_for("appstate/keys").join(hex::encode(key_id));
-        self.write_json(&path, &key).await
+        self.write_bincode(&path, &key).await
     }
 }
 
@@ -282,7 +282,7 @@ impl AppStateStore for FileStore {
         let path = self
             .path_for("appstate/versions")
             .join(Self::sanitize_filename(name));
-        Ok(self.read_json(&path).await?.unwrap_or_default())
+        Ok(self.read_bincode(&path).await?.unwrap_or_default())
     }
 
     async fn set_app_state_version(
@@ -293,6 +293,6 @@ impl AppStateStore for FileStore {
         let path = self
             .path_for("appstate/versions")
             .join(Self::sanitize_filename(name));
-        self.write_json(&path, &state).await
+        self.write_bincode(&path, &state).await
     }
 }

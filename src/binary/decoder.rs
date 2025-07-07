@@ -280,7 +280,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn read_node_ref(&mut self) -> Result<NodeRef<'a>> {
+    pub(crate) fn read_node_ref(&mut self) -> Result<NodeRef<'a>> {
         let tag = self.read_u8()?;
         let list_size = self.read_list_size(tag)?;
         if list_size == 0 {

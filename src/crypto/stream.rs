@@ -83,21 +83,23 @@ where
         // Process full blocks from the buffer, leaving any remainder for the next iteration
         let blocks_to_encrypt_len = (processed_blocks.len() / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
         if blocks_to_encrypt_len > 0 {
-            let mut blocks_to_encrypt = processed_blocks
-                .drain(..blocks_to_encrypt_len)
-                .collect::<Vec<_>>();
-            // Encrypt in-place as blocks
-            let blocks = blocks_to_encrypt.chunks_exact_mut(AES_BLOCK_SIZE);
-            for block in blocks {
-                use cipher::generic_array::GenericArray;
-                let mut block_array = GenericArray::clone_from_slice(block);
-                cbc_cipher.encrypt_blocks_mut(std::slice::from_mut(&mut block_array));
-                block.copy_from_slice(&block_array);
-            }
+            {
+                let blocks_to_encrypt_slice = &mut processed_blocks[..blocks_to_encrypt_len];
 
-            cipher_mac.update(&blocks_to_encrypt);
-            cipher_hasher.update(&blocks_to_encrypt);
-            writer.write_all(&blocks_to_encrypt).await?;
+                let blocks = blocks_to_encrypt_slice.chunks_exact_mut(AES_BLOCK_SIZE);
+                for block in blocks {
+                    use cipher::generic_array::GenericArray;
+                    let mut block_array = GenericArray::clone_from_slice(block);
+                    cbc_cipher.encrypt_blocks_mut(std::slice::from_mut(&mut block_array));
+                    block.copy_from_slice(&block_array);
+                }
+
+                cipher_mac.update(&*blocks_to_encrypt_slice);
+                cipher_hasher.update(&*blocks_to_encrypt_slice);
+                writer.write_all(&*blocks_to_encrypt_slice).await?;
+            } // slice lifetime ends here
+
+            processed_blocks.drain(..blocks_to_encrypt_len); // Now drain the processed part
         }
     }
 

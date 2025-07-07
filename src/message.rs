@@ -13,7 +13,7 @@ use std::sync::Arc;
 use whatsapp_proto::whatsapp as wa;
 
 // Helper to unpad messages after decryption
-fn unpad_message(plaintext: &[u8], version: u8) -> Result<Vec<u8>, anyhow::Error> {
+fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
     if version < 3 {
         if plaintext.is_empty() {
             return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
@@ -22,9 +22,9 @@ fn unpad_message(plaintext: &[u8], version: u8) -> Result<Vec<u8>, anyhow::Error
         if pad_len == 0 || pad_len > plaintext.len() {
             return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
         }
-        Ok(plaintext[..plaintext.len() - pad_len].to_vec())
+        Ok(&plaintext[..plaintext.len() - pad_len])
     } else {
-        Ok(plaintext.to_vec())
+        Ok(plaintext)
     }
 }
 
@@ -57,8 +57,12 @@ impl Client {
             }
         };
 
-        match binary::unmarshal(unpacked_data_cow.as_ref()) {
-            Ok(node) => self.process_node(node).await,
+        match binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
+            Ok(node_ref) => {
+                // Convert to owned only when needed for processing
+                let node = node_ref.to_owned();
+                self.process_node(node).await;
+            }
             Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
         };
     }
@@ -129,7 +133,7 @@ impl Client {
 
         match cipher.decrypt(ciphertext_enum).await {
             Ok(padded_plaintext) => {
-                let plaintext = match unpad_message(&padded_plaintext, enc_version) {
+                let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
                     Ok(pt) => pt,
                     Err(e) => {
                         log::error!("Failed to unpad message from {}: {}", info.source.sender, e);
@@ -143,7 +147,7 @@ impl Client {
                     plaintext.len()
                 );
 
-                if let Ok(mut msg) = wa::Message::decode(plaintext.as_slice()) {
+                if let Ok(mut msg) = wa::Message::decode(plaintext) {
                     if let Some(protocol_msg) = msg.protocol_message.take() {
                         if protocol_msg.r#type()
                             == wa::message::protocol_message::Type::AppStateSyncKeyShare
