@@ -68,8 +68,7 @@ impl Client {
         let mut participant_nodes = Vec::new();
         let mut includes_prekey_message = false;
 
-        let store = self.store.read().await.clone();
-        let store_arc = std::sync::Arc::new(store);
+        let store_arc = self.store.clone();
 
         for device_jid in all_devices {
             let is_own_device =

@@ -9,6 +9,7 @@ use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
 use std::sync::Arc;
+
 use whatsapp_proto::whatsapp as wa;
 
 // Helper to unpad messages after decryption
@@ -99,9 +100,9 @@ impl Client {
             info.source.sender.user.clone(),
             info.source.sender.device as u32,
         );
-        let store_guard = self.store.read().await;
-        let device_arc = Arc::new((*store_guard).clone());
-        let cipher = SessionCipher::new(device_arc.clone(), signal_address);
+        let store_arc: std::sync::Arc<tokio::sync::RwLock<crate::store::Device>> =
+            self.store.clone();
+        let cipher = SessionCipher::new(store_arc, signal_address);
 
         let enc_type = enc_node.attrs().string("type");
         use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
@@ -242,7 +243,10 @@ impl Client {
 
     /// Stores app state sync keys received from a key share message.
     pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
-        let key_store = self.store.read().await.backend.clone();
+        let key_store = {
+            let guard = self.store.read().await;
+            guard.backend.clone()
+        };
         for key in &keys.keys {
             if let Some(key_id_proto) = &key.key_id {
                 if let Some(key_id) = &key_id_proto.key_id {

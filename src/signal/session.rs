@@ -18,12 +18,12 @@ use whatsapp_proto::whatsapp::session_structure::chain::{ChainKey, MessageKey};
 use whatsapp_proto::whatsapp::PreKeyRecordStructure;
 
 pub struct SessionCipher<S: SignalProtocolStore> {
-    store: Arc<S>,
+    store: S,
     remote_address: SignalAddress,
 }
 
-impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
-    pub fn new(store: Arc<S>, remote_address: SignalAddress) -> Self {
+impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
+    pub fn new(store: S, remote_address: SignalAddress) -> Self {
         Self {
             store,
             remote_address,
@@ -88,7 +88,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
     }
 }
 
-impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
+impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
     fn get_or_create_message_keys(
         &self,
         session_state: &mut SessionState,
@@ -206,7 +206,7 @@ impl From<crate::signal::root_key::RootKeyError> for DecryptionError {
     }
 }
 
-impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
+impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
     pub async fn decrypt(
         &self,
         ciphertext: crate::signal::protocol::Ciphertext,
@@ -247,7 +247,7 @@ impl<S: SignalProtocolStore + 'static> SessionCipher<S> {
         let used_prekey_id = builder
             .process_prekey_message(&mut session_record, message)
             .await
-            .map_err(|e| DecryptionError::Store(e.into()))?;
+            .map_err(|e| DecryptionError::Store(Box::new(e)))?;
 
         let plaintext = self
             .decrypt_whisper_message(&mut session_record, &message.message)
@@ -415,12 +415,12 @@ fn get_message_keys(current: &ChainKey) -> MessageKey {
 
 // Corresponds to session/Builder
 pub struct SessionBuilder<S: SignalProtocolStore> {
-    store: Arc<S>,
+    store: S,
     remote_address: SignalAddress,
 }
 
-impl<S: SignalProtocolStore> SessionBuilder<S> {
-    pub fn new(store: Arc<S>, remote_address: SignalAddress) -> Self {
+impl<S: SignalProtocolStore + Clone> SessionBuilder<S> {
+    pub fn new(store: S, remote_address: SignalAddress) -> Self {
         Self {
             store,
             remote_address,

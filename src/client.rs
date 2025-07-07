@@ -39,7 +39,7 @@ pub enum ClientError {
 }
 
 pub struct Client {
-    pub store: tokio::sync::RwLock<store::Device>,
+    pub store: std::sync::Arc<tokio::sync::RwLock<store::Device>>,
 
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 
@@ -69,7 +69,7 @@ impl Client {
         rand::thread_rng().fill_bytes(&mut unique_id_bytes);
 
         Self {
-            store: tokio::sync::RwLock::new(store),
+            store: std::sync::Arc::new(tokio::sync::RwLock::new(store)),
             media_conn: Arc::new(Mutex::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
