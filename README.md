@@ -24,7 +24,7 @@ This document outlines the migration progress and the current state of the proje
 
 ### 1. Foundation & Core Primitives
 
-These modules form the bedrock of the library. They are prerequisites for any higher-level functionality.
+These modules form the bedrock of the library and are prerequisites for any higher-level functionality.
 
 - `✅` **Protocol Buffers (`proto/`)**
 - `✅` **Cryptography Utilities (`crypto/`)**
@@ -39,7 +39,7 @@ This section covers establishing and securing the connection to WhatsApp's serve
 
 - `✅` **Socket Layer (`socket/`)**
 - `✅` **Authentication Handshake (`handshake.rs`)**
-- `✅` **Pairing Logic (`pair.rs`, `qrcode.rs`)**
+- `✅` **Pairing Logic (QR Code, `pair.rs`, `qrcode.rs`)**
 
 ---
 
@@ -47,53 +47,56 @@ This section covers establishing and securing the connection to WhatsApp's serve
 
 This is the primary orchestrator that brings all other modules together.
 
-- `✅` **Client Struct (`client.rs`)**
+- `✅` **Client Struct & Main Loop (`client.rs`)**
 - `✅` **IQ (Info/Query) Handling (`request.rs`)**
 - `✅` **Keepalive Loop (`keepalive.rs`)**
 - `⏳` **App State Synchronization (`appstate/`)**:
   - `✅` Logic to fetch app state patches from the server.
-  - `⏳` **Current Status:** The client correctly triggers app state syncs but cannot yet decrypt the patches. This is blocked by the Signal Protocol implementation.
+  - `⏳` **Current Status:** The client can receive and decrypt app state patches. The next step is to process these patches to populate contacts, chats, and other client state.
 
 ---
 
 ### 4. End-to-End Encryption (Signal Protocol)
 
-The core of the end-to-end encryption. **This is the current major implementation area.**
+The core of the end-to-end encryption implementation.
 
-- `⏳` **Session Management (`signal/session.rs`)**:
-  - `⏳` Decrypting `PreKeySignalMessage` is the immediate next step.
-  - `[ ]` Encrypting and sending messages.
-- `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported.
-- `✅` **Store Traits (`signal/store.rs`)**: The necessary traits for the protocol are defined.
+- `✅` **Session Management (`signal/session.rs`)**:
+  - `✅` Decryption of both `PreKeySignalMessage` and `SignalMessage` is working correctly.
+  - `✅` Encryption for 1-on-1 chats is implemented, correctly handling multi-device `DeviceSentMessage` payloads.
+- `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported and are in use.
+- `✅` **Store Traits & Implementations (`store/`, `signal/store.rs`)**: The necessary traits and backend implementations for the protocol are defined and functional.
 
 ---
 
 ## Roadmap & Next Steps
 
-The project has achieved a stable, authenticated connection. The next critical phase is to implement the Signal Protocol decryption flow. This will unblock app state synchronization and enable the client to receive and process messages.
+The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
 
-### Phase 1: Implement Signal Protocol Decryption (Current Focus)
+The current focus is on building out higher-level features and improving the robustness of the client.
 
-1.  **Implement `SessionCipher::decrypt`**:
+### Phase 1: Full App State and Event Handling (Current Focus)
 
-    - **Task**: Flesh out the `decrypt` method in `src/signal/session.rs` by porting the logic from `go.mau.fi/libsignal/session/SessionCipher.go`. This involves handling `PreKeySignalMessage` and `SignalMessage` types.
-    - **Why**: This is required to decrypt the initial `AppStateSyncKeyShare` message, which is the blocker for all other app state processing.
+1.  **Process App State Mutations**:
 
-2.  **Integrate Decryption into the Client**:
+    - **Task**: Implement the logic in `appstate/processor.rs` to take the decrypted `Mutation` objects and apply them to the client's store. This includes updating contacts, chat settings (mute, archive), and more.
+    - **Why**: This will give the client awareness of the user's account state and is essential for a fully-featured bot or client.
 
-    - **Task**: In `client.rs`, use the new `SessionCipher` to decrypt incoming `<enc>` nodes.
-    - **Why**: This connects the protocol implementation to the main client event loop.
+2.  **Expand Event Emitter**:
+    - **Task**: As app state and other notifications are processed, emit more specific events (e.g., `Event::ContactUpdate`, `Event::ChatUpdate`) for the library user to consume.
+    - **Why**: A rich event system is crucial for building interactive applications.
 
-3.  **Implement `AppStateSyncKeyShare` Handling**:
-    - **Task**: Once a message is decrypted, check if it contains `AppStateSyncKeyShare`. If it does, store the keys in the `AppStateKeyStore`.
-    - **Why**: This will resolve the "No app state sync key found" warnings and allow app state syncs to complete successfully.
+### Phase 2: Group Messaging and Media
 
-### Phase 2: Message and App State Handling
+1.  **Implement Group Messaging**:
 
-1.  **Complete App State Processing**: With keys available, the `appstate::Processor` will be able to fully decrypt and apply patches. This will populate contacts, chats, etc.
-2.  **Handle Plaintext Messages**: Add logic to handle decrypted `wa::Message` payloads and emit them as `Event::Message`.
+    - **Task**: Port the `SenderKey` (SKMSG) part of the Signal Protocol. This involves creating, distributing, and using sender keys to encrypt and decrypt messages in group chats.
+    - **Why**: This is the next major E2EE feature required for interacting with groups.
 
-### Phase 3: Sending Messages and Feature Expansion
+2.  **Implement Media Uploads/Downloads**:
+    - **Task**: Add support for encrypting/uploading and downloading/decrypting media files (images, videos, documents). This involves handling media connection details (`mediaconn.rs`).
+    - **Why**: Essential for any client that needs to handle more than just text.
 
-1.  **Implement Message Sending**: Create a high-level `send_text_message` function that uses the Signal Protocol to encrypt messages.
-2.  **Expand Node Handlers**: Implement handlers for receipts, presence, and other notification types.
+### Phase 3: Robustness and Feature Parity
+
+1.  **Full `usync` Implementation**: Implement a robust `get_user_devices` function using `usync` IQs to ensure device lists are always up-to-date.
+2.  **Expand Node Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
