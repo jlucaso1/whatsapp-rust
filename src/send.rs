@@ -179,11 +179,7 @@ impl Client {
         // TODO: Replace this stub with a real usync IQ device fetch.
         let mut devices = Vec::new();
         for jid in jids {
-            if jid.device == 0 {
-                devices.push(jid.clone());
-            } else {
-                devices.push(jid.clone());
-            }
+            devices.push(jid.clone());
         }
         Ok(devices)
     }

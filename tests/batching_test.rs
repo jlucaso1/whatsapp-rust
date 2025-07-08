@@ -45,31 +45,27 @@ async fn main() -> Result<(), anyhow::Error> {
             let save_counter_clone = save_counter_clone.clone();
 
             tokio::spawn(async move {
-                match &*event {
-                    Event::SelfPushNameUpdated(update) => {
-                        let event_num = event_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                        info!("📨 SelfPushNameUpdated event #{} received!", event_num);
-                        info!("  From server: {}", update.from_server);
-                        info!("  Old name: '{}'", update.old_name);
-                        info!("  New name: '{}'", update.new_name);
+                if let Event::SelfPushNameUpdated(update) = &*event {
+                    let event_num = event_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    info!("📨 SelfPushNameUpdated event #{} received!", event_num);
+                    info!("  From server: {}", update.from_server);
+                    info!("  Old name: '{}'", update.old_name);
+                    info!("  New name: '{}'", update.new_name);
 
-                        // Save the state
-                        let store_guard = client_clone.store.read().await;
-                        match store_backend_clone
-                            .save_device_data(&store_guard.to_serializable())
-                            .await
-                        {
-                            Ok(_) => {
-                                let save_num =
-                                    save_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                                info!("💾 Device state save #{} successful", save_num);
-                            }
-                            Err(e) => {
-                                error!("❌ Failed to save device state: {e}");
-                            }
+                    // Save the state
+                    let store_guard = client_clone.store.read().await;
+                    match store_backend_clone
+                        .save_device_data(&store_guard.to_serializable())
+                        .await
+                    {
+                        Ok(_) => {
+                            let save_num = save_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                            info!("💾 Device state save #{} successful", save_num);
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to save device state: {e}");
                         }
                     }
-                    _ => {}
                 }
             });
         }))
@@ -113,7 +109,7 @@ async fn main() -> Result<(), anyhow::Error> {
     event_counter.store(0, Ordering::SeqCst);
     save_counter.store(0, Ordering::SeqCst);
 
-    let test_names = vec![
+    let test_names = [
         "Batch Test 2a",
         "Batch Test 2b",
         "Batch Test 2c",

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
-use whatsapp_rust::binary::node::{Node, NodeContent};
+use whatsapp_rust::binary::node::Node;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store;
 use whatsapp_rust::store::filestore::FileStore;
