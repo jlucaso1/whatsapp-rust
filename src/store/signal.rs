@@ -1,7 +1,9 @@
 use crate::signal::address::SignalAddress;
 use crate::signal::ecc;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
+use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::state::record::SignedPreKeyRecordStructureExt;
+use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::*;
 use crate::store::Device;
@@ -202,6 +204,31 @@ impl SessionStore for Device {
     }
 }
 
+// --- SenderKeyStore ---
+#[async_trait]
+impl SenderKeyStore for Device {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend
+            .store_sender_key(sender_key_name, record)
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.backend
+            .load_sender_key(sender_key_name)
+            .await
+            .map_err(|e| e.into())
+    }
+}
+
 // --- Arc<RwLock<T>> wrappers for SignalProtocolStore traits ---
 
 #[async_trait]
@@ -345,5 +372,26 @@ impl<T: SessionStore + Send + Sync> SessionStore for Arc<RwLock<T>> {
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.read().await.delete_all_sessions(name).await
+    }
+}
+
+#[async_trait]
+impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<RwLock<T>> {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.read()
+            .await
+            .store_sender_key(sender_key_name, record)
+            .await
+    }
+
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.read().await.load_sender_key(sender_key_name).await
     }
 }
