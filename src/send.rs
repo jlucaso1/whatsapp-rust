@@ -49,6 +49,10 @@ impl Client {
 
         let request_id = self.generate_request_id();
 
+        // Cache the outgoing message for retry support
+        self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+            .await;
+
         // Prepare two payloads
         let message_plaintext = message.encode_to_vec();
         let dsm = wa::Message {

@@ -11,14 +11,15 @@ use crate::types::presence::Presence;
 use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
+use whatsapp_proto::whatsapp as wa;
 
 pub type EventHandler = Box<dyn Fn(Arc<Event>) + Send + Sync>;
 pub(crate) struct WrappedHandler {
@@ -39,6 +40,12 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RecentMessageKey {
+    to: crate::types::jid::Jid,
+    id: String,
+}
+
 pub struct Client {
     pub store: std::sync::Arc<tokio::sync::RwLock<store::Device>>,
 
@@ -53,7 +60,8 @@ pub struct Client {
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
     pub(crate) frames_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<bytes::Bytes>>>>,
 
-    pub(crate) response_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<crate::binary::Node>>>>,
+    pub(crate) response_waiters:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::binary::Node>>>>,
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
     pub(crate) event_handlers: Arc<RwLock<Vec<WrappedHandler>>>,
@@ -64,6 +72,10 @@ pub struct Client {
     pub(crate) message_handler_lock: Arc<Mutex<()>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
+
+    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
+    pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
+
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -95,6 +107,10 @@ impl Client {
             message_handler_lock: Arc::new(Mutex::new(())),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
+
+            recent_messages_map: Arc::new(Mutex::new(HashMap::with_capacity(256))),
+            recent_messages_list: Arc::new(Mutex::new(VecDeque::with_capacity(256))),
+
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
@@ -292,33 +308,46 @@ impl Client {
         warn!(target: "Client", "TODO: Implement handler for <{tag}>");
     }
 
-    async fn handle_receipt(&self, node: &Node) {
+    async fn handle_receipt(self: &Arc<Self>, node: &Node) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
         let id = attrs.string("id");
         let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
 
         use crate::types::presence::ReceiptType;
-        let receipt_type = match receipt_type_str {
-            "read" => ReceiptType::Read,
-            "played" => ReceiptType::Played,
-            _ => ReceiptType::Delivered,
-        };
+        let receipt_type = ReceiptType::from(receipt_type_str.to_string());
 
         info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
-        self.dispatch_event(Event::Receipt(crate::types::events::Receipt {
-            message_ids: vec![id],
+        let receipt = crate::types::events::Receipt {
+            message_ids: vec![id.clone()],
             source: crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: from.clone(),
                 ..Default::default()
             },
             timestamp: chrono::Utc::now(),
-            r#type: receipt_type,
-            message_sender: from,
-        }))
-        .await;
+            r#type: receipt_type.clone(),
+            message_sender: from.clone(),
+        };
+
+        if receipt_type == ReceiptType::Retry {
+            let client_clone = Arc::clone(self);
+            let node_clone = node.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client_clone
+                    .handle_retry_receipt(&receipt, &node_clone)
+                    .await
+                {
+                    log::warn!(
+                        "Failed to handle retry receipt for {}: {e:?}",
+                        receipt.message_ids[0]
+                    );
+                }
+            });
+        } else {
+            self.dispatch_event(Event::Receipt(receipt)).await;
+        }
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
@@ -643,6 +672,74 @@ impl Client {
             ))
             .await;
         }
+        Ok(())
+    }
+
+    /// Add a message to the recent message cache (with eviction)
+    pub(crate) async fn add_recent_message(
+        &self,
+        to: crate::types::jid::Jid,
+        id: String,
+        msg: wa::Message,
+    ) {
+        const RECENT_MESSAGES_SIZE: usize = 256;
+        let key = RecentMessageKey { to, id };
+        let mut map_guard = self.recent_messages_map.lock().await;
+        let mut list_guard = self.recent_messages_list.lock().await;
+
+        if list_guard.len() >= RECENT_MESSAGES_SIZE {
+            if let Some(old_key) = list_guard.pop_front() {
+                map_guard.remove(&old_key);
+            }
+        }
+        list_guard.push_back(key.clone());
+        map_guard.insert(key, msg);
+    }
+
+    /// Retrieve a message from the recent message cache
+    pub(crate) async fn get_recent_message(
+        &self,
+        to: crate::types::jid::Jid,
+        id: String,
+    ) -> Option<wa::Message> {
+        let key = RecentMessageKey { to, id };
+        let map_guard = self.recent_messages_map.lock().await;
+        map_guard.get(&key).cloned()
+    }
+
+    /// Handle retry receipt: clear session and resend original message
+    pub(crate) async fn handle_retry_receipt(
+        &self,
+        receipt: &crate::types::events::Receipt,
+        node: &Node,
+    ) -> Result<(), anyhow::Error> {
+        let retry_child = node
+            .get_optional_child("retry")
+            .ok_or_else(|| anyhow::anyhow!("<retry> child missing from receipt"))?;
+
+        let message_id = retry_child.attrs().string("id");
+
+        let original_msg = self
+            .get_recent_message(receipt.source.chat.clone(), message_id.clone())
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Could not find message {} in cache for retry", message_id)
+            })?;
+
+        let signal_address = crate::signal::address::SignalAddress::new(
+            receipt.source.sender.user.clone(),
+            receipt.source.sender.device as u32,
+        );
+        let address_str = signal_address.to_string();
+        let store_guard = self.store.read().await;
+        let _ = store_guard.backend.delete_session(&address_str).await;
+        info!(
+            "Deleted session for {} due to retry receipt, will re-establish.",
+            receipt.source.sender
+        );
+
+        self.send_message(receipt.source.chat.clone(), original_msg)
+            .await?;
         Ok(())
     }
 
