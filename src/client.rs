@@ -58,6 +58,11 @@ pub struct Client {
     pub(crate) id_counter: Arc<AtomicU64>,
     pub(crate) event_handlers: Arc<RwLock<Vec<WrappedHandler>>>,
 
+    // Global lock to serialize message handling.
+    // NOTE: For better performance, this could be replaced in the future with a per-JID lock
+    // to allow concurrent processing of messages from different senders.
+    pub(crate) message_handler_lock: Arc<Mutex<()>>,
+
     pub(crate) expected_disconnect: Arc<AtomicBool>,
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
@@ -85,6 +90,9 @@ impl Client {
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             event_handlers: Arc::new(RwLock::new(Vec::new())),
+
+            // Initialize the message handler lock
+            message_handler_lock: Arc::new(Mutex::new(())),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
@@ -265,8 +273,12 @@ impl Client {
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
+                let lock = client_clone.message_handler_lock.clone();
+                let node_clone = node.clone();
                 tokio::spawn(async move {
-                    client_clone.handle_encrypted_message(node).await;
+                    // Acquire the global message handler lock before processing
+                    let _guard = lock.lock().await;
+                    client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
             "ack" => {}
