@@ -101,6 +101,39 @@ async fn main() -> Result<(), anyhow::Error> {
                             error!("Failed to save device state after push name update: {e}");
                         }
                     }
+                    Event::Message(msg, info) => {
+                        if !info.source.is_from_me {
+                            // Only reply to messages not sent by ourselves
+                            if let Some(text) = msg.conversation.as_ref() {
+                                if text == "send" {
+                                    log::info!("Received 'send' command, sending a response.");
+                                    let response_text = "Hello from Signal E2EE!";
+                                    if let Err(e) = client_clone
+                                        .send_text_message(info.source.chat.clone(), response_text)
+                                        .await
+                                    {
+                                        log::error!("Failed to send response message: {e:?}");
+                                    }
+                                }
+                            } else if let Some(ext_text) = msg.extended_text_message.as_ref() {
+                                if let Some(text) = ext_text.text.as_ref() {
+                                    if text == "send" {
+                                        log::info!("Received 'send' command, sending a response.");
+                                        let response_text = "Hello from Signal E2EE!";
+                                        if let Err(e) = client_clone
+                                            .send_text_message(
+                                                info.source.chat.clone(),
+                                                response_text,
+                                            )
+                                            .await
+                                        {
+                                            log::error!("Failed to send response message: {e:?}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             });

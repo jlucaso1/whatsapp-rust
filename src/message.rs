@@ -226,21 +226,51 @@ impl Client {
     /// Parses a `<message>` node to extract common information.
     pub async fn parse_message_info(&self, node: &Node) -> Result<MessageInfo, anyhow::Error> {
         let mut attrs = node.attrs();
-        Ok(MessageInfo {
-            source: crate::types::message::MessageSource {
-                chat: attrs.jid("from"),
-                sender: {
-                    let from = attrs.jid("from");
-                    if from.is_group() {
-                        attrs.jid("participant")
-                    } else {
-                        from
-                    }
-                },
+        let own_jid = self.store.read().await.id.clone().unwrap_or_default();
+        let from = attrs.jid("from");
+
+        let mut source = if from.is_group() {
+            let sender = attrs.jid("participant");
+            crate::types::message::MessageSource {
+                chat: from.clone(),
+                sender: sender.clone(),
+                is_from_me: sender.user == own_jid.user,
+                is_group: true,
+                ..Default::default()
+            }
+        } else if from.user == own_jid.user {
+            crate::types::message::MessageSource {
+                chat: attrs.jid("recipient").to_non_ad(),
+                sender: from.clone(),
+                is_from_me: true,
+                ..Default::default()
+            }
+        } else {
+            crate::types::message::MessageSource {
+                chat: from.to_non_ad(),
+                sender: from.clone(),
                 is_from_me: false,
                 ..Default::default()
-            },
+            }
+        };
+
+        // Manual parse for AddressingMode
+        source.addressing_mode = attrs
+            .optional_string("addressing_mode")
+            .and_then(|s| match &*s {
+                "Pn" => Some(crate::types::message::AddressingMode::Pn),
+                "Lid" => Some(crate::types::message::AddressingMode::Lid),
+                _ => None,
+            });
+
+        Ok(MessageInfo {
+            source,
             id: attrs.string("id"),
+            push_name: attrs
+                .optional_string("notify")
+                .map(|s| s.to_string())
+                .unwrap_or_else(String::new),
+            timestamp: attrs.unix_time("t"),
             ..Default::default()
         })
     }
