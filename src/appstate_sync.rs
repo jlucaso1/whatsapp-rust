@@ -174,6 +174,14 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             mutations.len(), name, current_state.version
                         );
 
+                        // Track the starting push name for this batch
+                        let batch_start_name = {
+                            let store = client.store.read().await;
+                            store.push_name.clone()
+                        };
+
+                        // Process all mutations in this batch
+                        let mut latest_push_name = None;
                         for mutation in &mutations {
                             if mutation.operation == wa::syncd_mutation::SyncdOperation::Set {
                                 if let Some(contact_action) =
@@ -192,7 +200,38 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                             let _ = client.dispatch_event(event).await;
                                         }
                                     }
+                                } else if let Some(push_name_setting) =
+                                    mutation.action.push_name_setting.as_ref()
+                                {
+                                    if let Some(name) = &push_name_setting.name {
+                                        // Just track the latest push name from this batch
+                                        latest_push_name = Some(name.clone());
+                                    }
                                 }
+                            }
+                        }
+
+                        // Only update and fire event if we found a push name change in this batch
+                        if let Some(final_name) = latest_push_name {
+                            if final_name != batch_start_name {
+                                info!(
+                                    target: "Client/AppState",
+                                    "Received push name '{}' via app state sync, updating store.",
+                                    final_name
+                                );
+                                {
+                                    let mut store = client.store.write().await;
+                                    store.push_name = final_name.clone();
+                                }
+
+                                let event = Event::SelfPushNameUpdated(
+                                    crate::types::events::SelfPushNameUpdated {
+                                        from_server: true,
+                                        old_name: batch_start_name,
+                                        new_name: final_name,
+                                    },
+                                );
+                                let _ = client.dispatch_event(event).await;
                             }
                         }
                     }

@@ -77,11 +77,31 @@ async fn main() -> Result<(), anyhow::Error> {
         });
     }
 
+    let store_backend_for_handler = store_backend.clone();
+    let client_for_handler = client.clone();
     client
-        .add_event_handler(Box::new(|event: Arc<Event>| {
+        .add_event_handler(Box::new(move |event: Arc<Event>| {
+            let store_backend_clone = store_backend_for_handler.clone();
+            let client_clone = client_for_handler.clone();
             tokio::spawn(async move {
-                if let Event::LoggedOut(logout_event) = &*event {
-                    info!("Received logout event: {:?}", logout_event.reason);
+                match &*event {
+                    Event::LoggedOut(logout_event) => {
+                        info!("Received logout event: {:?}", logout_event.reason);
+                    }
+                    Event::SelfPushNameUpdated(update) => {
+                        info!(
+                            "Received SelfPushNameUpdated event from '{}' to '{}', saving state.",
+                            update.old_name, update.new_name
+                        );
+                        let store_guard = client_clone.store.read().await;
+                        if let Err(e) = store_backend_clone
+                            .save_device_data(&store_guard.to_serializable())
+                            .await
+                        {
+                            error!("Failed to save device state after push name update: {e}");
+                        }
+                    }
+                    _ => {}
                 }
             });
         }))

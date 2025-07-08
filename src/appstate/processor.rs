@@ -82,11 +82,11 @@ impl Processor {
             let keys = keys::expand_app_state_keys(&key_struct.key_data);
 
             for mutation in &patch.mutations {
-                if let Err(e) = self
+                if let Err(_e) = self
                     .decode_mutation(&keys, mutation, &mut new_mutations)
                     .await
                 {
-                    log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {e:?}");
+                    //log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {e:?}");
                 }
             }
         }

@@ -9,6 +9,13 @@ use std::fmt;
 use whatsapp_proto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
+pub struct SelfPushNameUpdated {
+    pub from_server: bool,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     Connected(Connected),
     Disconnected(Disconnected),
@@ -37,6 +44,7 @@ pub enum Event {
     ContactUpdate(ContactUpdate),
 
     PushNameUpdate(PushNameUpdate),
+    SelfPushNameUpdated(SelfPushNameUpdated),
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),

@@ -41,8 +41,8 @@ impl FileStore {
 
     async fn read_bincode<T: DeserializeOwned>(&self, path: &Path) -> Result<Option<T>> {
         match fs::read(path).await {
-            Ok(data) => bincode::deserialize(&data)
-                .map(Some)
+            Ok(data) => bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                .map(|(value, _)| Some(value))
                 .map_err(|e| StoreError::Serialization(e.to_string())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(StoreError::Io(e)),
@@ -50,8 +50,8 @@ impl FileStore {
     }
 
     async fn write_bincode<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
-        let data =
-            bincode::serialize(value).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        let data = bincode::serde::encode_to_vec(value, bincode::config::standard())
+            .map_err(|e| StoreError::Serialization(e.to_string()))?;
         fs::write(path, data).await.map_err(StoreError::Io)
     }
 

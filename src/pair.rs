@@ -189,9 +189,20 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 }
             };
 
+            // Update the in-memory store immediately
             let mut store_guard = client.store.write().await;
             store_guard.id = Some(jid.clone());
             store_guard.account = signed_identity;
+
+            // Only set push_name if we actually got one.
+            if !business_name.is_empty() {
+                info!("✅ Setting push_name during pairing: '{}'", &business_name);
+                store_guard.push_name = business_name.clone();
+            } else {
+                info!(
+                    "⚠️ business_name not found in pair-success, push_name remains unset for now."
+                );
+            }
             drop(store_guard);
 
             let response_content = Node {
@@ -224,8 +235,6 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             client.expected_disconnect.store(true, Ordering::Relaxed);
 
             info!("Successfully paired {jid}");
-            client.store.write().await.id = Some(jid.clone());
-            // Optionally: persist lid, business_name, platform, etc.
 
             let success_event = PairSuccess {
                 id: jid,

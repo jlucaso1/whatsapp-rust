@@ -148,7 +148,8 @@ impl SessionStore for Device {
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(data) = self.backend.get_session(&address.to_string()).await? {
             if !data.is_empty() {
-                let record: SessionRecord = bincode::deserialize(&data)?;
+                let record: SessionRecord =
+                    bincode::serde::decode_from_slice(&data, bincode::config::standard())?.0;
                 return Ok(record);
             }
             Ok(SessionRecord::new())
@@ -162,7 +163,7 @@ impl SessionStore for Device {
         address: &SignalAddress,
         record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let data = bincode::serialize(record)?;
+        let data = bincode::serde::encode_to_vec(record, bincode::config::standard())?;
         self.backend
             .put_session(&address.to_string(), &data)
             .await

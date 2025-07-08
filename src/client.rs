@@ -6,6 +6,7 @@ use crate::store;
 
 use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
+use crate::types::presence::Presence;
 
 use log::{debug, error, info, warn};
 use rand::RngCore;
@@ -260,7 +261,7 @@ impl Client {
                 }
             }
             "receipt" => self.handle_receipt(&node).await,
-            "notification" => self.handle_notification(node).await,
+            "notification" => handlers::notification::handle_notification(self, &node).await,
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
@@ -308,11 +309,6 @@ impl Client {
         .await;
     }
 
-    async fn handle_notification(&self, node: Node) {
-        self.handle_unimplemented(&node.tag).await;
-        self.dispatch_event(Event::Notification(node)).await;
-    }
-
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
         use crate::binary::node::Node;
         use crate::request::{InfoQuery, InfoQueryType};
@@ -336,17 +332,50 @@ impl Client {
         self.send_iq(query).await.map(|_| ())
     }
 
-    async fn handle_success(self: &Arc<Self>, _node: &Node) {
+    async fn handle_success(self: &Arc<Self>, node: &Node) {
         info!("Successfully authenticated with WhatsApp servers!");
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
+        // Check for `pushname` and update the store if it's different.
+        if let Some(push_name) = node.attrs.get("pushname") {
+            let new_name = push_name.clone();
+            let (needs_update, old_name) = {
+                let store = self.store.read().await;
+                (store.push_name != new_name, store.push_name.clone())
+            };
+
+            if needs_update {
+                info!(target: "Client", "Updating push name from server to '{}'", new_name);
+                {
+                    let mut store = self.store.write().await;
+                    store.push_name = new_name.clone();
+                } // write lock dropped
+
+                self.dispatch_event(Event::SelfPushNameUpdated(
+                    crate::types::events::SelfPushNameUpdated {
+                        from_server: true,
+                        old_name,
+                        new_name,
+                    },
+                ))
+                .await;
+            }
+        }
+
         let client_clone = self.clone();
         tokio::spawn(async move {
+            // This task runs after successful authentication.
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect passive IQ: {e:?}");
             }
+
+            // Now, attempt to send presence. This might fail if push_name is still empty, which is OK.
+            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+                warn!("Could not send initial presence: {e:?}. This is expected if push_name is not yet known.");
+            }
+
             client_clone
                 .dispatch_event(Event::Connected(crate::types::events::Connected))
                 .await;
@@ -542,5 +571,104 @@ impl Client {
         })?;
 
         noise_socket.send_frame(&payload).await.map_err(Into::into)
+    }
+
+    pub async fn send_presence(&self, presence: Presence) -> Result<(), anyhow::Error> {
+        let store = self.store.read().await;
+        debug!(
+            "🔍 send_presence called with push_name: '{}'",
+            store.push_name
+        );
+        if store.push_name.is_empty() {
+            warn!("❌ Cannot send presence: push_name is empty!");
+            return Err(anyhow::anyhow!(
+                "Cannot send presence without a push name set"
+            ));
+        }
+        let presence_type = match presence {
+            Presence::Available => "available",
+            Presence::Unavailable => "unavailable",
+        };
+        let node = crate::binary::node::Node {
+            tag: "presence".to_string(),
+            attrs: [
+                ("type".to_string(), presence_type.to_string()),
+                ("name".to_string(), store.push_name.clone()),
+            ]
+            .into(),
+            content: None,
+        };
+        drop(store);
+        info!(
+            "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
+            presence_type,
+            node.attrs.get("name").unwrap_or(&"".to_string())
+        );
+        self.send_node(node).await.map_err(|e| e.into())
+    }
+
+    /// Sets the push name (display name) for this client.
+    /// This name will be sent in presence announcements and shown to other users.
+    /// This will trigger a `SelfPushNameUpdated` event, which your application
+    /// should handle to persist the new state.
+    pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
+        let (needs_update, old_name) = {
+            let store = self.store.read().await;
+            (store.push_name != name, store.push_name.clone())
+        };
+
+        if needs_update {
+            let mut store = self.store.write().await;
+            store.push_name = name.clone();
+            drop(store);
+
+            self.dispatch_event(Event::SelfPushNameUpdated(
+                crate::types::events::SelfPushNameUpdated {
+                    from_server: false, // This was a manual call
+                    old_name,
+                    new_name: name,
+                },
+            ))
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Gets the current push name (display name) for this client.
+    pub async fn get_push_name(&self) -> String {
+        let store = self.store.read().await;
+        store.push_name.clone()
+    }
+
+    /// Checks if the device has all required information for presence announcements.
+    /// Returns true if the device has a JID and push name set.
+    pub async fn is_ready_for_presence(&self) -> bool {
+        let store = self.store.read().await;
+        store.id.is_some() && !store.push_name.is_empty()
+    }
+
+    /// Gets diagnostic information about the device state for debugging.
+    pub async fn get_device_debug_info(&self) -> String {
+        let store = self.store.read().await;
+        format!(
+            "Device Debug Info:\n  - JID: {:?}\n  - Push Name: '{}'\n  - Has Account: {}\n  - Ready for Presence: {}",
+            store.id,
+            store.push_name,
+            store.account.is_some(),
+            store.id.is_some() && !store.push_name.is_empty()
+        )
+    }
+
+    /// Save the current device state to persistent storage.
+    /// This method requires the concrete FileStore type to be passed in.
+    pub async fn save_device_state(
+        &self,
+        file_store: &crate::store::filestore::FileStore,
+    ) -> Result<(), anyhow::Error> {
+        let store = self.store.read().await;
+        file_store
+            .save_device_data(&store.to_serializable())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to save device state: {}", e))
     }
 }
