@@ -235,7 +235,7 @@ impl Client {
         // Manual parse for AddressingMode
         source.addressing_mode = attrs
             .optional_string("addressing_mode")
-            .and_then(|s| match &*s {
+            .and_then(|s| match s {
                 "Pn" => Some(crate::types::message::AddressingMode::Pn),
                 "Lid" => Some(crate::types::message::AddressingMode::Lid),
                 _ => None,
@@ -247,7 +247,7 @@ impl Client {
             push_name: attrs
                 .optional_string("notify")
                 .map(|s| s.to_string())
-                .unwrap_or_else(String::new),
+                .unwrap_or_default(),
             timestamp: attrs.unix_time("t"),
             ..Default::default()
         })

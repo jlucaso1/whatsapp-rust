@@ -212,20 +212,14 @@ impl SenderKeyStore for Device {
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.backend
-            .store_sender_key(sender_key_name, record)
-            .await
-            .map_err(|e| e.into())
+        self.backend.store_sender_key(sender_key_name, record).await
     }
 
     async fn load_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.backend
-            .load_sender_key(sender_key_name)
-            .await
-            .map_err(|e| e.into())
+        self.backend.load_sender_key(sender_key_name).await
     }
 }
 
