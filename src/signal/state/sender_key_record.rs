@@ -54,6 +54,35 @@ impl SenderKeyRecord {
         chain_key: &[u8],
         signing_key_pub: &[u8],
     ) {
+        // Normalize: If the key is 33 bytes and starts with DJB_TYPE (0x05), strip the prefix.
+        let pub_key_to_store = if signing_key_pub.len() == 33
+            && signing_key_pub[0] == crate::signal::ecc::keys::DJB_TYPE
+        {
+            &signing_key_pub[1..]
+        } else {
+            signing_key_pub
+        };
+
+        // Check if we already have this public key (i.e., it's our own from a linked device)
+        for state in self.sender_key_states.iter_mut() {
+            if let Some(signing_key) = &state.sender_signing_key {
+                if let Some(public) = &signing_key.public {
+                    if public.as_slice() == pub_key_to_store {
+                        // It's our key. Just update the chain, don't create a new state.
+                        state.sender_chain_key =
+                            Some(wa::sender_key_state_structure::SenderChainKey {
+                                iteration: Some(iteration),
+                                seed: Some(chain_key.to_vec()),
+                            });
+                        state.sender_key_id = Some(id);
+                        state.sender_message_keys.clear();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // It's a key from another participant. Create a new state without a private key.
         let new_state = SenderKeyStateStructure {
             sender_key_id: Some(id),
             sender_chain_key: Some(wa::sender_key_state_structure::SenderChainKey {
@@ -61,7 +90,7 @@ impl SenderKeyRecord {
                 seed: Some(chain_key.to_vec()),
             }),
             sender_signing_key: Some(wa::sender_key_state_structure::SenderSigningKey {
-                public: Some(signing_key_pub.to_vec()),
+                public: Some(pub_key_to_store.to_vec()),
                 private: None,
             }),
             sender_message_keys: Vec::new(),

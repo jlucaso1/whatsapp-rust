@@ -79,7 +79,10 @@ dashmap = "6.1.0"
 tempfile = "3.20"
 
 [profile.release]
-lto = "fat"
+opt-level = "z"
+debug = false
+lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+incremental = false
