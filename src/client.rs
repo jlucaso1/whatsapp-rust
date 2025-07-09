@@ -8,6 +8,7 @@ use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
 
+use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
@@ -66,10 +67,9 @@ pub struct Client {
     pub(crate) id_counter: Arc<AtomicU64>,
     pub(crate) event_handlers: Arc<RwLock<Vec<WrappedHandler>>>,
 
-    // Global lock to serialize message handling.
-    // NOTE: For better performance, this could be replaced in the future with a per-JID lock
-    // to allow concurrent processing of messages from different senders.
-    pub(crate) message_handler_lock: Arc<Mutex<()>>,
+    /// Manages per-chat locks to allow for concurrent message processing
+    /// from different chats while serializing messages within the same chat.
+    pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
@@ -103,8 +103,8 @@ impl Client {
             id_counter: Arc::new(AtomicU64::new(0)),
             event_handlers: Arc::new(RwLock::new(Vec::new())),
 
-            // Initialize the message handler lock
-            message_handler_lock: Arc::new(Mutex::new(())),
+            // Initialize the per-chat locks map
+            chat_locks: Arc::new(DashMap::new()),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
@@ -289,11 +289,26 @@ impl Client {
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
-                let lock = client_clone.message_handler_lock.clone();
                 let node_clone = node.clone();
                 tokio::spawn(async move {
-                    // Acquire the global message handler lock before processing
-                    let _guard = lock.lock().await;
+                    // First, parse the message info to get the source chat JID
+                    let info = match client_clone.parse_message_info(&node_clone).await {
+                        Ok(info) => info,
+                        Err(e) => {
+                            log::warn!("Could not parse message info to acquire lock: {e:?}");
+                            return;
+                        }
+                    };
+                    let chat_jid = info.source.chat;
+
+                    // Acquire a lock for this specific chat.
+                    // entry().or_default() gets the existing mutex or creates a new one atomically.
+                    let mutex_arc = client_clone
+                        .chat_locks
+                        .entry(chat_jid)
+                        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                        .clone();
+                    let _lock_guard = mutex_arc.lock().await;
                     client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
