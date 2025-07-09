@@ -183,28 +183,6 @@ impl Client {
                             "Decrypted message content: {base_msg:?}"
                         );
 
-                        if let Some(text) = base_msg.conversation.as_ref() {
-                            log::info!(r#"Received message from {}: "{}""#, info.push_name, text);
-                        } else if let Some(ext_text) = base_msg.extended_text_message.as_ref() {
-                            if let Some(text) = ext_text.text.as_ref() {
-                                log::info!(
-                                    r#"Received extended text message from {}: "{}""#,
-                                    info.push_name,
-                                    text
-                                );
-
-                                if text == "send" {
-                                    log::info!("Received 'send' command, sending a response.");
-                                    let response_text = "Hello from Signal E2EE!";
-                                    if let Err(e) = self
-                                        .send_text_message(info.source.chat.clone(), response_text)
-                                        .await
-                                    {
-                                        log::error!("Failed to send response message: {e:?}");
-                                    }
-                                }
-                            }
-                        }
                         let _ = self
                             .dispatch_event(Event::Message(Box::new(msg), info.clone()))
                             .await;
