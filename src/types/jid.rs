@@ -208,16 +208,14 @@ impl fmt::Display for Jid {
         if self.user.is_empty() {
             write!(f, "{}", self.server)
         } else {
-            let mut user_part = self.user.clone();
+            write!(f, "{}", self.user)?;
             if self.agent > 0 {
-                user_part.push('.');
-                user_part.push_str(&self.agent.to_string());
+                write!(f, ".{}", self.agent)?;
             }
             if self.device > 0 {
-                user_part.push(':');
-                user_part.push_str(&self.device.to_string());
+                write!(f, ":{}", self.device)?;
             }
-            write!(f, "{}@{}", user_part, self.server)
+            write!(f, "@{}", self.server)
         }
     }
 }
@@ -227,16 +225,14 @@ impl<'a> fmt::Display for JidRef<'a> {
         if self.user.is_empty() {
             write!(f, "{}", self.server)
         } else {
-            let mut user_part = self.user.to_string();
+            write!(f, "{}", self.user)?;
             if self.agent > 0 {
-                user_part.push('.');
-                user_part.push_str(&self.agent.to_string());
+                write!(f, ".{}", self.agent)?;
             }
             if self.device > 0 {
-                user_part.push(':');
-                user_part.push_str(&self.device.to_string());
+                write!(f, ":{}", self.device)?;
             }
-            write!(f, "{}@{}", user_part, self.server)
+            write!(f, "@{}", self.server)
         }
     }
 }
