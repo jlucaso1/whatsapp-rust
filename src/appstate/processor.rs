@@ -98,7 +98,7 @@ impl Processor {
         Ok((new_mutations, current_state))
     }
 
-    async fn decode_mutation(
+    pub async fn decode_mutation(
         &self,
         keys: &keys::ExpandedAppStateKeys,
         mutation: &wa::SyncdMutation,

@@ -1,5 +1,5 @@
 use crate::binary::error::{BinaryError, Result};
-use crate::binary::node::{AttrsRef, Node, NodeContentRef, NodeRef};
+use crate::binary::node::{AttrsRef, NodeContentRef, NodeRef};
 use crate::binary::token;
 use crate::types::jid::JidRef;
 use bytes::Buf;
@@ -306,10 +306,5 @@ impl<'a> Decoder<'a> {
             attrs,
             content,
         })
-    }
-
-    pub(crate) fn read_node(&mut self) -> Result<Node> {
-        let node_ref = self.read_node_ref()?;
-        Ok(node_ref.to_owned())
     }
 }

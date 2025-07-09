@@ -12,19 +12,6 @@ pub mod util;
 pub use error::{BinaryError, Result};
 pub use node::{Node, NodeRef};
 
-/// Decodes a byte slice into a `Node`.
-/// This is the Rust equivalent of `waBinary.Unmarshal`.
-pub fn unmarshal(data: &[u8]) -> Result<Node> {
-    let mut decoder = Decoder::new(data);
-    let node = decoder.read_node()?;
-
-    if decoder.is_finished() {
-        Ok(node)
-    } else {
-        Err(BinaryError::LeftoverData(decoder.bytes_left()))
-    }
-}
-
 /// Parses the binary data into a reference-based, zero-copy structure.
 /// The returned `NodeRef` borrows from the input `data` slice.
 pub fn unmarshal_ref(data: &[u8]) -> Result<NodeRef<'_>> {
