@@ -14,6 +14,7 @@ use whatsapp_proto::whatsapp as wa;
 use whatsapp_proto::whatsapp::AdvEncryptionType;
 
 use std::sync::atomic::Ordering;
+
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
 const ADV_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 0];
 const ADV_PREFIX_DEVICE_SIGNATURE_GENERATE: &[u8] = &[6, 1];
@@ -406,7 +407,7 @@ async fn do_pair_crypto(
 }
 
 /// Constructs the full QR code string from the ref and the client's keys.
-fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
+pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let noise_b64 = B64.encode(store.noise_key.public_key);
     let identity_b64 = B64.encode(store.identity_key.public_key);
     let adv_b64 = B64.encode(store.adv_secret_key);
@@ -417,4 +418,85 @@ fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
 /// Helper to concatenate multiple byte slices into a single Vec.
 fn concat_bytes(slices: &[&[u8]]) -> Vec<u8> {
     slices.iter().flat_map(|s| s.iter().cloned()).collect()
+}
+
+/// Simulates a phone scanning a QR code and pairing with a new device.
+/// This is the logic that the "master" client will use in tests.
+pub async fn pair_with_qr_code(
+    client: &Arc<Client>, // The "master" client
+    qr_code: &str,
+) -> Result<(), anyhow::Error> {
+    info!(target: "Client/PairTest", "Master client attempting to pair with QR code.");
+
+    // 1. Parse the QR Code string
+    let parts: Vec<&str> = qr_code.split(',').collect();
+    if parts.len() != 4 {
+        return Err(anyhow::anyhow!("Invalid QR code format"));
+    }
+    let pairing_ref = parts[0].to_string();
+    let dut_noise_pub_b64 = parts[1];
+    let dut_identity_pub_b64 = parts[2];
+    // The ADV secret is not used by the phone side.
+
+    let dut_noise_pub_bytes = B64.decode(dut_noise_pub_b64)?;
+    let dut_identity_pub_bytes = B64.decode(dut_identity_pub_b64)?;
+
+    let dut_noise_pub: [u8; 32] = dut_noise_pub_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid noise public key length"))?;
+    let dut_identity_pub: [u8; 32] = dut_identity_pub_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid identity public key length"))?;
+
+    // 2. The master client (phone) generates its own ephemeral key
+    let master_ephemeral = crate::crypto::key_pair::KeyPair::new();
+
+    // 3. Perform the cryptographic exchange to create the shared secrets
+    let store_guard = client.store.read().await;
+    let adv_key = &store_guard.adv_secret_key;
+    let identity_key = &store_guard.identity_key;
+
+    let mut mac = HmacSha256::new_from_slice(adv_key).unwrap();
+    mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
+    mac.update(&dut_identity_pub);
+    mac.update(&master_ephemeral.public_key);
+    let account_signature = mac.finalize().into_bytes();
+
+    let secret = x25519_dalek::StaticSecret::from(master_ephemeral.private_key);
+    let shared_secret = x25519_dalek::x25519(secret.to_bytes(), dut_noise_pub);
+
+    let mut final_message = Vec::new();
+    final_message.extend_from_slice(&account_signature);
+    final_message.extend_from_slice(&master_ephemeral.public_key);
+    final_message.extend_from_slice(&identity_key.public_key);
+    
+    // 4. Encrypt the final message
+    let encryption_key = crate::crypto::hkdf::sha256(&shared_secret, None, b"WA-Ads-Key", 32)?;
+    let encrypted = crate::crypto::gcm::encrypt(&encryption_key, &[0; 12], &final_message, pairing_ref.as_bytes())?;
+
+    // 5. Send the final pairing IQ stanza to the server
+    let master_jid = store_guard.id.clone().unwrap();
+    drop(store_guard);
+
+    let response_content = Node {
+        tag: "pair-device-sign".into(),
+        attrs: [("jid".into(), master_jid.to_string())].into(),
+        content: Some(NodeContent::Bytes(encrypted)),
+    };
+    let iq = Node {
+        tag: "iq".into(),
+        attrs: [
+            ("to".into(), SERVER_JID.to_string()),
+            ("type".into(), "set".into()),
+            ("id".into(), client.generate_request_id()),
+            ("xmlns".into(), "md".into()),
+        ]
+        .into(),
+        content: Some(NodeContent::Nodes(vec![response_content])),
+    };
+
+    client.send_node(iq).await?;
+    
+    info!(target: "Client/PairTest", "Master client sent pairing confirmation.");
+    Ok(())
 }
