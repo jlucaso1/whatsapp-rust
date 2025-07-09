@@ -164,14 +164,10 @@ impl Client {
                             info.source.chat.to_string(),
                             info.source.sender.user.clone(),
                         );
-                        let builder = crate::signal::groups::builder::GroupSessionBuilder::<
-                            std::sync::Arc<tokio::sync::RwLock<crate::store::Device>>,
-                        >::new(Arc::new(self.store.clone()));
-                        let cipher = GroupCipher::<
-                            std::sync::Arc<tokio::sync::RwLock<crate::store::Device>>,
-                        >::new(
-                            sender_key_name, Arc::new(self.store.clone()), builder
+                        let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
+                            self.store.clone(),
                         );
+                        let cipher = GroupCipher::new(sender_key_name, self.store.clone(), builder);
                         let sk_msg = SenderKeyMessage::deserialize(&ciphertext).map_err(|e| {
                             anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
                         })?;
@@ -423,9 +419,7 @@ impl Client {
         };
 
         let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_jid.user.clone());
-        let builder = GroupSessionBuilder::<
-            std::sync::Arc<tokio::sync::RwLock<crate::store::Device>>,
-        >::new(Arc::new(self.store.clone()));
+        let builder = GroupSessionBuilder::new(self.store.clone());
 
         match builder.process(&sender_key_name, &dist_msg).await {
             Ok(_) => {

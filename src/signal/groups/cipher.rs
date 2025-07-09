@@ -11,11 +11,10 @@ use crate::signal::groups::ratchet::get_sender_key;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
 use std::error::Error;
-use std::sync::Arc;
 
 pub struct GroupCipher<S: SenderKeyStore> {
     sender_key_id: SenderKeyName,
-    sender_key_store: Arc<S>,
+    sender_key_store: S,
     #[allow(dead_code)]
     session_builder: GroupSessionBuilder<S>,
 }
@@ -23,7 +22,7 @@ pub struct GroupCipher<S: SenderKeyStore> {
 impl<S: SenderKeyStore> GroupCipher<S> {
     pub fn new(
         sender_key_id: SenderKeyName,
-        sender_key_store: Arc<S>,
+        sender_key_store: S,
         session_builder: GroupSessionBuilder<S>,
     ) -> Self {
         Self {
@@ -80,7 +79,7 @@ impl<S: SenderKeyStore> GroupCipher<S> {
             state.sender_key_id.unwrap_or(0),
             sender_key.iteration.unwrap_or(0),
             ciphertext.clone(),
-            signature.to_vec(),
+            signature,
         );
 
         let next_chain_key = get_next_sender_chain_key(chain_key);
