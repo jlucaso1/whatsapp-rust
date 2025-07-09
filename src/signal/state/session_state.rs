@@ -251,6 +251,10 @@ impl SessionState {
         })
     }
 
+    pub fn clear_unacknowledged_prekey_message(&mut self) {
+        self.pending_pre_key = None;
+    }
+
     pub fn set_session_version(&mut self, version: u32) {
         self.session_version = version;
     }
