@@ -41,4 +41,13 @@ where
     pub async fn values(&self) -> Vec<V> {
         self.store.lock().await.values().cloned().collect()
     }
+
+    /// Retain only the elements specified by the predicate.
+    pub async fn retain_where<F>(&self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let mut store = self.store.lock().await;
+        store.retain(|k, v| f(k, v));
+    }
 }

@@ -161,10 +161,18 @@ impl crate::store::traits::EventBufferStore for MemoryStore {
 
     async fn delete_old_buffered_events(
         &self,
-        _older_than: chrono::DateTime<chrono::Utc>,
+        older_than: chrono::DateTime<chrono::Utc>,
     ) -> crate::store::error::Result<usize> {
-        // In-memory store, no cleanup needed as it's lost on restart.
-        Ok(0)
+        let before = self.event_buffer.values().await.len();
+        self.event_buffer
+            .retain_where(|_, v| v.insert_time >= older_than)
+            .await;
+        let after = self.event_buffer.values().await.len();
+        let deleted_count = before - after;
+        if deleted_count > 0 {
+            log::info!(target: "Client/Store", "Deleted {} old event buffer entries from memory.", deleted_count);
+        }
+        Ok(deleted_count)
     }
 }
 

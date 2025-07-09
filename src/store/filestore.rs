@@ -174,10 +174,33 @@ impl crate::store::traits::EventBufferStore for FileStore {
 
     async fn delete_old_buffered_events(
         &self,
-        _older_than: chrono::DateTime<chrono::Utc>,
+        older_than: chrono::DateTime<chrono::Utc>,
     ) -> crate::store::error::Result<usize> {
-        // TODO: Implement cleanup logic, e.g., iterating files and checking modification times.
-        Ok(0)
+        use tokio::fs;
+
+        let mut deleted_count = 0;
+        let dir_path = self.path_for("event_buffer");
+        let mut entries = match fs::read_dir(dir_path).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(StoreError::Io(e)),
+        };
+
+        while let Some(entry) = entries.next_entry().await.map_err(StoreError::Io)? {
+            if let Ok(metadata) = entry.metadata().await {
+                if let Ok(modified_time) = metadata.modified() {
+                    // Convert SystemTime to chrono::DateTime<Utc>
+                    let modified_chrono: chrono::DateTime<chrono::Utc> = modified_time.into();
+                    if modified_chrono < older_than && fs::remove_file(entry.path()).await.is_ok() {
+                        deleted_count += 1;
+                    }
+                }
+            }
+        }
+        if deleted_count > 0 {
+            log::info!(target: "Client/Store", "Deleted {} old event buffer entries.", deleted_count);
+        }
+        Ok(deleted_count)
     }
 }
 

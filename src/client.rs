@@ -79,6 +79,7 @@ pub struct Client {
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
+    pub(crate) last_buffer_cleanup: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 }
 
 impl Client {
@@ -114,6 +115,7 @@ impl Client {
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
+            last_buffer_cleanup: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -275,6 +277,27 @@ impl Client {
                 return;
             }
         };
+
+        // --- Periodic cleanup of event buffer (every 12 hours) ---
+        {
+            let mut last_cleanup = self.last_buffer_cleanup.lock().await;
+            let now = chrono::Utc::now();
+            let needs_cleanup = last_cleanup
+                .map(|t| (now - t).num_hours() >= 12)
+                .unwrap_or(true);
+            if needs_cleanup {
+                *last_cleanup = Some(now);
+                let client_clone = self.clone();
+                tokio::spawn(async move {
+                    let backend = client_clone.store.read().await.backend.clone();
+                    // Delete entries older than 14 days, similar to whatsmeow
+                    let cutoff = chrono::Utc::now() - chrono::Duration::days(14);
+                    if let Err(e) = backend.delete_old_buffered_events(cutoff).await {
+                        log::warn!("Failed to clean up old event buffer entries: {:?}", e);
+                    }
+                });
+            }
+        }
 
         match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
