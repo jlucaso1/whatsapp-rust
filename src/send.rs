@@ -53,8 +53,8 @@ impl Client {
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
 
-        // Prepare two payloads
-        let message_plaintext = message.encode_to_vec();
+        // Prepare and pad the two message variants upfront
+        let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
         let dsm = wa::Message {
             device_sent_message: Some(Box::new(DeviceSentMessage {
                 destination_jid: Some(to.to_string()),
@@ -63,7 +63,7 @@ impl Client {
             })),
             ..Default::default()
         };
-        let dsm_plaintext = dsm.encode_to_vec();
+        let padded_dsm_plaintext = pad_message_v2(dsm.encode_to_vec());
 
         // Get all devices for both sender and recipient
         let participants = vec![to.clone(), own_jid.clone()];
@@ -77,13 +77,12 @@ impl Client {
         for device_jid in all_devices {
             let is_own_device =
                 device_jid.user == own_jid.user && device_jid.device != own_jid.device;
+            // Use a reference to the pre-padded plaintext
             let plaintext_to_encrypt = if is_own_device {
-                &dsm_plaintext
+                &padded_dsm_plaintext
             } else {
-                &message_plaintext
+                &padded_message_plaintext
             };
-
-            let padded_plaintext = pad_message_v2(plaintext_to_encrypt.clone());
 
             let signal_address =
                 SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
@@ -104,8 +103,9 @@ impl Client {
             }
 
             let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            // Encrypt directly from the pre-padded slice
             let encrypted_message = cipher
-                .encrypt(&mut session_record, &padded_plaintext)
+                .encrypt(&mut session_record, plaintext_to_encrypt)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             store_arc
