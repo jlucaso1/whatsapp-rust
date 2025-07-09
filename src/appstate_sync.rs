@@ -227,11 +227,29 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                 let event = Event::SelfPushNameUpdated(
                                     crate::types::events::SelfPushNameUpdated {
                                         from_server: true,
-                                        old_name: batch_start_name,
-                                        new_name: final_name,
+                                        old_name: batch_start_name.clone(),
+                                        new_name: final_name.clone(),
                                     },
                                 );
                                 let _ = client.dispatch_event(event).await;
+
+                                // If the push name was previously empty, we are now ready to announce presence.
+                                // This resolves the race condition on initial pairing.
+                                if batch_start_name.is_empty() {
+                                    let client_clone = client.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = client_clone
+                                            .send_presence(
+                                                crate::types::presence::Presence::Available,
+                                            )
+                                            .await
+                                        {
+                                            warn!("Failed to send presence after app_state_sync update: {e:?}");
+                                        } else {
+                                            info!("✅ Successfully sent presence after receiving push_name via app_state_sync");
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
