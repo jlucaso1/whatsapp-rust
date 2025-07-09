@@ -3,11 +3,11 @@ pub struct SenderKeyMessage {
     key_id: u32,
     iteration: u32,
     ciphertext: Vec<u8>,
-    signature: Vec<u8>,
+    signature: [u8; 64],
 }
 
 impl SenderKeyMessage {
-    pub fn new(key_id: u32, iteration: u32, ciphertext: Vec<u8>, signature: Vec<u8>) -> Self {
+    pub fn new(key_id: u32, iteration: u32, ciphertext: Vec<u8>, signature: [u8; 64]) -> Self {
         Self {
             key_id,
             iteration,
@@ -54,7 +54,9 @@ impl SenderKeyMessage {
             return Err(anyhow::anyhow!("Too short SenderKeyMessage for signature"));
         }
         let proto_bytes = &serialized[1..serialized.len() - 64];
-        let signature = serialized[serialized.len() - 64..].to_vec();
+        let signature: [u8; 64] = serialized[serialized.len() - 64..]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid signature length"))?;
 
         let proto = whatsapp_proto::whatsapp::SenderKeyMessage::decode(proto_bytes)?;
 
@@ -64,5 +66,26 @@ impl SenderKeyMessage {
             ciphertext: proto.ciphertext.unwrap_or_default(),
             signature,
         })
+    }
+    pub fn serialize(&self) -> Vec<u8> {
+        use prost::Message;
+
+        let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
+            id: Some(self.key_id),
+            iteration: Some(self.iteration),
+            ciphertext: Some(self.ciphertext.clone()),
+        };
+
+        // Get the serialized protobuf message
+        let mut proto_buf = Vec::new();
+        proto_msg.encode(&mut proto_buf).unwrap(); // Should not fail
+
+        // Assemble the final message: 1 (version) + N (protobuf) + 64 (signature)
+        let mut final_buf = Vec::with_capacity(1 + proto_buf.len() + 64);
+        final_buf.push((3 << 4) | 3); // Version 3
+        final_buf.extend_from_slice(&proto_buf);
+        final_buf.extend_from_slice(&self.signature);
+
+        final_buf
     }
 }

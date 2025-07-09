@@ -10,6 +10,12 @@ use rand::Rng;
 use whatsapp_proto::whatsapp as wa;
 use whatsapp_proto::whatsapp::message::DeviceSentMessage;
 
+// Group messaging imports
+use crate::signal::groups::builder::GroupSessionBuilder;
+use crate::signal::groups::cipher::GroupCipher;
+use crate::signal::sender_key_name::SenderKeyName;
+use prost::Message as ProtoMessage;
+
 // Helper function to pad messages for encryption
 fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
     let mut rng = rand::thread_rng();
@@ -37,6 +43,15 @@ impl Client {
     /// Encrypts and sends a protobuf message to the given JID.
     /// Multi-device compatible: builds <participants> node and syncs to own devices.
     pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+        if to.is_group() {
+            self.send_group_message(to, message).await
+        } else {
+            self.send_dm_message(to, message).await
+        }
+    }
+
+    // Moved from send_message: direct message logic
+    async fn send_dm_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
         use crate::binary::node::{Node, NodeContent};
         use prost::Message as ProtoMessage;
 
@@ -49,11 +64,9 @@ impl Client {
 
         let request_id = self.generate_request_id();
 
-        // Cache the outgoing message for retry support
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
 
-        // Prepare and pad the two message variants upfront
         let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
         let dsm = wa::Message {
             device_sent_message: Some(Box::new(DeviceSentMessage {
@@ -65,7 +78,6 @@ impl Client {
         };
         let padded_dsm_plaintext = pad_message_v2(dsm.encode_to_vec());
 
-        // Get all devices for both sender and recipient
         let participants = vec![to.clone(), own_jid.clone()];
         let all_devices = self.get_user_devices(&participants).await?;
 
@@ -77,7 +89,6 @@ impl Client {
         for device_jid in all_devices {
             let is_own_device =
                 device_jid.user == own_jid.user && device_jid.device != own_jid.device;
-            // Use a reference to the pre-padded plaintext
             let plaintext_to_encrypt = if is_own_device {
                 &padded_dsm_plaintext
             } else {
@@ -103,7 +114,6 @@ impl Client {
             }
 
             let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
-            // Encrypt directly from the pre-padded slice
             let encrypted_message = cipher
                 .encrypt(&mut session_record, plaintext_to_encrypt)
                 .await
@@ -163,6 +173,124 @@ impl Client {
                 return Err(anyhow::anyhow!("Cannot send pre-key message: device account identity is missing. Please re-pair."));
             }
         }
+
+        let stanza = Node {
+            tag: "message".to_string(),
+            attrs: [
+                ("to".to_string(), to.to_string()),
+                ("id".to_string(), request_id),
+                ("type".to_string(), "text".to_string()),
+            ]
+            .into(),
+            content: Some(NodeContent::Nodes(message_content_nodes)),
+        };
+
+        self.send_node(stanza).await.map_err(|e| e.into())
+    }
+
+    // Group message logic
+    async fn send_group_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+        let store_arc = self.store.clone();
+        let own_jid = store_arc
+            .read()
+            .await
+            .id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
+        let request_id = self.generate_request_id();
+
+        // 1. Get all participant devices
+        let participants = self.get_group_participants(&to).await?;
+        let all_devices = self.get_user_devices(&participants).await?;
+
+        // 2. Create the SenderKeyDistributionMessage. This is the "key" we distribute.
+        let sender_key_name = SenderKeyName::new(to.to_string(), own_jid.user.clone());
+        let group_builder = GroupSessionBuilder::new(store_arc.clone());
+        let distribution_message = group_builder.create(&sender_key_name).await.map_err(|e| {
+            anyhow::anyhow!("Failed to create sender key distribution message: {e}")
+        })?;
+
+        let distribution_message_bytes = distribution_message.encode_to_vec();
+
+        // 3. Encrypt the actual message content with the group cipher to create the 'skmsg'
+        let group_cipher = GroupCipher::new(sender_key_name, store_arc.clone(), group_builder);
+        let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
+        let sk_msg_ciphertext = group_cipher
+            .encrypt(&padded_message_plaintext)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to encrypt group message: {e}"))?;
+        let sk_msg_node = Node {
+            tag: "enc".to_string(),
+            attrs: [
+                ("v".to_string(), "2".to_string()),
+                ("type".to_string(), "skmsg".to_string()),
+            ]
+            .into(),
+            content: Some(NodeContent::Bytes(sk_msg_ciphertext.serialize())),
+        };
+
+        // 4. Encrypt the SenderKeyDistributionMessage for each participant device
+        let mut participant_nodes = Vec::new();
+        for device_jid in all_devices {
+            let signal_address =
+                SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
+            let mut session_record = store_arc
+                .load_session(&signal_address)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            if session_record.is_fresh() {
+                let bundles = self.fetch_pre_keys(&[device_jid.clone()]).await?;
+                let bundle = bundles
+                    .get(&device_jid)
+                    .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", device_jid))?;
+                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+                builder.process_bundle(&mut session_record, bundle).await?;
+            }
+
+            let session_cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            let encrypted_distribution_message = session_cipher
+                .encrypt(&mut session_record, &distribution_message_bytes)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to encrypt distribution message for {}: {}",
+                        device_jid,
+                        e
+                    )
+                })?;
+
+            store_arc
+                .store_session(&signal_address, &session_record)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            let enc_node = Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), "pkmsg".to_string()),
+                ]
+                .into(),
+                content: Some(NodeContent::Bytes(
+                    encrypted_distribution_message.serialize(),
+                )),
+            };
+
+            participant_nodes.push(Node {
+                tag: "to".to_string(),
+                attrs: [("jid".to_string(), device_jid.to_string())].into(),
+                content: Some(NodeContent::Nodes(vec![enc_node])),
+            });
+        }
+
+        let participants_node = Node {
+            tag: "participants".to_string(),
+            attrs: Default::default(),
+            content: Some(NodeContent::Nodes(participant_nodes)),
+        };
+
+        let message_content_nodes = vec![participants_node, sk_msg_node];
 
         let stanza = Node {
             tag: "message".to_string(),

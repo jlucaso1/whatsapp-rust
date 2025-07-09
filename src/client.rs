@@ -118,6 +118,25 @@ impl Client {
             last_buffer_cleanup: Arc::new(Mutex::new(None)),
         }
     }
+    /// Placeholder function to get group participants.
+    /// A real implementation should fetch this information from the store
+    /// where group metadata is persisted.
+    pub async fn get_group_participants(
+        &self,
+        _group_jid: &crate::types::jid::Jid,
+    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        // TODO: This is a placeholder. A real implementation should fetch
+        // group metadata from the store to get the actual participant list.
+        // For now, it includes only the sender to allow testing the flow to yourself.
+        let own_jid = self
+            .store
+            .read()
+            .await
+            .id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
+        Ok(vec![own_jid])
+    }
 
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {

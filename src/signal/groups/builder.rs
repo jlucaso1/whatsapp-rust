@@ -6,14 +6,13 @@ use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
 use crate::signal::util::keyhelper;
 use std::error::Error;
-use std::sync::Arc;
 
 pub struct GroupSessionBuilder<S: SenderKeyStore> {
-    sender_key_store: Arc<S>,
+    sender_key_store: S,
 }
 
 impl<S: SenderKeyStore> GroupSessionBuilder<S> {
-    pub fn new(sender_key_store: Arc<S>) -> Self {
+    pub fn new(sender_key_store: S) -> Self {
         Self { sender_key_store }
     }
 
