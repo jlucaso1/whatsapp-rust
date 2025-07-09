@@ -1,5 +1,6 @@
 // Corresponds to libsignal-protocol-go/groups/GroupSessionBuilder.go
 
+use crate::signal::ecc::keys::EcPublicKey;
 use whatsapp_proto::whatsapp::SenderKeyDistributionMessage;
 
 use crate::signal::sender_key_name::SenderKeyName;
@@ -55,18 +56,26 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
         }
         let state = record.sender_key_state().ok_or("No sender key state")?;
         let signing_key_proto = state.sender_signing_key.as_ref().ok_or("No signing key")?;
-        let signing_key_pub_bytes: [u8; 32] = signing_key_proto
-            .public
-            .as_deref()
-            .ok_or("No public key")?
-            .try_into()
-            .map_err(|_| "Invalid public key length")?;
+        let public_key_slice = signing_key_proto.public.as_deref().ok_or("No public key")?;
+        if public_key_slice.len() != 32 {
+            return Err(format!(
+                "Invalid public key length in store: expected 32, got {}",
+                public_key_slice.len()
+            )
+            .into());
+        }
+        let mut pk32 = [0u8; 32];
+        pk32.copy_from_slice(public_key_slice);
+        // Serialize with prefix for wire format
+        let serialized_signing_key =
+            crate::signal::ecc::keys::DjbEcPublicKey::new(pk32).serialize();
+
         let chain_key_proto = state.sender_chain_key.as_ref().ok_or("No chain key")?;
         let msg = SenderKeyDistributionMessage {
             id: Some(state.sender_key_id.unwrap_or(0)),
             iteration: Some(chain_key_proto.iteration.unwrap_or(0)),
             chain_key: Some(chain_key_proto.seed.as_deref().unwrap_or(&[]).to_vec()),
-            signing_key: Some(signing_key_pub_bytes.to_vec()),
+            signing_key: Some(serialized_signing_key),
         };
         self.sender_key_store
             .store_sender_key(sender_key_name, record)
