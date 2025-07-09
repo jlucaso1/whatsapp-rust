@@ -160,12 +160,9 @@ impl Client {
                                 );
                                 self.handle_app_state_sync_key_share(key_share).await;
 
-                                let self_clone = self.clone();
-                                tokio::spawn(async move {
-                                    for name in ALL_PATCH_NAMES {
-                                        app_state_sync(&self_clone, name, false).await;
-                                    }
-                                });
+                                for name in ALL_PATCH_NAMES {
+                                    app_state_sync(&self, name, false).await;
+                                }
                             }
                         } else {
                             log::warn!(
