@@ -175,7 +175,8 @@ pub async fn do_handshake(
         .map_err(|e| HandshakeError::Crypto(format!("Failed to decrypt certificate: {e}")))?;
 
     debug!("Successfully decrypted certificate, verifying...");
-    verify_server_cert(&cert_decrypted, &static_decrypted_arr)?;
+    let cert_override = store.read().await.wa_cert_override;
+    verify_server_cert(&cert_decrypted, &static_decrypted_arr, cert_override)?;
     info!("Server certificate verified successfully");
 
     // 7. Send ClientFinish
@@ -228,7 +229,11 @@ pub async fn do_handshake(
 }
 
 /// Verifies the server's certificate chain.
-fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Result<()> {
+fn verify_server_cert(
+    cert_decrypted: &[u8],
+    static_decrypted: &[u8; 32],
+    root_key_override: Option<[u8; 32]>,
+) -> Result<()> {
     let cert_chain = CertChain::decode(cert_decrypted)?;
 
     let intermediate = cert_chain
@@ -238,8 +243,11 @@ fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Res
         .leaf
         .ok_or_else(|| HandshakeError::CertVerification("Missing leaf cert".into()))?;
 
-    // Convert WA_CERT_PUB_KEY from Montgomery (Curve25519) to Edwards (Ed25519)
-    let montgomery_point = MontgomeryPoint(WA_CERT_PUB_KEY);
+    // Use override root key if present (for tests), otherwise use WA_CERT_PUB_KEY
+    let root_key_to_use = root_key_override.unwrap_or(WA_CERT_PUB_KEY);
+
+    // Convert root key from Montgomery (Curve25519) to Edwards (Ed25519)
+    let montgomery_point = MontgomeryPoint(root_key_to_use);
     let edwards_point = montgomery_point.to_edwards(0).ok_or_else(|| {
         HandshakeError::CertVerification(
             "Failed to convert WA root key from Montgomery to Edwards".into(),

@@ -42,6 +42,9 @@ pub struct Device {
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
 
+    /// Used for test-only root certificate override (for e2e/integration tests).
+    pub wa_cert_override: Option<[u8; 32]>,
+
     pub backend: Arc<dyn Backend>,
 }
 
@@ -62,6 +65,7 @@ impl Device {
             adv_secret_key,
             account: None,
             push_name: "".to_string(),
+            wa_cert_override: None,
             backend,
         }
     }

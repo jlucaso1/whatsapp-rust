@@ -16,7 +16,6 @@ use whatsapp_rust::binary::node::{Node, NodeContent};
 use whatsapp_rust::binary::unmarshal_ref;
 use whatsapp_rust::crypto::key_pair::KeyPair;
 use whatsapp_rust::store::memory::MemoryStore;
-use whatsapp_rust::store::WA_CERT_PUB_KEY;
 use whatsapp_rust::types::jid::{Jid, SERVER_JID};
 
 /// Represents the state of a single client connection from the server's perspective.
@@ -44,14 +43,9 @@ impl MockServer {
     pub fn new(qr_code_rx: mpsc::Receiver<String>, qr_scanned_rx: oneshot::Receiver<()>) -> Self {
         let static_key = Arc::new(KeyPair::new());
 
-        let cert_root_key = Arc::new(KeyPair::from_private_key([
-            54, 166, 8, 116, 172, 178, 183, 23, 226, 12, 179, 151, 161, 23, 126, 238, 16, 219, 98,
-            11, 22, 107, 182, 117, 185, 218, 142, 13, 24, 216, 15, 126,
-        ]));
-        assert_eq!(
-            cert_root_key.public_key, WA_CERT_PUB_KEY,
-            "Mock server root key must match client's trusted key"
-        );
+        // Generate a fresh root CA for this test run. The client will be configured
+        // to trust this specific CA's public key via the `wa_cert_override` field.
+        let cert_root_key = Arc::new(KeyPair::new());
 
         let intermediate_key = KeyPair::new();
         let leaf_key = static_key.clone();
@@ -429,10 +423,12 @@ async fn test_full_registration_flow() {
     let (scan_tx, scan_rx) = oneshot::channel::<()>();
 
     let server = MockServer::new(qr_rx, scan_rx);
+    let cert_root_pubkey = server.cert_root_key.public_key;
     let server_addr = server.run().await.unwrap();
 
     let store_backend = Arc::new(MemoryStore::new());
-    let device = whatsapp_rust::store::Device::new(store_backend);
+    let mut device = whatsapp_rust::store::Device::new(store_backend);
+    device.wa_cert_override = Some(cert_root_pubkey);
     let client = Arc::new(whatsapp_rust::client::Client::new(device));
 
     let mut qr_channel = client.get_qr_channel().await.unwrap();
