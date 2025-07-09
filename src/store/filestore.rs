@@ -27,6 +27,7 @@ impl FileStore {
         fs::create_dir_all(store.path_for("sender_keys")).await?;
         fs::create_dir_all(store.path_for("appstate/keys")).await?;
         fs::create_dir_all(store.path_for("appstate/versions")).await?;
+        fs::create_dir_all(store.path_for("event_buffer")).await?;
 
         Ok(store)
     }
@@ -137,6 +138,46 @@ impl SessionStore for FileStore {
             .path_for("sessions")
             .join(Self::sanitize_filename(address));
         Ok(path.exists())
+    }
+}
+
+// --- EventBufferStore implementation for FileStore ---
+#[async_trait]
+// --- EventBufferStore implementation for FileStore ---
+#[async_trait]
+impl crate::store::traits::EventBufferStore for FileStore {
+    async fn get_buffered_event(
+        &self,
+        ciphertext_hash: &[u8; 32],
+    ) -> crate::store::error::Result<Option<crate::store::traits::BufferedEvent>> {
+        let path = self
+            .path_for("event_buffer")
+            .join(hex::encode(ciphertext_hash));
+        self.read_bincode(&path).await
+    }
+
+    async fn put_buffered_event(
+        &self,
+        ciphertext_hash: &[u8; 32],
+        plaintext: Option<Vec<u8>>,
+        _server_timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> crate::store::error::Result<()> {
+        let event = crate::store::traits::BufferedEvent {
+            plaintext,
+            insert_time: chrono::Utc::now(),
+        };
+        let path = self
+            .path_for("event_buffer")
+            .join(hex::encode(ciphertext_hash));
+        self.write_bincode(&path, &event).await
+    }
+
+    async fn delete_old_buffered_events(
+        &self,
+        _older_than: chrono::DateTime<chrono::Utc>,
+    ) -> crate::store::error::Result<usize> {
+        // TODO: Implement cleanup logic, e.g., iterating files and checking modification times.
+        Ok(0)
     }
 }
 

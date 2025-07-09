@@ -1,6 +1,5 @@
 use crate::appstate::keys::ALL_PATCH_NAMES;
 use crate::appstate_sync::app_state_sync;
-use crate::binary;
 use crate::binary::node::Node;
 use crate::client::Client;
 use crate::proto_helpers::MessageExt;
@@ -11,6 +10,11 @@ use prost::Message as ProtoMessage;
 use std::sync::Arc;
 
 use whatsapp_proto::whatsapp as wa;
+
+// --- Deduplication imports ---
+use crate::error::decryption::DecryptionError;
+
+use sha2::{Digest, Sha256};
 
 // Helper to unpad messages after decryption
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
@@ -28,43 +32,60 @@ fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Err
     }
 }
 
+// --- Buffered decrypt wrapper for deduplication ---
 impl Client {
-    /// Processes an encrypted frame from the WebSocket.
-    /// This is the entry point for all incoming frames after the handshake.
-    pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
-        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
-        let noise_socket = match noise_socket_arc {
-            Some(s) => s,
-            None => {
-                log::error!("Cannot process frame: not connected (no noise socket)");
-                return;
-            }
-        };
+    async fn buffered_decrypt<F, Fut>(
+        &self,
+        ciphertext: &[u8],
+        decrypt_fn: F,
+    ) -> Result<Vec<u8>, DecryptionError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<u8>, anyhow::Error>>,
+    {
+        let ciphertext_hash: [u8; 32] = Sha256::digest(ciphertext).into();
 
-        let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
-            Ok(p) => p,
+        let backend = { self.store.read().await.backend.clone() };
+
+        if let Some(_buffered_event) = backend
+            .get_buffered_event(&ciphertext_hash)
+            .await
+            .unwrap_or(None)
+        {
+            log::debug!(target: "Client/Recv", "Ignoring message: event was already processed (hash: {})", hex::encode(ciphertext_hash));
+            return Err(DecryptionError::AlreadyProcessed);
+        }
+
+        match decrypt_fn().await {
+            Ok(plaintext) => {
+                // Store the hash and plaintext to prevent reprocessing
+                if let Err(e) = backend
+                    .put_buffered_event(
+                        &ciphertext_hash,
+                        Some(plaintext.clone()),
+                        chrono::Utc::now(),
+                    )
+                    .await
+                {
+                    log::warn!("Failed to save decrypted event to buffer: {:?}", e);
+                }
+                Ok(plaintext)
+            }
             Err(e) => {
-                log::error!(target: "Client", "Failed to decrypt frame: {e}");
-                return;
+                // Store only the hash to mark it as seen, even if decryption fails,
+                // to avoid retrying a known-bad message.
+                if let Err(store_err) = backend
+                    .put_buffered_event(&ciphertext_hash, None, chrono::Utc::now())
+                    .await
+                {
+                    log::warn!(
+                        "Failed to save failed event hash to buffer: {:?}",
+                        store_err
+                    );
+                }
+                Err(DecryptionError::Crypto(e))
             }
-        };
-
-        let unpacked_data_cow = match binary::util::unpack(&decrypted_payload) {
-            Ok(data) => data,
-            Err(e) => {
-                log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
-                return;
-            }
-        };
-
-        match binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
-            Ok(node_ref) => {
-                // Convert to owned only when needed for processing
-                let node = node_ref.to_owned();
-                self.process_node(node).await;
-            }
-            Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
-        };
+        }
     }
 
     /// Handles an incoming `<message>` stanza, which contains an encrypted payload.
@@ -93,61 +114,44 @@ impl Client {
             }
         };
 
-        let enc_version = enc_node
-            .attrs()
-            .optional_string("v")
-            .unwrap_or("2")
-            .parse::<u8>()
-            .unwrap_or(2);
+        // --- Deduplication: use buffered_decrypt ---
+        let decrypt_closure = || async {
+            let enc_version = enc_node
+                .attrs()
+                .optional_string("v")
+                .unwrap_or("2")
+                .parse::<u8>()
+                .unwrap_or(2);
 
-        let signal_address = SignalAddress::new(
-            info.source.sender.user.clone(),
-            info.source.sender.device as u32,
-        );
-        let store_arc: std::sync::Arc<tokio::sync::RwLock<crate::store::Device>> =
-            self.store.clone();
-        let cipher = SessionCipher::new(store_arc, signal_address);
+            let signal_address = SignalAddress::new(
+                info.source.sender.user.clone(),
+                info.source.sender.device as u32,
+            );
+            let store_arc = self.store.clone();
+            let cipher = SessionCipher::new(store_arc, signal_address);
 
-        let enc_type = enc_node.attrs().string("type");
-        use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
-        let ciphertext_enum = match enc_type.as_str() {
-            "pkmsg" => match PreKeySignalMessage::deserialize(&ciphertext) {
-                Ok(msg) => Ciphertext::PreKey(msg),
-                Err(e) => {
-                    log::warn!("Failed to deserialize PreKeySignalMessage: {e:?}");
-                    return;
-                }
-            },
-            "msg" => match SignalMessage::deserialize(&ciphertext) {
-                Ok(msg) => Ciphertext::Whisper(msg),
-                Err(e) => {
-                    log::warn!("Failed to deserialize SignalMessage: {e:?}");
-                    return;
-                }
-            },
-            _ => {
-                log::warn!("Unsupported enc type: {enc_type}");
-                return;
+            let enc_type = enc_node.attrs().string("type");
+            use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
+            let ciphertext_enum = match enc_type.as_str() {
+                "pkmsg" => PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey),
+                "msg" => SignalMessage::deserialize(&ciphertext).map(Ciphertext::Whisper),
+                _ => return Err(anyhow::anyhow!("Unsupported enc type: {enc_type}")),
             }
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e))?;
+
+            let padded_plaintext = cipher.decrypt(ciphertext_enum).await?;
+            unpad_message_ref(&padded_plaintext, enc_version).map(|b| b.to_vec())
         };
 
-        match cipher.decrypt(ciphertext_enum).await {
-            Ok(padded_plaintext) => {
-                let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
-                    Ok(pt) => pt,
-                    Err(e) => {
-                        log::error!("Failed to unpad message from {}: {}", info.source.sender, e);
-                        return;
-                    }
-                };
-
+        match self.buffered_decrypt(&ciphertext, decrypt_closure).await {
+            Ok(plaintext) => {
                 log::info!(
                     "Successfully decrypted and unpadded message from {}: {} bytes",
                     info.source.sender,
                     plaintext.len()
                 );
 
-                if let Ok(mut msg) = wa::Message::decode(plaintext) {
+                if let Ok(mut msg) = wa::Message::decode(plaintext.as_slice()) {
                     if let Some(protocol_msg) = msg.protocol_message.take() {
                         if protocol_msg.r#type()
                             == wa::message::protocol_message::Type::AppStateSyncKeyShare
@@ -188,7 +192,11 @@ impl Client {
                     log::warn!("Failed to unmarshal decrypted plaintext into wa::Message");
                 }
             }
-            Err(e) => {
+            Err(DecryptionError::AlreadyProcessed) => {
+                // This is the expected case for a duplicate message.
+                // It has been successfully de-duplicated.
+            }
+            Err(DecryptionError::Crypto(e)) => {
                 log::error!(
                     "Failed to decrypt message from {}: {:?}",
                     info.source.sender,

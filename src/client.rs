@@ -248,6 +248,44 @@ impl Client {
         }
     }
 
+    /// Processes an encrypted frame from the WebSocket.
+    /// This is the entry point for all incoming frames after the handshake.
+    pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
+        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
+        let noise_socket = match noise_socket_arc {
+            Some(s) => s,
+            None => {
+                log::error!("Cannot process frame: not connected (no noise socket)");
+                return;
+            }
+        };
+
+        let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!(target: "Client", "Failed to decrypt frame: {e}");
+                return;
+            }
+        };
+
+        let unpacked_data_cow = match crate::binary::util::unpack(&decrypted_payload) {
+            Ok(data) => data,
+            Err(e) => {
+                log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
+                return;
+            }
+        };
+
+        match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
+            Ok(node_ref) => {
+                // Convert to owned only when needed for processing
+                let node = node_ref.to_owned();
+                self.process_node(node).await;
+            }
+            Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
+        };
+    }
+
     pub async fn process_node(self: &Arc<Self>, node: Node) {
         if node.tag == "iq" {
             if let Some(sync_node) = node.get_optional_child("sync") {

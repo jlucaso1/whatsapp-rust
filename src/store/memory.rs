@@ -14,6 +14,8 @@ type SignedPreKeyMap = GenericMemoryStore<u32, SignedPreKeyRecordStructure>;
 type SenderKeyMap =
     GenericMemoryStore<crate::signal::sender_key_name::SenderKeyName, SenderKeyRecord>;
 
+type EventBufferMap = GenericMemoryStore<[u8; 32], crate::store::traits::BufferedEvent>;
+
 #[derive(Default)]
 pub struct MemoryStore {
     identities: IdentityMap,
@@ -24,6 +26,7 @@ pub struct MemoryStore {
     pre_keys: PreKeyMap,
     signed_pre_keys: SignedPreKeyMap,
     sender_keys: SenderKeyMap,
+    event_buffer: EventBufferMap,
 }
 
 impl MemoryStore {
@@ -36,6 +39,7 @@ impl MemoryStore {
             pre_keys: PreKeyMap::new(),
             signed_pre_keys: SignedPreKeyMap::new(),
             sender_keys: SenderKeyMap::new(),
+            event_buffer: EventBufferMap::new(),
         }
     }
 }
@@ -128,6 +132,39 @@ impl AppStateStore for MemoryStore {
     ) -> Result<()> {
         self.app_state_versions.put(name.to_string(), state).await;
         Ok(())
+    }
+}
+
+// --- EventBufferStore implementation for MemoryStore ---
+#[async_trait]
+impl crate::store::traits::EventBufferStore for MemoryStore {
+    async fn get_buffered_event(
+        &self,
+        ciphertext_hash: &[u8; 32],
+    ) -> crate::store::error::Result<Option<crate::store::traits::BufferedEvent>> {
+        Ok(self.event_buffer.get(ciphertext_hash).await)
+    }
+
+    async fn put_buffered_event(
+        &self,
+        ciphertext_hash: &[u8; 32],
+        plaintext: Option<Vec<u8>>,
+        _server_timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> crate::store::error::Result<()> {
+        let event = crate::store::traits::BufferedEvent {
+            plaintext,
+            insert_time: chrono::Utc::now(),
+        };
+        self.event_buffer.put(*ciphertext_hash, event).await;
+        Ok(())
+    }
+
+    async fn delete_old_buffered_events(
+        &self,
+        _older_than: chrono::DateTime<chrono::Utc>,
+    ) -> crate::store::error::Result<usize> {
+        // In-memory store, no cleanup needed as it's lost on restart.
+        Ok(0)
     }
 }
 

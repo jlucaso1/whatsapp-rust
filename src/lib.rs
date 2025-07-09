@@ -19,3 +19,6 @@ pub mod store;
 pub mod types;
 
 pub mod signal;
+pub mod error {
+    pub mod decryption;
+}
