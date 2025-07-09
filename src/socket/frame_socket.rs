@@ -26,6 +26,8 @@ pub struct FrameSocket {
     on_disconnect: Arc<Mutex<Option<OnDisconnectCallback>>>,
     is_connected: Arc<Mutex<bool>>,
     header: Arc<Mutex<Option<Vec<u8>>>>,
+    #[cfg(test)]
+    test_frames_rx: Option<Receiver<bytes::Bytes>>,
 }
 
 impl FrameSocket {
@@ -37,8 +39,68 @@ impl FrameSocket {
             on_disconnect: Arc::new(Mutex::new(None)),
             is_connected: Arc::new(Mutex::new(false)),
             header: Arc::new(Mutex::new(Some(super::consts::WA_CONN_HEADER.to_vec()))),
+            #[cfg(test)]
+            test_frames_rx: None,
         };
         (socket, rx)
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test(
+        ws_write: futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            tokio_tungstenite::tungstenite::Message,
+        >,
+        ws_read: futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    ) -> Self {
+        let (frames_tx, _frames_rx) = tokio::sync::mpsc::channel(100);
+        let socket = Self {
+            ws_sink: Arc::new(Mutex::new(Some(ws_write))),
+            frames_tx: frames_tx.clone(),
+            on_disconnect: Arc::new(Mutex::new(None)),
+            is_connected: Arc::new(Mutex::new(true)),
+            header: Arc::new(Mutex::new(Some(super::consts::WA_CONN_HEADER.to_vec()))),
+            #[cfg(test)]
+            test_frames_rx: Some(_frames_rx),
+        };
+        tokio::spawn(Self::read_pump_for_test(ws_read, frames_tx));
+        socket
+    }
+
+    /// Public test read pump for integration tests.
+    pub async fn read_pump_for_test(
+        mut stream: futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+        frames_tx: tokio::sync::mpsc::Sender<bytes::Bytes>,
+    ) {
+        while let Some(Ok(msg)) = stream.next().await {
+            if let tokio_tungstenite::tungstenite::Message::Binary(data) = msg {
+                if frames_tx.send(data).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Test-only: receive a frame from the test receiver.
+    #[cfg(test)]
+    pub async fn recv_frame_for_test(&mut self) -> anyhow::Result<bytes::Bytes> {
+        if let Some(rx) = &mut self.test_frames_rx {
+            rx.recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("Test frame channel closed"))
+        } else {
+            Err(anyhow::anyhow!("Test frame receiver not initialized"))
+        }
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -54,9 +116,10 @@ impl FrameSocket {
             return Err(SocketError::SocketAlreadyOpen);
         }
 
-        info!("Dialing {URL}");
+        let url = URL.read().unwrap().clone();
+        info!("Dialing {}", url);
         // Let tokio-tungstenite handle the handshake headers
-        let (ws_stream, _response) = connect_async(URL).await?;
+        let (ws_stream, _response) = connect_async(&url).await?;
 
         let (sink, stream) = ws_stream.split();
         *self.ws_sink.lock().await = Some(sink);

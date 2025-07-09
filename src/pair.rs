@@ -20,6 +20,17 @@ const ADV_PREFIX_DEVICE_SIGNATURE_GENERATE: &[u8] = &[6, 1];
 const ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 5];
 const ADV_HOSTED_PREFIX_DEVICE_SIGNATURE_VERIFICATION: &[u8] = &[6, 6];
 
+/// Expose for test: get the message to sign for ADV device identity/account signature
+#[cfg(test)]
+pub fn get_adv_msg_to_sign_for_test(
+    details: &[u8],
+    client_pk: &[u8; 32],
+    account_pk: &[u8; 32],
+) -> Vec<u8> {
+    let prefix = ADV_PREFIX_ACCOUNT_SIGNATURE;
+    [prefix, details, client_pk, account_pk].concat()
+}
+
 // Aliases for HMAC-SHA256
 type HmacSha256 = Hmac<Sha256>;
 

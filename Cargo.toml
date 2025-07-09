@@ -74,6 +74,8 @@ subtle = "2.6.1"
 ureq = "3.0.12"
 serde_bytes = "0.11.17"
 dashmap = "6.1.0"
+tokio-stream = "0.1.17"
+uuid = "1.17.0"
 
 [dev-dependencies]
 tempfile = "3.20"

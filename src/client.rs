@@ -117,6 +117,22 @@ impl Client {
         }
     }
 
+    /// Test-only constructor to allow specifying a custom WebSocket URL.
+    #[cfg(test)]
+    pub fn new_for_test(store: store::Device, ws_url: impl Into<String>) -> Self {
+        let mut client = Self::new(store);
+        client.override_ws_url(ws_url.into());
+        client
+    }
+
+    /// Test-only: override the WebSocket URL for testability.
+    #[cfg(test)]
+    pub fn override_ws_url(&mut self, url: String) {
+        use crate::socket::consts;
+        // Safety: This is only used in tests, so it's fine to mutate the static.
+        *consts::URL.write().unwrap() = url;
+    }
+
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
             warn!("Client `run` method called while already running.");

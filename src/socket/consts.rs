@@ -2,7 +2,10 @@
 use crate::binary::token;
 
 pub const ORIGIN: &str = "https://web.whatsapp.com";
-pub const URL: &str = "wss://web.whatsapp.com/ws/chat";
+use std::sync::{LazyLock, RwLock};
+
+pub static URL: LazyLock<RwLock<String>> =
+    LazyLock::new(|| RwLock::new("wss://web.whatsapp.com/ws/chat".to_string()));
 
 pub const NOISE_START_PATTERN: &str = "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00";
 

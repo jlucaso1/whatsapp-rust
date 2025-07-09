@@ -12,6 +12,22 @@ use tokio::time::{timeout, Duration};
 use whatsapp_proto::whatsapp::cert_chain::noise_certificate;
 use whatsapp_proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 
+/// Expose for test: extract payload bytes from a Node (for handshake testing)
+#[cfg(test)]
+pub fn get_client_hello_payload_for_test(
+    node: &crate::binary::node::Node,
+) -> anyhow::Result<Vec<u8>> {
+    let payload = node
+        .content
+        .as_ref()
+        .and_then(|c| match c {
+            crate::binary::node::NodeContent::Bytes(b) => Some(b.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("ClientHello has no payload"))?;
+    Ok(payload)
+}
+
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 const WA_CERT_ISSUER_SERIAL: i64 = 0;
 

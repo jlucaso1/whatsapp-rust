@@ -107,7 +107,9 @@ pub(crate) async fn get_qr_channel_logic(
     let (stop_emitter_tx, stop_emitter_rx) = watch::channel(());
     let closed = Arc::new(AtomicBool::new(false));
 
-    let event_handlers_weak = Arc::downgrade(&client.event_handlers);
+    let event_handlers_weak: std::sync::Weak<
+        tokio::sync::RwLock<Vec<crate::client::WrappedHandler>>,
+    > = Arc::downgrade(&client.event_handlers);
     let handler_id_arc = Arc::new(tokio::sync::Mutex::new(None::<usize>));
 
     let handler = {

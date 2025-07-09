@@ -14,7 +14,7 @@ use crate::socket::FrameSocket;
 use tokio::sync::Mutex;
 
 pub struct NoiseSocket {
-    frame_socket: Arc<Mutex<FrameSocket>>,
+    pub(crate) frame_socket: Arc<Mutex<FrameSocket>>,
     write_key: Aes256Gcm,
     read_key: Aes256Gcm,
     write_counter: Arc<AtomicU32>,
@@ -62,5 +62,17 @@ impl NoiseSocket {
         self.read_key
             .decrypt(iv.as_ref().into(), ciphertext)
             .map_err(|e| SocketError::Crypto(e.to_string()))
+    }
+
+    /// Test-only: receive and decrypt a full node from the underlying FrameSocket.
+    #[cfg(test)]
+    pub async fn recv_node(&self) -> anyhow::Result<crate::binary::node::Node> {
+        let mut fs_guard = self.frame_socket.lock().await;
+        let frame = fs_guard.recv_frame_for_test().await?;
+        let decrypted = self
+            .decrypt_frame(&frame)
+            .map_err(|e| anyhow::anyhow!("Noise decrypt error: {:?}", e))?;
+        let unpacked = crate::binary::util::unpack(&decrypted)?;
+        Ok(crate::binary::unmarshal_ref(unpacked.as_ref())?.to_owned())
     }
 }
