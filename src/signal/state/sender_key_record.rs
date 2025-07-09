@@ -1,4 +1,3 @@
-use crate::signal::ecc;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use serde::{Deserialize, Serialize};
 use whatsapp_proto::whatsapp as wa;
@@ -53,7 +52,7 @@ impl SenderKeyRecord {
         id: u32,
         iteration: u32,
         chain_key: &[u8],
-        signing_key_pub: ecc::keys::DjbEcPublicKey,
+        signing_key_pub: &[u8],
     ) {
         let new_state = SenderKeyStateStructure {
             sender_key_id: Some(id),
@@ -62,7 +61,7 @@ impl SenderKeyRecord {
                 seed: Some(chain_key.to_vec()),
             }),
             sender_signing_key: Some(wa::sender_key_state_structure::SenderSigningKey {
-                public: Some(signing_key_pub.public_key.to_vec()),
+                public: Some(signing_key_pub.to_vec()),
                 private: None,
             }),
             sender_message_keys: Vec::new(),

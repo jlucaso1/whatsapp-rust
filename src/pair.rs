@@ -469,10 +469,15 @@ pub async fn pair_with_qr_code(
     final_message.extend_from_slice(&account_signature);
     final_message.extend_from_slice(&master_ephemeral.public_key);
     final_message.extend_from_slice(&identity_key.public_key);
-    
+
     // 4. Encrypt the final message
     let encryption_key = crate::crypto::hkdf::sha256(&shared_secret, None, b"WA-Ads-Key", 32)?;
-    let encrypted = crate::crypto::gcm::encrypt(&encryption_key, &[0; 12], &final_message, pairing_ref.as_bytes())?;
+    let encrypted = crate::crypto::gcm::encrypt(
+        &encryption_key,
+        &[0; 12],
+        &final_message,
+        pairing_ref.as_bytes(),
+    )?;
 
     // 5. Send the final pairing IQ stanza to the server
     let master_jid = store_guard.id.clone().unwrap();
@@ -496,7 +501,7 @@ pub async fn pair_with_qr_code(
     };
 
     client.send_node(iq).await?;
-    
+
     info!(target: "Client/PairTest", "Master client sent pairing confirmation.");
     Ok(())
 }

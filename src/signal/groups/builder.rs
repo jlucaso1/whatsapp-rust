@@ -1,7 +1,7 @@
 // Corresponds to libsignal-protocol-go/groups/GroupSessionBuilder.go
 
-use crate::signal::ecc::keys::DjbEcPublicKey;
-use crate::signal::groups::message::SenderKeyDistributionMessage;
+use whatsapp_proto::whatsapp::SenderKeyDistributionMessage;
+
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::store::SenderKeyStore;
 use crate::signal::util::keyhelper;
@@ -31,7 +31,7 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
             msg.id(),
             msg.iteration(),
             msg.chain_key(),
-            msg.signing_key().clone(),
+            msg.signing_key(),
         );
         self.sender_key_store
             .store_sender_key(sender_key_name, sender_key_record)
@@ -63,12 +63,12 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
             .try_into()
             .map_err(|_| "Invalid public key length")?;
         let chain_key_proto = state.sender_chain_key.as_ref().ok_or("No chain key")?;
-        let msg = crate::signal::groups::message::SenderKeyDistributionMessage::new(
-            state.sender_key_id.unwrap_or(0),
-            chain_key_proto.iteration.unwrap_or(0),
-            chain_key_proto.seed.as_deref().unwrap_or(&[]).to_vec(),
-            DjbEcPublicKey::new(signing_key_pub_bytes),
-        );
+        let msg = SenderKeyDistributionMessage {
+            id: Some(state.sender_key_id.unwrap_or(0)),
+            iteration: Some(chain_key_proto.iteration.unwrap_or(0)),
+            chain_key: Some(chain_key_proto.seed.as_deref().unwrap_or(&[]).to_vec()),
+            signing_key: Some(signing_key_pub_bytes.to_vec()),
+        };
         self.sender_key_store
             .store_sender_key(sender_key_name, record)
             .await?;

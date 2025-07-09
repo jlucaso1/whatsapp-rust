@@ -69,9 +69,9 @@ async fn test_pairing_and_keepalive() {
     let store_guard = harness.dut_client.store.read().await;
     let qr_code = whatsapp_rust::pair::make_qr_data(&store_guard, "test_ref_12345".to_string());
     drop(store_guard);
-    
+
     info!("📱 Generated QR code: {}", qr_code);
-    
+
     // Verify QR code format
     let parts: Vec<&str> = qr_code.split(',').collect();
     assert_eq!(parts.len(), 4, "QR code should have 4 parts");
@@ -90,7 +90,7 @@ async fn test_pairing_and_keepalive() {
 
     // 4. Test the pairing crypto logic (without requiring network connection)
     let result = pair_with_qr_code(&harness.master_client, &qr_code).await;
-    
+
     // The function should succeed in generating the pairing message even if network is unavailable
     // In a real environment, this would send the message over the network
     match result {
@@ -101,16 +101,17 @@ async fn test_pairing_and_keepalive() {
             // We expect this to fail due to network issues in the test environment
             // but the crypto logic should have worked up to the network call
             info!("⚠️ Pairing failed as expected due to network: {}", e);
-            
+
             // Verify it's a network-related error, not a crypto error
             let error_str = e.to_string();
             assert!(
-                error_str.contains("not connected") || 
-                error_str.contains("Socket") || 
-                error_str.contains("network") ||
-                error_str.contains("connection") ||
-                error_str.contains("WebSocket"),
-                "Should fail due to network issues, not crypto. Error: {}", error_str
+                error_str.contains("not connected")
+                    || error_str.contains("Socket")
+                    || error_str.contains("network")
+                    || error_str.contains("connection")
+                    || error_str.contains("WebSocket"),
+                "Should fail due to network issues, not crypto. Error: {}",
+                error_str
             );
         }
     }
@@ -118,12 +119,15 @@ async fn test_pairing_and_keepalive() {
     // 5. Test keepalive mechanism (simulate connection state)
     // Since we can't test real network keepalive without a connection,
     // we test the client's internal state management
-    
+
     // The client should report as not connected since we never established a real connection
-    assert!(!harness.dut_client.is_connected(), "Client should not be connected without network");
-    
+    assert!(
+        !harness.dut_client.is_connected(),
+        "Client should not be connected without network"
+    );
+
     info!("✅ E2E test completed - pairing logic validated, keepalive state verified");
-    
+
     // In a real environment with network access, this test would:
     // 1. Actually connect to WhatsApp servers
     // 2. Complete the full pairing handshake
@@ -136,23 +140,48 @@ fn test_qr_code_generation() {
     // Test the QR code generation in isolation
     let store_backend = Arc::new(MemoryStore::new());
     let store = Device::new(store_backend);
-    
+
     let qr_code = whatsapp_rust::pair::make_qr_data(&store, "test_ref_123".to_string());
-    
+
     // Verify QR code structure
     let parts: Vec<&str> = qr_code.split(',').collect();
-    assert_eq!(parts.len(), 4, "QR code should have exactly 4 comma-separated parts");
+    assert_eq!(
+        parts.len(),
+        4,
+        "QR code should have exactly 4 comma-separated parts"
+    );
     assert_eq!(parts[0], "test_ref_123", "First part should be the ref");
-    
+
     // Verify that the other parts are valid base64
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
-    
-    assert!(B64.decode(parts[1]).is_ok(), "Noise public key should be valid base64");
-    assert!(B64.decode(parts[2]).is_ok(), "Identity public key should be valid base64");
-    assert!(B64.decode(parts[3]).is_ok(), "ADV secret should be valid base64");
-    
+
+    assert!(
+        B64.decode(parts[1]).is_ok(),
+        "Noise public key should be valid base64"
+    );
+    assert!(
+        B64.decode(parts[2]).is_ok(),
+        "Identity public key should be valid base64"
+    );
+    assert!(
+        B64.decode(parts[3]).is_ok(),
+        "ADV secret should be valid base64"
+    );
+
     // Verify key lengths
-    assert_eq!(B64.decode(parts[1]).unwrap().len(), 32, "Noise public key should be 32 bytes");
-    assert_eq!(B64.decode(parts[2]).unwrap().len(), 32, "Identity public key should be 32 bytes");
-    assert_eq!(B64.decode(parts[3]).unwrap().len(), 32, "ADV secret should be 32 bytes");
+    assert_eq!(
+        B64.decode(parts[1]).unwrap().len(),
+        32,
+        "Noise public key should be 32 bytes"
+    );
+    assert_eq!(
+        B64.decode(parts[2]).unwrap().len(),
+        32,
+        "Identity public key should be 32 bytes"
+    );
+    assert_eq!(
+        B64.decode(parts[3]).unwrap().len(),
+        32,
+        "ADV secret should be 32 bytes"
+    );
 }
