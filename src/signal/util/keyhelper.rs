@@ -4,7 +4,7 @@ use crate::signal::ecc;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
-use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordStructureExt};
+use crate::signal::state::record;
 use chrono::Utc;
 use rand::{thread_rng, Rng};
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
@@ -19,7 +19,7 @@ pub fn generate_pre_keys(start: u32, count: u32) -> Vec<PreKeyRecordStructure> {
     let mut pre_keys = Vec::with_capacity(count as usize);
     for i in start..start + count {
         let key_pair = ecc::curve::generate_key_pair();
-        pre_keys.push(PreKeyRecordStructure::new(i, key_pair));
+        pre_keys.push(record::new_pre_key_record(i, key_pair));
     }
     pre_keys
 }
@@ -37,7 +37,7 @@ pub fn generate_signed_pre_key(
         &EcPublicKey::serialize(&key_pair.public_key),
     );
     let timestamp = Utc::now();
-    SignedPreKeyRecordStructure::new(signed_pre_key_id, key_pair, signature, timestamp)
+    record::new_signed_pre_key_record(signed_pre_key_id, key_pair, signature, timestamp)
 }
 
 pub fn generate_sender_signing_key() -> EcKeyPair {

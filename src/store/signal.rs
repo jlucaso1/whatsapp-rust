@@ -2,7 +2,7 @@ use crate::signal::address::SignalAddress;
 use crate::signal::ecc;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
 use crate::signal::sender_key_name::SenderKeyName;
-use crate::signal::state::record::SignedPreKeyRecordStructureExt;
+
 use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::*;
@@ -100,7 +100,7 @@ impl SignedPreKeyStore for Device {
                     self.signed_pre_key.key_pair.private_key,
                 ),
             );
-            let record = SignedPreKeyRecordStructure::new(
+            let record = crate::signal::state::record::new_signed_pre_key_record(
                 self.signed_pre_key.key_id,
                 key_pair,
                 self.signed_pre_key
