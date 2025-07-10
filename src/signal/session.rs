@@ -45,9 +45,9 @@ impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
         let signal_message = SignalMessage::new(
             message_keys.mac_key.as_deref().unwrap_or_default(),
             session_state.sender_ratchet_key(),
-            message_keys.index.unwrap_or(0),
+            message_keys.index(),
             session_state.previous_counter(),
-            ciphertext,
+            ciphertext.clone(),
             &session_state.local_identity_public(),
             &session_state.remote_identity_public(),
         )?;
@@ -237,7 +237,7 @@ impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
         &self,
         message: &PreKeySignalMessage,
     ) -> Result<Vec<u8>, DecryptionError> {
-        let mut session_record = self
+        let mut session_record: SessionRecord = self
             .store
             .load_session(&self.remote_address)
             .await
@@ -325,21 +325,18 @@ impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
             .downcast_ref::<DjbEcPublicKey>()
             .expect("Expected DjbEcPublicKey in sender_ratchet_key");
         let (chain_key, message_keys) =
-            self.get_or_create_message_keys(session_state, their_ephemeral, message.counter)?;
+            self.get_or_create_message_keys(session_state, their_ephemeral, message.counter())?;
 
         crate::signal::protocol::SignalMessage::deserialize_and_verify(
             &message.serialized_form,
             message_keys.mac_key.as_deref().unwrap_or_default(),
-            session_state.remote_identity_public().as_ref(),
+            &session_state.remote_identity_public(),
             session_state.local_identity_public().as_ref(),
         )?;
 
-        let decrypted_plaintext = self.decrypt_internal(&message_keys, &message.ciphertext)?;
+        let decrypted_plaintext = self.decrypt_internal(&message_keys, message.ciphertext())?;
 
-        session_state.set_receiver_chain_key(
-            message.sender_ratchet_key.clone(),
-            get_next_chain_key(&chain_key),
-        );
+        session_state.set_receiver_chain_key(message.sender_ratchet_key.clone(), chain_key);
 
         Ok(decrypted_plaintext)
     }
@@ -446,12 +443,12 @@ impl<S: SignalProtocolStore + Clone> SessionBuilder<S> {
         let our_identity = self.store.get_identity_key_pair().await?;
         let our_signed_prekey = self
             .store
-            .load_signed_prekey(message.signed_pre_key_id)
+            .load_signed_prekey(message.signed_pre_key_id())
             .await?
             .ok_or_else(|| BuilderError::NoSignedPreKey)?;
 
         let mut our_one_time_prekey: Option<PreKeyRecordStructure> = None;
-        if let Some(id) = message.pre_key_id {
+        if let Some(id) = message.pre_key_id() {
             match self.store.load_prekey(id).await? {
                 Some(record) => our_one_time_prekey = Some(record),
                 None => return Err(BuilderError::NoOneTimePreKeyFound(id)),
@@ -491,7 +488,7 @@ impl<S: SignalProtocolStore + Clone> SessionBuilder<S> {
             .await
             .map_err(BuilderError::Store)?;
 
-        Ok(message.pre_key_id)
+        Ok(message.pre_key_id())
     }
     /// Build a session from a PreKeyBundle (for outgoing messages)
     pub async fn process_bundle(

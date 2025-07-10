@@ -44,15 +44,24 @@ const CURRENT_VERSION: u8 = 3;
 
 // --- SignalMessage ---
 pub struct SignalMessage {
+    pub proto: whatsapp::SignalMessage,
     pub sender_ratchet_key: Arc<dyn EcPublicKey>,
-    pub counter: u32,
     pub message_version: u8,
-    pub previous_counter: u32,
-    pub ciphertext: Vec<u8>,
     pub serialized_form: Vec<u8>,
 }
 
 impl SignalMessage {
+    pub fn counter(&self) -> u32 {
+        self.proto.counter.unwrap_or(0)
+    }
+
+    pub fn previous_counter(&self) -> u32 {
+        self.proto.previous_counter.unwrap_or(0)
+    }
+
+    pub fn ciphertext(&self) -> &[u8] {
+        self.proto.ciphertext.as_deref().unwrap_or_default()
+    }
     pub fn new(
         mac_key: &[u8],
         sender_ratchet_key: Arc<dyn EcPublicKey>,
@@ -83,34 +92,33 @@ impl SignalMessage {
         serialized_form.extend_from_slice(&serialized_proto);
         serialized_form.extend_from_slice(&mac);
         Ok(Self {
+            proto,
             sender_ratchet_key,
-            counter,
             message_version: CURRENT_VERSION,
-            previous_counter,
-            ciphertext,
             serialized_form,
         })
     }
 
     pub fn deserialize(serialized: &[u8]) -> Result<Self, ProtocolError> {
-        if serialized.len() < 1 + MAC_LENGTH {
+        if serialized.len() < 2 {
             return Err(ProtocolError::IncompleteMessage);
         }
-        let version_byte = serialized[0];
-        let message_version = version_byte >> 4;
+        let message_version = serialized[0] >> 4;
         if message_version != CURRENT_VERSION {
             return Err(ProtocolError::InvalidVersion(message_version));
         }
         let serialized_proto = &serialized[1..serialized.len() - MAC_LENGTH];
         let proto = whatsapp::SignalMessage::decode(serialized_proto)?;
-        let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
-        let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)?;
+        let ratchet_key_bytes = proto
+            .ratchet_key
+            .as_ref()
+            .map(|v| &v[..])
+            .ok_or(ProtocolError::IncompleteMessage)?;
+        let ratchet_key = super::ecc::curve::decode_point(ratchet_key_bytes)?;
         Ok(SignalMessage {
+            proto,
             sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
-            counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
             message_version,
-            previous_counter: proto.previous_counter.unwrap_or(0),
-            ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
             serialized_form: serialized.to_vec(),
         })
     }
@@ -169,16 +177,18 @@ impl SignalMessage {
 
         let proto =
             whatsapp::SignalMessage::decode(serialized_proto).map_err(ProtocolError::Proto)?;
-        let ratchet_key_bytes = proto.ratchet_key.ok_or(ProtocolError::IncompleteMessage)?;
-        let ratchet_key = super::ecc::curve::decode_point(&ratchet_key_bytes)
+        let ratchet_key_bytes = proto
+            .ratchet_key
+            .as_ref()
+            .map(|v| &v[..])
+            .ok_or(ProtocolError::IncompleteMessage)?;
+        let ratchet_key = super::ecc::curve::decode_point(ratchet_key_bytes)
             .map_err(ProtocolError::InvalidKey)?;
 
         Ok(Self {
+            proto,
             sender_ratchet_key: Arc::new(ratchet_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
-            counter: proto.counter.ok_or(ProtocolError::IncompleteMessage)?,
             message_version,
-            previous_counter: proto.previous_counter.unwrap_or(0),
-            ciphertext: proto.ciphertext.ok_or(ProtocolError::IncompleteMessage)?,
             serialized_form: serialized.to_vec(),
         })
     }
@@ -194,9 +204,7 @@ impl CiphertextMessage for SignalMessage {
 }
 
 pub struct PreKeySignalMessage {
-    pub registration_id: u32,
-    pub pre_key_id: Option<u32>,
-    pub signed_pre_key_id: u32,
+    pub proto: whatsapp::PreKeySignalMessage,
     pub base_key: Arc<dyn EcPublicKey>,
     pub identity_key: IdentityKey,
     pub message: SignalMessage,
@@ -204,6 +212,15 @@ pub struct PreKeySignalMessage {
 }
 
 impl PreKeySignalMessage {
+    pub fn registration_id(&self) -> u32 {
+        self.proto.registration_id.unwrap_or(0)
+    }
+    pub fn pre_key_id(&self) -> Option<u32> {
+        self.proto.pre_key_id
+    }
+    pub fn signed_pre_key_id(&self) -> u32 {
+        self.proto.signed_pre_key_id.unwrap_or(0)
+    }
     pub fn new(
         registration_id: u32,
         pre_key_id: Option<u32>,
@@ -213,16 +230,14 @@ impl PreKeySignalMessage {
         message: SignalMessage,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let version_byte = (CURRENT_VERSION << 4) | CURRENT_VERSION;
-
         let proto = whatsapp::PreKeySignalMessage {
             registration_id: Some(registration_id),
             pre_key_id,
             signed_pre_key_id: Some(signed_pre_key_id),
             base_key: Some(base_key.serialize()),
             identity_key: Some(identity_key.serialize()),
-            message: Some(message.serialize()),
+            message: Some(message.serialized_form.clone()),
         };
-
         let mut serialized_proto = Vec::new();
         proto.encode(&mut serialized_proto)?;
 
@@ -231,9 +246,7 @@ impl PreKeySignalMessage {
         serialized_form.extend_from_slice(&serialized_proto);
 
         Ok(Self {
-            registration_id,
-            pre_key_id,
-            signed_pre_key_id,
+            proto,
             base_key,
             identity_key,
             message,
@@ -250,30 +263,29 @@ impl PreKeySignalMessage {
         if serialized.len() < 2 {
             return Err(ProtocolError::IncompleteMessage);
         }
-        let version_byte = serialized[0];
-        let message_version = version_byte >> 4;
+        let message_version = serialized[0] >> 4;
         if message_version != CURRENT_VERSION {
             return Err(ProtocolError::InvalidVersion(message_version));
         }
         let proto = whatsapp::PreKeySignalMessage::decode(&serialized[1..])
             .map_err(ProtocolError::Proto)?;
-        let registration_id = proto
-            .registration_id
+        let base_key_bytes = proto
+            .base_key
+            .as_deref()
             .ok_or(ProtocolError::IncompleteMessage)?;
-        let pre_key_id = proto.pre_key_id;
-        let signed_pre_key_id = proto
-            .signed_pre_key_id
+        let identity_key_bytes = proto
+            .identity_key
+            .as_deref()
             .ok_or(ProtocolError::IncompleteMessage)?;
-        let base_key = proto.base_key.ok_or(ProtocolError::IncompleteMessage)?;
-        let identity_key = proto.identity_key.ok_or(ProtocolError::IncompleteMessage)?;
-        let message_bytes = proto.message.ok_or(ProtocolError::IncompleteMessage)?;
-        let base_key = super::ecc::curve::decode_point(&base_key)?;
-        let identity_key = IdentityKey::deserialize(&identity_key)?;
-        let message = SignalMessage::deserialize(&message_bytes)?;
+        let message_bytes = proto
+            .message
+            .as_deref()
+            .ok_or(ProtocolError::IncompleteMessage)?;
+        let base_key = super::ecc::curve::decode_point(base_key_bytes)?;
+        let identity_key = IdentityKey::deserialize(identity_key_bytes)?;
+        let message = SignalMessage::deserialize(message_bytes)?;
         Ok(Self {
-            registration_id,
-            pre_key_id,
-            signed_pre_key_id,
+            proto,
             base_key: Arc::new(base_key) as Arc<dyn super::ecc::keys::EcPublicKey>,
             identity_key,
             message,
@@ -283,30 +295,6 @@ impl PreKeySignalMessage {
 }
 
 // --- Move these impls to module scope ---
-
-impl From<whatsapp::SignalMessage> for SignalMessage {
-    fn from(proto: whatsapp::SignalMessage) -> Self {
-        Self {
-            counter: proto.counter.unwrap_or_default(),
-            previous_counter: proto.previous_counter.unwrap_or_default(),
-            ciphertext: proto.ciphertext.unwrap_or_default(),
-            ..Default::default()
-        }
-    }
-}
-
-impl Default for SignalMessage {
-    fn default() -> Self {
-        Self {
-            sender_ratchet_key: Arc::new(super::ecc::keys::DjbEcPublicKey::new([0; 32])),
-            message_version: CURRENT_VERSION,
-            counter: 0,
-            previous_counter: 0,
-            ciphertext: Vec::new(),
-            serialized_form: Vec::new(),
-        }
-    }
-}
 
 impl CiphertextMessage for PreKeySignalMessage {
     fn serialize(&self) -> Vec<u8> {
