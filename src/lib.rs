@@ -18,6 +18,11 @@ pub mod socket;
 pub mod store;
 pub mod types;
 
+// New modules
+pub mod prekeys;
+pub mod receipt;
+pub mod retry;
+
 pub mod signal;
 pub mod error {
     pub mod decryption;

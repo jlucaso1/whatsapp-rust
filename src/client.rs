@@ -2,13 +2,14 @@ use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
-use crate::signal::address::SignalAddress;
-use crate::signal::store::{SenderKeyStore, SessionStore};
+
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
 
 use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
+
+// New modules for refactored logic
 
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -44,9 +45,9 @@ pub enum ClientError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct RecentMessageKey {
-    to: crate::types::jid::Jid,
-    id: String,
+pub struct RecentMessageKey {
+    pub to: crate::types::jid::Jid,
+    pub id: String,
 }
 
 pub struct Client {
@@ -405,55 +406,6 @@ impl Client {
         warn!(target: "Client", "TODO: Implement handler for <{tag}>");
     }
 
-    async fn handle_receipt(self: &Arc<Self>, node: &Node) {
-        let mut attrs = node.attrs();
-        let from = attrs.jid("from");
-        let id = attrs.string("id");
-        let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
-        let participant = attrs.optional_jid("participant");
-
-        use crate::types::presence::ReceiptType;
-        let receipt_type = ReceiptType::from(receipt_type_str.to_string());
-
-        info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
-
-        let sender = if from.is_group() && participant.is_some() {
-            participant.unwrap()
-        } else {
-            from.clone()
-        };
-
-        let receipt = crate::types::events::Receipt {
-            message_ids: vec![id.clone()],
-            source: crate::types::message::MessageSource {
-                chat: from.clone(),
-                sender: sender.clone(),
-                ..Default::default()
-            },
-            timestamp: chrono::Utc::now(),
-            r#type: receipt_type.clone(),
-            message_sender: sender.clone(),
-        };
-
-        if receipt_type == ReceiptType::Retry {
-            let client_clone = Arc::clone(self);
-            let node_clone = node.clone();
-            tokio::spawn(async move {
-                if let Err(e) = client_clone
-                    .handle_retry_receipt(&receipt, &node_clone)
-                    .await
-                {
-                    log::warn!(
-                        "Failed to handle retry receipt for {}: {e:?}",
-                        receipt.message_ids[0]
-                    );
-                }
-            });
-        } else {
-            self.dispatch_event(Event::Receipt(receipt)).await;
-        }
-    }
-
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
         use crate::binary::node::Node;
         use crate::request::{InfoQuery, InfoQueryType};
@@ -802,146 +754,6 @@ impl Client {
             ))
             .await;
         }
-        Ok(())
-    }
-
-    /// Add a message to the recent message cache (with eviction)
-    pub(crate) async fn add_recent_message(
-        &self,
-        to: crate::types::jid::Jid,
-        id: String,
-        msg: wa::Message,
-    ) {
-        const RECENT_MESSAGES_SIZE: usize = 256;
-        let key = RecentMessageKey { to, id };
-        let mut map_guard = self.recent_messages_map.lock().await;
-        let mut list_guard = self.recent_messages_list.lock().await;
-
-        if list_guard.len() >= RECENT_MESSAGES_SIZE {
-            if let Some(old_key) = list_guard.pop_front() {
-                map_guard.remove(&old_key);
-            }
-        }
-        list_guard.push_back(key.clone());
-        map_guard.insert(key, msg);
-    }
-
-    /// Retrieve a message from the recent message cache
-    pub(crate) async fn get_recent_message(
-        &self,
-        to: crate::types::jid::Jid,
-        id: String,
-    ) -> Option<wa::Message> {
-        let key = RecentMessageKey { to, id };
-        let map_guard = self.recent_messages_map.lock().await;
-        map_guard.get(&key).cloned()
-    }
-
-    /// Handle retry receipt: clear session and resend original message
-    pub(crate) async fn handle_retry_receipt(
-        &self,
-        receipt: &crate::types::events::Receipt,
-        node: &Node,
-    ) -> Result<(), anyhow::Error> {
-        let retry_child = node
-            .get_optional_child("retry")
-            .ok_or_else(|| anyhow::anyhow!("<retry> child missing from receipt"))?;
-
-        let message_id = retry_child.attrs().string("id");
-
-        let original_msg = self
-            .get_recent_message(receipt.source.chat.clone(), message_id.clone())
-            .await
-            .ok_or_else(|| {
-                anyhow::anyhow!("Could not find message {} in cache for retry", message_id)
-            })?;
-
-        let participant_jid = receipt.source.sender.clone();
-
-        // Check if this is a group message
-        if receipt.source.chat.is_group() {
-            // For group messages, delete the sender key to force generation of a new one
-            // This is the key fix to prevent infinite retry loops
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            let own_lid = device_snapshot
-                .lid
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("LID missing for group retry handling"))?;
-
-            let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
-            let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
-                receipt.source.chat.to_string(),
-                sender_address.to_string(),
-            );
-
-            let device_store = self.persistence_manager.get_device_arc().await;
-
-            // Delete the sender key record to force creation of a new one
-            if let Err(e) = device_store.delete_sender_key(&sender_key_name).await {
-                log::warn!(
-                    "Failed to delete sender key for group {}: {}",
-                    receipt.source.chat,
-                    e
-                );
-            } else {
-                info!(
-                    "Deleted sender key for group {} due to retry receipt from {}",
-                    receipt.source.chat, participant_jid
-                );
-            }
-
-            // Also delete the pairwise session with the participant who sent the retry
-            let signal_address = crate::signal::address::SignalAddress::new(
-                participant_jid.user.clone(),
-                participant_jid.device as u32,
-            );
-
-            if let Err(e) = device_store.delete_session(&signal_address).await {
-                // It's not a critical error if the session file doesn't exist,
-                // especially when dealing with the primary device (:0).
-                if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
-                    if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
-                    {
-                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
-                    }
-                } else {
-                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
-                }
-            } else {
-                info!(
-                    "Deleted session for {} due to retry receipt",
-                    signal_address
-                );
-            }
-        } else {
-            // For direct messages, only delete the pairwise session
-            let signal_address = crate::signal::address::SignalAddress::new(
-                participant_jid.user.clone(),
-                participant_jid.device as u32,
-            );
-
-            let device_store = self.persistence_manager.get_device_arc().await;
-            if let Err(e) = device_store.delete_session(&signal_address).await {
-                // It's not a critical error if the session file doesn't exist.
-                if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
-                    if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
-                    {
-                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
-                    }
-                } else {
-                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
-                }
-            } else {
-                info!(
-                    "Deleted session for {} due to retry receipt",
-                    signal_address
-                );
-            }
-        }
-
-        // Resend the original message
-        self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id)
-            .await?; // Use _impl to send with original ID
         Ok(())
     }
 
