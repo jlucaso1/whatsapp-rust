@@ -30,7 +30,8 @@ async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     if let Some(own_jid) = device_snapshot.id.clone() {
         let own_non_ad = own_jid.to_non_ad();
-        if let Err(e) = client.send_message(own_non_ad, msg).await {
+        let request_id = client.generate_message_id().await;
+        if let Err(e) = client.send_message_impl(own_non_ad, msg, request_id).await {
             warn!("Failed to send app state key request: {e:?}");
         }
     } else {

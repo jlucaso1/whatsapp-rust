@@ -120,8 +120,13 @@ async fn test_group_messaging_end_to_end() {
         bob_device.clone(),
         bob_builder_for_decrypt1,
     );
+    // Serialize and deserialize the message to get the verification data
+    let serialized_msg1 = encrypted_message1.serialize();
+    let (deserialized_msg1, data_to_verify1) =
+        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg1)
+            .expect("Should deserialize message 1");
     let decrypted1_bob = bob_cipher
-        .decrypt(&encrypted_message1)
+        .decrypt(&deserialized_msg1, data_to_verify1)
         .await
         .expect("Bob should decrypt message 1");
     assert_eq!(
@@ -138,7 +143,7 @@ async fn test_group_messaging_end_to_end() {
         charlie_builder_for_decrypt1,
     );
     let decrypted1_charlie = charlie_cipher
-        .decrypt(&encrypted_message1)
+        .decrypt(&deserialized_msg1, data_to_verify1)
         .await
         .expect("Charlie should decrypt message 1");
     assert_eq!(
@@ -180,8 +185,13 @@ async fn test_group_messaging_end_to_end() {
         bob_device.clone(),
         bob_builder_for_decrypt2,
     );
+    // Serialize and deserialize the message to get the verification data
+    let serialized_msg2 = encrypted_message2.serialize();
+    let (deserialized_msg2, data_to_verify2) =
+        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg2)
+            .expect("Should deserialize message 2");
     let decrypted2_bob = bob_cipher2
-        .decrypt(&encrypted_message2)
+        .decrypt(&deserialized_msg2, data_to_verify2)
         .await
         .expect("Bob should decrypt message 2");
     assert_eq!(
@@ -198,7 +208,7 @@ async fn test_group_messaging_end_to_end() {
         charlie_builder_for_decrypt2,
     );
     let decrypted2_charlie = charlie_cipher2
-        .decrypt(&encrypted_message2)
+        .decrypt(&deserialized_msg2, data_to_verify2)
         .await
         .expect("Charlie should decrypt message 2");
     assert_eq!(
@@ -297,15 +307,36 @@ async fn test_group_messaging_out_of_order() {
         GroupCipher::new(sender_key_name.clone(), bob_device.clone(), bob_builder_ooo);
 
     // Decrypt message 1
-    let decrypted1 = bob_cipher_ooo.decrypt(&msg1).await.unwrap();
+    let serialized_msg1 = msg1.serialize();
+    let (deserialized_msg1, data_to_verify1) =
+        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg1)
+            .unwrap();
+    let decrypted1 = bob_cipher_ooo
+        .decrypt(&deserialized_msg1, data_to_verify1)
+        .await
+        .unwrap();
     assert_eq!(decrypted1, plaintext1);
 
     // Decrypt message 3 (skipping message 2)
-    let decrypted3 = bob_cipher_ooo.decrypt(&msg3).await.unwrap();
+    let serialized_msg3 = msg3.serialize();
+    let (deserialized_msg3, data_to_verify3) =
+        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg3)
+            .unwrap();
+    let decrypted3 = bob_cipher_ooo
+        .decrypt(&deserialized_msg3, data_to_verify3)
+        .await
+        .unwrap();
     assert_eq!(decrypted3, plaintext3);
 
     // Decrypt message 2 (out of order)
-    let decrypted2 = bob_cipher_ooo.decrypt(&msg2).await.unwrap();
+    let serialized_msg2 = msg2.serialize();
+    let (deserialized_msg2, data_to_verify2) =
+        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg2)
+            .unwrap();
+    let decrypted2 = bob_cipher_ooo
+        .decrypt(&deserialized_msg2, data_to_verify2)
+        .await
+        .unwrap();
     assert_eq!(decrypted2, plaintext2);
 
     println!("✅ Out-of-order message handling test passed!");

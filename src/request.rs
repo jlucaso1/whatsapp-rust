@@ -8,9 +8,9 @@ use thiserror::Error;
 use tokio::time::timeout;
 
 // Additional imports for message ID generation
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rand::RngCore;
 
 /// Represents the type of an IQ stanza.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl Client {
             data.extend_from_slice(jid.user.as_bytes());
             data.extend_from_slice(b"@c.us"); // whatsmeow uses legacy server here
         }
-        
+
         // 3. Add random bytes (16 bytes)
         let mut random_bytes = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut random_bytes);

@@ -163,11 +163,15 @@ impl Client {
                         continue;
                     }
                     let decrypt_closure = || async {
+                        let (sk_msg, data_to_verify) = SenderKeyMessage::deserialize(&ciphertext)
+                            .map_err(|e| {
+                            anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
+                        })?;
+
                         let sender_key_name = SenderKeyName::new(
                             info.source.chat.to_string(),
                             info.source.sender.user.clone(),
                         );
-                        // Use Arc<Mutex<Device>> as the store for GroupCipher
                         let device_store_for_group =
                             self.persistence_manager.get_device_arc().await;
                         let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
@@ -175,11 +179,8 @@ impl Client {
                         );
                         let cipher =
                             GroupCipher::new(sender_key_name, device_store_for_group, builder);
-                        let sk_msg = SenderKeyMessage::deserialize(&ciphertext).map_err(|e| {
-                            anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
-                        })?;
                         cipher
-                            .decrypt(&sk_msg)
+                            .decrypt(&sk_msg, data_to_verify)
                             .await
                             .map_err(|e| anyhow::anyhow!("{e}"))
                     };
