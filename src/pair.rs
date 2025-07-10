@@ -42,8 +42,9 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     for grandchild in child.get_children_by_tag("ref") {
                         if let Some(NodeContent::Bytes(bytes)) = &grandchild.content {
                             if let Ok(r) = String::from_utf8(bytes.clone()) {
-                                let store_guard = client.store.read().await;
-                                codes.push(make_qr_data(&store_guard, r));
+                                let device_snapshot =
+                                    client.persistence_manager.get_device_snapshot().await;
+                                codes.push(make_qr_data(&device_snapshot, r));
                             }
                         }
                     }
@@ -165,16 +166,17 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
     };
 
     // Perform the crypto operations directly and respond only once.
-    let result = do_pair_crypto(&client.store, &device_identity_bytes).await;
+    // do_pair_crypto now takes Arc<PersistenceManager>
+    let result = do_pair_crypto(client.persistence_manager.clone(), &device_identity_bytes).await;
 
     match result {
         Ok((self_signed_identity_bytes, key_index)) => {
-            let signed_identity = match wa::AdvSignedDeviceIdentity::decode(
+            let signed_identity_for_event = match wa::AdvSignedDeviceIdentity::decode(
                 self_signed_identity_bytes.as_slice(),
             ) {
-                Ok(identity) => Some(identity),
+                Ok(identity) => identity,
                 Err(e) => {
-                    error!("FATAL: Failed to re-decode self-signed identity for storage, pairing cannot complete: {e}");
+                    error!("FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}");
                     client
                         .dispatch_event(Event::PairError(PairError {
                             id: jid.clone(),
@@ -182,7 +184,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                             business_name: business_name.clone(),
                             platform: platform.clone(),
                             error: format!(
-                                "internal error: failed to decode identity for storage: {e}"
+                                "internal error: failed to decode identity for event: {e}"
                             ),
                         }))
                         .await;
@@ -190,21 +192,41 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 }
             };
 
-            // Update the in-memory store immediately
-            let mut store_guard = client.store.write().await;
-            store_guard.id = Some(jid.clone());
-            store_guard.account = signed_identity;
+            // Update the store via PersistenceManager commands
+            client
+                .persistence_manager
+                .process_command(crate::store::commands::DeviceCommand::SetId(Some(
+                    jid.clone(),
+                )))
+                .await;
+            // The signed_identity_for_event is already the correct type for SetAccount
+            client
+                .persistence_manager
+                .process_command(crate::store::commands::DeviceCommand::SetAccount(Some(
+                    signed_identity_for_event.clone(),
+                )))
+                .await;
+            client
+                .persistence_manager
+                .process_command(crate::store::commands::DeviceCommand::SetLid(Some(
+                    lid.clone(),
+                )))
+                .await;
 
             // Only set push_name if we actually got one.
             if !business_name.is_empty() {
                 info!("✅ Setting push_name during pairing: '{}'", &business_name);
-                store_guard.push_name = business_name.clone();
+                client
+                    .persistence_manager
+                    .process_command(crate::store::commands::DeviceCommand::SetPushName(
+                        business_name.clone(),
+                    ))
+                    .await;
             } else {
                 info!(
                     "⚠️ business_name not found in pair-success, push_name remains unset for now."
                 );
             }
-            drop(store_guard);
 
             let response_content = Node {
                 tag: "pair-device-sign".into(),
@@ -282,11 +304,12 @@ impl std::fmt::Display for PairCryptoError {
 }
 
 async fn do_pair_crypto(
-    store: &tokio::sync::RwLock<crate::store::Device>,
+    // store: &tokio::sync::RwLock<crate::store::Device>, // Old store type
+    persistence_manager: Arc<crate::store::persistence_manager::PersistenceManager>, // New type
     device_identity_bytes: &[u8],
 ) -> Result<(Vec<u8>, u32), PairCryptoError> {
-    let store_guard = store.read().await;
-    // 1. Unmarshal HMAC container and verify HMAC
+    let device_snapshot = persistence_manager.get_device_snapshot().await; // Get snapshot
+                                                                           // 1. Unmarshal HMAC container and verify HMAC
     let hmac_container =
         wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes).map_err(|e| {
             PairCryptoError {
@@ -300,8 +323,8 @@ async fn do_pair_crypto(
     let is_hosted_account = hmac_container.account_type.is_some()
         && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
-    let mut mac = HmacSha256::new_from_slice(&store_guard.adv_secret_key).unwrap();
-    // Get details and hmac as slices, handling potential None values
+    let mut mac = HmacSha256::new_from_slice(&device_snapshot.adv_secret_key).unwrap(); // Use snapshot
+                                                                                        // Get details and hmac as slices, handling potential None values
     let details_bytes = hmac_container
         .details
         .as_deref()
@@ -352,7 +375,7 @@ async fn do_pair_crypto(
     let msg_to_verify = concat_bytes(&[
         account_sig_prefix,
         &inner_details_bytes,
-        &store_guard.identity_key.public_key,
+        &device_snapshot.identity_key.public_key, // Use snapshot
     ]);
 
     let Ok(signature) = ed25519_dalek::Signature::from_slice(account_sig_bytes) else {
@@ -385,10 +408,13 @@ async fn do_pair_crypto(
     let msg_to_sign = concat_bytes(&[
         device_sig_prefix,
         &inner_details_bytes,
-        &store_guard.identity_key.public_key,
+        &device_snapshot.identity_key.public_key, // Use snapshot
         account_sig_key_bytes,
     ]);
-    let device_signature = store_guard.identity_key.sign_message(&msg_to_sign).to_vec();
+    let device_signature = device_snapshot
+        .identity_key
+        .sign_message(&msg_to_sign)
+        .to_vec(); // Use snapshot
     signed_identity.device_signature = Some(device_signature);
 
     // 4. Unmarshal final details to get key_index
@@ -452,9 +478,9 @@ pub async fn pair_with_qr_code(
     let master_ephemeral = crate::crypto::key_pair::KeyPair::new();
 
     // 3. Perform the cryptographic exchange to create the shared secrets
-    let store_guard = client.store.read().await;
-    let adv_key = &store_guard.adv_secret_key;
-    let identity_key = &store_guard.identity_key;
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await; // Use snapshot
+    let adv_key = &device_snapshot.adv_secret_key;
+    let identity_key = &device_snapshot.identity_key;
 
     let mut mac = HmacSha256::new_from_slice(adv_key).unwrap();
     mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
@@ -480,8 +506,8 @@ pub async fn pair_with_qr_code(
     )?;
 
     // 5. Send the final pairing IQ stanza to the server
-    let master_jid = store_guard.id.clone().unwrap();
-    drop(store_guard);
+    let master_jid = device_snapshot.id.clone().unwrap(); // Use snapshot
+                                                          // drop(store_guard) // Not needed
 
     let response_content = Node {
         tag: "pair-device-sign".into(),

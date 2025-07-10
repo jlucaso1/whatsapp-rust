@@ -9,7 +9,7 @@ use crate::signal::store::*;
 use crate::store::Device;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock}; // Added Mutex
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 // --- IdentityKeyStore ---
@@ -145,6 +145,7 @@ impl SignedPreKeyStore for Device {
 #[async_trait]
 impl SessionStore for Device {
     async fn load_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
@@ -161,6 +162,7 @@ impl SessionStore for Device {
     }
 
     async fn store_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
@@ -173,12 +175,14 @@ impl SessionStore for Device {
     }
 
     async fn get_sub_device_sessions(
+        // Name matches trait
         &self,
         _name: &str,
     ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(vec![])
     }
     async fn contains_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
@@ -188,6 +192,7 @@ impl SessionStore for Device {
             .map_err(|e| e.into())
     }
     async fn delete_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -197,9 +202,11 @@ impl SessionStore for Device {
             .map_err(|e| e.into())
     }
     async fn delete_all_sessions(
+        // Reverted name, trait returns ()
         &self,
         _name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Return type ()
         Ok(())
     }
 }
@@ -331,41 +338,48 @@ impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<RwLock<T>> {
 #[async_trait]
 impl<T: SessionStore + Send + Sync> SessionStore for Arc<RwLock<T>> {
     async fn load_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_session(address).await
+        self.read().await.load_session(address).await // Reverted name
     }
     async fn get_sub_device_sessions(
+        // Matches trait
         &self,
         name: &str,
     ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
         self.read().await.get_sub_device_sessions(name).await
     }
     async fn store_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.store_session(address, record).await
+        self.read().await.store_session(address, record).await // Reverted name
     }
     async fn contains_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.contains_session(address).await
+        self.read().await.contains_session(address).await // Reverted name
     }
     async fn delete_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.delete_session(address).await
+        self.read().await.delete_session(address).await // Reverted name
     }
     async fn delete_all_sessions(
+        // Reverted name
         &self,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.delete_all_sessions(name).await
+        // Return type ()
+        self.read().await.delete_all_sessions(name).await // Reverted name
     }
 }
 
@@ -492,41 +506,48 @@ impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<T> {
 #[async_trait]
 impl<T: SessionStore + Send + Sync> SessionStore for Arc<T> {
     async fn load_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_session(address).await
+        self.as_ref().load_session(address).await // Reverted name
     }
     async fn get_sub_device_sessions(
+        // Matches trait
         &self,
         name: &str,
     ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
         self.as_ref().get_sub_device_sessions(name).await
     }
     async fn store_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().store_session(address, record).await
+        self.as_ref().store_session(address, record).await // Reverted name
     }
     async fn contains_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().contains_session(address).await
+        self.as_ref().contains_session(address).await // Reverted name
     }
     async fn delete_session(
+        // Reverted name
         &self,
         address: &SignalAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().delete_session(address).await
+        self.as_ref().delete_session(address).await // Reverted name
     }
     async fn delete_all_sessions(
+        // Reverted name
         &self,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().delete_all_sessions(name).await
+        // Return type ()
+        self.as_ref().delete_all_sessions(name).await // Reverted name
     }
 }
 
@@ -547,5 +568,179 @@ impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<T> {
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
         self.as_ref().load_sender_key(sender_key_name).await
+    }
+}
+
+// --- Arc<Mutex<T>> wrappers for SignalProtocolStore traits ---
+
+#[async_trait]
+impl<T: IdentityKeyStore + Send + Sync> IdentityKeyStore for Arc<Mutex<T>> {
+    async fn get_identity_key_pair(
+        &self,
+    ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.get_identity_key_pair().await
+    }
+    async fn get_local_registration_id(
+        &self,
+    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.get_local_registration_id().await
+    }
+    async fn save_identity(
+        &self,
+        address: &SignalAddress,
+        identity_key: &IdentityKey,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.save_identity(address, identity_key).await
+    }
+    async fn is_trusted_identity(
+        &self,
+        address: &SignalAddress,
+        identity_key: &IdentityKey,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock()
+            .await
+            .is_trusted_identity(address, identity_key)
+            .await
+    }
+}
+
+#[async_trait]
+impl<T: PreKeyStore + Send + Sync> PreKeyStore for Arc<Mutex<T>> {
+    async fn load_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.load_prekey(prekey_id).await
+    }
+    async fn store_prekey(
+        &self,
+        prekey_id: u32,
+        record: PreKeyRecordStructure,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.store_prekey(prekey_id, record).await
+    }
+    async fn contains_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.contains_prekey(prekey_id).await
+    }
+    async fn remove_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.remove_prekey(prekey_id).await
+    }
+}
+
+#[async_trait]
+impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<Mutex<T>> {
+    async fn load_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.load_signed_prekey(signed_prekey_id).await
+    }
+    async fn load_signed_prekeys(
+        &self,
+    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.load_signed_prekeys().await
+    }
+    async fn store_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+        record: SignedPreKeyRecordStructure,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock()
+            .await
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
+    }
+    async fn contains_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock()
+            .await
+            .contains_signed_prekey(signed_prekey_id)
+            .await
+    }
+    async fn remove_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock()
+            .await
+            .remove_signed_prekey(signed_prekey_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl<T: SessionStore + Send + Sync> SessionStore for Arc<Mutex<T>> {
+    async fn load_session(
+        // Reverted name
+        &self,
+        address: &SignalAddress,
+    ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.load_session(address).await // Reverted name
+    }
+    async fn get_sub_device_sessions(
+        // Matches trait
+        &self,
+        name: &str,
+    ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.get_sub_device_sessions(name).await
+    }
+    async fn store_session(
+        // Reverted name
+        &self,
+        address: &SignalAddress,
+        record: &SessionRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.store_session(address, record).await // Reverted name
+    }
+    async fn contains_session(
+        // Reverted name
+        &self,
+        address: &SignalAddress,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.contains_session(address).await // Reverted name
+    }
+    async fn delete_session(
+        // Reverted name
+        &self,
+        address: &SignalAddress,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.delete_session(address).await // Reverted name
+    }
+    async fn delete_all_sessions(
+        // Reverted name
+        &self,
+        name: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Return type ()
+        self.lock().await.delete_all_sessions(name).await // Reverted name
+    }
+}
+
+#[async_trait]
+impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<Mutex<T>> {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock()
+            .await
+            .store_sender_key(sender_key_name, record)
+            .await
+    }
+
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.load_sender_key(sender_key_name).await
     }
 }

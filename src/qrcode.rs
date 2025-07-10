@@ -99,7 +99,9 @@ pub(crate) async fn get_qr_channel_logic(
     if client.is_connected() {
         return Err(QrError::AlreadyConnected);
     }
-    if client.store.read().await.id.is_some() {
+    // Use persistence_manager to check login status
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    if device_snapshot.id.is_some() {
         return Err(QrError::AlreadyLoggedIn);
     }
 

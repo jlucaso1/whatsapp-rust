@@ -2,7 +2,7 @@ use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
-use crate::store;
+use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self
 
 use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
@@ -48,7 +48,8 @@ pub(crate) struct RecentMessageKey {
 }
 
 pub struct Client {
-    pub store: std::sync::Arc<tokio::sync::RwLock<store::Device>>,
+    // pub store: std::sync::Arc<tokio::sync::RwLock<store::Device>>, // Replaced with persistence_manager
+    pub persistence_manager: Arc<PersistenceManager>,
 
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 
@@ -85,12 +86,14 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(store: store::Device) -> Self {
+    // pub fn new(store: store::Device) -> Self { // Old constructor
+    pub fn new(persistence_manager: Arc<PersistenceManager>) -> Self {
         let mut unique_id_bytes = [0u8; 2];
         rand::thread_rng().fill_bytes(&mut unique_id_bytes);
 
         Self {
-            store: std::sync::Arc::new(tokio::sync::RwLock::new(store)),
+            // store: std::sync::Arc::new(tokio::sync::RwLock::new(store)), // Old store
+            persistence_manager,
             media_conn: Arc::new(Mutex::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
@@ -186,8 +189,14 @@ impl Client {
         let (mut frame_socket, mut frames_rx) = FrameSocket::new();
         frame_socket.connect().await?;
 
+        // Use persistence_manager to get a device snapshot for handshake
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let noise_socket =
-            handshake::do_handshake(&self.store, &mut frame_socket, &mut frames_rx).await?;
+            handshake::do_handshake(&device_snapshot, &mut frame_socket, &mut frames_rx).await?;
+        // It's assumed do_handshake might modify the device_snapshot (e.g. JID, account details after pairing)
+        // If so, these changes need to be committed back via PersistenceManager commands.
+        // For QR pairing, this is handled by QrCodeEvent::Success which should trigger commands.
+        // For login, the <success> handler will update the device via commands.
 
         *self.frame_socket.lock().await = Some(frame_socket);
         *self.frames_rx.lock().await = Some(frames_rx);
@@ -292,9 +301,14 @@ impl Client {
                 .unwrap_or(true);
             if needs_cleanup {
                 *last_cleanup = Some(now);
-                let client_clone = self.clone();
+                let pm_clone = self.persistence_manager.clone(); // Use persistence_manager
                 tokio::spawn(async move {
-                    let backend = client_clone.store.read().await.backend.clone();
+                    // Access backend through persistence_manager's device's backend
+                    // This requires PersistenceManager to expose a way to get the backend,
+                    // or for Device to hold an Arc<dyn Backend> that PM initializes.
+                    // Assuming Device has `backend: Arc<dyn Backend>`
+                    let device_snapshot = pm_clone.get_device_snapshot().await;
+                    let backend = device_snapshot.backend.clone();
                     // Delete entries older than 14 days, similar to whatsmeow
                     let cutoff = chrono::Utc::now() - chrono::Duration::days(14);
                     if let Err(e) = backend.delete_old_buffered_events(cutoff).await {
@@ -471,10 +485,13 @@ impl Client {
         // Check for `lid` and update the store. This is crucial for group messaging.
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<crate::types::jid::Jid>() {
-                let mut store = self.store.write().await;
-                if store.lid.as_ref() != Some(&lid) {
+                // Use command to update LID
+                let current_device = self.persistence_manager.get_device_snapshot().await;
+                if current_device.lid.as_ref() != Some(&lid) {
                     info!(target: "Client", "Updating LID from server to '{}'", lid);
-                    store.lid = Some(lid);
+                    self.persistence_manager
+                        .process_command(DeviceCommand::SetLid(Some(lid)))
+                        .await;
                 }
             } else {
                 warn!(target: "Client", "Failed to parse LID from success stanza: {}", lid_str);
@@ -485,19 +502,16 @@ impl Client {
         // --- MODIFICATION END ---
 
         // Check for `pushname` and update the store if it's different.
-        if let Some(push_name) = node.attrs.get("pushname") {
-            let new_name = push_name.clone();
-            let (needs_update, old_name) = {
-                let store = self.store.read().await;
-                (store.push_name != new_name, store.push_name.clone())
-            };
+        if let Some(push_name_attr) = node.attrs.get("pushname") {
+            let new_name = push_name_attr.clone();
+            let current_device = self.persistence_manager.get_device_snapshot().await;
+            let old_name = current_device.push_name.clone();
 
-            if needs_update {
+            if old_name != new_name {
                 info!(target: "Client", "Updating push name from server to '{}'", new_name);
-                {
-                    let mut store = self.store.write().await;
-                    store.push_name = new_name.clone();
-                } // write lock dropped
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetPushName(new_name.clone()))
+                    .await;
 
                 self.dispatch_event(Event::SelfPushNameUpdated(
                     crate::types::events::SelfPushNameUpdated {
@@ -509,6 +523,17 @@ impl Client {
                 .await;
             }
         }
+
+        // Update account info if present in success node
+        // This part needs to be adapted if `account` is part of the success node attributes or children
+        // For example, if it's an attribute:
+        // if let Some(account_str) = node.attrs.get("account") { ... parse and update ... }
+        // Or if it's a child node:
+        // if let Some(account_node) = node.get_optional_child("account") { ... parse and update ... }
+        // Assuming AdvSignedDeviceIdentity might come from here or another handshake part
+        // For now, this is a placeholder. If login provides AdvSignedDeviceIdentity,
+        // it should be processed and a DeviceCommand::SetAccount should be sent.
+        // e.g. self.persistence_manager.process_command(DeviceCommand::SetAccount(Some(parsed_account_identity))).await;
 
         let client_clone = self.clone();
         tokio::spawn(async move {
@@ -720,12 +745,12 @@ impl Client {
     }
 
     pub async fn send_presence(&self, presence: Presence) -> Result<(), anyhow::Error> {
-        let store = self.store.read().await;
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         debug!(
             "🔍 send_presence called with push_name: '{}'",
-            store.push_name
+            device_snapshot.push_name
         );
-        if store.push_name.is_empty() {
+        if device_snapshot.push_name.is_empty() {
             warn!("❌ Cannot send presence: push_name is empty!");
             return Err(anyhow::anyhow!(
                 "Cannot send presence without a push name set"
@@ -739,12 +764,12 @@ impl Client {
             tag: "presence".to_string(),
             attrs: [
                 ("type".to_string(), presence_type.to_string()),
-                ("name".to_string(), store.push_name.clone()),
+                ("name".to_string(), device_snapshot.push_name.clone()),
             ]
             .into(),
             content: None,
         };
-        drop(store);
+        // drop(device_snapshot) // Not needed as it's a clone
         info!(
             "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
@@ -755,18 +780,16 @@ impl Client {
 
     /// Sets the push name (display name) for this client.
     /// This name will be sent in presence announcements and shown to other users.
-    /// This will trigger a `SelfPushNameUpdated` event, which your application
-    /// should handle to persist the new state.
+    /// This will trigger a `SelfPushNameUpdated` event. The PersistenceManager
+    /// will handle saving the state.
     pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
-        let (needs_update, old_name) = {
-            let store = self.store.read().await;
-            (store.push_name != name, store.push_name.clone())
-        };
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let old_name = device_snapshot.push_name.clone();
 
-        if needs_update {
-            let mut store = self.store.write().await;
-            store.push_name = name.clone();
-            drop(store);
+        if old_name != name {
+            self.persistence_manager
+                .process_command(DeviceCommand::SetPushName(name.clone()))
+                .await;
 
             self.dispatch_event(Event::SelfPushNameUpdated(
                 crate::types::events::SelfPushNameUpdated {
@@ -838,8 +861,10 @@ impl Client {
             participant_jid.device as u32,
         );
         let address_str = signal_address.to_string();
-        let store_guard = self.store.read().await;
-        let _ = store_guard.backend.delete_session(&address_str).await;
+
+        // Access backend via PersistenceManager's device snapshot
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let _ = device_snapshot.backend.delete_session(&address_str).await;
         info!(
             "Deleted session for {} due to retry receipt, will re-establish.",
             participant_jid
@@ -852,41 +877,33 @@ impl Client {
 
     /// Gets the current push name (display name) for this client.
     pub async fn get_push_name(&self) -> String {
-        let store = self.store.read().await;
-        store.push_name.clone()
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        device_snapshot.push_name.clone()
     }
 
     /// Checks if the device has all required information for presence announcements.
     /// Returns true if the device has a JID and push name set.
     pub async fn is_ready_for_presence(&self) -> bool {
-        let store = self.store.read().await;
-        store.id.is_some() && !store.push_name.is_empty()
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
     }
 
     /// Gets diagnostic information about the device state for debugging.
     pub async fn get_device_debug_info(&self) -> String {
-        let store = self.store.read().await;
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         format!(
-            "Device Debug Info:\n  - JID: {:?}\n  - Push Name: '{}'\n  - Has Account: {}\n  - Ready for Presence: {}",
-            store.id,
-            store.push_name,
-            store.account.is_some(),
-            store.id.is_some() && !store.push_name.is_empty()
+            "Device Debug Info:\n  - JID: {:?}\n  - LID: {:?}\n  - Push Name: '{}'\n  - Has Account: {}\n  - Ready for Presence: {}",
+            device_snapshot.id,
+            device_snapshot.lid,
+            device_snapshot.push_name,
+            device_snapshot.account.is_some(),
+            device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
         )
     }
 
-    /// Save the current device state to persistent storage.
-    /// This method requires the concrete FileStore type to be passed in.
-    pub async fn save_device_state(
-        &self,
-        file_store: &crate::store::filestore::FileStore,
-    ) -> Result<(), anyhow::Error> {
-        let store = self.store.read().await;
-        file_store
-            .save_device_data(&store.to_serializable())
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to save device state: {}", e))
-    }
+    // save_device_state is removed as PersistenceManager handles saving.
+    // If a manual save is needed, it should be a method on PersistenceManager.
+
     /// Query group info to get all participant JIDs.
     pub async fn query_group_info(
         &self,

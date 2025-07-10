@@ -53,6 +53,7 @@ impl FileStore {
     async fn write_bincode<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
         let data = bincode::serde::encode_to_vec(value, bincode::config::standard())
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
+        log::debug!("FileStore: Writing {} bytes to {:?}", data.len(), path);
         fs::write(path, data).await.map_err(StoreError::Io)
     }
 
@@ -61,11 +62,33 @@ impl FileStore {
     }
 
     pub async fn save_device_data(&self, device_data: &SerializableDevice) -> Result<()> {
+        log::info!(
+            "FileStore: Saving device data (PushName: '{}') to {:?}",
+            device_data.push_name,
+            self.device_path()
+        );
         self.write_bincode(&self.device_path(), device_data).await
     }
 
     pub async fn load_device_data(&self) -> Result<Option<SerializableDevice>> {
-        self.read_bincode(&self.device_path()).await
+        log::info!(
+            "FileStore: Attempting to load device data from {:?}",
+            self.device_path()
+        );
+        let result = self
+            .read_bincode::<SerializableDevice>(&self.device_path())
+            .await; // Explicit type
+        if let Ok(Some(data)) = &result {
+            log::info!(
+                "FileStore: Loaded device data (PushName: '{}')",
+                data.push_name
+            );
+        } else if let Ok(None) = &result {
+            log::info!("FileStore: No device data found at path.");
+        } else if let Err(e) = &result {
+            log::error!("FileStore: Error loading device data: {}", e);
+        }
+        result
     }
 }
 

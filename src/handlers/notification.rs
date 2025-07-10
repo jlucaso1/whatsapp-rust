@@ -34,30 +34,32 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
             }
         }
         "account_sync" => {
-            if let Some(push_name) = node.attrs.get("pushname") {
-                let push_name = push_name.clone();
+            if let Some(push_name_attr) = node.attrs.get("pushname") {
+                let new_push_name = push_name_attr.clone();
 
-                let (needs_update, old_name) = {
-                    let store = client.store.read().await;
-                    (store.push_name != push_name, store.push_name.clone())
-                };
+                let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+                let old_name = device_snapshot.push_name.clone();
+                // drop(device_snapshot); // Not needed
 
-                if needs_update {
+                if old_name != new_push_name {
                     info!(
                         "Received push name '{}' via account_sync notification, updating store.",
-                        push_name
+                        new_push_name
                     );
-                    {
-                        let mut store = client.store.write().await;
-                        store.push_name = push_name.clone();
-                    } // Write lock is released here
+                    // Use command to update push name
+                    client
+                        .persistence_manager
+                        .process_command(crate::store::commands::DeviceCommand::SetPushName(
+                            new_push_name.clone(),
+                        ))
+                        .await;
 
                     client
                         .dispatch_event(Event::SelfPushNameUpdated(
                             crate::types::events::SelfPushNameUpdated {
                                 from_server: true,
                                 old_name,
-                                new_name: push_name,
+                                new_name: new_push_name, // Use new_push_name
                             },
                         ))
                         .await;
