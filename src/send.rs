@@ -73,12 +73,12 @@ impl Client {
         use crate::binary::node::{Node, NodeContent};
         use prost::Message as ProtoMessage;
 
-        let store = self.store.read().await;
-        let own_jid = store
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_jid = device_snapshot
             .id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
-        drop(store);
+        // drop(device_snapshot); // Not needed
 
         let request_id = self.generate_request_id();
 
@@ -102,7 +102,19 @@ impl Client {
         let mut participant_nodes = Vec::new();
         let mut includes_prekey_message = false;
 
-        let store_arc = self.store.clone();
+        // store_arc is now persistence_manager. We need to pass Arc<PersistenceManager>
+        // to SessionBuilder and SessionCipher if they need it, or pass the backend Arc directly.
+        // For now, assuming SessionStore methods on PersistenceManager will be sufficient,
+        // or that Device itself holds Arc<dyn Backend>.
+        // Let's assume Device has `backend: Arc<dyn Backend>` and PersistenceManager provides access to it
+        // or that SessionStore methods on PM directly use its filestore/memorystore.
+
+        // If SessionStore methods are on Device, we'd get a device snapshot and use its backend.
+        // If SessionStore methods are on PersistenceManager, we'd use self.persistence_manager.
+        // The current store::Device has `backend: Arc<dyn Backend>`.
+        // So, we get a device snapshot from PM, then use its backend.
+
+        let pm_for_sessions = self.persistence_manager.clone();
 
         for device_jid in all_devices {
             let is_own_device =
@@ -115,31 +127,51 @@ impl Client {
 
             let signal_address =
                 SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
-            let mut session_record = store_arc
-                .load_session(&signal_address)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            let mut is_prekey_msg = false;
 
+            // Use Arc<Mutex<Device>> as the store for signal operations
+            let device_store = pm_for_sessions.get_device_arc().await;
+
+            // Load SessionRecord using the device_store
+            let mut session_record = device_store
+                .load_session(&signal_address) // Corrected name
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to load session record for {}: {}",
+                        signal_address,
+                        e
+                    )
+                })?;
+            // .unwrap_or_default(); // Removed, as load_session returns SessionRecord::new() on not found
+
+            let mut is_prekey_msg = false;
             if session_record.is_fresh() {
                 let bundles = self.fetch_pre_keys(&[device_jid.clone()]).await?;
                 let bundle = bundles
                     .get(&device_jid)
                     .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", device_jid))?;
-                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+
+                let builder = SessionBuilder::new(device_store.clone(), signal_address.clone());
                 builder.process_bundle(&mut session_record, bundle).await?;
                 is_prekey_msg = true;
             }
 
-            let cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            let cipher = SessionCipher::new(device_store.clone(), signal_address.clone());
             let encrypted_message = cipher
                 .encrypt(&mut session_record, plaintext_to_encrypt)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            store_arc
-                .store_session(&signal_address, &session_record)
+
+            device_store
+                .store_session(&signal_address, &session_record) // Corrected name
                 .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to store session record for {}: {}",
+                        signal_address,
+                        e
+                    )
+                })?;
 
             if is_prekey_msg
                 || matches!(
@@ -179,8 +211,8 @@ impl Client {
         }];
 
         if includes_prekey_message {
-            let store_guard = self.store.read().await;
-            if let Some(account) = &store_guard.account {
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            if let Some(account) = &device_snapshot.account {
                 let device_identity_bytes = account.encode_to_vec();
                 message_content_nodes.push(Node {
                     tag: "device-identity".to_string(),
@@ -217,20 +249,20 @@ impl Client {
         use crate::signal::SessionCipher;
         use prost::Message as ProtoMessage;
 
-        let store_arc = self.store.clone();
-        let (_own_jid, own_lid) = {
-            let store_guard = store_arc.read().await;
-            (
-                store_guard
-                    .id
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?,
-                store_guard
-                    .lid
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?,
-            )
-        };
+        // Get own_jid and own_lid from PersistenceManager
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let _own_jid = device_snapshot
+            .id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?;
+        let own_lid = device_snapshot
+            .lid
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?;
+        // let backend = device_snapshot.backend.clone(); // No longer need separate backend variable.
+        // device_store (Arc<Mutex<Device>>) will be used directly.
+        let device_store = self.persistence_manager.get_device_arc().await;
+
         let request_id = self.generate_request_id();
 
         // Add message to cache for potential retries
@@ -248,14 +280,15 @@ impl Client {
         // 2. Create the SenderKeyDistributionMessage to be sent to participants who need it.
         // Use the LID's user part to create the sender key name. This is the crucial fix.
         let sender_key_name = SenderKeyName::new(to.to_string(), own_lid.user.clone());
-        let group_builder = GroupSessionBuilder::new(store_arc.clone());
+        let group_builder = GroupSessionBuilder::new(device_store.clone()); // Use device_store
         let distribution_message = group_builder.create(&sender_key_name).await.map_err(|e| {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
         })?;
         let distribution_message_bytes = distribution_message.encode_to_vec();
 
         // 3. Encrypt the actual message content with the shared group sender key.
-        let group_cipher = GroupCipher::new(sender_key_name, store_arc.clone(), group_builder);
+        let group_cipher =
+            GroupCipher::new(sender_key_name.clone(), device_store.clone(), group_builder); // Use device_store
         let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
         let sk_msg_ciphertext = group_cipher
             .encrypt(&padded_message_plaintext)
@@ -263,21 +296,25 @@ impl Client {
             .map_err(|e| anyhow::anyhow!("Failed to encrypt group message: {e}"))?;
 
         // 4. Bulk-fetch prekeys for devices without a session, then process per device.
-        let mut devices_needing_prekeys = Vec::new();
+        let mut devices_needing_prekeys_for_check = Vec::new();
         for device_jid in &all_devices {
             let signal_address =
                 SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
-            if !store_arc
-                .contains_session(&signal_address)
+            // Use device_store for contains_session
+            if !device_store
+                .contains_session(&signal_address) // Corrected name
                 .await
                 .unwrap_or(false)
             {
-                devices_needing_prekeys.push(device_jid.clone());
+                devices_needing_prekeys_for_check.push(device_jid.clone());
             }
         }
 
-        let prekey_bundles = if !devices_needing_prekeys.is_empty() {
-            self.fetch_pre_keys(&devices_needing_prekeys)
+        // Re-assign to avoid confusion with the later devices_needing_prekeys for bundle fetching
+        let devices_to_fetch_bundles_for = devices_needing_prekeys_for_check;
+
+        let prekey_bundles = if !devices_to_fetch_bundles_for.is_empty() {
+            self.fetch_pre_keys(&devices_to_fetch_bundles_for)
                 .await
                 .unwrap_or_default()
         } else {
@@ -290,7 +327,8 @@ impl Client {
 
         // --- MODIFICATION START: Pre-calculate identities and perform session migration ---
         let mut devices_to_process = Vec::new();
-        let mut devices_needing_prekeys = Vec::new();
+        // This devices_needing_prekeys is for the inner loop, distinct from above.
+        // let mut devices_needing_prekeys_inner_loop = Vec::new();
 
         for wire_identity in &all_devices {
             let encryption_identity =
@@ -313,18 +351,25 @@ impl Client {
                 );
 
                 // If a session exists for the PN but not the LID, migrate it.
-                if store_arc
-                    .contains_session(&pn_address)
+                // Use device_store for session operations
+                if device_store
+                    .contains_session(&pn_address) // Corrected name
                     .await
                     .unwrap_or(false)
-                    && !store_arc
-                        .contains_session(&lid_address)
+                    && !device_store
+                        .contains_session(&lid_address) // Corrected name
                         .await
                         .unwrap_or(false)
                 {
                     log::debug!("Migrating session from {} to {}", pn_address, lid_address);
-                    if let Ok(session) = store_arc.load_session(&pn_address).await {
-                        let _ = store_arc.store_session(&lid_address, &session).await;
+                    // Corrected: load_session returns Result<SessionRecord, _>
+                    if let Ok(session_record_data) = device_store.load_session(&pn_address).await {
+                        // Only store if it's not a fresh/empty record, or handle is_fresh appropriately
+                        if !session_record_data.is_fresh() {
+                            let _ = device_store
+                                .store_session(&lid_address, &session_record_data)
+                                .await;
+                        }
                         // Not deleting the old one is safer for now.
                     }
                 }
@@ -334,26 +379,28 @@ impl Client {
                 encryption_identity.user.clone(),
                 encryption_identity.device as u32,
             );
-            if !store_arc
-                .contains_session(&signal_address)
-                .await
-                .unwrap_or(false)
-            {
-                devices_needing_prekeys.push(wire_identity.clone());
-            }
+            // This check was already done above, but keeping it aligned with original logic for now.
+            // if !device_store.contains_session(&signal_address).await.unwrap_or(false) { // Corrected name
+            //     devices_needing_prekeys_inner_loop.push(wire_identity.clone());
+            // }
             devices_to_process.push((wire_identity.clone(), encryption_identity, signal_address));
         }
         // --- MODIFICATION END ---
 
         for (wire_identity, encryption_identity, signal_address) in devices_to_process {
+            // Load SessionRecord using device_store
             let mut session_record =
-                store_arc.load_session(&signal_address).await.map_err(|e| {
-                    anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
-                })?;
+                device_store
+                    .load_session(&signal_address)
+                    .await
+                    .map_err(|e| {
+                        // Corrected name
+                        anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
+                    })?; // Removed unwrap_or_default
 
             // If we fetched a bundle for this device, process it now.
             if let Some(bundle) = prekey_bundles.get(&wire_identity) {
-                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+                let builder = SessionBuilder::new(device_store.clone(), signal_address.clone());
                 if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
                     log::warn!(
                         "Failed to process prekey bundle for {}: {}. Skipping.",
@@ -363,6 +410,7 @@ impl Client {
                     continue;
                 }
             } else if session_record.is_fresh() {
+                // is_fresh should work on SessionRecord
                 log::warn!(
                     "Device {} has no session and no prekey bundle was fetched. Skipping.",
                     wire_identity
@@ -370,7 +418,7 @@ impl Client {
                 continue;
             }
 
-            let session_cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            let session_cipher = SessionCipher::new(device_store.clone(), signal_address.clone());
             let encrypted_distribution_message = session_cipher
                 .encrypt(&mut session_record, &distribution_message_bytes)
                 .await
@@ -378,8 +426,8 @@ impl Client {
                     anyhow::anyhow!("Failed to encrypt SKDM for {}: {}", encryption_identity, e)
                 })?;
 
-            store_arc
-                .store_session(&signal_address, &session_record)
+            device_store
+                .store_session(&signal_address, &session_record) // Corrected name
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!("Failed to store session for {}: {}", encryption_identity, e)
@@ -437,7 +485,8 @@ impl Client {
 
         // Add device identity if we sent any pre-key messages.
         if includes_prekey_message {
-            if let Some(account) = &self.store.read().await.account {
+            // Get account from device_snapshot which was fetched at the beginning of the function
+            if let Some(account) = &device_snapshot.account {
                 log::debug!("Including device-identity node because a pkmsg was sent");
                 let device_identity_bytes = account.encode_to_vec();
                 message_content_nodes.push(Node {

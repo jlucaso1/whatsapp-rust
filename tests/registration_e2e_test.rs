@@ -5,40 +5,51 @@
 
 use log::info;
 use std::sync::Arc;
+use tempfile::TempDir; // For temporary store paths
 use tokio::sync::mpsc;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::pair::pair_with_qr_code;
-use whatsapp_rust::store::memory::MemoryStore;
-use whatsapp_rust::store::Device;
+use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
+                                                                   // use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
+                                                                   // use whatsapp_rust::store::Device; // Device is managed by PM
+use whatsapp_rust::store::commands::DeviceCommand; // For direct store manipulation in tests
 use whatsapp_rust::types::events::Event;
 
 /// TestHarness manages the state for a single integration test.
 struct TestHarness {
     // The "phone" client, which is already logged in.
     master_client: Arc<Client>,
+    pm_master: Arc<PersistenceManager>,
     // The new client we are testing.
     dut_client: Arc<Client>,
+    pm_dut: Arc<PersistenceManager>,
     // A channel to receive events from the DUT.
     #[allow(dead_code)]
     dut_events_rx: mpsc::UnboundedReceiver<Event>,
+    _temp_dir_master: TempDir,
+    _temp_dir_dut: TempDir,
 }
 
 impl TestHarness {
     /// Creates a new test harness.
-    /// It will create a master client from a file store or pair a new one if it doesn't exist.
     async fn new() -> Self {
-        // For real-world CI, you would use a file-based store (like sqlstore)
-        // and check if the master client session exists before pairing.
-        // For this example, we'll use in-memory stores for simplicity.
-        // A real implementation would have a `setup_master_client()` function.
-        let master_store_backend = Arc::new(MemoryStore::new());
-        let master_store = Device::new(master_store_backend.clone());
-        let master_client = Arc::new(Client::new(master_store));
+        let temp_dir_master = TempDir::new().unwrap();
+        let store_path_master = temp_dir_master.path().join("master_store");
+        let pm_master = Arc::new(
+            PersistenceManager::new(store_path_master)
+                .await
+                .expect("Failed to create PersistenceManager for Master Client"),
+        );
+        let master_client = Arc::new(Client::new(pm_master.clone()));
 
-        // Setup the Device Under Test (DUT) with a fresh store
-        let dut_store_backend = Arc::new(MemoryStore::new());
-        let dut_store = Device::new(dut_store_backend.clone());
-        let dut_client = Arc::new(Client::new(dut_store));
+        let temp_dir_dut = TempDir::new().unwrap();
+        let store_path_dut = temp_dir_dut.path().join("dut_store");
+        let pm_dut = Arc::new(
+            PersistenceManager::new(store_path_dut)
+                .await
+                .expect("Failed to create PersistenceManager for DUT Client"),
+        );
+        let dut_client = Arc::new(Client::new(pm_dut.clone()));
 
         // Create an event channel for the DUT
         let (tx, rx) = mpsc::unbounded_channel();
@@ -50,8 +61,12 @@ impl TestHarness {
 
         Self {
             master_client,
+            pm_master,
             dut_client,
+            pm_dut,
             dut_events_rx: rx,
+            _temp_dir_master: temp_dir_master,
+            _temp_dir_dut: temp_dir_dut,
         }
     }
 }
@@ -66,9 +81,10 @@ async fn test_pairing_and_keepalive() {
     let harness = TestHarness::new().await;
 
     // 2. Test QR code generation (this tests the core logic without network)
-    let store_guard = harness.dut_client.store.read().await;
-    let qr_code = whatsapp_rust::pair::make_qr_data(&store_guard, "test_ref_12345".to_string());
-    drop(store_guard);
+    let dut_device_snapshot = harness.pm_dut.get_device_snapshot().await;
+    let qr_code =
+        whatsapp_rust::pair::make_qr_data(&dut_device_snapshot, "test_ref_12345".to_string());
+    // drop(dut_device_snapshot); // Not needed
 
     info!("📱 Generated QR code: {}", qr_code);
 
@@ -78,15 +94,15 @@ async fn test_pairing_and_keepalive() {
     assert_eq!(parts[0], "test_ref_12345", "QR code ref should match");
 
     // 3. Setup the master client for pairing (simulate pre-authenticated phone)
-    {
-        let mut master_store = harness.master_client.store.write().await;
-        if master_store.id.is_none() {
-            // This is where you would load a session from file or do a one-time manual pair
-            // for the master client. We'll mock it for this example.
-            let master_jid = "1234567890@s.whatsapp.net".parse().unwrap();
-            master_store.id = Some(master_jid);
-        }
+    let master_snapshot = harness.pm_master.get_device_snapshot().await;
+    if master_snapshot.id.is_none() {
+        let master_jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        harness
+            .pm_master
+            .process_command(DeviceCommand::SetId(Some(master_jid)))
+            .await;
     }
+    // drop(master_snapshot); // Not needed
 
     // 4. Test the pairing crypto logic (without requiring network connection)
     let result = pair_with_qr_code(&harness.master_client, &qr_code).await;
@@ -135,13 +151,19 @@ async fn test_pairing_and_keepalive() {
     // 4. Verify connection remains active
 }
 
-#[test]
-fn test_qr_code_generation() {
+#[tokio::test] // Needs to be async for PersistenceManager
+async fn test_qr_code_generation() {
     // Test the QR code generation in isolation
-    let store_backend = Arc::new(MemoryStore::new());
-    let store = Device::new(store_backend);
+    let temp_dir = TempDir::new().unwrap();
+    let store_path = temp_dir.path().join("qr_test_store");
+    let pm = Arc::new(
+        PersistenceManager::new(store_path)
+            .await
+            .expect("Failed to create PersistenceManager for QR test"),
+    );
+    let device_snapshot = pm.get_device_snapshot().await;
 
-    let qr_code = whatsapp_rust::pair::make_qr_data(&store, "test_ref_123".to_string());
+    let qr_code = whatsapp_rust::pair::make_qr_data(&device_snapshot, "test_ref_123".to_string());
 
     // Verify QR code structure
     let parts: Vec<&str> = qr_code.split(',').collect();

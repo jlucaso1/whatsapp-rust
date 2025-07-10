@@ -1,35 +1,77 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 use whatsapp_rust::client::Client;
-use whatsapp_rust::store;
-use whatsapp_rust::store::filestore::FileStore;
+use whatsapp_rust::store::commands::DeviceCommand;
+use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PM // Use Commands
+                                                                             // use whatsapp_rust::store; // No longer needed directly
+                                                                             // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
 use whatsapp_rust::types::presence::Presence;
 
 #[tokio::test]
 async fn test_push_name_persistence() {
     // Create a temporary directory for the test
     let temp_dir = TempDir::new().unwrap();
-    let store_path = temp_dir.path().join("test_store");
+    let store_path = temp_dir.path().join("test_store_persistence");
+    let store_path_str = store_path.to_str().unwrap().to_string();
+    log::info!(
+        "[test_push_name_persistence] Store path: {}",
+        store_path_str
+    );
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let mut device = store::Device::new(store_backend.clone());
+    // Phase 1: Setup and save
+    {
+        log::info!(
+            "[test_push_name_persistence] Initializing pm1 for path: {}",
+            store_path_str
+        );
+        let pm1 = Arc::new(
+            PersistenceManager::new(store_path_str.clone())
+                .await
+                .unwrap(),
+        );
+        log::info!("[test_push_name_persistence] Setting push name 'Test User' on pm1");
+        pm1.process_command(DeviceCommand::SetPushName("Test User".to_string()))
+            .await;
+        log::info!("[test_push_name_persistence] Setting ID on pm1");
+        pm1.process_command(DeviceCommand::SetId(Some(
+            "1234567890@s.whatsapp.net".parse().unwrap(),
+        )))
+        .await;
 
-    // Set up basic device info (simulating what happens during pairing)
-    device.push_name = "Test User".to_string();
-    device.id = Some("1234567890@s.whatsapp.net".parse().unwrap());
+        log::info!("[test_push_name_persistence] Calling save_now on pm1");
+        pm1.save_now().await.expect("Failed to save PM1 state");
+        log::info!("[test_push_name_persistence] pm1 save_now complete. Dropping pm1.");
+    }
 
-    // Save the device data
-    store_backend
-        .save_device_data(&device.to_serializable())
-        .await
-        .unwrap();
+    // Phase 2: Reload
+    log::info!(
+        "[test_push_name_persistence] Initializing pm_reloaded for path: {}",
+        store_path_str
+    );
+    let pm_reloaded = Arc::new(
+        PersistenceManager::new(store_path_str.clone())
+            .await
+            .unwrap(),
+    );
+    let reloaded_snapshot = pm_reloaded.get_device_snapshot().await;
+    log::info!(
+        "[test_push_name_persistence] Reloaded device push_name from snapshot: '{}'",
+        reloaded_snapshot.push_name
+    );
+    log::info!(
+        "[test_push_name_persistence] Reloaded device ID from snapshot: {:?}",
+        reloaded_snapshot.id
+    );
 
-    // Create a client with the device
-    let client = Arc::new(Client::new(device));
+    let client = Arc::new(Client::new(pm_reloaded.clone()));
 
     // Test that push name is set correctly
-    assert_eq!(client.get_push_name().await, "Test User");
+    let current_push_name = client.get_push_name().await;
+    log::info!(
+        "[test_push_name_persistence] Push name from client.get_push_name(): '{}'",
+        current_push_name
+    );
+    assert_eq!(current_push_name, "Test User");
     assert!(client.is_ready_for_presence().await);
 
     // Test that we can send presence (this should not fail)
@@ -53,14 +95,15 @@ async fn test_push_name_persistence() {
 async fn test_push_name_empty_validation() {
     // Create a temporary directory for the test
     let temp_dir = TempDir::new().unwrap();
-    let store_path = temp_dir.path().join("test_store");
+    let store_path = temp_dir.path().join("test_store_empty");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-
-    // Create a client with the device (push_name should be empty)
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager, device will be new and empty
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Test that push name is empty
     assert_eq!(client.get_push_name().await, "");
@@ -83,14 +126,15 @@ async fn test_push_name_empty_validation() {
 async fn test_push_name_set_and_get() {
     // Create a temporary directory for the test
     let temp_dir = TempDir::new().unwrap();
-    let store_path = temp_dir.path().join("test_store");
+    let store_path = temp_dir.path().join("test_store_set_get");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-
-    // Create a client with the device
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Test setting push name
     client
@@ -106,30 +150,32 @@ async fn test_push_name_set_and_get() {
 async fn test_device_state_reload() {
     // Create a temporary directory for the test
     let temp_dir = TempDir::new().unwrap();
-    let store_path = temp_dir.path().join("test_store");
+    let store_path = temp_dir.path().join("test_store_reload");
+    let store_path_str = store_path.to_str().unwrap().to_string();
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let mut device = store::Device::new(store_backend.clone());
+    // Phase 1: Setup and save device info with PersistenceManager
+    {
+        let pm1 = Arc::new(
+            PersistenceManager::new(store_path_str.clone())
+                .await
+                .unwrap(),
+        );
+        pm1.process_command(DeviceCommand::SetPushName("Original User".to_string()))
+            .await;
+        pm1.process_command(DeviceCommand::SetId(Some(
+            "1234567890@s.whatsapp.net".parse().unwrap(),
+        )))
+        .await;
 
-    // Set up device info and save it
-    device.push_name = "Original User".to_string();
-    device.id = Some("1234567890@s.whatsapp.net".parse().unwrap());
-    store_backend
-        .save_device_data(&device.to_serializable())
-        .await
-        .unwrap();
+        // Explicitly save or ensure PM saves. For tests, a direct save is more reliable.
+        pm1.save_now().await.expect("Failed to save PM1 state"); // Use save_now
 
-    // Create a new store instance (simulating app restart)
-    let store_backend2 = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
+        // To be robust, best to ensure save completes. We can drop pm1 and re-initialize.
+    } // pm1 is dropped.
 
-    // Load the device data
-    let loaded_data = store_backend2.load_device_data().await.unwrap().unwrap();
-    let mut device2 = store::Device::new(store_backend2.clone());
-    device2.load_from_serializable(loaded_data);
-
-    // Create a client with the reloaded device
-    let client = Arc::new(Client::new(device2));
+    // Phase 2: Create a new PersistenceManager instance to reload from the same path
+    let pm2 = Arc::new(PersistenceManager::new(store_path_str).await.unwrap());
+    let client = Arc::new(Client::new(pm2.clone()));
 
     // Test that push name was persisted and reloaded correctly
     assert_eq!(client.get_push_name().await, "Original User");
@@ -140,18 +186,24 @@ async fn test_device_state_reload() {
 async fn test_debug_info() {
     // Create a temporary directory for the test
     let temp_dir = TempDir::new().unwrap();
-    let store_path = temp_dir.path().join("test_store");
+    let store_path = temp_dir.path().join("test_store_debug");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let mut device = store::Device::new(store_backend.clone());
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
 
-    // Set up device info
-    device.push_name = "Debug User".to_string();
-    device.id = Some("1234567890@s.whatsapp.net".parse().unwrap());
+    // Set up device info using commands
+    pm.process_command(DeviceCommand::SetPushName("Debug User".to_string()))
+        .await;
+    pm.process_command(DeviceCommand::SetId(Some(
+        "1234567890@s.whatsapp.net".parse().unwrap(),
+    )))
+    .await;
 
-    // Create a client with the device
-    let client = Arc::new(Client::new(device));
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Test debug info
     let debug_info = client.get_device_debug_info().await;

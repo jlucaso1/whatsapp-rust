@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use whatsapp_rust::binary::node::Node;
 use whatsapp_rust::client::Client;
-use whatsapp_rust::store;
-use whatsapp_rust::store::filestore::FileStore;
+use whatsapp_rust::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PM and Command, removed self
+                                                                                              // use whatsapp_rust::store::filestore::FileStore; // FileStore is managed by PM
 
 #[tokio::test]
 async fn test_success_node_with_pushname() {
@@ -12,10 +12,13 @@ async fn test_success_node_with_pushname() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Create a success node with pushname attribute
     let mut attrs = HashMap::new();
@@ -32,23 +35,19 @@ async fn test_success_node_with_pushname() {
     assert_eq!(client.get_push_name().await, "");
     assert!(!client.is_ready_for_presence().await);
 
-    // Simulate the handle_success call (we can't call it directly as it's private)
-    // Instead, we'll test the logic that would be in handle_success
-    if let Some(push_name) = success_node.attrs.get("pushname") {
-        let mut store = client.store.write().await;
-        if store.push_name != *push_name {
-            store.push_name = push_name.clone();
-        }
-    }
+    // Call the actual handle_success method (making it pub(crate) or using a helper if needed)
+    // For now, directly invoking the logic within client that processes this.
+    // Client::handle_success is async, and it will use persistence_manager internally.
+    client.process_node(success_node).await; // Assuming process_node routes to handle_success
 
     // Verify push name was updated
     assert_eq!(client.get_push_name().await, "Test User Name");
 
-    // Set a JID to make it ready for presence
-    {
-        let mut store = client.store.write().await;
-        store.id = Some("1234567890@s.whatsapp.net".parse().unwrap());
-    }
+    // Set a JID to make it ready for presence using PersistenceManager command
+    pm.process_command(DeviceCommand::SetId(Some(
+        "1234567890@s.whatsapp.net".parse().unwrap(),
+    )))
+    .await;
 
     assert!(client.is_ready_for_presence().await);
 }
@@ -59,10 +58,13 @@ async fn test_success_node_without_pushname() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Create a success node without pushname attribute
     let mut attrs = HashMap::new();
@@ -78,12 +80,7 @@ async fn test_success_node_without_pushname() {
     assert_eq!(client.get_push_name().await, "");
 
     // Simulate the handle_success call logic
-    if let Some(push_name) = success_node.attrs.get("pushname") {
-        let mut store = client.store.write().await;
-        if store.push_name != *push_name {
-            store.push_name = push_name.clone();
-        }
-    }
+    client.process_node(success_node).await; // Assuming process_node routes to handle_success
 
     // Verify push name remains empty (no pushname attribute in success node)
     assert_eq!(client.get_push_name().await, "");
@@ -96,10 +93,13 @@ async fn test_success_node_empty_pushname() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Create a success node with empty pushname attribute
     let mut attrs = HashMap::new();
@@ -116,12 +116,7 @@ async fn test_success_node_empty_pushname() {
     assert_eq!(client.get_push_name().await, "");
 
     // Simulate the handle_success call logic
-    if let Some(push_name) = success_node.attrs.get("pushname") {
-        let mut store = client.store.write().await;
-        if store.push_name != *push_name {
-            store.push_name = push_name.clone();
-        }
-    }
+    client.process_node(success_node.clone()).await; // Assuming process_node routes to handle_success
 
     // Verify push name remains empty (empty pushname attribute)
     assert_eq!(client.get_push_name().await, "");
@@ -134,10 +129,13 @@ async fn test_success_node_pushname_update() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Set an initial push name
     client
@@ -158,12 +156,7 @@ async fn test_success_node_pushname_update() {
     };
 
     // Simulate the handle_success call logic
-    if let Some(push_name) = success_node.attrs.get("pushname") {
-        let mut store = client.store.write().await;
-        if store.push_name != *push_name {
-            store.push_name = push_name.clone();
-        }
-    }
+    client.process_node(success_node).await; // Assuming process_node routes to handle_success
 
     // Verify push name was updated
     assert_eq!(client.get_push_name().await, "Updated Name");
@@ -175,10 +168,13 @@ async fn test_success_node_no_update_same_pushname() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store");
 
-    // Create a new store and device
-    let store_backend = Arc::new(FileStore::new(store_path.to_str().unwrap()).await.unwrap());
-    let device = store::Device::new(store_backend.clone());
-    let client = Arc::new(Client::new(device));
+    // Initialize PersistenceManager
+    let pm = Arc::new(
+        PersistenceManager::new(store_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Set an initial push name
     client.set_push_name("Same Name".to_string()).await.unwrap();
@@ -196,12 +192,7 @@ async fn test_success_node_no_update_same_pushname() {
     };
 
     // Simulate the handle_success call logic
-    if let Some(push_name) = success_node.attrs.get("pushname") {
-        let mut store = client.store.write().await;
-        if store.push_name != *push_name {
-            store.push_name = push_name.clone();
-        }
-    }
+    client.process_node(success_node).await; // Assuming process_node routes to handle_success
 
     // Verify push name remains the same
     assert_eq!(client.get_push_name().await, "Same Name");

@@ -54,7 +54,9 @@ impl Client {
     {
         let ciphertext_hash: [u8; 32] = Sha256::digest(ciphertext).into();
 
-        let backend = { self.store.read().await.backend.clone() };
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let backend = device_snapshot.backend.clone();
+        // drop(device_snapshot); // Not needed
 
         if let Some(_buffered_event) = backend
             .get_buffered_event(&ciphertext_hash)
@@ -145,8 +147,9 @@ impl Client {
                             info.source.sender.user.clone(),
                             info.source.sender.device as u32,
                         );
-                        let store_arc = self.store.clone();
-                        let cipher = SessionCipher::new(store_arc, signal_address);
+                        // Use Arc<Mutex<Device>> as the store for SessionCipher
+                        let device_store = self.persistence_manager.get_device_arc().await;
+                        let cipher = SessionCipher::new(device_store, signal_address);
                         cipher
                             .decrypt(ciphertext_enum)
                             .await
@@ -164,10 +167,14 @@ impl Client {
                             info.source.chat.to_string(),
                             info.source.sender.user.clone(),
                         );
+                        // Use Arc<Mutex<Device>> as the store for GroupCipher
+                        let device_store_for_group =
+                            self.persistence_manager.get_device_arc().await;
                         let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
-                            self.store.clone(),
+                            device_store_for_group.clone(),
                         );
-                        let cipher = GroupCipher::new(sender_key_name, self.store.clone(), builder);
+                        let cipher =
+                            GroupCipher::new(sender_key_name, device_store_for_group, builder);
                         let sk_msg = SenderKeyMessage::deserialize(&ciphertext).map_err(|e| {
                             anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
                         })?;
@@ -290,7 +297,9 @@ impl Client {
 
     pub async fn parse_message_info(&self, node: &Node) -> Result<MessageInfo, anyhow::Error> {
         let mut attrs = node.attrs();
-        let own_jid = self.store.read().await.id.clone().unwrap_or_default();
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_jid = device_snapshot.id.clone().unwrap_or_default();
+        // drop(device_snapshot); // Not needed
         let from = attrs.jid("from");
 
         let mut source = if from.is_group() {
@@ -339,10 +348,10 @@ impl Client {
     }
 
     pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
-        let key_store = {
-            let guard = self.store.read().await;
-            guard.backend.clone()
-        };
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let key_store = device_snapshot.backend.clone(); // This is Arc<dyn Backend>
+                                                         // drop(device_snapshot); // Not needed
+
         for key in &keys.keys {
             if let Some(key_id_proto) = &key.key_id {
                 if let Some(key_id) = &key_id_proto.key_id {
@@ -419,7 +428,10 @@ impl Client {
         };
 
         let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_jid.user.clone());
-        let builder = GroupSessionBuilder::new(self.store.clone());
+
+        // Use Arc<Mutex<Device>> as the store for GroupSessionBuilder
+        let device_store_for_builder = self.persistence_manager.get_device_arc().await;
+        let builder = GroupSessionBuilder::new(device_store_for_builder);
 
         match builder.process(&sender_key_name, &dist_msg).await {
             Ok(_) => {

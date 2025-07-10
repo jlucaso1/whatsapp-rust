@@ -43,7 +43,7 @@ type Result<T> = std::result::Result<T, HandshakeError>;
 
 /// Performs the full Noise handshake and authentication with the server.
 pub async fn do_handshake(
-    store: &tokio::sync::RwLock<crate::store::Device>,
+    device: &crate::store::Device, // Changed to pass Device directly
     frame_socket: &mut FrameSocket,
     frames_rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>,
 ) -> Result<Arc<NoiseSocket>> {
@@ -90,9 +90,7 @@ pub async fn do_handshake(
         .map_err(|_| HandshakeError::Timeout)?
         .ok_or(HandshakeError::Timeout)?;
 
-    // Use the store RwLock for client payload
-    // ... use store_guard for all field accesses below ...
-    // (rest of function unchanged until field accesses)
+    // Use the device directly for client payload
     debug!(
         "<-- Received handshake response ({} bytes)",
         resp_frame.len(),
@@ -163,14 +161,14 @@ pub async fn do_handshake(
     info!("Server certificate verified successfully");
 
     // 7. Send ClientFinish
-    let store_guard = store.read().await;
+    // let store_guard = store.read().await; // Removed
     let encrypted_pubkey = nh
-        .encrypt(&store_guard.noise_key.public_key)
+        .encrypt(&device.noise_key.public_key) // Use device directly
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
-    nh.mix_shared_secret(&store_guard.noise_key.private_key, &server_ephemeral)
+    nh.mix_shared_secret(&device.noise_key.private_key, &server_ephemeral) // Use device directly
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-    let client_payload = store_guard.get_client_payload();
+    let client_payload = device.get_client_payload(); // Use device directly
     let client_finish_payload_bytes = client_payload.encode_to_vec();
     // [HANDSHAKE_DEBUG] Log ClientFinish.payload (unencrypted)
     debug!(
