@@ -81,7 +81,7 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
         // drop(device_snapshot); // Not needed
 
-        let request_id = self.generate_request_id();
+        let request_id = self.generate_message_id().await;
 
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
@@ -292,7 +292,7 @@ impl Client {
         // device_store (Arc<Mutex<Device>>) will be used directly.
         let device_store = self.persistence_manager.get_device_arc().await;
 
-        let request_id = self.generate_request_id();
+        let request_id = self.generate_message_id().await;
 
         // Add message to cache for potential retries
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
@@ -307,8 +307,11 @@ impl Client {
         let mut includes_prekey_message = false;
 
         // 2. Create the SenderKeyDistributionMessage to be sent to participants who need it.
-        // Use the LID's user part to create the sender key name. This is the crucial fix.
-        let sender_key_name = SenderKeyName::new(to.to_string(), own_lid.user.clone());
+        // The sender identifier for group messages must be a unique identifier
+        // for the sending device within the group context. Using the LID's
+        // signal address (user:device) is the correct approach.
+        let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
+        let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
         let group_builder = GroupSessionBuilder::new(device_store.clone()); // Use device_store
         let distribution_message = group_builder.create(&sender_key_name).await.map_err(|e| {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
@@ -559,8 +562,6 @@ impl Client {
                 ("phash".to_string(), phash),
                 ("id".to_string(), request_id),
                 ("type".to_string(), "text".to_string()),
-                // CRITICAL FIX: Add participant attribute with LID to match sender key identity
-                ("participant".to_string(), own_lid.to_string()),
             ]
             .into(),
             content: Some(NodeContent::Nodes(message_content_nodes)),
