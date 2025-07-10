@@ -1,3 +1,4 @@
+pub mod actors;
 pub mod appstate;
 pub mod appstate_sync;
 pub mod binary;
