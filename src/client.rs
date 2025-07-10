@@ -854,19 +854,15 @@ impl Client {
                 anyhow::anyhow!("Could not find message {} in cache for retry", message_id)
             })?;
 
-        // Use the participant JID (receipt.source.sender) for session deletion in group retry receipts.
         let participant_jid = receipt.source.sender.clone();
-        let signal_address = crate::signal::address::SignalAddress::new(
-            participant_jid.user.clone(),
-            participant_jid.device as u32,
-        );
-        let address_str = signal_address.to_string();
-
-        // Access backend via PersistenceManager's device snapshot
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let _ = device_snapshot.backend.delete_session(&address_str).await;
+        // The `retry` receipt for a group message means the recipient doesn't have the correct
+        // sender key to decrypt the `skmsg`. It does NOT mean the pairwise session is invalid.
+        // Deleting the pairwise session is incorrect and causes decryption failures for later
+        // 1-on-1 messages.
+        // The correct action is to simply re-send the group message, which will include a new
+        // SenderKeyDistributionMessage for the participant that sent the retry.
         info!(
-            "Deleted session for {} due to retry receipt, will re-establish.",
+            "Received retry receipt from {}. Resending group key distribution.",
             participant_jid
         );
 
