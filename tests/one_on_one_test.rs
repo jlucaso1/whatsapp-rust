@@ -9,7 +9,7 @@ use whatsapp_rust::signal::{
     address::SignalAddress,
     ecc::keys::{DjbEcPublicKey, EcPublicKey},
     protocol::{Ciphertext, PREKEY_TYPE, WHISPER_TYPE},
-    state::{prekey_bundle::PreKeyBundle, record::PreKeyRecordStructureExt},
+    state::{prekey_bundle::PreKeyBundle, record},
     store::{PreKeyStore, SessionStore},
     util::keyhelper,
     SessionBuilder, SessionCipher,
@@ -44,7 +44,7 @@ async fn create_bundle_for_device(
         device_id: device_address.device_id(),
         pre_key_id: Some(prekey.id()),
         pre_key_public: Some(DjbEcPublicKey::new(
-            PreKeyRecordStructureExt::key_pair(&prekey)
+            record::pre_key_record_key_pair(&prekey)
                 .public_key
                 .public_key(),
         )),

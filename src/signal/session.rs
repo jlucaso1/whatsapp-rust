@@ -8,7 +8,7 @@ use crate::signal::ecc::{
 };
 use crate::signal::protocol::ProtocolError;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
-use crate::signal::state::record::{PreKeyRecordStructureExt, SignedPreKeyRecordStructureExt};
+use crate::signal::state::record;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
 use hmac::{Hmac, Mac};
@@ -455,8 +455,10 @@ impl<S: SignalProtocolStore + Clone> SessionBuilder<S> {
             }
         }
 
-        let our_signed_prekey_keypair = our_signed_prekey.key_pair();
-        let our_one_time_prekey_keypair = our_one_time_prekey.as_ref().map(|r| r.key_pair());
+        let our_signed_prekey_keypair = record::signed_pre_key_record_key_pair(&our_signed_prekey);
+        let our_one_time_prekey_keypair = our_one_time_prekey
+            .as_ref()
+            .map(record::pre_key_record_key_pair);
 
         let receiver_params = crate::signal::ratchet::parameters::ReceiverParameters {
             our_identity_key_pair: our_identity.clone(),

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use whatsapp_rust::signal::ecc::keys::{DjbEcPublicKey, EcPublicKey};
 use whatsapp_rust::signal::protocol::Ciphertext;
-use whatsapp_rust::signal::state::record::PreKeyRecordStructureExt;
+use whatsapp_rust::signal::state::record;
 use whatsapp_rust::signal::store::{IdentityKeyStore, PreKeyStore, SessionStore};
 use whatsapp_rust::signal::{
     address::SignalAddress, state::prekey_bundle::PreKeyBundle, util::keyhelper, SessionBuilder,
@@ -50,7 +50,7 @@ async fn create_bundle_for_receiver(
         device_id: receiver_address.device_id(),
         pre_key_id: Some(prekey.id()),
         pre_key_public: Some(DjbEcPublicKey::new(
-            PreKeyRecordStructureExt::key_pair(&prekey)
+            record::pre_key_record_key_pair(&prekey)
                 .public_key
                 .public_key(),
         )),
