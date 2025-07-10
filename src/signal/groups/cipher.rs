@@ -52,14 +52,14 @@ impl<S: SenderKeyStore> GroupCipher<S> {
         let (iv, cipher_key) = derive_message_key_material(&sender_key);
         let ciphertext = cbc::encrypt(&cipher_key, &iv, plaintext)?;
 
-        // Efficiently serialize the message components for signing without creating an intermediate struct
-        let mut buf = Vec::with_capacity(128);
-        buf.push((3 << 4) | 3); // version byte
+        // Prepare the protobuf message and buffer for signature
         let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
             id: state.sender_key_id,
             iteration: sender_key.iteration,
             ciphertext: Some(ciphertext.clone()),
         };
+        let mut buf = Vec::with_capacity(128);
+        buf.push((3 << 4) | 3); // version byte
         prost::Message::encode(&proto_msg, &mut buf).unwrap();
 
         let signing_key_proto = state
@@ -75,12 +75,10 @@ impl<S: SenderKeyStore> GroupCipher<S> {
         let private_key = ecc::keys::DjbEcPrivateKey::new(private_key_bytes);
         let signature = ecc::curve::calculate_signature(private_key, &buf);
 
-        let sender_key_message = SenderKeyMessage::new(
-            state.sender_key_id.unwrap_or(0),
-            sender_key.iteration.unwrap_or(0),
-            ciphertext.clone(),
+        let sender_key_message = SenderKeyMessage {
+            proto: proto_msg,
             signature,
-        );
+        };
 
         let next_chain_key = get_next_sender_chain_key(chain_key);
         state.sender_chain_key = Some(next_chain_key);

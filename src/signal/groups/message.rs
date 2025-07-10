@@ -1,36 +1,48 @@
+use prost::Message;
+use whatsapp_proto::whatsapp as wa;
+
+/// Represents a SenderKeyMessage, wrapping the protobuf struct and signature.
 #[derive(Clone, Debug)]
 pub struct SenderKeyMessage {
-    key_id: u32,
-    iteration: u32,
-    ciphertext: Vec<u8>,
-    signature: [u8; 64],
+    pub proto: wa::SenderKeyMessage,
+    pub signature: [u8; 64],
 }
 
 impl SenderKeyMessage {
+    /// Create a new SenderKeyMessage from components.
     pub fn new(key_id: u32, iteration: u32, ciphertext: Vec<u8>, signature: [u8; 64]) -> Self {
         Self {
-            key_id,
-            iteration,
-            ciphertext,
+            proto: wa::SenderKeyMessage {
+                id: Some(key_id),
+                iteration: Some(iteration),
+                ciphertext: Some(ciphertext),
+            },
             signature,
         }
     }
+
+    /// Get the key ID.
     pub fn key_id(&self) -> u32 {
-        self.key_id
+        self.proto.id.unwrap_or(0)
     }
+
+    /// Get the iteration.
     pub fn iteration(&self) -> u32 {
-        self.iteration
+        self.proto.iteration.unwrap_or(0)
     }
+
+    /// Get the ciphertext.
     pub fn ciphertext(&self) -> &[u8] {
-        &self.ciphertext
+        self.proto.ciphertext.as_deref().unwrap_or_default()
     }
+
+    /// Get the signature.
     pub fn signature(&self) -> &[u8] {
         &self.signature
     }
 
+    /// Deserialize a SenderKeyMessage from bytes.
     pub fn deserialize(serialized: &[u8]) -> Result<Self, anyhow::Error> {
-        use prost::Message;
-
         if serialized.is_empty() {
             return Err(anyhow::anyhow!("Empty serialized SenderKeyMessage"));
         }
@@ -58,27 +70,15 @@ impl SenderKeyMessage {
             .try_into()
             .map_err(|_| anyhow::anyhow!("Invalid signature length"))?;
 
-        let proto = whatsapp_proto::whatsapp::SenderKeyMessage::decode(proto_bytes)?;
+        let proto = wa::SenderKeyMessage::decode(proto_bytes)?;
 
-        Ok(Self {
-            key_id: proto.id.unwrap_or(0),
-            iteration: proto.iteration.unwrap_or(0),
-            ciphertext: proto.ciphertext.unwrap_or_default(),
-            signature,
-        })
+        Ok(Self { proto, signature })
     }
+
+    /// Serialize the SenderKeyMessage to bytes.
     pub fn serialize(&self) -> Vec<u8> {
-        use prost::Message;
-
-        let proto_msg = whatsapp_proto::whatsapp::SenderKeyMessage {
-            id: Some(self.key_id),
-            iteration: Some(self.iteration),
-            ciphertext: Some(self.ciphertext.clone()),
-        };
-
-        // Get the serialized protobuf message
         let mut proto_buf = Vec::new();
-        proto_msg.encode(&mut proto_buf).unwrap(); // Should not fail
+        self.proto.encode(&mut proto_buf).unwrap(); // Should not fail
 
         // Assemble the final message: 1 (version) + N (protobuf) + 64 (signature)
         let mut final_buf = Vec::with_capacity(1 + proto_buf.len() + 64);
