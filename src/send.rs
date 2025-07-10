@@ -293,7 +293,7 @@ impl Client {
         use prost::Message as ProtoMessage;
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let _own_jid = device_snapshot
+        let own_jid = device_snapshot
             .id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?;
@@ -439,6 +439,17 @@ impl Client {
         // --- MODIFICATION END ---
 
         for (wire_identity, encryption_identity, signal_address) in devices_to_process {
+            // Do not send the sender key distribution message to the sending device itself.
+            // This prevents the "Waiting for this message" error by avoiding unnecessary
+            // self-encryption that would fail and cause retry receipts.
+            if wire_identity == own_jid || wire_identity == own_lid {
+                log::debug!(
+                    "Skipping sender key distribution to self ({})",
+                    wire_identity
+                );
+                continue;
+            }
+
             // Load SessionRecord using device_store
             let mut session_record =
                 device_store
@@ -723,7 +734,12 @@ impl Client {
                     Ok(u32::from_be_bytes([0, b[0], b[1], b[2]]))
                 } else if let Ok(s) = std::str::from_utf8(b) {
                     // Handle hex string ID
-                    u32::from_str_radix(s, 16).map_err(|e| e.into())
+                    let trimmed_s = s.trim();
+                    if trimmed_s.is_empty() {
+                        Err(anyhow::anyhow!("ID content is only whitespace"))
+                    } else {
+                        u32::from_str_radix(trimmed_s, 16).map_err(|e| e.into())
+                    }
                 } else {
                     Err(anyhow::anyhow!("ID is not valid UTF-8 hex or 3-byte int"))
                 }
@@ -734,7 +750,10 @@ impl Client {
 
         let id = match id {
             Ok(val) => val,
-            Err(_) => return Ok(None), // Gracefully ignore invalid one-time pre-keys
+            Err(e) => {
+                log::warn!("Could not parse pre-key ID: {}. Skipping this key.", e);
+                return Ok(None);
+            } // Gracefully ignore invalid one-time pre-keys
         };
 
         let value_bytes = node
