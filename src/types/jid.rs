@@ -101,6 +101,17 @@ impl Jid {
     pub fn is_empty(&self) -> bool {
         self.server.is_empty()
     }
+
+    pub fn to_ad_string(&self) -> String {
+        if self.user.is_empty() {
+            self.server.clone()
+        } else {
+            format!(
+                "{}.{}:{}@{}",
+                self.user, self.agent, self.device, self.server
+            )
+        }
+    }
 }
 
 impl<'a> JidRef<'a> {

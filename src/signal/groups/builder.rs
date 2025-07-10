@@ -48,7 +48,14 @@ impl<S: SenderKeyStore> GroupSessionBuilder<S> {
             .sender_key_store
             .load_sender_key(sender_key_name)
             .await?;
-        if record.is_empty() {
+        // Check if the current state has a private key. If not, we must create a new one.
+        let has_private_key = record
+            .sender_key_state()
+            .and_then(|s| s.sender_signing_key.as_ref())
+            .and_then(|sk| sk.private.as_ref())
+            .is_some();
+
+        if !has_private_key {
             let signing_key = keyhelper::generate_sender_signing_key();
             let chain_key = keyhelper::generate_sender_key();
             let key_id = keyhelper::generate_sender_key_id();

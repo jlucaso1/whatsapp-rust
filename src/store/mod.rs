@@ -22,6 +22,7 @@ use std::sync::Arc;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SerializableDevice {
     pub id: Option<Jid>,
+    pub lid: Option<Jid>,
     pub registration_id: u32,
     pub noise_key: KeyPair,
     pub identity_key: KeyPair,
@@ -34,6 +35,7 @@ pub struct SerializableDevice {
 #[derive(Clone)]
 pub struct Device {
     pub id: Option<Jid>,
+    pub lid: Option<Jid>,
     pub registration_id: u32,
     pub noise_key: KeyPair,
     pub identity_key: KeyPair,
@@ -55,6 +57,7 @@ impl Device {
 
         Self {
             id: None,
+            lid: None,
             registration_id: 3718719151,
             noise_key: KeyPair::new(),
             identity_key,
@@ -69,6 +72,7 @@ impl Device {
     pub fn to_serializable(&self) -> SerializableDevice {
         SerializableDevice {
             id: self.id.clone(),
+            lid: self.lid.clone(),
             registration_id: self.registration_id,
             noise_key: self.noise_key.clone(),
             identity_key: self.identity_key.clone(),
@@ -81,6 +85,7 @@ impl Device {
 
     pub fn load_from_serializable(&mut self, loaded: SerializableDevice) {
         self.id = loaded.id;
+        self.lid = loaded.lid;
         self.registration_id = loaded.registration_id;
         self.noise_key = loaded.noise_key;
         self.identity_key = loaded.identity_key;
