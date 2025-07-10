@@ -43,6 +43,11 @@ impl PersistenceManager {
         self.device.clone()
     }
 
+    // Synchronous getter for the Arc<Mutex<Device>> which acts as the SignalProtocolStore.
+    pub fn get_signal_protocol_store(&self) -> Arc<Mutex<Device>> {
+        self.device.clone()
+    }
+
     // Provides locked access to the device for reading.
     // The returned guard allows multiple reads simultaneously if needed,
     // but for simplicity, we'll keep it as a direct owned Device clone for now

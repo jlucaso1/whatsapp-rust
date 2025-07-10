@@ -92,12 +92,12 @@ pub trait SenderKeyStore: Send + Sync {
 
 // Corresponds to state/store/SignalProtocolStore.go
 pub trait SignalProtocolStore:
-    IdentityKeyStore + PreKeyStore + SignedPreKeyStore + SessionStore
+    IdentityKeyStore + PreKeyStore + SignedPreKeyStore + SessionStore + SenderKeyStore
 {
 }
 
 // Blanket implementation
-impl<T: IdentityKeyStore + PreKeyStore + SignedPreKeyStore + SessionStore> SignalProtocolStore
-    for T
+impl<T: IdentityKeyStore + PreKeyStore + SignedPreKeyStore + SessionStore + SenderKeyStore>
+    SignalProtocolStore for T
 {
 }

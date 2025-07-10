@@ -1,11 +1,11 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::client::Client;
-use crate::socket::error::SocketError;
-use crate::types::jid::Jid;
-use log::warn;
-use std::time::Duration;
+use crate::binary::node::{Node, NodeContent}; // Keep Node, NodeContent
+use crate::types::jid::Jid; // Keep Jid
+                            // Remove: use crate::client::Client;
+                            // Remove: use crate::socket::error::SocketError; // IqError::Socket will take String
+                            // Remove: use log::warn;
+use std::time::Duration; // Keep Duration for InfoQuery
 use thiserror::Error;
-use tokio::time::timeout;
+// Remove: use tokio::time::timeout; // Not used in this file anymore
 
 /// Represents the type of an IQ stanza.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,8 @@ pub enum InfoQueryType {
 }
 
 impl InfoQueryType {
+    // This method might be used by code that constructs InfoQuery, keep for now
+    #[allow(dead_code)] // If not used elsewhere after Client::send_iq removal
     fn as_str(&self) -> &'static str {
         match self {
             InfoQueryType::Set => "set",
@@ -23,16 +25,17 @@ impl InfoQueryType {
     }
 }
 
-/// Defines an IQ request to be sent to the server.
+/// Defines an IQ request to be sent. (Used by SessionManager to construct IQs)
+/// Note: The sending logic (Client::send_iq) is moved to StanzaProcessor.
 #[derive(Debug, Clone)]
 pub struct InfoQuery<'a> {
     pub namespace: &'a str,
     pub query_type: InfoQueryType,
     pub to: Jid,
     pub target: Option<Jid>,
-    pub id: Option<String>,
+    pub id: Option<String>, // StanzaProcessor.send_request_iq will generate if None
     pub content: Option<NodeContent>,
-    pub timeout: Option<Duration>,
+    pub timeout: Option<Duration>, // StanzaProcessor.send_request_iq will use its default if None
 }
 
 /// Custom error types for IQ operations.
@@ -40,118 +43,23 @@ pub struct InfoQuery<'a> {
 pub enum IqError {
     #[error("IQ request timed out")]
     Timeout,
-    #[error("Client is not connected")]
-    NotConnected,
-    #[error("Socket error: {0}")]
-    Socket(#[from] SocketError),
-    #[error("Received disconnect node during IQ wait: {0:?}")]
-    Disconnected(Node),
-    #[error("Received a server error response: code={code}, text='{text}'")]
+    #[error("Socket error during IQ send/recv: {0}")]
+    Socket(String),
+    // Disconnected variant might be less relevant here, as StanzaProcessor won't be waiting on an IQ if disconnected.
+    // ConnectionManager's read_loop would terminate.
+    // #[error("Received disconnect while waiting for IQ response: {0:?}")]
+    // Disconnected(Node),
+    #[error("IQ server error response: code={code}, text='{text}'")]
     ServerError { code: u16, text: String },
-    #[error("Internal channel closed unexpectedly")]
-    InternalChannelClosed,
+    #[error("Response channel closed prematurely / request dropped")]
+    RequestDropped,
+    #[error("Bad IQ request: {0}")]
+    BadRequest(String),
+    #[error("IQ operation failed: {0}")]
+    Other(String),
 }
 
-impl Client {
-    /// Generates a new unique request ID string.
-    pub fn generate_request_id(&self) -> String {
-        let count = self
-            .id_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{}-{}", self.unique_id, count)
-    }
-
-    /// Sends an IQ (Info/Query) stanza and asynchronously waits for a response.
-    pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
-        let req_id = query
-            .id
-            .clone()
-            .unwrap_or_else(|| self.generate_request_id());
-        let default_timeout = Duration::from_secs(75);
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.response_waiters
-            .lock()
-            .await
-            .insert(req_id.clone(), tx);
-
-        let mut attrs = Attrs::new();
-        attrs.insert("id".into(), req_id.clone());
-        attrs.insert("xmlns".into(), query.namespace.into());
-        attrs.insert("type".into(), query.query_type.as_str().into());
-        attrs.insert("to".into(), query.to.to_string());
-        if let Some(target) = query.target {
-            if !target.is_empty() {
-                attrs.insert("target".into(), target.to_string());
-            }
-        }
-
-        let node = Node {
-            tag: "iq".into(),
-            attrs,
-            content: query.content,
-        };
-
-        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
-        let noise_socket = match noise_socket_arc {
-            Some(s) => s,
-            None => return Err(IqError::NotConnected),
-        };
-        if let Err(e) = noise_socket.send_node(&node).await {
-            self.response_waiters.lock().await.remove(&req_id);
-            return Err(IqError::Socket(e));
-        }
-
-        match timeout(query.timeout.unwrap_or(default_timeout), rx).await {
-            Ok(Ok(response_node)) => {
-                if response_node.tag == "stream:error" || response_node.tag == "xmlstreamend" {
-                    return Err(IqError::Disconnected(response_node));
-                }
-
-                if let Some(res_type) = response_node.attrs.get("type") {
-                    if res_type == "error" {
-                        let error_child = response_node.get_optional_child_by_tag(&["error"]);
-                        if let Some(error_node) = error_child {
-                            let mut parser = crate::binary::attrs::AttrParser::new(error_node);
-                            let code = parser.optional_u64("code").unwrap_or(0) as u16;
-                            let text = parser.optional_string("text").unwrap_or("").to_string();
-                            if !parser.ok() {
-                                warn!(
-                                    target: "Client/IQ",
-                                    "Attribute parsing errors in IQ error response: {:?}",
-                                    parser.errors
-                                );
-                            }
-                            return Err(IqError::ServerError { code, text });
-                        }
-                        // Fallback for a malformed error response with no child
-                        return Err(IqError::ServerError {
-                            code: 0,
-                            text: "Malformed error response".to_string(),
-                        });
-                    }
-                }
-                Ok(response_node)
-            }
-            Ok(Err(_)) => Err(IqError::InternalChannelClosed),
-            Err(_) => {
-                self.response_waiters.lock().await.remove(&req_id);
-                Err(IqError::Timeout)
-            }
-        }
-    }
-
-    /// Handles an incoming IQ response by forwarding it to the waiting task.
-    pub async fn handle_iq_response(&self, node: Node) -> bool {
-        let id_opt = node.attrs.get("id").cloned();
-        if let Some(id) = id_opt {
-            if let Some(waiter) = self.response_waiters.lock().await.remove(&id) {
-                if waiter.send(node).is_err() {
-                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");
-                }
-                return true;
-            }
-        }
-        false
-    }
-}
+// The `impl Client` block containing `send_iq` and `handle_iq_response` is removed
+// as this functionality is now part of StanzaProcessor.
+// Helper functions to *construct* specific IQ Nodes might still live here,
+// but not the sending/response handling logic tied to the old Client.

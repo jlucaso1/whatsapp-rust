@@ -1,102 +1,69 @@
 use crate::binary::node::{Node, NodeContent};
-use crate::client::Client;
-use crate::request::{InfoQuery, InfoQueryType, IqError};
+use crate::socket::NoiseSocket;
 use crate::types::jid::SERVER_JID;
 use log::{debug, info, warn};
 use rand::Rng;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::time::Duration; // Use tokio::time::Duration
 
-// Constants ported from whatsmeow/keepalive.go
+// Constants
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
 const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
-const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180); // 3 minutes
-const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
 
-impl Client {
-    /// Sends a single keepalive ping and waits for a pong.
-    /// Returns true on success, false on failure.
-    async fn send_keepalive(&self) -> bool {
-        if !self.is_connected() {
-            return false;
-        }
+async fn send_ping_directly(noise_socket: &Arc<NoiseSocket>) -> Result<(), anyhow::Error> {
+    let ping_id = format!("ping_{}", chrono::Utc::now().timestamp_millis());
+    let ping_node = Node {
+        tag: "iq".to_string(),
+        attrs: vec![
+            ("to".to_string(), SERVER_JID.to_string()),
+            ("type".to_string(), "get".to_string()),
+            ("id".to_string(), ping_id.clone()),
+        ]
+        .into_iter()
+        .collect(),
+        content: Some(NodeContent::Nodes(vec![Node {
+            tag: "ping".to_string(),
+            attrs: Default::default(),
+            content: None,
+        }])),
+    };
 
-        info!(target: "Client/Keepalive", "Sending keepalive ping");
+    debug!(target: "Keepalive/Send", "Sending ping id: {}", ping_id);
 
-        let iq = InfoQuery {
-            namespace: "w:p",
-            query_type: InfoQueryType::Get,
-            to: SERVER_JID.parse().unwrap(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![Node {
-                tag: "ping".to_string(),
-                ..Default::default()
-            }])),
-            timeout: Some(KEEP_ALIVE_RESPONSE_DEADLINE),
-        };
+    let payload = crate::binary::marshal(&ping_node)
+        .map_err(|e| anyhow::anyhow!("Failed to marshal ping node: {:?}", e))?;
 
-        match self.send_iq(iq).await {
-            Ok(_) => {
-                debug!(target: "Client/Keepalive", "Received keepalive pong");
-                true
+    noise_socket
+        .send_frame(&payload)
+        .await
+        .map_err(|e| e.into())
+}
+
+/// Runs the keepalive loop, sending pings at random intervals.
+pub async fn run_keepalive_loop(noise_socket: Arc<NoiseSocket>, shutdown_notifier: Arc<Notify>) {
+    info!("Keepalive loop starting.");
+
+    loop {
+        let interval_ms = rand::thread_rng()
+            .gen_range(KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis());
+        let interval_duration = Duration::from_millis(interval_ms as u64);
+
+        tokio::select! {
+            biased; // Prioritize shutdown notification
+            _ = shutdown_notifier.notified() => {
+                info!("Keepalive loop: shutdown signaled.");
+                break;
             }
-            Err(e) => {
-                warn!(target: "Client/Keepalive", "Keepalive ping failed: {e:?}");
-                !matches!(e, IqError::Socket(_) | IqError::Disconnected(_))
-            }
-        }
-    }
-
-    /// The main keepalive loop. This should be spawned as a background task.
-    pub(crate) async fn keepalive_loop(self: Arc<Self>) {
-        let mut last_success = chrono::Utc::now();
-        let mut error_count = 0u32;
-
-        loop {
-            let interval_ms = rand::thread_rng().gen_range(
-                KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
-            );
-            let interval = Duration::from_millis(interval_ms as u64);
-
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {
-                    if !self.is_connected() {
-                        debug!(target: "Client/Keepalive", "Not connected, exiting keepalive loop.");
-                        return;
-                    }
-
-                    let is_success = self.send_keepalive().await;
-
-                    if is_success {
-                        if error_count > 0 {
-                            info!(target: "Client/Keepalive", "Keepalive restored.");
-                        }
-                        error_count = 0;
-                        last_success = chrono::Utc::now();
-                    } else {
-                        error_count += 1;
-                        warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {error_count}");
-
-                        // If auto-reconnect is enabled and we haven't had a successful ping in a while,
-                        // force a disconnect so the main `run` loop can handle reconnecting.
-                        if self.enable_auto_reconnect.load(Ordering::Relaxed)
-                            && chrono::Utc::now().signed_duration_since(last_success)
-                                > chrono::Duration::from_std(KEEP_ALIVE_MAX_FAIL_TIME).unwrap()
-                        {
-                            warn!(target: "Client/Keepalive", "Forcing reconnect due to keepalive failure for over {} seconds.", KEEP_ALIVE_MAX_FAIL_TIME.as_secs());
-                            self.disconnect().await;
-                            // The main run loop will handle the reconnect logic.
-                            return;
-                        }
-                    }
-                },
-                _ = self.shutdown_notifier.notified() => {
-                    debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
-                    return;
+            _ = tokio::time::sleep(interval_duration) => {
+                debug!("Keepalive: interval elapsed, sending ping...");
+                if let Err(e) = send_ping_directly(&noise_socket).await {
+                    warn!("Keepalive: failed to send ping: {:?}. This might indicate a dead connection.", e);
+                } else {
+                    debug!("Keepalive: ping sent successfully.");
                 }
             }
         }
     }
+    info!("Keepalive loop stopped.");
 }

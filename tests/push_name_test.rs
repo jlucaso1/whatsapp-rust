@@ -3,8 +3,8 @@ use tempfile::TempDir;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PM // Use Commands
-                                                                             // use whatsapp_rust::store; // No longer needed directly
-                                                                             // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
+                                                                   // use whatsapp_rust::store; // No longer needed directly
+                                                                   // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
 use whatsapp_rust::types::presence::Presence;
 
 #[tokio::test]
