@@ -42,7 +42,7 @@ impl SenderKeyMessage {
     }
 
     /// Deserialize a SenderKeyMessage from bytes.
-    pub fn deserialize(serialized: &[u8]) -> Result<Self, anyhow::Error> {
+    pub fn deserialize(serialized: &[u8]) -> Result<(Self, &[u8]), anyhow::Error> {
         if serialized.is_empty() {
             return Err(anyhow::anyhow!("Empty serialized SenderKeyMessage"));
         }
@@ -65,14 +65,17 @@ impl SenderKeyMessage {
         if serialized.len() < 1 + 64 {
             return Err(anyhow::anyhow!("Too short SenderKeyMessage for signature"));
         }
-        let proto_bytes = &serialized[1..serialized.len() - 64];
+
+        // The signature covers the version byte and the proto bytes.
+        let data_to_verify = &serialized[..serialized.len() - 64];
+        let proto_bytes = &data_to_verify[1..];
         let signature: [u8; 64] = serialized[serialized.len() - 64..]
             .try_into()
             .map_err(|_| anyhow::anyhow!("Invalid signature length"))?;
 
         let proto = wa::SenderKeyMessage::decode(proto_bytes)?;
 
-        Ok(Self { proto, signature })
+        Ok((Self { proto, signature }, data_to_verify))
     }
 
     /// Serialize the SenderKeyMessage to bytes.

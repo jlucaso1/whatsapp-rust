@@ -2,6 +2,7 @@ use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
+use crate::signal::address::SignalAddress;
 use crate::signal::store::{SenderKeyStore, SessionStore};
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
 
@@ -867,9 +868,10 @@ impl Client {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("LID missing for group retry handling"))?;
 
+            let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
             let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
                 receipt.source.chat.to_string(),
-                own_lid.user.clone(),
+                sender_address.to_string(),
             );
 
             let device_store = self.persistence_manager.get_device_arc().await;
@@ -921,8 +923,8 @@ impl Client {
         }
 
         // Resend the original message
-        self.send_message(receipt.source.chat.clone(), original_msg)
-            .await?;
+        self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id)
+            .await?; // Use _impl to send with original ID
         Ok(())
     }
 

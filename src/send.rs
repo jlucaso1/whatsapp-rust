@@ -56,21 +56,33 @@ impl Client {
             conversation: Some(text.to_string()),
             ..Default::default()
         };
-        self.send_message(to, content).await
+        // Generate a new ID for a new message and call the internal implementation.
+        let request_id = self.generate_message_id().await;
+        self.send_message_impl(to, content, request_id).await
     }
 
     /// Encrypts and sends a protobuf message to the given JID.
     /// Multi-device compatible: builds <participants> node and syncs to own devices.
-    pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+    pub async fn send_message_impl(
+        &self,
+        to: Jid,
+        message: wa::Message,
+        request_id: String,
+    ) -> Result<(), anyhow::Error> {
         if to.is_group() {
-            self.send_group_message(to, message).await
+            self.send_group_message(to, message, request_id).await
         } else {
-            self.send_dm_message(to, message).await
+            self.send_dm_message(to, message, request_id).await
         }
     }
 
     // Moved from send_message: direct message logic
-    async fn send_dm_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+    async fn send_dm_message(
+        &self,
+        to: Jid,
+        message: wa::Message,
+        request_id: String,
+    ) -> Result<(), anyhow::Error> {
         use crate::binary::node::{Node, NodeContent};
         use prost::Message as ProtoMessage;
 
@@ -79,9 +91,6 @@ impl Client {
             .id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
-        // drop(device_snapshot); // Not needed
-
-        let request_id = self.generate_message_id().await;
 
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
@@ -268,7 +277,12 @@ impl Client {
     }
 
     // Group message logic
-    async fn send_group_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+    async fn send_group_message(
+        &self,
+        to: Jid,
+        message: wa::Message,
+        request_id: String,
+    ) -> Result<(), anyhow::Error> {
         use crate::binary::node::{Node, NodeContent};
         use crate::signal::address::SignalAddress;
         use crate::signal::groups::builder::GroupSessionBuilder;
@@ -278,7 +292,6 @@ impl Client {
         use crate::signal::SessionCipher;
         use prost::Message as ProtoMessage;
 
-        // Get own_jid and own_lid from PersistenceManager
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let _own_jid = device_snapshot
             .id
@@ -288,11 +301,7 @@ impl Client {
             .lid
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?;
-        // let backend = device_snapshot.backend.clone(); // No longer need separate backend variable.
-        // device_store (Arc<Mutex<Device>>) will be used directly.
         let device_store = self.persistence_manager.get_device_arc().await;
-
-        let request_id = self.generate_message_id().await;
 
         // Add message to cache for potential retries
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
@@ -316,14 +325,24 @@ impl Client {
         let distribution_message = group_builder.create(&sender_key_name).await.map_err(|e| {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
         })?;
-        let distribution_message_bytes = distribution_message.encode_to_vec();
+
+        // The axolotl protocol message (distribution_message) must be wrapped in a wa::Message
+        // before being encrypted for each participant.
+        let skdm_for_encryption = wa::Message {
+            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
+                group_id: Some(to.to_string()),
+                axolotl_sender_key_distribution_message: Some(distribution_message.encode_to_vec()),
+            }),
+            ..Default::default()
+        };
+        let distribution_message_bytes = skdm_for_encryption.encode_to_vec();
 
         // 3. Encrypt the actual message content with the shared group sender key.
         let group_cipher =
             GroupCipher::new(sender_key_name.clone(), device_store.clone(), group_builder); // Use device_store
-        let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
+        let message_plaintext = message.encode_to_vec();
         let sk_msg_ciphertext = group_cipher
-            .encrypt(&padded_message_plaintext)
+            .encrypt(&message_plaintext)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to encrypt group message: {e}"))?;
 
