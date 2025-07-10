@@ -47,7 +47,7 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("  Registration ID: {}", device_snapshot.registration_id);
     info!(
         "  Identity Key (Public): {}",
-        hex::encode(&device_snapshot.identity_key.public_key)
+        hex::encode(device_snapshot.identity_key.public_key)
     );
     info!(
         "  Signed PreKey ID: {}",
@@ -55,19 +55,19 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     info!(
         "  ADV Secret Key: {}",
-        hex::encode(&device_snapshot.adv_secret_key)
+        hex::encode(device_snapshot.adv_secret_key)
     );
 
     if let Some(account_details) = &device_snapshot.account {
         info!("  Account Details (ADV):");
         info!(
             "    - Account Signature Key: {}",
-            hex::encode(&account_details.account_signature_key())
+            hex::encode(account_details.account_signature_key())
         );
         // info!("    - Account Signature: {}", hex::encode(&account_details.account_signature())); // This field might not be directly on AdvSignedDeviceIdentity
         info!(
             "    - Device Signature: {}",
-            hex::encode(&account_details.device_signature())
+            hex::encode(account_details.device_signature())
         );
         if let Some(details_bytes) = &account_details.details {
             match wa::AdvDeviceIdentity::decode(details_bytes.as_slice()) {
