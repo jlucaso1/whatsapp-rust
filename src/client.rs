@@ -897,7 +897,16 @@ impl Client {
             );
 
             if let Err(e) = device_store.delete_session(&signal_address).await {
-                log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                // It's not a critical error if the session file doesn't exist,
+                // especially when dealing with the primary device (:0).
+                if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
+                    if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                    }
+                } else {
+                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                }
             } else {
                 info!(
                     "Deleted session for {} due to retry receipt",
@@ -913,7 +922,15 @@ impl Client {
 
             let device_store = self.persistence_manager.get_device_arc().await;
             if let Err(e) = device_store.delete_session(&signal_address).await {
-                log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                // It's not a critical error if the session file doesn't exist.
+                if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
+                    if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                    }
+                } else {
+                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                }
             } else {
                 info!(
                     "Deleted session for {} due to retry receipt",
