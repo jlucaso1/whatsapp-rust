@@ -7,6 +7,11 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
 
+// Additional imports for message ID generation
+use sha2::{Digest, Sha256};
+use std::time::{SystemTime, UNIX_EPOCH};
+use rand::RngCore;
+
 /// Represents the type of an IQ stanza.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoQueryType {
@@ -59,6 +64,39 @@ impl Client {
             .id_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!("{}-{}", self.unique_id, count)
+    }
+
+    /// Generates a proper WhatsApp message ID in the format expected by the protocol.
+    /// Message IDs are used for chat messages and must follow the 3EB0... format
+    /// to ensure proper synchronization across devices and support for features
+    /// like receipts, replies, reactions, and message revokes.
+    pub async fn generate_message_id(&self) -> String {
+        let mut data = Vec::with_capacity(8 + 20 + 16);
+
+        // 1. Add current unix timestamp (8 bytes)
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        data.extend_from_slice(&timestamp.to_be_bytes());
+
+        // 2. Add own JID if available (best effort)
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        if let Some(jid) = &device_snapshot.id {
+            data.extend_from_slice(jid.user.as_bytes());
+            data.extend_from_slice(b"@c.us"); // whatsmeow uses legacy server here
+        }
+        
+        // 3. Add random bytes (16 bytes)
+        let mut random_bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut random_bytes);
+        data.extend_from_slice(&random_bytes);
+
+        // 4. Hash, truncate, and format with 3EB0 prefix
+        let hash = Sha256::digest(&data);
+        let truncated_hash = &hash[..9]; // Use first 9 bytes for 18 hex chars
+
+        format!("3EB0{}", hex::encode(truncated_hash).to_uppercase())
     }
 
     /// Sends an IQ (Info/Query) stanza and asynchronously waits for a response.
