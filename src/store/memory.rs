@@ -87,6 +87,14 @@ impl crate::signal::store::SenderKeyStore for MemoryStore {
             .await
             .unwrap_or_default())
     }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &crate::signal::sender_key_name::SenderKeyName,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.sender_keys.remove(sender_key_name).await;
+        Ok(())
+    }
 }
 
 #[async_trait]

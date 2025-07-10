@@ -88,6 +88,7 @@ pub trait SenderKeyStore: Send + Sync {
         &self,
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, StoreError>;
+    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError>;
 }
 
 // Corresponds to state/store/SignalProtocolStore.go
