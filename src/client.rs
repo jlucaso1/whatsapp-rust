@@ -71,6 +71,8 @@ pub struct Client {
     /// from different chats while serializing messages within the same chat.
     pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
 
+    pub(crate) lid_pn_map: Arc<Mutex<HashMap<crate::types::jid::Jid, crate::types::jid::Jid>>>,
+
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
     pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
@@ -107,6 +109,8 @@ impl Client {
             // Initialize the per-chat locks map
             chat_locks: Arc::new(DashMap::new()),
 
+            lid_pn_map: Arc::new(Mutex::new(HashMap::new())),
+
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
             recent_messages_map: Arc::new(Mutex::new(HashMap::with_capacity(256))),
@@ -118,25 +122,7 @@ impl Client {
             last_buffer_cleanup: Arc::new(Mutex::new(None)),
         }
     }
-    /// Placeholder function to get group participants.
-    /// A real implementation should fetch this information from the store
-    /// where group metadata is persisted.
-    pub async fn get_group_participants(
-        &self,
-        _group_jid: &crate::types::jid::Jid,
-    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
-        // TODO: This is a placeholder. A real implementation should fetch
-        // group metadata from the store to get the actual participant list.
-        // For now, it includes only the sender to allow testing the flow to yourself.
-        let own_jid = self
-            .store
-            .read()
-            .await
-            .id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
-        Ok(vec![own_jid])
-    }
+    // REMOVED: get_group_participants stub. Use query_group_info instead.
 
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
@@ -408,22 +394,29 @@ impl Client {
         let from = attrs.jid("from");
         let id = attrs.string("id");
         let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
+        let participant = attrs.optional_jid("participant");
 
         use crate::types::presence::ReceiptType;
         let receipt_type = ReceiptType::from(receipt_type_str.to_string());
 
         info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
+        let sender = if from.is_group() && participant.is_some() {
+            participant.unwrap()
+        } else {
+            from.clone()
+        };
+
         let receipt = crate::types::events::Receipt {
             message_ids: vec![id.clone()],
             source: crate::types::message::MessageSource {
                 chat: from.clone(),
-                sender: from.clone(),
+                sender: sender.clone(),
                 ..Default::default()
             },
             timestamp: chrono::Utc::now(),
             r#type: receipt_type.clone(),
-            message_sender: from.clone(),
+            message_sender: sender.clone(),
         };
 
         if receipt_type == ReceiptType::Retry {
@@ -473,6 +466,23 @@ impl Client {
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
+
+        // --- MODIFICATION START ---
+        // Check for `lid` and update the store. This is crucial for group messaging.
+        if let Some(lid_str) = node.attrs.get("lid") {
+            if let Ok(lid) = lid_str.parse::<crate::types::jid::Jid>() {
+                let mut store = self.store.write().await;
+                if store.lid.as_ref() != Some(&lid) {
+                    info!(target: "Client", "Updating LID from server to '{}'", lid);
+                    store.lid = Some(lid);
+                }
+            } else {
+                warn!(target: "Client", "Failed to parse LID from success stanza: {}", lid_str);
+            }
+        } else {
+            warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
+        }
+        // --- MODIFICATION END ---
 
         // Check for `pushname` and update the store if it's different.
         if let Some(push_name) = node.attrs.get("pushname") {
@@ -821,16 +831,18 @@ impl Client {
                 anyhow::anyhow!("Could not find message {} in cache for retry", message_id)
             })?;
 
+        // Use the participant JID (receipt.source.sender) for session deletion in group retry receipts.
+        let participant_jid = receipt.source.sender.clone();
         let signal_address = crate::signal::address::SignalAddress::new(
-            receipt.source.sender.user.clone(),
-            receipt.source.sender.device as u32,
+            participant_jid.user.clone(),
+            participant_jid.device as u32,
         );
         let address_str = signal_address.to_string();
         let store_guard = self.store.read().await;
         let _ = store_guard.backend.delete_session(&address_str).await;
         info!(
             "Deleted session for {} due to retry receipt, will re-establish.",
-            receipt.source.sender
+            participant_jid
         );
 
         self.send_message(receipt.source.chat.clone(), original_msg)
@@ -874,5 +886,143 @@ impl Client {
             .save_device_data(&store.to_serializable())
             .await
             .map_err(|e| anyhow::anyhow!("Failed to save device state: {}", e))
+    }
+    /// Query group info to get all participant JIDs.
+    pub async fn query_group_info(
+        &self,
+        jid: &crate::types::jid::Jid,
+    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        use crate::binary::node::{Node, NodeContent};
+        let query_node = Node {
+            tag: "query".to_string(),
+            attrs: [("request".to_string(), "interactive".to_string())].into(),
+            content: None,
+        };
+        let iq = crate::request::InfoQuery {
+            namespace: "w:g2",
+            query_type: crate::request::InfoQueryType::Get,
+            to: jid.clone(),
+            content: Some(NodeContent::Nodes(vec![query_node])),
+            id: None,
+            target: None,
+            timeout: None,
+        };
+
+        let resp_node = self.send_iq(iq).await?;
+
+        let group_node = resp_node
+            .get_optional_child("group")
+            .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
+
+        let mut participants = Vec::new();
+        // Lock the map to update it
+        let mut lid_pn_map = self.lid_pn_map.lock().await;
+
+        for participant_node in group_node.get_children_by_tag("participant") {
+            let mut attrs = participant_node.attrs();
+            let participant_jid = attrs.jid("jid");
+
+            // --- MODIFICATION START ---
+            if let Some(lid_jid_str) = attrs.optional_string("lid") {
+                if !lid_jid_str.is_empty() {
+                    if let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>() {
+                        log::debug!("Found LID-PN mapping: {} <-> {}", participant_jid, lid_jid);
+                        // Store both ways for easy lookup
+                        lid_pn_map.insert(participant_jid.clone(), lid_jid.clone());
+                        lid_pn_map.insert(lid_jid, participant_jid.clone());
+                    }
+                }
+            }
+            // --- MODIFICATION END ---
+
+            if !attrs.ok() {
+                log::warn!("Failed to parse participant attrs: {:?}", attrs.errors);
+                continue;
+            }
+            participants.push(participant_jid);
+        }
+
+        Ok(participants)
+    }
+
+    /// Fetch all devices for the given JIDs using usync IQ.
+    pub async fn get_user_devices(
+        &self,
+        jids: &[crate::types::jid::Jid],
+    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        use crate::binary::node::{Node, NodeContent};
+        let mut user_nodes = Vec::new();
+        for jid in jids {
+            user_nodes.push(Node {
+                tag: "user".to_string(),
+                attrs: [("jid".to_string(), jid.to_non_ad().to_string())].into(),
+                content: None,
+            });
+        }
+
+        let usync_node = Node {
+            tag: "usync".to_string(),
+            attrs: [
+                ("context".to_string(), "message".to_string()),
+                ("index".to_string(), "0".to_string()),
+                ("last".to_string(), "true".to_string()),
+                ("mode".to_string(), "query".to_string()),
+                ("sid".to_string(), self.generate_request_id()),
+            ]
+            .into(),
+            content: Some(NodeContent::Nodes(vec![
+                Node {
+                    tag: "query".to_string(),
+                    attrs: Default::default(),
+                    content: Some(NodeContent::Nodes(vec![Node {
+                        tag: "devices".to_string(),
+                        attrs: [("version".to_string(), "2".to_string())].into(),
+                        content: None,
+                    }])),
+                },
+                Node {
+                    tag: "list".to_string(),
+                    attrs: Default::default(),
+                    content: Some(NodeContent::Nodes(user_nodes)),
+                },
+            ])),
+        };
+
+        let iq = crate::request::InfoQuery {
+            namespace: "usync",
+            query_type: crate::request::InfoQueryType::Get,
+            to: crate::types::jid::SERVER_JID.parse().unwrap(),
+            content: Some(NodeContent::Nodes(vec![usync_node])),
+            id: None,
+            target: None,
+            timeout: None,
+        };
+
+        let resp_node = self.send_iq(iq).await?;
+
+        let list_node = resp_node
+            .get_optional_child_by_tag(&["usync", "list"])
+            .ok_or_else(|| anyhow::anyhow!("<usync> or <list> not found in usync response"))?;
+
+        let mut all_devices = Vec::new();
+        for user_node in list_node.get_children_by_tag("user") {
+            let user_jid = user_node.attrs().jid("jid");
+            let device_list_node = user_node
+                .get_optional_child_by_tag(&["devices", "device-list"])
+                .ok_or_else(|| {
+                    anyhow::anyhow!(format!("<device-list> not found for user {}", user_jid))
+                })?;
+
+            for device_node in device_list_node.get_children_by_tag("device") {
+                let device_id_str = device_node.attrs().string("id");
+                let device_id: u16 = device_id_str.parse()?;
+
+                let mut device_jid = user_jid.clone();
+                device_jid.device = device_id;
+                all_devices.push(device_jid);
+            }
+        }
+
+        Ok(all_devices)
     }
 }

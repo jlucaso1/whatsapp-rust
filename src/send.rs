@@ -11,10 +11,8 @@ use whatsapp_proto::whatsapp as wa;
 use whatsapp_proto::whatsapp::message::DeviceSentMessage;
 
 // Group messaging imports
-use crate::signal::groups::builder::GroupSessionBuilder;
-use crate::signal::groups::cipher::GroupCipher;
-use crate::signal::sender_key_name::SenderKeyName;
-use prost::Message as ProtoMessage;
+use base64::Engine;
+use sha2::{Digest, Sha256};
 
 // Helper function to pad messages for encryption
 fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
@@ -28,6 +26,26 @@ fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
     let padding = vec![pad_val; pad_val as usize];
     plaintext.extend_from_slice(&padding);
     plaintext
+}
+
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+
+fn participant_list_hash(devices: &[Jid]) -> String {
+    let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
+    jids.sort();
+
+    // Concatenate all JIDs into a single string before hashing
+    let concatenated_jids = jids.join("");
+
+    let mut hasher = Sha256::new();
+    hasher.update(concatenated_jids.as_bytes());
+    let full_hash = hasher.finalize();
+
+    // Truncate the hash to the first 6 bytes
+    let truncated_hash = &full_hash[..6];
+
+    // Encode using base64 without padding
+    format!("2:{}", STANDARD_NO_PAD.encode(truncated_hash))
 }
 
 impl Client {
@@ -190,35 +208,212 @@ impl Client {
 
     // Group message logic
     async fn send_group_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+        use crate::binary::node::{Node, NodeContent};
+        use crate::signal::address::SignalAddress;
+        use crate::signal::groups::builder::GroupSessionBuilder;
+        use crate::signal::groups::cipher::GroupCipher;
+        use crate::signal::sender_key_name::SenderKeyName;
+        use crate::signal::session::SessionBuilder;
+        use crate::signal::SessionCipher;
+        use prost::Message as ProtoMessage;
+
         let store_arc = self.store.clone();
-        let own_jid = store_arc
-            .read()
-            .await
-            .id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in"))?;
+        let (_own_jid, own_lid) = {
+            let store_guard = store_arc.read().await;
+            (
+                store_guard
+                    .id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?,
+                store_guard
+                    .lid
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?,
+            )
+        };
         let request_id = self.generate_request_id();
 
-        // 1. Get all participant devices
-        let participants = self.get_group_participants(&to).await?;
-        let all_devices = self.get_user_devices(&participants).await?;
+        // Add message to cache for potential retries
+        self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+            .await;
 
-        // 2. Create the SenderKeyDistributionMessage. This is the "key" we distribute.
-        let sender_key_name = SenderKeyName::new(to.to_string(), own_jid.user.clone());
+        // 1. Get all members of the group, then get all of their devices.
+        let participants = self.query_group_info(&to).await?;
+        log::debug!("Group participants for {:?}: {:?}", to, participants);
+        let all_devices = self.get_user_devices(&participants).await?;
+        log::debug!("All devices for group {:?}: {:?}", to, all_devices);
+
+        let mut includes_prekey_message = false;
+
+        // 2. Create the SenderKeyDistributionMessage to be sent to participants who need it.
+        // Use the LID's user part to create the sender key name. This is the crucial fix.
+        let sender_key_name = SenderKeyName::new(to.to_string(), own_lid.user.clone());
         let group_builder = GroupSessionBuilder::new(store_arc.clone());
         let distribution_message = group_builder.create(&sender_key_name).await.map_err(|e| {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
         })?;
-
         let distribution_message_bytes = distribution_message.encode_to_vec();
 
-        // 3. Encrypt the actual message content with the group cipher to create the 'skmsg'
+        // 3. Encrypt the actual message content with the shared group sender key.
         let group_cipher = GroupCipher::new(sender_key_name, store_arc.clone(), group_builder);
         let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
         let sk_msg_ciphertext = group_cipher
             .encrypt(&padded_message_plaintext)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to encrypt group message: {e}"))?;
+
+        // 4. Bulk-fetch prekeys for devices without a session, then process per device.
+        let mut devices_needing_prekeys = Vec::new();
+        for device_jid in &all_devices {
+            let signal_address =
+                SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
+            if !store_arc
+                .contains_session(&signal_address)
+                .await
+                .unwrap_or(false)
+            {
+                devices_needing_prekeys.push(device_jid.clone());
+            }
+        }
+
+        let prekey_bundles = if !devices_needing_prekeys.is_empty() {
+            self.fetch_pre_keys(&devices_needing_prekeys)
+                .await
+                .unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        let mut participant_pkmsg_nodes = Vec::new();
+        // Lock the LID-PN map for lookup
+        let lid_pn_map = self.lid_pn_map.lock().await;
+
+        // --- MODIFICATION START: Pre-calculate identities and perform session migration ---
+        let mut devices_to_process = Vec::new();
+        let mut devices_needing_prekeys = Vec::new();
+
+        for wire_identity in &all_devices {
+            let encryption_identity =
+                if wire_identity.server == crate::types::jid::DEFAULT_USER_SERVER {
+                    lid_pn_map
+                        .get(wire_identity)
+                        .cloned()
+                        .unwrap_or_else(|| wire_identity.clone())
+                } else {
+                    wire_identity.clone()
+                };
+
+            // If a LID is being used for a PN identity, check if we need to migrate the session.
+            if &encryption_identity != wire_identity {
+                let pn_address =
+                    SignalAddress::new(wire_identity.user.clone(), wire_identity.device as u32);
+                let lid_address = SignalAddress::new(
+                    encryption_identity.user.clone(),
+                    encryption_identity.device as u32,
+                );
+
+                // If a session exists for the PN but not the LID, migrate it.
+                if store_arc
+                    .contains_session(&pn_address)
+                    .await
+                    .unwrap_or(false)
+                    && !store_arc
+                        .contains_session(&lid_address)
+                        .await
+                        .unwrap_or(false)
+                {
+                    log::debug!("Migrating session from {} to {}", pn_address, lid_address);
+                    if let Ok(session) = store_arc.load_session(&pn_address).await {
+                        let _ = store_arc.store_session(&lid_address, &session).await;
+                        // Not deleting the old one is safer for now.
+                    }
+                }
+            }
+
+            let signal_address = SignalAddress::new(
+                encryption_identity.user.clone(),
+                encryption_identity.device as u32,
+            );
+            if !store_arc
+                .contains_session(&signal_address)
+                .await
+                .unwrap_or(false)
+            {
+                devices_needing_prekeys.push(wire_identity.clone());
+            }
+            devices_to_process.push((wire_identity.clone(), encryption_identity, signal_address));
+        }
+        // --- MODIFICATION END ---
+
+        for (wire_identity, encryption_identity, signal_address) in devices_to_process {
+            let mut session_record =
+                store_arc.load_session(&signal_address).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
+                })?;
+
+            // If we fetched a bundle for this device, process it now.
+            if let Some(bundle) = prekey_bundles.get(&wire_identity) {
+                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
+                if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
+                    log::warn!(
+                        "Failed to process prekey bundle for {}: {}. Skipping.",
+                        wire_identity,
+                        e
+                    );
+                    continue;
+                }
+            } else if session_record.is_fresh() {
+                log::warn!(
+                    "Device {} has no session and no prekey bundle was fetched. Skipping.",
+                    wire_identity
+                );
+                continue;
+            }
+
+            let session_cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
+            let encrypted_distribution_message = session_cipher
+                .encrypt(&mut session_record, &distribution_message_bytes)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to encrypt SKDM for {}: {}", encryption_identity, e)
+                })?;
+
+            store_arc
+                .store_session(&signal_address, &session_record)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to store session for {}: {}", encryption_identity, e)
+                })?;
+
+            if encrypted_distribution_message.q_type() == crate::signal::protocol::PREKEY_TYPE {
+                includes_prekey_message = true;
+            }
+
+            let enc_type = match encrypted_distribution_message.q_type() {
+                crate::signal::protocol::PREKEY_TYPE => "pkmsg",
+                _ => "msg",
+            };
+
+            let pkmsg_enc_node = Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), enc_type.to_string()),
+                ]
+                .into(),
+                content: Some(NodeContent::Bytes(
+                    encrypted_distribution_message.serialize(),
+                )),
+            };
+
+            participant_pkmsg_nodes.push(Node {
+                tag: "to".to_string(),
+                attrs: [("jid".to_string(), wire_identity.to_string())].into(),
+                content: Some(NodeContent::Nodes(vec![pkmsg_enc_node])),
+            });
+        }
+
+        // 5. CORRECTLY CONSTRUCT THE FINAL STANZA
         let sk_msg_node = Node {
             tag: "enc".to_string(),
             attrs: [
@@ -229,73 +424,39 @@ impl Client {
             content: Some(NodeContent::Bytes(sk_msg_ciphertext.serialize())),
         };
 
-        // 4. Encrypt the SenderKeyDistributionMessage for each participant device
-        let mut participant_nodes = Vec::new();
-        for device_jid in all_devices {
-            let signal_address =
-                SignalAddress::new(device_jid.user.clone(), device_jid.device as u32);
-            let mut session_record = store_arc
-                .load_session(&signal_address)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let mut message_content_nodes = Vec::new();
 
-            if session_record.is_fresh() {
-                let bundles = self.fetch_pre_keys(&[device_jid.clone()]).await?;
-                let bundle = bundles
-                    .get(&device_jid)
-                    .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", device_jid))?;
-                let builder = SessionBuilder::new(store_arc.clone(), signal_address.clone());
-                builder.process_bundle(&mut session_record, bundle).await?;
-            }
-
-            let session_cipher = SessionCipher::new(store_arc.clone(), signal_address.clone());
-            let encrypted_distribution_message = session_cipher
-                .encrypt(&mut session_record, &distribution_message_bytes)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to encrypt distribution message for {}: {}",
-                        device_jid,
-                        e
-                    )
-                })?;
-
-            store_arc
-                .store_session(&signal_address, &session_record)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-            let enc_node = Node {
-                tag: "enc".to_string(),
-                attrs: [
-                    ("v".to_string(), "2".to_string()),
-                    ("type".to_string(), "pkmsg".to_string()),
-                ]
-                .into(),
-                content: Some(NodeContent::Bytes(
-                    encrypted_distribution_message.serialize(),
-                )),
-            };
-
-            participant_nodes.push(Node {
-                tag: "to".to_string(),
-                attrs: [("jid".to_string(), device_jid.to_string())].into(),
-                content: Some(NodeContent::Nodes(vec![enc_node])),
+        // Add the participants block *if* we have any keys to distribute.
+        if !participant_pkmsg_nodes.is_empty() {
+            message_content_nodes.push(Node {
+                tag: "participants".to_string(),
+                attrs: Default::default(),
+                content: Some(NodeContent::Nodes(participant_pkmsg_nodes)),
             });
         }
 
-        let participants_node = Node {
-            tag: "participants".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Nodes(participant_nodes)),
-        };
+        // Add device identity if we sent any pre-key messages.
+        if includes_prekey_message {
+            if let Some(account) = &self.store.read().await.account {
+                log::debug!("Including device-identity node because a pkmsg was sent");
+                let device_identity_bytes = account.encode_to_vec();
+                message_content_nodes.push(Node {
+                    tag: "device-identity".to_string(),
+                    attrs: Default::default(),
+                    content: Some(NodeContent::Bytes(device_identity_bytes)),
+                });
+            }
+        }
 
-        let message_content_nodes = vec![participants_node, sk_msg_node];
+        // The skmsg is always at the top level of the message content.
+        message_content_nodes.push(sk_msg_node);
 
+        let phash = participant_list_hash(&all_devices);
         let stanza = Node {
             tag: "message".to_string(),
             attrs: [
                 ("to".to_string(), to.to_string()),
+                ("phash".to_string(), phash),
                 ("id".to_string(), request_id),
                 ("type".to_string(), "text".to_string()),
             ]
@@ -304,16 +465,6 @@ impl Client {
         };
 
         self.send_node(stanza).await.map_err(|e| e.into())
-    }
-
-    /// Fetch all devices for the given JIDs (stub, needs real usync IQ).
-    pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
-        // TODO: Replace this stub with a real usync IQ device fetch.
-        let mut devices = Vec::new();
-        for jid in jids {
-            devices.push(jid.clone());
-        }
-        Ok(devices)
     }
 
     /// Fetches pre-key bundles for a list of JIDs.
@@ -411,9 +562,10 @@ impl Client {
         let mut pre_key_id = None;
         let mut pre_key_public = None;
         if let Some(pre_key_node) = keys_node.get_optional_child("key") {
-            let (id, key) = self.node_to_pre_key(pre_key_node)?;
-            pre_key_id = Some(id);
-            pre_key_public = Some(key);
+            if let Some((id, key)) = self.node_to_pre_key(pre_key_node)? {
+                pre_key_id = Some(id);
+                pre_key_public = Some(key);
+            }
         }
 
         let signed_pre_key_node = keys_node
@@ -437,22 +589,31 @@ impl Client {
     fn node_to_pre_key(
         &self,
         node: &Node,
-    ) -> Result<(u32, crate::signal::ecc::keys::DjbEcPublicKey), anyhow::Error> {
-        let id_bytes = node
+    ) -> Result<Option<(u32, crate::signal::ecc::keys::DjbEcPublicKey)>, anyhow::Error> {
+        let id_node_content = node
             .get_optional_child("id")
-            .and_then(|n| n.content.as_ref())
-            .and_then(|c| {
-                if let NodeContent::Bytes(b) = c {
-                    Some(b.clone())
+            .and_then(|n| n.content.as_ref());
+
+        let id = match id_node_content {
+            Some(NodeContent::Bytes(b)) if !b.is_empty() => {
+                if b.len() == 3 {
+                    // Handle 3-byte big-endian integer ID
+                    Ok(u32::from_be_bytes([0, b[0], b[1], b[2]]))
+                } else if let Ok(s) = std::str::from_utf8(b) {
+                    // Handle hex string ID
+                    u32::from_str_radix(s, 16).map_err(|e| e.into())
                 } else {
-                    None
+                    Err(anyhow::anyhow!("ID is not valid UTF-8 hex or 3-byte int"))
                 }
-            })
-            .ok_or(anyhow::anyhow!("Missing pre-key ID"))?;
-        if id_bytes.len() != 3 {
-            return Err(anyhow::anyhow!("Invalid pre-key ID length"));
-        }
-        let id = u32::from_be_bytes([0, id_bytes[0], id_bytes[1], id_bytes[2]]);
+            }
+            // ID is empty or missing, this is invalid for a one-time pre-key
+            _ => Err(anyhow::anyhow!("Missing or empty pre-key ID content")),
+        };
+
+        let id = match id {
+            Ok(val) => val,
+            Err(_) => return Ok(None), // Gracefully ignore invalid one-time pre-keys
+        };
 
         let value_bytes = node
             .get_optional_child("value")
@@ -468,18 +629,22 @@ impl Client {
         if value_bytes.len() != 32 {
             return Err(anyhow::anyhow!("Invalid pre-key value length"));
         }
+        let public_key =
+            crate::signal::ecc::keys::DjbEcPublicKey::new(value_bytes.try_into().unwrap());
 
-        Ok((
-            id,
-            crate::signal::ecc::keys::DjbEcPublicKey::new(value_bytes.try_into().unwrap()),
-        ))
+        Ok(Some((id, public_key)))
     }
 
     fn node_to_signed_pre_key(
         &self,
         node: &Node,
     ) -> Result<(u32, crate::signal::ecc::keys::DjbEcPublicKey, [u8; 64]), anyhow::Error> {
-        let (id, public_key) = self.node_to_pre_key(node)?;
+        // HACK: In some cases, the signed prekey ID is missing. The Go implementation seems to default to 1 in this scenario.
+        // This is a bit of a magic number, but it matches the behavior of the reference implementation.
+        let (id, public_key) = match self.node_to_pre_key(node)? {
+            Some((id, key)) => (id, key),
+            None => (1, crate::signal::ecc::keys::DjbEcPublicKey::new([0u8; 32])),
+        };
         let signature_bytes = node
             .get_optional_child("signature")
             .and_then(|n| n.content.as_ref())
