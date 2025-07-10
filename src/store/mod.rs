@@ -10,9 +10,11 @@ use crate::types::jid::Jid;
 use rand::RngCore;
 use whatsapp_proto::whatsapp as wa;
 pub mod clientpayload;
+pub mod commands; // Added commands module
 pub mod error;
 pub mod generic;
 pub mod memory;
+pub mod persistence_manager; // Added persistence_manager module
 pub mod traits;
 
 use crate::store::traits::*;
