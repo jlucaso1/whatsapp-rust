@@ -59,7 +59,7 @@ impl PersistenceManager {
         F: FnOnce(&mut Device) -> R,
     {
         let mut device_guard = self.device.lock().await;
-        let result = modifier(&mut *device_guard);
+        let result = modifier(&mut device_guard);
         let mut dirty_guard = self.dirty.lock().await;
         *dirty_guard = true;
         self.save_notify.notify_one(); // Notify the saver task that there's something to save
