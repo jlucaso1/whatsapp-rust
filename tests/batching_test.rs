@@ -2,47 +2,46 @@ use log::{error, info};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use whatsapp_rust::client::Client;
-use whatsapp_rust::store;
-use whatsapp_rust::store::filestore::FileStore;
+use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
+                                                                   // use whatsapp_rust::store; // Not needed directly
+                                                                   // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
+use std::time::Duration;
 use whatsapp_rust::types::events::Event;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    info!("=== WhatsApp Rust Batching Test Utility ===");
+    info!("=== WhatsApp Rust Batching Test Utility (with PersistenceManager) ===");
 
-    let store_backend = Arc::new(FileStore::new("./whatsapp_store").await?);
-
-    // Try to load existing device data
-    let device = if let Some(loaded_data) = store_backend.load_device_data().await? {
-        info!("✅ Found existing device data");
-        let mut dev = store::Device::new(store_backend.clone());
-        dev.load_from_serializable(loaded_data);
-        dev
-    } else {
-        info!("❌ No existing device data found");
-        return Ok(());
+    let pm = match PersistenceManager::new("./whatsapp_store_batch_test").await {
+        Ok(manager) => Arc::new(manager),
+        Err(e) => {
+            error!("Failed to initialize PersistenceManager: {}", e);
+            return Err(e.into());
+        }
     };
+    // Start background saver for PM, with a short interval for testing if desired,
+    // but the test mainly focuses on event counts now.
+    let pm_clone_for_saver = pm.clone();
+    tokio::spawn(async move {
+        pm_clone_for_saver.run_background_saver(Duration::from_secs(5));
+    });
 
-    let client = Arc::new(Client::new(device));
+    let client = Arc::new(Client::new(pm.clone()));
 
     // Counter to track how many events we receive
     let event_counter = Arc::new(AtomicUsize::new(0));
-    let save_counter = Arc::new(AtomicUsize::new(0));
+    // let save_counter = Arc::new(AtomicUsize::new(0)); // PersistenceManager handles saves
 
-    // Add event handler to count events and saves
-    let store_backend_for_handler = store_backend.clone();
-    let client_for_handler = client.clone();
+    // Add event handler to count events
     let event_counter_clone = event_counter.clone();
-    let save_counter_clone = save_counter.clone();
+    // let save_counter_clone = save_counter.clone(); // Not needed
 
     client
         .add_event_handler(Box::new(move |event: Arc<Event>| {
-            let store_backend_clone = store_backend_for_handler.clone();
-            let client_clone = client_for_handler.clone();
             let event_counter_clone = event_counter_clone.clone();
-            let save_counter_clone = save_counter_clone.clone();
+            // let save_counter_clone = save_counter_clone.clone(); // Not needed
 
             tokio::spawn(async move {
                 if let Event::SelfPushNameUpdated(update) = &*event {
@@ -52,32 +51,21 @@ async fn main() -> Result<(), anyhow::Error> {
                     info!("  Old name: '{}'", update.old_name);
                     info!("  New name: '{}'", update.new_name);
 
-                    // Save the state
-                    let store_guard = client_clone.store.read().await;
-                    match store_backend_clone
-                        .save_device_data(&store_guard.to_serializable())
-                        .await
-                    {
-                        Ok(_) => {
-                            let save_num = save_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                            info!("💾 Device state save #{} successful", save_num);
-                        }
-                        Err(e) => {
-                            error!("❌ Failed to save device state: {e}");
-                        }
-                    }
+                    // PersistenceManager handles saving automatically.
+                    // We could log when the PM saves if needed for debugging, but not counting manual saves here.
+                    // info!("💾 PM will handle saving if state is dirty.");
                 }
             });
         }))
         .await;
 
-    info!("\n=== Testing Batching Behavior ===");
+    info!("\n=== Testing Batching Behavior (Event Counts with PersistenceManager) ===");
     let initial_name = client.get_push_name().await;
     info!("Initial push name: '{}'", initial_name);
 
     // Reset counters
     event_counter.store(0, Ordering::SeqCst);
-    save_counter.store(0, Ordering::SeqCst);
+    // save_counter.store(0, Ordering::SeqCst); // Removed
 
     // Test 1: Single update
     info!("\n--- Test 1: Single Update ---");
@@ -86,20 +74,24 @@ async fn main() -> Result<(), anyhow::Error> {
 
     client.set_push_name(test_name_1.to_string()).await?;
 
-    // Wait for event processing
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for event processing & potential save by PM
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // Increased delay slightly
 
     let events_after_1 = event_counter.load(Ordering::SeqCst);
-    let saves_after_1 = save_counter.load(Ordering::SeqCst);
+    // let saves_after_1 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Single update complete");
     info!("  Events fired: {}", events_after_1);
-    info!("  Saves performed: {}", saves_after_1);
+    // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
 
-    if events_after_1 == 1 && saves_after_1 == 1 {
-        info!("✅ Single update behavior is correct");
+    if events_after_1 == 1 {
+        // Check only events
+        info!("✅ Single update event behavior is correct");
     } else {
-        error!("❌ Single update behavior is incorrect");
+        error!(
+            "❌ Single update event behavior is incorrect (expected 1 event, got {})",
+            events_after_1
+        );
     }
 
     // Test 2: Multiple rapid updates (simulating what happens during app state sync)
@@ -107,7 +99,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Reset counters
     event_counter.store(0, Ordering::SeqCst);
-    save_counter.store(0, Ordering::SeqCst);
+    // save_counter.store(0, Ordering::SeqCst); // Removed
 
     let test_names = [
         "Batch Test 2a",
@@ -128,24 +120,28 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // Wait for all events to be processed
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await; // Increased delay slightly
 
     let events_after_2 = event_counter.load(Ordering::SeqCst);
-    let saves_after_2 = save_counter.load(Ordering::SeqCst);
+    // let saves_after_2 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Multiple updates complete");
     info!("  Events fired: {}", events_after_2);
-    info!("  Saves performed: {}", saves_after_2);
+    // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
     info!(
-        "  Expected: {} events, {} saves",
-        test_names.len(),
+        "  Expected: {} events", // Removed saves from expected log
         test_names.len()
     );
 
-    if events_after_2 == test_names.len() && saves_after_2 == test_names.len() {
-        info!("✅ Multiple update behavior is correct");
+    if events_after_2 == test_names.len() {
+        // Check only events
+        info!("✅ Multiple update event behavior is correct");
     } else {
-        error!("❌ Multiple update behavior may be inefficient");
+        error!(
+            "❌ Multiple update event behavior is incorrect (expected {} events, got {})",
+            test_names.len(),
+            events_after_2
+        );
         info!("  Note: This is expected with manual updates, batching only applies to server sync");
     }
 
@@ -154,7 +150,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Reset counters
     event_counter.store(0, Ordering::SeqCst);
-    save_counter.store(0, Ordering::SeqCst);
+    // save_counter.store(0, Ordering::SeqCst); // Removed
 
     let current_name = client.get_push_name().await;
     info!("Current name: '{}'", current_name);
@@ -167,34 +163,38 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // Wait for any events
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // Increased delay slightly
 
     let events_after_3 = event_counter.load(Ordering::SeqCst);
-    let saves_after_3 = save_counter.load(Ordering::SeqCst);
+    // let saves_after_3 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Duplicate updates complete");
     info!("  Events fired: {}", events_after_3);
-    info!("  Saves performed: {}", saves_after_3);
+    // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
 
-    if events_after_3 == 0 && saves_after_3 == 0 {
-        info!("✅ Duplicate update filtering is working correctly");
+    if events_after_3 == 0 {
+        // Check only events
+        info!("✅ Duplicate update filtering is working correctly (0 events fired)");
     } else {
-        error!("❌ Duplicate update filtering is not working");
+        error!(
+            "❌ Duplicate update filtering is not working (expected 0 events, got {})",
+            events_after_3
+        );
     }
 
     // Restore original name
     if initial_name != current_name {
         info!("\n--- Restoring Original Name ---");
         client.set_push_name(initial_name.clone()).await?;
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // Increased delay
         info!("✅ Original name '{}' restored", initial_name);
     }
 
-    info!("\n=== Batching Test Complete ===");
+    info!("\n=== Batching Test Complete (with PersistenceManager) ===");
     info!("Key observations:");
-    info!("• Single updates work correctly (1 event, 1 save)");
-    info!("• Manual updates fire individual events (expected behavior)");
-    info!("• Duplicate updates are filtered out (0 events, 0 saves)");
+    info!("• Single updates fire 1 event (saves handled by PM).");
+    info!("• Manual updates fire individual events (expected behavior, saves by PM).");
+    info!("• Duplicate updates are filtered out (0 events fired, saves by PM if initial state was different).");
     info!("• Server-side app state sync will batch multiple mutations efficiently");
     info!("\nTo test server-side batching:");
     info!("1. Run the main application: cargo run");

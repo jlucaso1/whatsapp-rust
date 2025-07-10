@@ -27,7 +27,8 @@ async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
         ..Default::default()
     };
 
-    if let Some(own_jid) = client.store.read().await.id.clone() {
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    if let Some(own_jid) = device_snapshot.id.clone() {
         let own_non_ad = own_jid.to_non_ad();
         if let Err(e) = client.send_message(own_non_ad, msg).await {
             warn!("Failed to send app state key request: {e:?}");
@@ -78,10 +79,10 @@ pub async fn fetch_app_state_patches(
 pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
     info!(target: "Client/AppState", "Starting AppState sync for '{name}' (full_sync: {full_sync})");
 
-    let store_guard = client.store.read().await;
-    let backend = store_guard.backend.clone();
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    let backend = device_snapshot.backend.clone();
     let processor = Processor::new(backend.clone(), backend.clone());
-    drop(store_guard);
+    // drop(device_snapshot) // Not needed
 
     let mut current_state = match backend.get_app_state_version(name).await {
         Ok(s) => s,
@@ -175,10 +176,11 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                         );
 
                         // Track the starting push name for this batch
-                        let batch_start_name = {
-                            let store = client.store.read().await;
-                            store.push_name.clone()
-                        };
+                        let batch_start_name = client
+                            .persistence_manager
+                            .get_device_snapshot()
+                            .await
+                            .push_name;
 
                         // Process all mutations in this batch
                         let mut latest_push_name = None;
@@ -219,10 +221,15 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                     "Received push name '{}' via app state sync, updating store.",
                                     final_name
                                 );
-                                {
-                                    let mut store = client.store.write().await;
-                                    store.push_name = final_name.clone();
-                                }
+                                // Use command to update push name
+                                client
+                                    .persistence_manager
+                                    .process_command(
+                                        crate::store::commands::DeviceCommand::SetPushName(
+                                            final_name.clone(),
+                                        ),
+                                    )
+                                    .await;
 
                                 let event = Event::SelfPushNameUpdated(
                                     crate::types::events::SelfPushNameUpdated {
