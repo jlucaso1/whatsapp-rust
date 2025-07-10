@@ -348,6 +348,26 @@ impl signal::store::SenderKeyStore for FileStore {
         let path = self.path_for("sender_keys").join(filename);
         Ok(self.read_bincode(&path).await?.unwrap_or_default())
     }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &signal::sender_key_name::SenderKeyName,
+    ) -> std::result::Result<(), SignalStoreError> {
+        let filename = Self::sanitize_filename(&format!(
+            "{}_{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        ));
+        let path = self.path_for("sender_keys").join(filename);
+        fs::remove_file(path).await.or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?;
+        Ok(())
+    }
 }
 
 #[async_trait]

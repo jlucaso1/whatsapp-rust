@@ -2,7 +2,8 @@ use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
-use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self
+use crate::signal::store::{SenderKeyStore, SessionStore};
+use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
 
 use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
@@ -855,17 +856,71 @@ impl Client {
             })?;
 
         let participant_jid = receipt.source.sender.clone();
-        // The `retry` receipt for a group message means the recipient doesn't have the correct
-        // sender key to decrypt the `skmsg`. It does NOT mean the pairwise session is invalid.
-        // Deleting the pairwise session is incorrect and causes decryption failures for later
-        // 1-on-1 messages.
-        // The correct action is to simply re-send the group message, which will include a new
-        // SenderKeyDistributionMessage for the participant that sent the retry.
-        info!(
-            "Received retry receipt from {}. Resending group key distribution.",
-            participant_jid
-        );
 
+        // Check if this is a group message
+        if receipt.source.chat.is_group() {
+            // For group messages, delete the sender key to force generation of a new one
+            // This is the key fix to prevent infinite retry loops
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            let own_lid = device_snapshot
+                .lid
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("LID missing for group retry handling"))?;
+
+            let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
+                receipt.source.chat.to_string(),
+                own_lid.user.clone(),
+            );
+
+            let device_store = self.persistence_manager.get_device_arc().await;
+
+            // Delete the sender key record to force creation of a new one
+            if let Err(e) = device_store.delete_sender_key(&sender_key_name).await {
+                log::warn!(
+                    "Failed to delete sender key for group {}: {}",
+                    receipt.source.chat,
+                    e
+                );
+            } else {
+                info!(
+                    "Deleted sender key for group {} due to retry receipt from {}",
+                    receipt.source.chat, participant_jid
+                );
+            }
+
+            // Also delete the pairwise session with the participant who sent the retry
+            let signal_address = crate::signal::address::SignalAddress::new(
+                participant_jid.user.clone(),
+                participant_jid.device as u32,
+            );
+
+            if let Err(e) = device_store.delete_session(&signal_address).await {
+                log::warn!("Failed to delete session for {}: {}", signal_address, e);
+            } else {
+                info!(
+                    "Deleted session for {} due to retry receipt",
+                    signal_address
+                );
+            }
+        } else {
+            // For direct messages, only delete the pairwise session
+            let signal_address = crate::signal::address::SignalAddress::new(
+                participant_jid.user.clone(),
+                participant_jid.device as u32,
+            );
+
+            let device_store = self.persistence_manager.get_device_arc().await;
+            if let Err(e) = device_store.delete_session(&signal_address).await {
+                log::warn!("Failed to delete session for {}: {}", signal_address, e);
+            } else {
+                info!(
+                    "Deleted session for {} due to retry receipt",
+                    signal_address
+                );
+            }
+        }
+
+        // Resend the original message
         self.send_message(receipt.source.chat.clone(), original_msg)
             .await?;
         Ok(())

@@ -3,6 +3,7 @@ use crate::client::Client;
 use crate::signal::address::SignalAddress;
 use crate::signal::session::SessionBuilder;
 use crate::signal::state::prekey_bundle::PreKeyBundle;
+use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
 use crate::signal::SessionCipher;
 use crate::types::jid::{Jid, SERVER_JID};
@@ -145,7 +146,33 @@ impl Client {
             // .unwrap_or_default(); // Removed, as load_session returns SessionRecord::new() on not found
 
             let mut is_prekey_msg = false;
-            if session_record.is_fresh() {
+            let mut needs_new_session = session_record.is_fresh();
+
+            // PROACTIVE SESSION VALIDATION: Test encryption with existing session
+            if !needs_new_session {
+                let test_cipher = SessionCipher::new(device_store.clone(), signal_address.clone());
+                let test_data = b"test";
+                let mut test_session = session_record.clone();
+
+                match test_cipher.encrypt(&mut test_session, test_data).await {
+                    Ok(_) => {
+                        log::debug!("Session validation passed for {}", device_jid);
+                        // Session is good, use the original session_record
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Session validation failed for {}: {}. Fetching new pre-key.",
+                            device_jid,
+                            e
+                        );
+                        needs_new_session = true;
+                        // Reset to fresh session since the existing one is stale
+                        session_record = SessionRecord::new();
+                    }
+                }
+            }
+
+            if needs_new_session {
                 let bundles = self.fetch_pre_keys(&[device_jid.clone()]).await?;
                 let bundle = bundles
                     .get(&device_jid)
@@ -160,7 +187,9 @@ impl Client {
             let encrypted_message = cipher
                 .encrypt(&mut session_record, plaintext_to_encrypt)
                 .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Final encryption failed for {}: {}", device_jid, e)
+                })?;
 
             device_store
                 .store_session(&signal_address, &session_record) // Corrected name
@@ -398,6 +427,28 @@ impl Client {
                         anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
                     })?; // Removed unwrap_or_default
 
+            let mut needs_new_session = session_record.is_fresh();
+
+            // PROACTIVE SESSION VALIDATION: Test encryption with existing session
+            if !needs_new_session {
+                let test_cipher = SessionCipher::new(device_store.clone(), signal_address.clone());
+                let test_data = b"test";
+                let mut test_session = session_record.clone();
+
+                match test_cipher.encrypt(&mut test_session, test_data).await {
+                    Ok(_) => {
+                        log::debug!("Group session validation passed for {}", wire_identity);
+                        // Session is good, use the original session_record
+                    }
+                    Err(e) => {
+                        log::warn!("Group session validation failed for {}: {}. Will fetch new pre-key if available.", wire_identity, e);
+                        needs_new_session = true;
+                        // Reset to fresh session since the existing one is stale
+                        session_record = SessionRecord::new();
+                    }
+                }
+            }
+
             // If we fetched a bundle for this device, process it now.
             if let Some(bundle) = prekey_bundles.get(&wire_identity) {
                 let builder = SessionBuilder::new(device_store.clone(), signal_address.clone());
@@ -409,10 +460,10 @@ impl Client {
                     );
                     continue;
                 }
-            } else if session_record.is_fresh() {
-                // is_fresh should work on SessionRecord
+            } else if needs_new_session {
+                // Session is fresh or stale, but no prekey bundle was fetched
                 log::warn!(
-                    "Device {} has no session and no prekey bundle was fetched. Skipping.",
+                    "Device {} needs new session but no prekey bundle was fetched. Skipping.",
                     wire_identity
                 );
                 continue;
@@ -508,6 +559,8 @@ impl Client {
                 ("phash".to_string(), phash),
                 ("id".to_string(), request_id),
                 ("type".to_string(), "text".to_string()),
+                // CRITICAL FIX: Add participant attribute with LID to match sender key identity
+                ("participant".to_string(), own_lid.to_string()),
             ]
             .into(),
             content: Some(NodeContent::Nodes(message_content_nodes)),

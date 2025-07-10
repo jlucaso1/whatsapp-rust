@@ -228,6 +228,13 @@ impl SenderKeyStore for Device {
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
         self.backend.load_sender_key(sender_key_name).await
     }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.delete_sender_key(sender_key_name).await
+    }
 }
 
 // --- Arc<RwLock<T>> wrappers for SignalProtocolStore traits ---
@@ -402,6 +409,13 @@ impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<RwLock<T>> {
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
         self.read().await.load_sender_key(sender_key_name).await
     }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.read().await.delete_sender_key(sender_key_name).await
+    }
 }
 
 //
@@ -568,6 +582,13 @@ impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<T> {
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
         self.as_ref().load_sender_key(sender_key_name).await
+    }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.as_ref().delete_sender_key(sender_key_name).await
     }
 }
 
@@ -742,5 +763,12 @@ impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<Mutex<T>> {
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
         self.lock().await.load_sender_key(sender_key_name).await
+    }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.lock().await.delete_sender_key(sender_key_name).await
     }
 }
