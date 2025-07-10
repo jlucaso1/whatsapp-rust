@@ -2,6 +2,7 @@ use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
 use crate::crypto::cbc;
+use hex; // Added for hex::encode
 use crate::crypto::hmac_sha512;
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use prost::Message;
@@ -42,18 +43,54 @@ impl Processor {
     ) -> Result<(Vec<Mutation>, HashState)> {
         let mut current_state = initial_state;
         let mut new_mutations: Vec<Mutation> = Vec::new();
-        let missing_keys: Vec<Vec<u8>> = Vec::new();
+        let mut missing_keys: Vec<Vec<u8>> = Vec::new(); // Modified to be mutable
 
         if let Some(snapshot) = &list.snapshot {
-            // TODO: Implement snapshot decoding. This involves:
-            // 1. Verifying snapshot.mac
-            // 2. Updating the hash state
-            // 3. Decoding all mutations within the snapshot
-            // For now, we'll just log and move to patches.
-            log::info!(target: "AppState", "Snapshot decoding not yet implemented. Skipping.");
-            current_state.version = snapshot.version.as_ref().map_or(0, |v| v.version());
+            log::info!(target: "AppState", "Processing snapshot for collection '{}', version: {}", list.name, snapshot.version.as_ref().map_or(0, |v| v.version()));
+
+            current_state.version = snapshot.version.as_ref().map_or(current_state.version, |v| v.version());
+
+            if let Some(key_id_proto) = &snapshot.key_id {
+                if let Some(key_id_bytes) = &key_id_proto.id {
+                    match self.key_store.get_app_state_sync_key(key_id_bytes).await {
+                        Ok(Some(key_struct)) => {
+                            let expanded_keys = keys::expand_app_state_keys(&key_struct.key_data);
+                            log::info!(target: "AppState", "Processing {} records from snapshot for '{}'", snapshot.records.len(), list.name);
+                            for record_from_snapshot in &snapshot.records {
+                                let virtual_mutation = wa::SyncdMutation {
+                                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                                    record: Some(record_from_snapshot.clone()),
+                                };
+                                match self.decode_mutation(&expanded_keys, &virtual_mutation, &mut new_mutations).await {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        log::warn!(target: "AppState", "Failed to decode a mutation from snapshot for '{}': {:?}. Skipping record.", list.name, e);
+                                        if let AppStateError::KeysNotFound(mut v) = e {
+                                            missing_keys.append(&mut v);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            log::warn!(target: "AppState", "Snapshot for '{}' references key_id {:?} which was not found. Skipping snapshot processing.", list.name, hex::encode(key_id_bytes));
+                            missing_keys.push(key_id_bytes.to_vec());
+                        }
+                        Err(e) => {
+                            log::error!(target: "AppState", "Failed to fetch app state sync key for snapshot of '{}': {:?}. Skipping snapshot processing.", list.name, e);
+                        }
+                    }
+                } else {
+                    log::warn!(target: "AppState", "Snapshot for '{}' has KeyId message but missing 'id' bytes. Skipping snapshot processing.", list.name);
+                }
+            } else {
+                log::warn!(target: "AppState", "Snapshot for '{}' is missing key_id. Skipping snapshot processing.", list.name);
+            }
+            // TODO: Verify snapshot.mac (using the expanded_keys.snapshot_mac)
+            // TODO: Recalculate LT-Hash (current_state.hash) based on all records in new_mutations from snapshot
         }
 
+        // Process patches (runs whether snapshot was present or not)
         for patch in &list.patches {
             let version = patch.version.as_ref().map_or(0, |v| v.version());
             current_state.version = version;
@@ -61,32 +98,36 @@ impl Processor {
             // TODO: Verify patch.snapshot_mac and patch.patch_mac
             // For now, we will proceed directly to mutation decoding.
 
-            let key_id = patch
+            let key_id_bytes_from_patch = patch
                 .key_id
                 .as_ref()
                 .and_then(|k| k.id.as_ref())
                 .map_or(&[][..], |v| &v[..]);
 
             // Fetch the real key from the key store
-            let key_struct = match self.key_store.get_app_state_sync_key(key_id).await {
+            let key_struct = match self.key_store.get_app_state_sync_key(key_id_bytes_from_patch).await {
                 Ok(Some(k)) => k,
                 Ok(None) => {
-                    log::warn!(target: "AppState", "No app state sync key found for key_id: {:?}", hex::encode(key_id));
+                    log::warn!(target: "AppState", "No app state sync key found for patch key_id: {:?} in collection '{}'. Skipping patch.", hex::encode(key_id_bytes_from_patch), list.name);
+                    missing_keys.push(key_id_bytes_from_patch.to_vec()); // Add to missing keys
                     continue;
                 }
                 Err(e) => {
-                    log::warn!(target: "AppState", "Failed to fetch app state sync key: {e:?}");
+                    log::warn!(target: "AppState", "Failed to fetch app state sync key for patch in '{}': {e:?}. Skipping patch.", list.name);
                     continue;
                 }
             };
-            let keys = keys::expand_app_state_keys(&key_struct.key_data);
+            let expanded_keys_for_patch = keys::expand_app_state_keys(&key_struct.key_data);
 
-            for mutation in &patch.mutations {
-                if let Err(_e) = self
-                    .decode_mutation(&keys, mutation, &mut new_mutations)
+            for mutation_from_patch in &patch.mutations {
+                if let Err(e) = self
+                    .decode_mutation(&expanded_keys_for_patch, mutation_from_patch, &mut new_mutations)
                     .await
                 {
-                    //log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {e:?}");
+                    log::warn!(target: "AppState", "Failed to decode a mutation from patch for '{}': {:?}. Skipping mutation.", list.name, e);
+                    if let AppStateError::KeysNotFound(mut v) = e {
+                        missing_keys.append(&mut v);
+                    }
                 }
             }
         }
