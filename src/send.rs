@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
     let mut rng = rand::thread_rng();
 
-    let mut pad_val = rng.gen::<u8>() & 0x0F;
+    let mut pad_val = rng.r#gen::<u8>() & 0x0F;
     if pad_val == 0 {
         pad_val = 0x0F;
     }
