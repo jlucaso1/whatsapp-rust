@@ -38,17 +38,11 @@ aes-gcm = { version = "0.10.2", features = [
 ], default-features = false }
 cbc = { version = "0.1.2", features = ["alloc"] }
 cipher = "0.4"
-aes = "0.8.3"
 sha2 = "0.10.6"
 hmac = "0.12.1"
 hkdf = "0.12.3"
 thiserror = "2.0.12"
 
-# Zlib decompression for WABinary
-flate2 = { version = "1.0", default-features = false, features = [
-    "any_zlib",
-    "libz-sys",
-] }
 serde-big-array = "0.5"
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 once_cell = { version = "1.19", default-features = false }
@@ -71,9 +65,7 @@ urlencoding = "2.1"
 md5 = { version = "0.7.0", default-features = false }
 async-trait = "0.1.88"
 scopeguard = "1.2"
-subtle = "2.6.1"
 ureq = "3.0.12"
-serde_bytes = "0.11.17"
 dashmap = "6.1.0"
 
 [dev-dependencies]
