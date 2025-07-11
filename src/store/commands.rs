@@ -1,5 +1,5 @@
 use crate::store::Device;
-use crate::types::jid::Jid;
+use whatsapp_core::types::jid::Jid;
 use whatsapp_proto::whatsapp as wa; // To reference fields being updated
 
 // Enum defining all possible commands to modify the Device state

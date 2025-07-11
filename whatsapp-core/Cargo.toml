@@ -1,18 +1,10 @@
-[workspace]
-members = [".", "whatsapp-core", "whatsapp-proto"]
-
 [package]
-name = "whatsapp-rust"
+name = "whatsapp-core"
 version = "0.1.0"
 edition = "2024"
 
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
-whatsapp-core = { path = "./whatsapp-core" }
-whatsapp-proto = { path = "./whatsapp-proto" }
+whatsapp-proto = { path = "../whatsapp-proto" }
 serde_json = "1.0"
 serde = { version = "1.0.188", features = ["derive"] }
 bincode = { version = "2.0.1", features = ["serde"] }
@@ -51,39 +43,14 @@ flate2 = { version = "1.0", default-features = false, features = [
 ] }
 serde-big-array = "0.5"
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-once_cell = { version = "1.19", default-features = false }
-futures-util = { version = "0.3.31", default-features = false }
-env_logger = { version = "0.11", default-features = false }
-tokio = { version = "1.45.1", features = [
-    "fs",
-    "macros",
-    "net",
-    "rt-multi-thread",
-    "signal",
-    "sync",
-    "time",
-] }
+once_cell = { version = "1.19", default-features = false, features = ["std"] }
 log = "0.4.27"
-tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
 anyhow = { version = "1.0", default-features = false }
 base64 = { version = "0.22.1", default-features = false }
 urlencoding = "2.1"
 md5 = { version = "0.7.0", default-features = false }
-async-trait = "0.1.88"
-scopeguard = "1.2"
-subtle = "2.6.1"
-ureq = "3.0.12"
 serde_bytes = "0.11.17"
-dashmap = "6.1.0"
+subtle = "2.6.1"
+async-trait = "0.1.88"
 
 [dev-dependencies]
-tempfile = "3.20"
-
-[profile.release]
-opt-level = "z"
-debug = false
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-incremental = false

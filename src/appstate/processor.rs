@@ -1,8 +1,9 @@
 use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
-use crate::crypto::cbc;
-use crate::crypto::hmac_sha512;
+use whatsapp_core::crypto::cbc;
+use whatsapp_core::crypto::hmac_sha512;
+// Temporarily use local AppState traits since they depend on appstate::hash::HashState
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use prost::Message;
 use std::sync::Arc;

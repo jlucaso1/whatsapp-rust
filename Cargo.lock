@@ -1558,6 +1558,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "whatsapp-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "base64",
+ "bincode",
+ "bytes",
+ "cbc",
+ "chrono",
+ "cipher",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "flate2",
+ "hex",
+ "hkdf",
+ "hmac",
+ "log",
+ "md5",
+ "once_cell",
+ "prost",
+ "rand 0.8.5",
+ "serde",
+ "serde-big-array",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "urlencoding",
+ "whatsapp-proto",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "whatsapp-proto"
 version = "0.1.0"
 dependencies = [
@@ -1607,6 +1644,7 @@ dependencies = [
  "tokio-tungstenite",
  "ureq",
  "urlencoding",
+ "whatsapp-core",
  "whatsapp-proto",
  "x25519-dalek",
 ]
