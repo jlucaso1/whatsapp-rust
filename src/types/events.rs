@@ -6,6 +6,8 @@ use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
 use std::fmt;
+use std::sync::Arc;
+use tokio::sync::broadcast;
 use whatsapp_proto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
@@ -418,4 +420,104 @@ pub struct NewsletterLiveUpdate {
     pub jid: Jid,
     pub time: DateTime<Utc>,
     pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+}
+
+// The size of the broadcast channel buffer.
+const CHANNEL_CAPACITY: usize = 100;
+
+/// Typed event bus that provides separate broadcast channels for each event type.
+/// This replaces the generic event handler system with type-safe, efficient channels.
+#[derive(Debug)]
+pub struct EventBus {
+    // Connection events
+    pub connected: broadcast::Sender<Arc<Connected>>,
+    pub disconnected: broadcast::Sender<Arc<Disconnected>>,
+    pub pair_success: broadcast::Sender<Arc<PairSuccess>>,
+    pub pair_error: broadcast::Sender<Arc<PairError>>,
+    pub logged_out: broadcast::Sender<Arc<LoggedOut>>,
+    pub qr: broadcast::Sender<Arc<Qr>>,
+    pub qr_scanned_without_multidevice: broadcast::Sender<Arc<QrScannedWithoutMultidevice>>,
+    pub client_outdated: broadcast::Sender<Arc<ClientOutdated>>,
+
+    // Message events
+    pub message: broadcast::Sender<Arc<(Box<wa::Message>, MessageInfo)>>,
+    pub receipt: broadcast::Sender<Arc<Receipt>>,
+    pub undecryptable_message: broadcast::Sender<Arc<UndecryptableMessage>>,
+    pub notification: broadcast::Sender<Arc<Node>>,
+
+    // Presence events
+    pub chat_presence: broadcast::Sender<Arc<ChatPresenceUpdate>>,
+    pub presence: broadcast::Sender<Arc<PresenceUpdate>>,
+    pub picture_update: broadcast::Sender<Arc<PictureUpdate>>,
+    pub user_about_update: broadcast::Sender<Arc<UserAboutUpdate>>,
+
+    // Group and contact events
+    pub joined_group: broadcast::Sender<Arc<Box<wa::Conversation>>>,
+    pub group_info_update: broadcast::Sender<Arc<(Jid, Box<wa::SyncActionValue>)>>,
+    pub contact_update: broadcast::Sender<Arc<ContactUpdate>>,
+
+    // Chat state events
+    pub push_name_update: broadcast::Sender<Arc<PushNameUpdate>>,
+    pub self_push_name_updated: broadcast::Sender<Arc<SelfPushNameUpdated>>,
+    pub pin_update: broadcast::Sender<Arc<PinUpdate>>,
+    pub mute_update: broadcast::Sender<Arc<MuteUpdate>>,
+    pub archive_update: broadcast::Sender<Arc<ArchiveUpdate>>,
+
+    // Error and stream events
+    pub stream_replaced: broadcast::Sender<Arc<StreamReplaced>>,
+    pub temporary_ban: broadcast::Sender<Arc<TemporaryBan>>,
+    pub connect_failure: broadcast::Sender<Arc<ConnectFailure>>,
+    pub stream_error: broadcast::Sender<Arc<StreamError>>,
+}
+
+impl EventBus {
+    pub fn new() -> Self {
+        Self {
+            // Connection events
+            connected: broadcast::channel(CHANNEL_CAPACITY).0,
+            disconnected: broadcast::channel(CHANNEL_CAPACITY).0,
+            pair_success: broadcast::channel(CHANNEL_CAPACITY).0,
+            pair_error: broadcast::channel(CHANNEL_CAPACITY).0,
+            logged_out: broadcast::channel(CHANNEL_CAPACITY).0,
+            qr: broadcast::channel(CHANNEL_CAPACITY).0,
+            qr_scanned_without_multidevice: broadcast::channel(CHANNEL_CAPACITY).0,
+            client_outdated: broadcast::channel(CHANNEL_CAPACITY).0,
+
+            // Message events
+            message: broadcast::channel(CHANNEL_CAPACITY).0,
+            receipt: broadcast::channel(CHANNEL_CAPACITY).0,
+            undecryptable_message: broadcast::channel(CHANNEL_CAPACITY).0,
+            notification: broadcast::channel(CHANNEL_CAPACITY).0,
+
+            // Presence events
+            chat_presence: broadcast::channel(CHANNEL_CAPACITY).0,
+            presence: broadcast::channel(CHANNEL_CAPACITY).0,
+            picture_update: broadcast::channel(CHANNEL_CAPACITY).0,
+            user_about_update: broadcast::channel(CHANNEL_CAPACITY).0,
+
+            // Group and contact events
+            joined_group: broadcast::channel(CHANNEL_CAPACITY).0,
+            group_info_update: broadcast::channel(CHANNEL_CAPACITY).0,
+            contact_update: broadcast::channel(CHANNEL_CAPACITY).0,
+
+            // Chat state events
+            push_name_update: broadcast::channel(CHANNEL_CAPACITY).0,
+            self_push_name_updated: broadcast::channel(CHANNEL_CAPACITY).0,
+            pin_update: broadcast::channel(CHANNEL_CAPACITY).0,
+            mute_update: broadcast::channel(CHANNEL_CAPACITY).0,
+            archive_update: broadcast::channel(CHANNEL_CAPACITY).0,
+
+            // Error and stream events
+            stream_replaced: broadcast::channel(CHANNEL_CAPACITY).0,
+            temporary_ban: broadcast::channel(CHANNEL_CAPACITY).0,
+            connect_failure: broadcast::channel(CHANNEL_CAPACITY).0,
+            stream_error: broadcast::channel(CHANNEL_CAPACITY).0,
+        }
+    }
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
