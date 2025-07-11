@@ -255,7 +255,10 @@ impl SenderKeyStore for DeviceArcWrapper {
         self.0.load_sender_key(sender_key_name).await
     }
 
-    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.0.delete_sender_key(sender_key_name).await
     }
 }

@@ -6,7 +6,7 @@ use crate::store::traits::*;
 use async_trait::async_trait;
 use whatsapp_core::signal::sender_key_name::SenderKeyName;
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use whatsapp_core::signal::store::{PreKeyStore, SignedPreKeyStore, SenderKeyStore};
+use whatsapp_core::signal::store::{PreKeyStore, SenderKeyStore, SignedPreKeyStore};
 use whatsapp_core::store::error::Result;
 
 // For signal store traits, we need to use the signal module's StoreError
@@ -121,8 +121,10 @@ impl AppStateKeyStore for MemoryStore {
 
 #[async_trait]
 impl EventBufferStore for MemoryStore {
-    async fn get_buffered_event(&self, ciphertext_hash: &[u8; 32])
-    -> Result<Option<BufferedEvent>> {
+    async fn get_buffered_event(
+        &self,
+        ciphertext_hash: &[u8; 32],
+    ) -> Result<Option<BufferedEvent>> {
         Ok(self.buffered_events.get(ciphertext_hash).await)
     }
 
@@ -186,7 +188,9 @@ impl SignedPreKeyStore for MemoryStore {
         Ok(self.signed_prekeys.get(&signed_prekey_id).await)
     }
 
-    async fn load_signed_prekeys(&self) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
+    async fn load_signed_prekeys(
+        &self,
+    ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
         Ok(self.signed_prekeys.values().await)
     }
 
@@ -199,11 +203,17 @@ impl SignedPreKeyStore for MemoryStore {
         Ok(())
     }
 
-    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> std::result::Result<bool, SignalStoreError> {
+    async fn contains_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<bool, SignalStoreError> {
         Ok(self.signed_prekeys.get(&signed_prekey_id).await.is_some())
     }
 
-    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> std::result::Result<(), SignalStoreError> {
+    async fn remove_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<(), SignalStoreError> {
         self.signed_prekeys.delete(&signed_prekey_id).await;
         Ok(())
     }
@@ -216,7 +226,11 @@ impl SenderKeyStore for MemoryStore {
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
     ) -> std::result::Result<(), SignalStoreError> {
-        let key = format!("{}:{}", sender_key_name.group_id(), sender_key_name.sender_id());
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         self.sender_keys.put(key, record).await;
         Ok(())
     }
@@ -225,12 +239,23 @@ impl SenderKeyStore for MemoryStore {
         &self,
         sender_key_name: &SenderKeyName,
     ) -> std::result::Result<SenderKeyRecord, SignalStoreError> {
-        let key = format!("{}:{}", sender_key_name.group_id(), sender_key_name.sender_id());
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         Ok(self.sender_keys.get(&key).await.unwrap_or_default())
     }
 
-    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> std::result::Result<(), SignalStoreError> {
-        let key = format!("{}:{}", sender_key_name.group_id(), sender_key_name.sender_id());
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> std::result::Result<(), SignalStoreError> {
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         self.sender_keys.delete(&key).await;
         Ok(())
     }

@@ -94,7 +94,10 @@ async fn test_pkmsg_rekey_logic() {
             .load_session(&receiver_address)
             .await
             .unwrap();
-        let sender_builder = SessionBuilder::new(DeviceRwLockWrapper::new(sender_device.clone()), receiver_address.clone());
+        let sender_builder = SessionBuilder::new(
+            DeviceRwLockWrapper::new(sender_device.clone()),
+            receiver_address.clone(),
+        );
 
         sender_builder
             .process_bundle(&mut sender_session_record, &receiver_bundle)
@@ -109,7 +112,10 @@ async fn test_pkmsg_rekey_logic() {
             .unwrap();
 
         // Sender encrypts the first message (this will be a PreKeySignalMessage)
-        let sender_cipher = SessionCipher::new(DeviceRwLockWrapper::new(sender_device.clone()), receiver_address.clone());
+        let sender_cipher = SessionCipher::new(
+            DeviceRwLockWrapper::new(sender_device.clone()),
+            receiver_address.clone(),
+        );
         let encrypted_msg = sender_cipher
             .encrypt(&mut sender_session_record, plaintext1)
             .await
@@ -126,7 +132,10 @@ async fn test_pkmsg_rekey_logic() {
     // === FIRST DECRYPTION: Receiver decrypts the first message ===
     let decrypted1;
     {
-        let receiver_cipher = SessionCipher::new(DeviceRwLockWrapper::new(receiver_device.clone()), sender_address.clone());
+        let receiver_cipher = SessionCipher::new(
+            DeviceRwLockWrapper::new(receiver_device.clone()),
+            sender_address.clone(),
+        );
         let pkmsg = whatsapp_rust::signal::protocol::PreKeySignalMessage::deserialize(&ciphertext1)
             .unwrap();
         decrypted1 = receiver_cipher
@@ -185,7 +194,10 @@ async fn test_pkmsg_rekey_logic() {
             .load_session(&receiver_address)
             .await
             .unwrap();
-        let sender_builder = SessionBuilder::new(DeviceRwLockWrapper::new(sender_device.clone()), receiver_address.clone());
+        let sender_builder = SessionBuilder::new(
+            DeviceRwLockWrapper::new(sender_device.clone()),
+            receiver_address.clone(),
+        );
 
         sender_builder
             .process_bundle(&mut sender_session_record, &receiver_bundle)
@@ -200,7 +212,10 @@ async fn test_pkmsg_rekey_logic() {
             .unwrap();
 
         // Sender encrypts the second message (will also be a PreKeySignalMessage)
-        let sender_cipher = SessionCipher::new(DeviceRwLockWrapper::new(sender_device.clone()), receiver_address.clone());
+        let sender_cipher = SessionCipher::new(
+            DeviceRwLockWrapper::new(sender_device.clone()),
+            receiver_address.clone(),
+        );
         let encrypted_msg = sender_cipher
             .encrypt(&mut sender_session_record, plaintext2)
             .await
@@ -217,7 +232,10 @@ async fn test_pkmsg_rekey_logic() {
     // === SECOND DECRYPTION: Test the critical re-key handling ===
     let decrypted2;
     {
-        let receiver_cipher = SessionCipher::new(DeviceRwLockWrapper::new(receiver_device.clone()), sender_address.clone());
+        let receiver_cipher = SessionCipher::new(
+            DeviceRwLockWrapper::new(receiver_device.clone()),
+            sender_address.clone(),
+        );
         let pkmsg = whatsapp_rust::signal::protocol::PreKeySignalMessage::deserialize(&ciphertext2)
             .unwrap();
 

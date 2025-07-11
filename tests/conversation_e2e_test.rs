@@ -418,7 +418,7 @@ async fn test_send_receive_message() {
 
     // 6. CLIENT A DECRYPTS THE REPLY FROM CLIENT B
     {
-        let device_a_arc = harness.pm_a.get_device_arc().await; 
+        let device_a_arc = harness.pm_a.get_device_arc().await;
         let device_a_store_signal = DeviceStore::new(device_a_arc);
         let cipher_a = SessionCipher::new(device_a_store_signal, client_b_address.clone());
         let whisper_msg =
