@@ -14,3 +14,9 @@ pub trait AppStateStore: Send + Sync {
 
 // Re-export the core traits
 pub use whatsapp_core::store::traits::*;
+
+// Extended Backend that includes our platform-specific traits
+pub trait ExtendedBackend: Backend + AppStateStore {}
+
+// Blanket implementation for any type that implements both traits
+impl<T> ExtendedBackend for T where T: Backend + AppStateStore {}

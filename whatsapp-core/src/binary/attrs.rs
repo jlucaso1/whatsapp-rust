@@ -10,7 +10,7 @@ pub struct AttrParser<'a> {
 }
 
 impl<'a> AttrParser<'a> {
-    pub(crate) fn new(node: &'a Node) -> Self {
+    pub fn new(node: &'a Node) -> Self {
         Self {
             attrs: &node.attrs,
             errors: Vec::new(),

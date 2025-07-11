@@ -1,6 +1,6 @@
 use whatsapp_core::signal;
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use crate::store::error::{Result, StoreError};
+use whatsapp_core::store::error::{Result, StoreError};
 use crate::store::traits::*;
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};

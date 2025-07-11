@@ -2,7 +2,7 @@
 // TODO: Re-implement full trait compatibility
 
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use crate::store::error::Result;
+use whatsapp_core::store::error::Result;
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;

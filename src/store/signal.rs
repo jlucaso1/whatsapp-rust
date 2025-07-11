@@ -7,6 +7,7 @@ use whatsapp_core::signal::sender_key_name::SenderKeyName;
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
 use whatsapp_core::signal::state::session_record::SessionRecord;
 use whatsapp_core::signal::store::*;
+use whatsapp_core::signal::util::keyhelper;
 use crate::store::Device;
 use async_trait::async_trait;
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
@@ -20,7 +21,7 @@ impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
         // TODO: Convert from KeyPair to IdentityKeyPair properly
         // For now, create a new one from the private key
-        Ok(IdentityKeyPair::generate())
+        Ok(keyhelper::generate_identity_key_pair())
     }
 
     async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
@@ -184,5 +185,11 @@ impl SenderKeyStore for Device {
         // TODO: Implement proper sender key loading - for now return a new record
         let _ = sender_key_name;
         Ok(SenderKeyRecord::new())
+    }
+
+    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
+        // TODO: Implement proper sender key deletion
+        let _ = sender_key_name;
+        Ok(())
     }
 }
