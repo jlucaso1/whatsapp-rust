@@ -146,7 +146,8 @@ impl Client {
                         );
                         // Use Arc<Mutex<Device>> as the store for SessionCipher
                         let device_store = self.persistence_manager.get_device_arc().await;
-                        let cipher = SessionCipher::new(device_store, signal_address);
+                        let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store);
+                        let cipher = SessionCipher::new(device_store_wrapper, signal_address);
                         cipher
                             .decrypt(ciphertext_enum)
                             .await
@@ -171,11 +172,12 @@ impl Client {
                         );
                         let device_store_for_group =
                             self.persistence_manager.get_device_arc().await;
+                        let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store_for_group.clone());
                         let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
-                            device_store_for_group.clone(),
+                            device_store_wrapper.clone(),
                         );
                         let cipher =
-                            GroupCipher::new(sender_key_name, device_store_for_group, builder);
+                            GroupCipher::new(sender_key_name, device_store_wrapper, builder);
                         cipher
                             .decrypt(&sk_msg, data_to_verify)
                             .await
@@ -422,7 +424,8 @@ impl Client {
 
         // Use Arc<Mutex<Device>> as the store for GroupSessionBuilder
         let device_store_for_builder = self.persistence_manager.get_device_arc().await;
-        let builder = GroupSessionBuilder::new(device_store_for_builder);
+        let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store_for_builder);
+        let builder = GroupSessionBuilder::new(device_store_wrapper);
 
         match builder.process(&sender_key_name, &dist_msg).await {
             Ok(_) => {
