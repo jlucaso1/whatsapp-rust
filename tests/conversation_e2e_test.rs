@@ -56,28 +56,17 @@ impl TestHarness {
         );
         let client_b = Arc::new(Client::new(pm_b.clone()));
 
-        // Create event channels
-        let (tx_a, rx_a) = mpsc::unbounded_channel();
-        client_a
-            .add_event_handler(Box::new(move |evt| {
-                let _ = tx_a.send((*evt).clone());
-            }))
-            .await;
-
-        let (tx_b, rx_b) = mpsc::unbounded_channel();
-        client_b
-            .add_event_handler(Box::new(move |evt| {
-                let _ = tx_b.send((*evt).clone());
-            }))
-            .await;
+        // Create event channels using the new typed event bus
+        let client_a_events_rx = client_a.subscribe_to_all_events();
+        let client_b_events_rx = client_b.subscribe_to_all_events();
 
         Self {
             client_a,
             pm_a,
             client_b,
             pm_b,
-            client_a_events_rx: rx_a,
-            client_b_events_rx: rx_b,
+            client_a_events_rx: client_a_events_rx,
+            client_b_events_rx: client_b_events_rx,
             _temp_dir_a: temp_dir_a,
             _temp_dir_b: temp_dir_b,
         }

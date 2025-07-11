@@ -854,6 +854,381 @@ impl Client {
         self.event_bus.stream_error.subscribe()
     }
 
+    /// Helper method for tests to subscribe to all events
+    /// This recreates the old behavior where all events are sent to a single channel
+    pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        
+        // Subscribe to all event types and forward them to the unified channel
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_connected();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Connected((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_disconnected();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Disconnected((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_pair_success();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::PairSuccess((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_pair_error();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::PairError((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_logged_out();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::LoggedOut((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_qr();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Qr((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_qr_scanned_without_multidevice();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::QrScannedWithoutMultidevice((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_client_outdated();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::ClientOutdated((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_messages();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let (msg, info) = &*data;
+                    let event = Event::Message(msg.clone(), info.clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_receipts();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Receipt((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_undecryptable_messages();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::UndecryptableMessage((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_notifications();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Notification((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_chat_presence();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::ChatPresence((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_presence();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::Presence((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_picture_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::PictureUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_user_about_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::UserAboutUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_joined_groups();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::JoinedGroup((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_group_info_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let (jid, update) = &*data;
+                    let event = Event::GroupInfoUpdate { jid: jid.clone(), update: update.clone() };
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_contact_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::ContactUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_push_name_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::PushNameUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_self_push_name_updated();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::SelfPushNameUpdated((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_pin_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::PinUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_mute_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::MuteUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_archive_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::ArchiveUpdate((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_stream_replaced();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::StreamReplaced((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_temporary_ban();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::TemporaryBan((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_connect_failure();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::ConnectFailure((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_stream_error();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let event = Event::StreamError((*data).clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        rx
+    }
+
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {

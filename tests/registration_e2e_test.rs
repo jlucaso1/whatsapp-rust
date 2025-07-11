@@ -51,20 +51,15 @@ impl TestHarness {
         );
         let dut_client = Arc::new(Client::new(pm_dut.clone()));
 
-        // Create an event channel for the DUT
-        let (tx, rx) = mpsc::unbounded_channel();
-        dut_client
-            .add_event_handler(Box::new(move |evt| {
-                let _ = tx.send((*evt).clone());
-            }))
-            .await;
+        // Create an event channel for the DUT using the new typed event bus
+        let dut_events_rx = dut_client.subscribe_to_all_events();
 
         Self {
             master_client,
             pm_master,
             dut_client,
             pm_dut,
-            dut_events_rx: rx,
+            dut_events_rx: dut_events_rx,
             _temp_dir_master: temp_dir_master,
             _temp_dir_dut: temp_dir_dut,
         }
