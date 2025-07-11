@@ -25,6 +25,17 @@ use tokio::time::{sleep, Duration};
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use whatsapp_proto::whatsapp as wa;
 
+// Macro to generate typed event subscription methods
+macro_rules! generate_subscription_methods {
+    ($(($method_name:ident, $return_type:ty, $bus_field:ident)),* $(,)?) => {
+        $(
+            pub fn $method_name(&self) -> broadcast::Receiver<$return_type> {
+                self.event_bus.$bus_field.subscribe()
+            }
+        )*
+    };
+}
+
 
 
 #[derive(Debug, Error)]
@@ -741,117 +752,36 @@ impl Client {
         }
     }
 
-    // Typed event subscription methods
-    pub fn subscribe_to_connected(&self) -> broadcast::Receiver<Arc<crate::types::events::Connected>> {
-        self.event_bus.connected.subscribe()
-    }
-
-    pub fn subscribe_to_disconnected(&self) -> broadcast::Receiver<Arc<crate::types::events::Disconnected>> {
-        self.event_bus.disconnected.subscribe()
-    }
-
-    pub fn subscribe_to_pair_success(&self) -> broadcast::Receiver<Arc<crate::types::events::PairSuccess>> {
-        self.event_bus.pair_success.subscribe()
-    }
-
-    pub fn subscribe_to_pair_error(&self) -> broadcast::Receiver<Arc<crate::types::events::PairError>> {
-        self.event_bus.pair_error.subscribe()
-    }
-
-    pub fn subscribe_to_logged_out(&self) -> broadcast::Receiver<Arc<crate::types::events::LoggedOut>> {
-        self.event_bus.logged_out.subscribe()
-    }
-
-    pub fn subscribe_to_qr(&self) -> broadcast::Receiver<Arc<crate::types::events::Qr>> {
-        self.event_bus.qr.subscribe()
-    }
-
-    pub fn subscribe_to_qr_scanned_without_multidevice(&self) -> broadcast::Receiver<Arc<crate::types::events::QrScannedWithoutMultidevice>> {
-        self.event_bus.qr_scanned_without_multidevice.subscribe()
-    }
-
-    pub fn subscribe_to_client_outdated(&self) -> broadcast::Receiver<Arc<crate::types::events::ClientOutdated>> {
-        self.event_bus.client_outdated.subscribe()
-    }
-
-    pub fn subscribe_to_messages(&self) -> broadcast::Receiver<Arc<(Box<whatsapp_proto::whatsapp::Message>, crate::types::message::MessageInfo)>> {
-        self.event_bus.message.subscribe()
-    }
-
-    pub fn subscribe_to_receipts(&self) -> broadcast::Receiver<Arc<crate::types::events::Receipt>> {
-        self.event_bus.receipt.subscribe()
-    }
-
-    pub fn subscribe_to_undecryptable_messages(&self) -> broadcast::Receiver<Arc<crate::types::events::UndecryptableMessage>> {
-        self.event_bus.undecryptable_message.subscribe()
-    }
-
-    pub fn subscribe_to_notifications(&self) -> broadcast::Receiver<Arc<crate::binary::node::Node>> {
-        self.event_bus.notification.subscribe()
-    }
-
-    pub fn subscribe_to_chat_presence(&self) -> broadcast::Receiver<Arc<crate::types::events::ChatPresenceUpdate>> {
-        self.event_bus.chat_presence.subscribe()
-    }
-
-    pub fn subscribe_to_presence(&self) -> broadcast::Receiver<Arc<crate::types::events::PresenceUpdate>> {
-        self.event_bus.presence.subscribe()
-    }
-
-    pub fn subscribe_to_picture_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PictureUpdate>> {
-        self.event_bus.picture_update.subscribe()
-    }
-
-    pub fn subscribe_to_user_about_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::UserAboutUpdate>> {
-        self.event_bus.user_about_update.subscribe()
-    }
-
-    pub fn subscribe_to_joined_groups(&self) -> broadcast::Receiver<Arc<Box<whatsapp_proto::whatsapp::Conversation>>> {
-        self.event_bus.joined_group.subscribe()
-    }
-
-    pub fn subscribe_to_group_info_updates(&self) -> broadcast::Receiver<Arc<(crate::types::jid::Jid, Box<whatsapp_proto::whatsapp::SyncActionValue>)>> {
-        self.event_bus.group_info_update.subscribe()
-    }
-
-    pub fn subscribe_to_contact_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::ContactUpdate>> {
-        self.event_bus.contact_update.subscribe()
-    }
-
-    pub fn subscribe_to_push_name_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PushNameUpdate>> {
-        self.event_bus.push_name_update.subscribe()
-    }
-
-    pub fn subscribe_to_self_push_name_updated(&self) -> broadcast::Receiver<Arc<crate::types::events::SelfPushNameUpdated>> {
-        self.event_bus.self_push_name_updated.subscribe()
-    }
-
-    pub fn subscribe_to_pin_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PinUpdate>> {
-        self.event_bus.pin_update.subscribe()
-    }
-
-    pub fn subscribe_to_mute_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::MuteUpdate>> {
-        self.event_bus.mute_update.subscribe()
-    }
-
-    pub fn subscribe_to_archive_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::ArchiveUpdate>> {
-        self.event_bus.archive_update.subscribe()
-    }
-
-    pub fn subscribe_to_stream_replaced(&self) -> broadcast::Receiver<Arc<crate::types::events::StreamReplaced>> {
-        self.event_bus.stream_replaced.subscribe()
-    }
-
-    pub fn subscribe_to_temporary_ban(&self) -> broadcast::Receiver<Arc<crate::types::events::TemporaryBan>> {
-        self.event_bus.temporary_ban.subscribe()
-    }
-
-    pub fn subscribe_to_connect_failure(&self) -> broadcast::Receiver<Arc<crate::types::events::ConnectFailure>> {
-        self.event_bus.connect_failure.subscribe()
-    }
-
-    pub fn subscribe_to_stream_error(&self) -> broadcast::Receiver<Arc<crate::types::events::StreamError>> {
-        self.event_bus.stream_error.subscribe()
+    // Generate all subscription methods using the macro
+    generate_subscription_methods! {
+        (subscribe_to_connected, Arc<crate::types::events::Connected>, connected),
+        (subscribe_to_disconnected, Arc<crate::types::events::Disconnected>, disconnected),
+        (subscribe_to_pair_success, Arc<crate::types::events::PairSuccess>, pair_success),
+        (subscribe_to_pair_error, Arc<crate::types::events::PairError>, pair_error),
+        (subscribe_to_logged_out, Arc<crate::types::events::LoggedOut>, logged_out),
+        (subscribe_to_qr, Arc<crate::types::events::Qr>, qr),
+        (subscribe_to_qr_scanned_without_multidevice, Arc<crate::types::events::QrScannedWithoutMultidevice>, qr_scanned_without_multidevice),
+        (subscribe_to_client_outdated, Arc<crate::types::events::ClientOutdated>, client_outdated),
+        (subscribe_to_messages, Arc<(Box<whatsapp_proto::whatsapp::Message>, crate::types::message::MessageInfo)>, message),
+        (subscribe_to_receipts, Arc<crate::types::events::Receipt>, receipt),
+        (subscribe_to_undecryptable_messages, Arc<crate::types::events::UndecryptableMessage>, undecryptable_message),
+        (subscribe_to_notifications, Arc<crate::binary::node::Node>, notification),
+        (subscribe_to_chat_presence, Arc<crate::types::events::ChatPresenceUpdate>, chat_presence),
+        (subscribe_to_presence, Arc<crate::types::events::PresenceUpdate>, presence),
+        (subscribe_to_picture_updates, Arc<crate::types::events::PictureUpdate>, picture_update),
+        (subscribe_to_user_about_updates, Arc<crate::types::events::UserAboutUpdate>, user_about_update),
+        (subscribe_to_joined_groups, Arc<Box<whatsapp_proto::whatsapp::Conversation>>, joined_group),
+        (subscribe_to_group_info_updates, Arc<(crate::types::jid::Jid, Box<whatsapp_proto::whatsapp::SyncActionValue>)>, group_info_update),
+        (subscribe_to_contact_updates, Arc<crate::types::events::ContactUpdate>, contact_update),
+        (subscribe_to_push_name_updates, Arc<crate::types::events::PushNameUpdate>, push_name_update),
+        (subscribe_to_self_push_name_updated, Arc<crate::types::events::SelfPushNameUpdated>, self_push_name_updated),
+        (subscribe_to_pin_updates, Arc<crate::types::events::PinUpdate>, pin_update),
+        (subscribe_to_mute_updates, Arc<crate::types::events::MuteUpdate>, mute_update),
+        (subscribe_to_archive_updates, Arc<crate::types::events::ArchiveUpdate>, archive_update),
+        (subscribe_to_stream_replaced, Arc<crate::types::events::StreamReplaced>, stream_replaced),
+        (subscribe_to_temporary_ban, Arc<crate::types::events::TemporaryBan>, temporary_ban),
+        (subscribe_to_connect_failure, Arc<crate::types::events::ConnectFailure>, connect_failure),
+        (subscribe_to_stream_error, Arc<crate::types::events::StreamError>, stream_error),
     }
 
     /// Helper method for tests to subscribe to all events
@@ -859,111 +789,58 @@ impl Client {
     pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         
-        // Subscribe to all event types and forward them to the unified channel
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_connected();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Connected((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
+        // Helper macro for standard single-value events
+        macro_rules! forward_simple_events {
+            ($(($method_name:ident, $event_variant:ident)),* $(,)?) => {
+                $(
+                    {
+                        let tx = tx.clone();
+                        let mut recv = self.$method_name();
+                        tokio::spawn(async move {
+                            while let Ok(data) = recv.recv().await {
+                                let event = Event::$event_variant((*data).clone());
+                                if tx.send(event).is_err() {
+                                    break;
+                                }
+                            }
+                        });
                     }
-                }
-            });
+                )*
+            };
         }
 
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_disconnected();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Disconnected((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
+        // Forward simple events using macro
+        forward_simple_events! {
+            (subscribe_to_connected, Connected),
+            (subscribe_to_disconnected, Disconnected),
+            (subscribe_to_pair_success, PairSuccess),
+            (subscribe_to_pair_error, PairError),
+            (subscribe_to_logged_out, LoggedOut),
+            (subscribe_to_qr, Qr),
+            (subscribe_to_qr_scanned_without_multidevice, QrScannedWithoutMultidevice),
+            (subscribe_to_client_outdated, ClientOutdated),
+            (subscribe_to_receipts, Receipt),
+            (subscribe_to_undecryptable_messages, UndecryptableMessage),
+            (subscribe_to_notifications, Notification),
+            (subscribe_to_chat_presence, ChatPresence),
+            (subscribe_to_presence, Presence),
+            (subscribe_to_picture_updates, PictureUpdate),
+            (subscribe_to_user_about_updates, UserAboutUpdate),
+            (subscribe_to_joined_groups, JoinedGroup),
+            (subscribe_to_contact_updates, ContactUpdate),
+            (subscribe_to_push_name_updates, PushNameUpdate),
+            (subscribe_to_self_push_name_updated, SelfPushNameUpdated),
+            (subscribe_to_pin_updates, PinUpdate),
+            (subscribe_to_mute_updates, MuteUpdate),
+            (subscribe_to_archive_updates, ArchiveUpdate),
+            (subscribe_to_stream_replaced, StreamReplaced),
+            (subscribe_to_temporary_ban, TemporaryBan),
+            (subscribe_to_connect_failure, ConnectFailure),
+            (subscribe_to_stream_error, StreamError),
         }
 
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_pair_success();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::PairSuccess((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_pair_error();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::PairError((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_logged_out();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::LoggedOut((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_qr();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Qr((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_qr_scanned_without_multidevice();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::QrScannedWithoutMultidevice((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_client_outdated();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::ClientOutdated((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
+        // Handle special cases manually for now
+        // Messages (tuple data)
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_messages();
@@ -978,247 +855,17 @@ impl Client {
             });
         }
 
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_receipts();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Receipt((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_undecryptable_messages();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::UndecryptableMessage((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_notifications();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Notification((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_chat_presence();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::ChatPresence((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_presence();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::Presence((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_picture_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::PictureUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_user_about_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::UserAboutUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_joined_groups();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::JoinedGroup((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
+        // Group info updates (special struct format)
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_group_info_updates();
             tokio::spawn(async move {
                 while let Ok(data) = recv.recv().await {
                     let (jid, update) = &*data;
-                    let event = Event::GroupInfoUpdate { jid: jid.clone(), update: update.clone() };
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_contact_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::ContactUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_push_name_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::PushNameUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_self_push_name_updated();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::SelfPushNameUpdated((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_pin_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::PinUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_mute_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::MuteUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_archive_updates();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::ArchiveUpdate((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_stream_replaced();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::StreamReplaced((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_temporary_ban();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::TemporaryBan((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_connect_failure();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::ConnectFailure((*data).clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_stream_error();
-            tokio::spawn(async move {
-                while let Ok(data) = recv.recv().await {
-                    let event = Event::StreamError((*data).clone());
+                    let event = Event::GroupInfoUpdate { 
+                        jid: jid.clone(), 
+                        update: update.clone() 
+                    };
                     if tx.send(event).is_err() {
                         break;
                     }
