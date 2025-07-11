@@ -212,10 +212,10 @@ impl Client {
                     match wa::Message::decode(plaintext) {
                         Ok(original_msg) => {
                             let mut msg_ref: &wa::Message = &original_msg;
-                            if let Some(dsm) = original_msg.device_sent_message.as_ref() {
-                                if let Some(inner) = dsm.message.as_ref() {
-                                    msg_ref = inner;
-                                }
+                            if let Some(dsm) = original_msg.device_sent_message.as_ref() &&
+                               let Some(inner) = dsm.message.as_ref()
+                            {
+                                msg_ref = inner;
                             }
 
                             let mut is_protocol_msg = false;
@@ -354,35 +354,32 @@ impl Client {
                                                          // drop(device_snapshot); // Not needed
 
         for key in &keys.keys {
-            if let Some(key_id_proto) = &key.key_id {
-                if let Some(key_id) = &key_id_proto.key_id {
-                    if let Some(key_data) = &key.key_data {
-                        if let Some(fingerprint) = &key_data.fingerprint {
-                            if let Some(data) = &key_data.key_data {
-                                let fingerprint_bytes = fingerprint.encode_to_vec();
-                                let new_key = crate::store::traits::AppStateSyncKey {
-                                    key_data: data.clone(),
-                                    fingerprint: fingerprint_bytes,
-                                    timestamp: key_data.timestamp(),
-                                };
+            if let Some(key_id_proto) = &key.key_id &&
+               let Some(key_id) = &key_id_proto.key_id &&
+               let Some(key_data) = &key.key_data &&
+               let Some(fingerprint) = &key_data.fingerprint &&
+               let Some(data) = &key_data.key_data
+            {
+                let fingerprint_bytes = fingerprint.encode_to_vec();
+                let new_key = crate::store::traits::AppStateSyncKey {
+                    key_data: data.clone(),
+                    fingerprint: fingerprint_bytes,
+                    timestamp: key_data.timestamp(),
+                };
 
-                                if let Err(e) =
-                                    key_store.set_app_state_sync_key(key_id, new_key).await
-                                {
-                                    log::error!(
-                                        "Failed to store app state sync key {:?}: {:?}",
-                                        hex::encode(key_id),
-                                        e
-                                    );
-                                } else {
-                                    log::info!(
-                                        "Stored new app state sync key with ID {:?}",
-                                        hex::encode(key_id)
-                                    );
-                                }
-                            }
-                        }
-                    }
+                if let Err(e) =
+                    key_store.set_app_state_sync_key(key_id, new_key).await
+                {
+                    log::error!(
+                        "Failed to store app state sync key {:?}: {:?}",
+                        hex::encode(key_id),
+                        e
+                    );
+                } else {
+                    log::info!(
+                        "Stored new app state sync key with ID {:?}",
+                        hex::encode(key_id)
+                    );
                 }
             }
         }
