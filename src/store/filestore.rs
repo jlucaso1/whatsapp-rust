@@ -1,12 +1,12 @@
-use crate::signal;
-use crate::signal::state::sender_key_record::SenderKeyRecord;
-use crate::store::error::{Result, StoreError};
 use crate::store::traits::*;
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use whatsapp_core::signal;
+use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
+use whatsapp_core::store::error::{Result, StoreError};
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use super::SerializableDevice;
@@ -172,7 +172,7 @@ impl crate::store::traits::EventBufferStore for FileStore {
     async fn get_buffered_event(
         &self,
         ciphertext_hash: &[u8; 32],
-    ) -> crate::store::error::Result<Option<crate::store::traits::BufferedEvent>> {
+    ) -> Result<Option<crate::store::traits::BufferedEvent>> {
         let path = self
             .path_for("event_buffer")
             .join(hex::encode(ciphertext_hash));
@@ -184,7 +184,7 @@ impl crate::store::traits::EventBufferStore for FileStore {
         ciphertext_hash: &[u8; 32],
         plaintext: Option<Vec<u8>>,
         _server_timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> crate::store::error::Result<()> {
+    ) -> Result<()> {
         let event = crate::store::traits::BufferedEvent {
             plaintext,
             insert_time: chrono::Utc::now(),
@@ -198,7 +198,7 @@ impl crate::store::traits::EventBufferStore for FileStore {
     async fn delete_old_buffered_events(
         &self,
         older_than: chrono::DateTime<chrono::Utc>,
-    ) -> crate::store::error::Result<usize> {
+    ) -> Result<usize> {
         use tokio::fs;
 
         let mut deleted_count = 0;

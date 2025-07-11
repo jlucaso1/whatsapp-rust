@@ -38,6 +38,10 @@ where
         self.store.lock().await.remove(key)
     }
 
+    pub async fn delete(&self, key: &K) {
+        self.store.lock().await.remove(key);
+    }
+
     pub async fn values(&self) -> Vec<V> {
         self.store.lock().await.values().cloned().collect()
     }

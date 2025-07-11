@@ -1,23 +1,24 @@
-pub mod filestore;
-mod signal;
+pub mod signal;
 /// The public key for verifying the server's intermediate certificate.
 pub const WA_CERT_PUB_KEY: [u8; 32] = [
     0x14, 0x23, 0x75, 0x57, 0x4d, 0x0a, 0x58, 0x71, 0x66, 0xaa, 0xe7, 0x1e, 0xbe, 0x51, 0x64, 0x37,
     0xc4, 0xa2, 0x8b, 0x73, 0xe3, 0x69, 0x5c, 0x6c, 0xe1, 0xf7, 0xf9, 0x54, 0x5d, 0xa8, 0xee, 0x6b,
 ];
-use crate::crypto::key_pair::{KeyPair, PreKey};
-use crate::types::jid::Jid;
 use rand::RngCore;
+use whatsapp_core::crypto::key_pair::{KeyPair, PreKey};
+use whatsapp_core::types::jid::Jid;
 use whatsapp_proto::whatsapp as wa;
 pub mod clientpayload;
-pub mod commands; // Added commands module
+pub mod commands; // Device commands for the persistence manager
 pub mod error;
+pub mod filestore;
 pub mod generic;
 pub mod memory;
-pub mod persistence_manager; // Added persistence_manager module
+pub mod persistence_manager; // Background persistence manager
 pub mod traits;
 
-use crate::store::traits::*;
+// Re-export traits from both whatsapp-core and local extensions
+pub use crate::store::traits::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
