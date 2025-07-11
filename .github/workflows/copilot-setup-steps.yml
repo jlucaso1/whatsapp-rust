@@ -49,4 +49,4 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build Rust dependencies
-        run: cargo build --release
+        run: cargo build
