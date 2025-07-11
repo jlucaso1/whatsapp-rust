@@ -104,7 +104,7 @@ impl SignedPreKeyStore for Device {
         if signed_prekey_id == self.signed_pre_key.key_id {
             use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
             use whatsapp_core::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
-            
+
             let key_pair = EcKeyPair::new(
                 DjbEcPublicKey::new(self.signed_pre_key.key_pair.public_key),
                 DjbEcPrivateKey::new(self.signed_pre_key.key_pair.private_key),
