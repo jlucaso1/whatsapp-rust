@@ -6,7 +6,7 @@ use crate::qrcode;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
 
 use crate::handlers;
-use crate::types::events::{ConnectFailureReason, Event};
+use crate::types::events::{ConnectFailureReason, Event, EventBus};
 use crate::types::presence::Presence;
 
 // New modules for refactored logic
@@ -16,21 +16,27 @@ use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, broadcast};
 use tokio::time::{sleep, Duration};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use whatsapp_proto::whatsapp as wa;
 
-pub type EventHandler = Box<dyn Fn(Arc<Event>) + Send + Sync>;
-pub(crate) struct WrappedHandler {
-    pub(crate) id: usize,
-    handler: EventHandler,
+// Macro to generate typed event subscription methods
+macro_rules! generate_subscription_methods {
+    ($(($method_name:ident, $return_type:ty, $bus_field:ident)),* $(,)?) => {
+        $(
+            pub fn $method_name(&self) -> broadcast::Receiver<$return_type> {
+                self.event_bus.$bus_field.subscribe()
+            }
+        )*
+    };
 }
-static NEXT_HANDLER_ID: AtomicUsize = AtomicUsize::new(1);
+
+
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -69,7 +75,7 @@ pub struct Client {
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::binary::Node>>>>,
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
-    pub(crate) event_handlers: Arc<RwLock<Vec<WrappedHandler>>>,
+    pub(crate) event_bus: Arc<EventBus>,
 
     /// Manages per-chat locks to allow for concurrent message processing
     /// from different chats while serializing messages within the same chat.
@@ -110,7 +116,7 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
-            event_handlers: Arc::new(RwLock::new(Vec::new())),
+            event_bus: Arc::new(EventBus::new()),
 
             // Initialize the per-chat locks map
             chat_locks: Arc::new(DashMap::new()),
@@ -639,24 +645,6 @@ impl Client {
         false
     }
 
-    pub(crate) async fn add_event_handler_internal(&self, handler: EventHandler) -> usize {
-        let id = NEXT_HANDLER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let wrapped = WrappedHandler { id, handler };
-        self.event_handlers.write().await.push(wrapped);
-        id
-    }
-
-    pub async fn add_event_handler(&self, handler: EventHandler) {
-        self.add_event_handler_internal(handler).await;
-    }
-
-    pub async fn remove_event_handler(&self, id: usize) -> bool {
-        let mut handlers = self.event_handlers.write().await;
-        let initial_len = handlers.len();
-        handlers.retain(|h| h.id != id);
-        handlers.len() < initial_len
-    }
-
     pub async fn get_qr_channel(
         &self,
     ) -> Result<mpsc::Receiver<qrcode::QrCodeEvent>, qrcode::QrError> {
@@ -674,11 +662,218 @@ impl Client {
     }
 
     pub async fn dispatch_event(&self, event: Event) {
-        let event_arc = Arc::new(event);
-        let handlers = self.event_handlers.read().await;
-        for wrapped in handlers.iter() {
-            (wrapped.handler)(event_arc.clone());
+        // Send events to their respective typed channels
+        // Ignore send errors as they indicate no subscribers, which is expected
+        match event {
+            Event::Connected(data) => {
+                let _ = self.event_bus.connected.send(Arc::new(data));
+            }
+            Event::Disconnected(data) => {
+                let _ = self.event_bus.disconnected.send(Arc::new(data));
+            }
+            Event::PairSuccess(data) => {
+                let _ = self.event_bus.pair_success.send(Arc::new(data));
+            }
+            Event::PairError(data) => {
+                let _ = self.event_bus.pair_error.send(Arc::new(data));
+            }
+            Event::LoggedOut(data) => {
+                let _ = self.event_bus.logged_out.send(Arc::new(data));
+            }
+            Event::Qr(data) => {
+                let _ = self.event_bus.qr.send(Arc::new(data));
+            }
+            Event::QrScannedWithoutMultidevice(data) => {
+                let _ = self.event_bus.qr_scanned_without_multidevice.send(Arc::new(data));
+            }
+            Event::ClientOutdated(data) => {
+                let _ = self.event_bus.client_outdated.send(Arc::new(data));
+            }
+            Event::Message(msg, info) => {
+                let _ = self.event_bus.message.send(Arc::new((msg, info)));
+            }
+            Event::Receipt(data) => {
+                let _ = self.event_bus.receipt.send(Arc::new(data));
+            }
+            Event::UndecryptableMessage(data) => {
+                let _ = self.event_bus.undecryptable_message.send(Arc::new(data));
+            }
+            Event::Notification(data) => {
+                let _ = self.event_bus.notification.send(Arc::new(data));
+            }
+            Event::ChatPresence(data) => {
+                let _ = self.event_bus.chat_presence.send(Arc::new(data));
+            }
+            Event::Presence(data) => {
+                let _ = self.event_bus.presence.send(Arc::new(data));
+            }
+            Event::PictureUpdate(data) => {
+                let _ = self.event_bus.picture_update.send(Arc::new(data));
+            }
+            Event::UserAboutUpdate(data) => {
+                let _ = self.event_bus.user_about_update.send(Arc::new(data));
+            }
+            Event::JoinedGroup(data) => {
+                let _ = self.event_bus.joined_group.send(Arc::new(data));
+            }
+            Event::GroupInfoUpdate { jid, update } => {
+                let _ = self.event_bus.group_info_update.send(Arc::new((jid, update)));
+            }
+            Event::ContactUpdate(data) => {
+                let _ = self.event_bus.contact_update.send(Arc::new(data));
+            }
+            Event::PushNameUpdate(data) => {
+                let _ = self.event_bus.push_name_update.send(Arc::new(data));
+            }
+            Event::SelfPushNameUpdated(data) => {
+                let _ = self.event_bus.self_push_name_updated.send(Arc::new(data));
+            }
+            Event::PinUpdate(data) => {
+                let _ = self.event_bus.pin_update.send(Arc::new(data));
+            }
+            Event::MuteUpdate(data) => {
+                let _ = self.event_bus.mute_update.send(Arc::new(data));
+            }
+            Event::ArchiveUpdate(data) => {
+                let _ = self.event_bus.archive_update.send(Arc::new(data));
+            }
+            Event::StreamReplaced(data) => {
+                let _ = self.event_bus.stream_replaced.send(Arc::new(data));
+            }
+            Event::TemporaryBan(data) => {
+                let _ = self.event_bus.temporary_ban.send(Arc::new(data));
+            }
+            Event::ConnectFailure(data) => {
+                let _ = self.event_bus.connect_failure.send(Arc::new(data));
+            }
+            Event::StreamError(data) => {
+                let _ = self.event_bus.stream_error.send(Arc::new(data));
+            }
         }
+    }
+
+    // Generate all subscription methods using the macro
+    generate_subscription_methods! {
+        (subscribe_to_connected, Arc<crate::types::events::Connected>, connected),
+        (subscribe_to_disconnected, Arc<crate::types::events::Disconnected>, disconnected),
+        (subscribe_to_pair_success, Arc<crate::types::events::PairSuccess>, pair_success),
+        (subscribe_to_pair_error, Arc<crate::types::events::PairError>, pair_error),
+        (subscribe_to_logged_out, Arc<crate::types::events::LoggedOut>, logged_out),
+        (subscribe_to_qr, Arc<crate::types::events::Qr>, qr),
+        (subscribe_to_qr_scanned_without_multidevice, Arc<crate::types::events::QrScannedWithoutMultidevice>, qr_scanned_without_multidevice),
+        (subscribe_to_client_outdated, Arc<crate::types::events::ClientOutdated>, client_outdated),
+        (subscribe_to_messages, Arc<(Box<whatsapp_proto::whatsapp::Message>, crate::types::message::MessageInfo)>, message),
+        (subscribe_to_receipts, Arc<crate::types::events::Receipt>, receipt),
+        (subscribe_to_undecryptable_messages, Arc<crate::types::events::UndecryptableMessage>, undecryptable_message),
+        (subscribe_to_notifications, Arc<crate::binary::node::Node>, notification),
+        (subscribe_to_chat_presence, Arc<crate::types::events::ChatPresenceUpdate>, chat_presence),
+        (subscribe_to_presence, Arc<crate::types::events::PresenceUpdate>, presence),
+        (subscribe_to_picture_updates, Arc<crate::types::events::PictureUpdate>, picture_update),
+        (subscribe_to_user_about_updates, Arc<crate::types::events::UserAboutUpdate>, user_about_update),
+        (subscribe_to_joined_groups, Arc<Box<whatsapp_proto::whatsapp::Conversation>>, joined_group),
+        (subscribe_to_group_info_updates, Arc<(crate::types::jid::Jid, Box<whatsapp_proto::whatsapp::SyncActionValue>)>, group_info_update),
+        (subscribe_to_contact_updates, Arc<crate::types::events::ContactUpdate>, contact_update),
+        (subscribe_to_push_name_updates, Arc<crate::types::events::PushNameUpdate>, push_name_update),
+        (subscribe_to_self_push_name_updated, Arc<crate::types::events::SelfPushNameUpdated>, self_push_name_updated),
+        (subscribe_to_pin_updates, Arc<crate::types::events::PinUpdate>, pin_update),
+        (subscribe_to_mute_updates, Arc<crate::types::events::MuteUpdate>, mute_update),
+        (subscribe_to_archive_updates, Arc<crate::types::events::ArchiveUpdate>, archive_update),
+        (subscribe_to_stream_replaced, Arc<crate::types::events::StreamReplaced>, stream_replaced),
+        (subscribe_to_temporary_ban, Arc<crate::types::events::TemporaryBan>, temporary_ban),
+        (subscribe_to_connect_failure, Arc<crate::types::events::ConnectFailure>, connect_failure),
+        (subscribe_to_stream_error, Arc<crate::types::events::StreamError>, stream_error),
+    }
+
+    /// Helper method for tests to subscribe to all events
+    /// This recreates the old behavior where all events are sent to a single channel
+    pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        
+        // Helper macro for standard single-value events
+        macro_rules! forward_simple_events {
+            ($(($method_name:ident, $event_variant:ident)),* $(,)?) => {
+                $(
+                    {
+                        let tx = tx.clone();
+                        let mut recv = self.$method_name();
+                        tokio::spawn(async move {
+                            while let Ok(data) = recv.recv().await {
+                                let event = Event::$event_variant((*data).clone());
+                                if tx.send(event).is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                )*
+            };
+        }
+
+        // Forward simple events using macro
+        forward_simple_events! {
+            (subscribe_to_connected, Connected),
+            (subscribe_to_disconnected, Disconnected),
+            (subscribe_to_pair_success, PairSuccess),
+            (subscribe_to_pair_error, PairError),
+            (subscribe_to_logged_out, LoggedOut),
+            (subscribe_to_qr, Qr),
+            (subscribe_to_qr_scanned_without_multidevice, QrScannedWithoutMultidevice),
+            (subscribe_to_client_outdated, ClientOutdated),
+            (subscribe_to_receipts, Receipt),
+            (subscribe_to_undecryptable_messages, UndecryptableMessage),
+            (subscribe_to_notifications, Notification),
+            (subscribe_to_chat_presence, ChatPresence),
+            (subscribe_to_presence, Presence),
+            (subscribe_to_picture_updates, PictureUpdate),
+            (subscribe_to_user_about_updates, UserAboutUpdate),
+            (subscribe_to_joined_groups, JoinedGroup),
+            (subscribe_to_contact_updates, ContactUpdate),
+            (subscribe_to_push_name_updates, PushNameUpdate),
+            (subscribe_to_self_push_name_updated, SelfPushNameUpdated),
+            (subscribe_to_pin_updates, PinUpdate),
+            (subscribe_to_mute_updates, MuteUpdate),
+            (subscribe_to_archive_updates, ArchiveUpdate),
+            (subscribe_to_stream_replaced, StreamReplaced),
+            (subscribe_to_temporary_ban, TemporaryBan),
+            (subscribe_to_connect_failure, ConnectFailure),
+            (subscribe_to_stream_error, StreamError),
+        }
+
+        // Handle special cases manually for now
+        // Messages (tuple data)
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_messages();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let (msg, info) = &*data;
+                    let event = Event::Message(msg.clone(), info.clone());
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Group info updates (special struct format)
+        {
+            let tx = tx.clone();
+            let mut recv = self.subscribe_to_group_info_updates();
+            tokio::spawn(async move {
+                while let Ok(data) = recv.recv().await {
+                    let (jid, update) = &*data;
+                    let event = Event::GroupInfoUpdate { 
+                        jid: jid.clone(), 
+                        update: update.clone() 
+                    };
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        rx
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
