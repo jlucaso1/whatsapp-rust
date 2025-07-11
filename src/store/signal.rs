@@ -1,34 +1,42 @@
-use crate::signal::address::SignalAddress;
-use crate::signal::ecc;
-use crate::signal::identity::{IdentityKey, IdentityKeyPair};
-use crate::signal::sender_key_name::SenderKeyName;
+// Temporary stub implementations for Device signal store traits
+// TODO: Implement proper signal store methods matching whatsapp-core trait signatures
 
-use crate::signal::state::sender_key_record::SenderKeyRecord;
-use crate::signal::state::session_record::SessionRecord;
-use crate::signal::store::*;
 use crate::store::Device;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock}; // Added Mutex
+use whatsapp_core::signal::address::SignalAddress;
+use whatsapp_core::signal::ecc::keys::EcPublicKey;
+use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
+use whatsapp_core::signal::sender_key_name::SenderKeyName;
+use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
+use whatsapp_core::signal::state::session_record::SessionRecord;
+use whatsapp_core::signal::store::*;
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+
+// Use the StoreError from whatsapp-core signal module
+type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 // --- IdentityKeyStore ---
 #[async_trait]
 impl IdentityKeyStore for Device {
-    async fn get_identity_key_pair(
-        &self,
-    ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        let public = IdentityKey::new(ecc::keys::DjbEcPublicKey::new(self.identity_key.public_key));
-        let private = ecc::key_pair::EcKeyPair::new(
-            ecc::keys::DjbEcPublicKey::new(self.identity_key.public_key),
-            ecc::keys::DjbEcPrivateKey::new(self.identity_key.private_key),
-        );
-        Ok(IdentityKeyPair::new(public, private))
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
+        // Convert from our KeyPair to signal protocol IdentityKeyPair
+        let private_key = self.identity_key.private_key;
+        let public_key = self.identity_key.public_key;
+
+        use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
+        use whatsapp_core::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+        use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
+
+        let djb_public_key = DjbEcPublicKey::new(public_key);
+        let djb_private_key = DjbEcPrivateKey::new(private_key);
+        let identity_key = IdentityKey::new(djb_public_key.clone());
+        let key_pair = EcKeyPair::new(djb_public_key, djb_private_key);
+
+        Ok(IdentityKeyPair::new(identity_key, key_pair))
     }
 
-    async fn get_local_registration_id(
-        &self,
-    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
         Ok(self.registration_id)
     }
 
@@ -36,18 +44,23 @@ impl IdentityKeyStore for Device {
         &self,
         address: &SignalAddress,
         identity_key: &IdentityKey,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
+        let address_str = address.to_string();
+        // Use the raw public key bytes (32 bytes) instead of serialized format (33 bytes with type prefix)
+        let key_bytes = identity_key.public_key().public_key();
+
         self.backend
-            .put_identity(&address.to_string(), identity_key.public_key().public_key)
+            .put_identity(&address_str, key_bytes)
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| Box::new(e) as StoreError)?;
+        Ok(())
     }
 
     async fn is_trusted_identity(
         &self,
         _address: &SignalAddress,
         _identity_key: &IdentityKey,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<bool, StoreError> {
         // For now, we trust all identities. A real implementation would compare against a stored key.
         Ok(true)
     }
@@ -59,26 +72,23 @@ impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
         prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
         self.backend.load_prekey(prekey_id).await
     }
+
     async fn store_prekey(
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         self.backend.store_prekey(prekey_id, record).await
     }
-    async fn contains_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
         self.backend.contains_prekey(prekey_id).await
     }
-    async fn remove_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
         self.backend.remove_prekey(prekey_id).await
     }
 }
@@ -89,18 +99,17 @@ impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         // First, check if the requested ID matches the one we hold directly.
         if signed_prekey_id == self.signed_pre_key.key_id {
-            let key_pair = crate::signal::ecc::key_pair::EcKeyPair::new(
-                crate::signal::ecc::keys::DjbEcPublicKey::new(
-                    self.signed_pre_key.key_pair.public_key,
-                ),
-                crate::signal::ecc::keys::DjbEcPrivateKey::new(
-                    self.signed_pre_key.key_pair.private_key,
-                ),
+            use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
+            use whatsapp_core::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+
+            let key_pair = EcKeyPair::new(
+                DjbEcPublicKey::new(self.signed_pre_key.key_pair.public_key),
+                DjbEcPrivateKey::new(self.signed_pre_key.key_pair.private_key),
             );
-            let record = crate::signal::state::record::new_signed_pre_key_record(
+            let record = whatsapp_core::signal::state::record::new_signed_pre_key_record(
                 self.signed_pre_key.key_id,
                 key_pair,
                 self.signed_pre_key
@@ -113,30 +122,26 @@ impl SignedPreKeyStore for Device {
         // Otherwise, delegate to the underlying store.
         self.backend.load_signed_prekey(signed_prekey_id).await
     }
-    async fn load_signed_prekeys(
-        &self,
-    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
         self.backend.load_signed_prekeys().await
     }
+
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         self.backend
             .store_signed_prekey(signed_prekey_id, record)
             .await
     }
-    async fn contains_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
         self.backend.contains_signed_prekey(signed_prekey_id).await
     }
-    async fn remove_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
         self.backend.remove_signed_prekey(signed_prekey_id).await
     }
 }
@@ -144,69 +149,63 @@ impl SignedPreKeyStore for Device {
 // --- SessionStore ---
 #[async_trait]
 impl SessionStore for Device {
-    async fn load_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(data) = self.backend.get_session(&address.to_string()).await? {
-            if !data.is_empty() {
-                let record: SessionRecord =
-                    bincode::serde::decode_from_slice(&data, bincode::config::standard())?.0;
-                return Ok(record);
+    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+        let address_str = address.to_string();
+        match self.backend.get_session(&address_str).await {
+            Ok(Some(session_data)) => {
+                // Deserialize the session data into a SessionRecord using bincode
+                bincode::serde::decode_from_slice(&session_data, bincode::config::standard())
+                    .map(|(record, _)| record)
+                    .map_err(|e| Box::new(e) as StoreError)
             }
-            Ok(SessionRecord::new())
-        } else {
-            Ok(SessionRecord::new())
+            Ok(None) => Ok(SessionRecord::new()),
+            Err(e) => Err(Box::new(e) as StoreError),
         }
     }
 
+    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
+        // TODO: Implement proper sub device session listing by querying backend
+        // For now, this requires extending the Backend trait to support this query
+        let _ = name;
+        Ok(Vec::new())
+    }
+
     async fn store_session(
-        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let data = bincode::serde::encode_to_vec(record, bincode::config::standard())?;
+    ) -> Result<(), StoreError> {
+        let address_str = address.to_string();
+        // Serialize the session record using bincode
+        let session_data = bincode::serde::encode_to_vec(record, bincode::config::standard())
+            .map_err(|e| Box::new(e) as StoreError)?;
+
         self.backend
-            .put_session(&address.to_string(), &data)
+            .put_session(&address_str, &session_data)
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
-    async fn get_sub_device_sessions(
-        // Name matches trait
-        &self,
-        _name: &str,
-    ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(vec![])
-    }
-    async fn contains_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+        let address_str = address.to_string();
         self.backend
-            .has_session(&address.to_string())
+            .has_session(&address_str)
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| Box::new(e) as StoreError)
     }
-    async fn delete_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+        let address_str = address.to_string();
         self.backend
-            .delete_session(&address.to_string())
+            .delete_session(&address_str)
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| Box::new(e) as StoreError)
     }
-    async fn delete_all_sessions(
-        // Reverted name, trait returns ()
-        &self,
-        _name: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Return type ()
+
+    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
+        // TODO: Implement proper all sessions deletion by extending Backend trait
+        // For now, this is a simplified implementation
+        let _ = name;
         Ok(())
     }
 }
@@ -218,124 +217,181 @@ impl SenderKeyStore for Device {
         &self,
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         self.backend.store_sender_key(sender_key_name, record).await
     }
 
     async fn load_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<SenderKeyRecord, StoreError> {
         self.backend.load_sender_key(sender_key_name).await
     }
 
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
         self.backend.delete_sender_key(sender_key_name).await
     }
 }
 
-// --- Arc<RwLock<T>> wrappers for SignalProtocolStore traits ---
+use tokio::sync::Mutex;
+
+// Additional wrappers for different Arc types used in tests
+
+// Wrapper for Arc<Device> used in group messaging tests
+pub struct DeviceArcWrapper(pub Arc<Device>);
+
+impl DeviceArcWrapper {
+    pub fn new(device: Arc<Device>) -> Self {
+        Self(device)
+    }
+}
+
+impl Clone for DeviceArcWrapper {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 #[async_trait]
-impl<T: IdentityKeyStore + Send + Sync> IdentityKeyStore for Arc<RwLock<T>> {
-    async fn get_identity_key_pair(
+impl SenderKeyStore for DeviceArcWrapper {
+    async fn store_sender_key(
         &self,
-    ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.get_identity_key_pair().await
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.store_sender_key(sender_key_name, record).await
     }
-    async fn get_local_registration_id(
+
+    async fn load_sender_key(
         &self,
-    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.get_local_registration_id().await
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.load_sender_key(sender_key_name).await
     }
+
+    async fn delete_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.delete_sender_key(sender_key_name).await
+    }
+}
+
+// Wrapper for Arc<RwLock<Device>> used in some tests
+use tokio::sync::RwLock;
+
+pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);
+
+impl DeviceRwLockWrapper {
+    pub fn new(device: Arc<RwLock<Device>>) -> Self {
+        Self(device)
+    }
+}
+
+impl Clone for DeviceRwLockWrapper {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+#[async_trait]
+impl IdentityKeyStore for DeviceRwLockWrapper {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
+        self.0.read().await.get_identity_key_pair().await
+    }
+
+    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
+        self.0.read().await.get_local_registration_id().await
+    }
+
     async fn save_identity(
         &self,
         address: &SignalAddress,
         identity_key: &IdentityKey,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.save_identity(address, identity_key).await
+    ) -> Result<(), StoreError> {
+        self.0
+            .read()
+            .await
+            .save_identity(address, identity_key)
+            .await
     }
+
     async fn is_trusted_identity(
         &self,
-        address: &SignalAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.read()
-            .await
-            .is_trusted_identity(address, identity_key)
-            .await
+        _address: &SignalAddress,
+        _identity_key: &IdentityKey,
+    ) -> Result<bool, StoreError> {
+        // For now, we trust all identities. A real implementation would compare against a stored key.
+        Ok(true)
     }
 }
 
 #[async_trait]
-impl<T: PreKeyStore + Send + Sync> PreKeyStore for Arc<RwLock<T>> {
+impl PreKeyStore for DeviceRwLockWrapper {
     async fn load_prekey(
         &self,
         prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_prekey(prekey_id).await
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
+        self.0.read().await.load_prekey(prekey_id).await
     }
+
     async fn store_prekey(
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.store_prekey(prekey_id, record).await
+    ) -> Result<(), StoreError> {
+        self.0.read().await.store_prekey(prekey_id, record).await
     }
-    async fn contains_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.contains_prekey(prekey_id).await
+
+    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
+        self.0.read().await.contains_prekey(prekey_id).await
     }
-    async fn remove_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.remove_prekey(prekey_id).await
+
+    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
+        self.0.read().await.remove_prekey(prekey_id).await
     }
 }
 
 #[async_trait]
-impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<RwLock<T>> {
+impl SignedPreKeyStore for DeviceRwLockWrapper {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_signed_prekey(signed_prekey_id).await
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
+        self.0
+            .read()
+            .await
+            .load_signed_prekey(signed_prekey_id)
+            .await
     }
-    async fn load_signed_prekeys(
-        &self,
-    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_signed_prekeys().await
+
+    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
+        self.0.read().await.load_signed_prekeys().await
     }
+
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read()
+    ) -> Result<(), StoreError> {
+        self.0
+            .read()
             .await
             .store_signed_prekey(signed_prekey_id, record)
             .await
     }
-    async fn contains_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.read()
+
+    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
+        self.0
+            .read()
             .await
             .contains_signed_prekey(signed_prekey_id)
             .await
     }
-    async fn remove_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read()
+
+    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
+        self.0
+            .read()
             .await
             .remove_signed_prekey(signed_prekey_id)
             .await
@@ -343,354 +399,149 @@ impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<RwLock<T>> {
 }
 
 #[async_trait]
-impl<T: SessionStore + Send + Sync> SessionStore for Arc<RwLock<T>> {
-    async fn load_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_session(address).await // Reverted name
+impl SessionStore for DeviceRwLockWrapper {
+    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+        self.0.read().await.load_session(address).await
     }
-    async fn get_sub_device_sessions(
-        // Matches trait
-        &self,
-        name: &str,
-    ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.get_sub_device_sessions(name).await
+
+    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
+        self.0.read().await.get_sub_device_sessions(name).await
     }
+
     async fn store_session(
-        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.store_session(address, record).await // Reverted name
+    ) -> Result<(), StoreError> {
+        self.0.read().await.store_session(address, record).await
     }
-    async fn contains_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.contains_session(address).await // Reverted name
+
+    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+        self.0.read().await.contains_session(address).await
     }
-    async fn delete_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.delete_session(address).await // Reverted name
+
+    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+        self.0.read().await.delete_session(address).await
     }
-    async fn delete_all_sessions(
-        // Reverted name
-        &self,
-        name: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Return type ()
-        self.read().await.delete_all_sessions(name).await // Reverted name
+
+    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
+        self.0.read().await.delete_all_sessions(name).await
+    }
+}
+
+// Wrapper type to work around orphan rules
+pub struct DeviceStore(pub Arc<Mutex<Device>>);
+
+impl DeviceStore {
+    pub fn new(device: Arc<Mutex<Device>>) -> Self {
+        Self(device)
+    }
+}
+
+impl Clone for DeviceStore {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
 #[async_trait]
-impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<RwLock<T>> {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read()
-            .await
-            .store_sender_key(sender_key_name, record)
-            .await
+impl IdentityKeyStore for DeviceStore {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
+        self.0.lock().await.get_identity_key_pair().await
     }
 
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.load_sender_key(sender_key_name).await
+    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
+        self.0.lock().await.get_local_registration_id().await
     }
 
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.read().await.delete_sender_key(sender_key_name).await
-    }
-}
-
-//
-// --- Arc<T> wrappers for SignalProtocolStore traits ---
-//
-
-#[async_trait]
-impl<T: IdentityKeyStore + Send + Sync> IdentityKeyStore for Arc<T> {
-    async fn get_identity_key_pair(
-        &self,
-    ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().get_identity_key_pair().await
-    }
-    async fn get_local_registration_id(
-        &self,
-    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().get_local_registration_id().await
-    }
     async fn save_identity(
         &self,
         address: &SignalAddress,
         identity_key: &IdentityKey,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().save_identity(address, identity_key).await
+    ) -> Result<(), StoreError> {
+        self.0
+            .lock()
+            .await
+            .save_identity(address, identity_key)
+            .await
     }
+
     async fn is_trusted_identity(
         &self,
-        address: &SignalAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref()
-            .is_trusted_identity(address, identity_key)
-            .await
+        _address: &SignalAddress,
+        _identity_key: &IdentityKey,
+    ) -> Result<bool, StoreError> {
+        // For now, we trust all identities. A real implementation would compare against a stored key.
+        Ok(true)
     }
 }
 
 #[async_trait]
-impl<T: PreKeyStore + Send + Sync> PreKeyStore for Arc<T> {
+impl PreKeyStore for DeviceStore {
     async fn load_prekey(
         &self,
         prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_prekey(prekey_id).await
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
+        self.0.lock().await.load_prekey(prekey_id).await
     }
+
     async fn store_prekey(
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().store_prekey(prekey_id, record).await
+    ) -> Result<(), StoreError> {
+        self.0.lock().await.store_prekey(prekey_id, record).await
     }
-    async fn contains_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().contains_prekey(prekey_id).await
+
+    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
+        self.0.lock().await.contains_prekey(prekey_id).await
     }
-    async fn remove_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().remove_prekey(prekey_id).await
+
+    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
+        self.0.lock().await.remove_prekey(prekey_id).await
     }
 }
 
 #[async_trait]
-impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<T> {
+impl SignedPreKeyStore for DeviceStore {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_signed_prekey(signed_prekey_id).await
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
+        self.0
+            .lock()
+            .await
+            .load_signed_prekey(signed_prekey_id)
+            .await
     }
-    async fn load_signed_prekeys(
-        &self,
-    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_signed_prekeys().await
+
+    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
+        self.0.lock().await.load_signed_prekeys().await
     }
+
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref()
-            .store_signed_prekey(signed_prekey_id, record)
-            .await
-    }
-    async fn contains_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().contains_signed_prekey(signed_prekey_id).await
-    }
-    async fn remove_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().remove_signed_prekey(signed_prekey_id).await
-    }
-}
-
-#[async_trait]
-impl<T: SessionStore + Send + Sync> SessionStore for Arc<T> {
-    async fn load_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_session(address).await // Reverted name
-    }
-    async fn get_sub_device_sessions(
-        // Matches trait
-        &self,
-        name: &str,
-    ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().get_sub_device_sessions(name).await
-    }
-    async fn store_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-        record: &SessionRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().store_session(address, record).await // Reverted name
-    }
-    async fn contains_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().contains_session(address).await // Reverted name
-    }
-    async fn delete_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().delete_session(address).await // Reverted name
-    }
-    async fn delete_all_sessions(
-        // Reverted name
-        &self,
-        name: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Return type ()
-        self.as_ref().delete_all_sessions(name).await // Reverted name
-    }
-}
-
-#[async_trait]
-impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<T> {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref()
-            .store_sender_key(sender_key_name, record)
-            .await
-    }
-
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().load_sender_key(sender_key_name).await
-    }
-
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.as_ref().delete_sender_key(sender_key_name).await
-    }
-}
-
-// --- Arc<Mutex<T>> wrappers for SignalProtocolStore traits ---
-
-#[async_trait]
-impl<T: IdentityKeyStore + Send + Sync> IdentityKeyStore for Arc<Mutex<T>> {
-    async fn get_identity_key_pair(
-        &self,
-    ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.get_identity_key_pair().await
-    }
-    async fn get_local_registration_id(
-        &self,
-    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.get_local_registration_id().await
-    }
-    async fn save_identity(
-        &self,
-        address: &SignalAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.save_identity(address, identity_key).await
-    }
-    async fn is_trusted_identity(
-        &self,
-        address: &SignalAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock()
-            .await
-            .is_trusted_identity(address, identity_key)
-            .await
-    }
-}
-
-#[async_trait]
-impl<T: PreKeyStore + Send + Sync> PreKeyStore for Arc<Mutex<T>> {
-    async fn load_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.load_prekey(prekey_id).await
-    }
-    async fn store_prekey(
-        &self,
-        prekey_id: u32,
-        record: PreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.store_prekey(prekey_id, record).await
-    }
-    async fn contains_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.contains_prekey(prekey_id).await
-    }
-    async fn remove_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.remove_prekey(prekey_id).await
-    }
-}
-
-#[async_trait]
-impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<Mutex<T>> {
-    async fn load_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.load_signed_prekey(signed_prekey_id).await
-    }
-    async fn load_signed_prekeys(
-        &self,
-    ) -> Result<Vec<SignedPreKeyRecordStructure>, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.load_signed_prekeys().await
-    }
-    async fn store_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-        record: SignedPreKeyRecordStructure,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock()
+    ) -> Result<(), StoreError> {
+        self.0
+            .lock()
             .await
             .store_signed_prekey(signed_prekey_id, record)
             .await
     }
-    async fn contains_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock()
+
+    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
+        self.0
+            .lock()
             .await
             .contains_signed_prekey(signed_prekey_id)
             .await
     }
-    async fn remove_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock()
+
+    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
+        self.0
+            .lock()
             .await
             .remove_signed_prekey(signed_prekey_id)
             .await
@@ -698,61 +549,45 @@ impl<T: SignedPreKeyStore + Send + Sync> SignedPreKeyStore for Arc<Mutex<T>> {
 }
 
 #[async_trait]
-impl<T: SessionStore + Send + Sync> SessionStore for Arc<Mutex<T>> {
-    async fn load_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<SessionRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.load_session(address).await // Reverted name
+impl SessionStore for DeviceStore {
+    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+        self.0.lock().await.load_session(address).await
     }
-    async fn get_sub_device_sessions(
-        // Matches trait
-        &self,
-        name: &str,
-    ) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.get_sub_device_sessions(name).await
+
+    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
+        self.0.lock().await.get_sub_device_sessions(name).await
     }
+
     async fn store_session(
-        // Reverted name
         &self,
         address: &SignalAddress,
         record: &SessionRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.store_session(address, record).await // Reverted name
+    ) -> Result<(), StoreError> {
+        self.0.lock().await.store_session(address, record).await
     }
-    async fn contains_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.contains_session(address).await // Reverted name
+
+    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+        self.0.lock().await.contains_session(address).await
     }
-    async fn delete_session(
-        // Reverted name
-        &self,
-        address: &SignalAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.delete_session(address).await // Reverted name
+
+    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+        self.0.lock().await.delete_session(address).await
     }
-    async fn delete_all_sessions(
-        // Reverted name
-        &self,
-        name: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Return type ()
-        self.lock().await.delete_all_sessions(name).await // Reverted name
+
+    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
+        self.0.lock().await.delete_all_sessions(name).await
     }
 }
 
 #[async_trait]
-impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<Mutex<T>> {
+impl SenderKeyStore for DeviceStore {
     async fn store_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock()
+    ) -> Result<(), StoreError> {
+        self.0
+            .lock()
             .await
             .store_sender_key(sender_key_name, record)
             .await
@@ -761,14 +596,11 @@ impl<T: SenderKeyStore + Send + Sync> SenderKeyStore for Arc<Mutex<T>> {
     async fn load_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.load_sender_key(sender_key_name).await
+    ) -> Result<SenderKeyRecord, StoreError> {
+        self.0.lock().await.load_sender_key(sender_key_name).await
     }
 
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.lock().await.delete_sender_key(sender_key_name).await
+    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
+        self.0.lock().await.delete_sender_key(sender_key_name).await
     }
 }

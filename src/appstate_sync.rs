@@ -82,16 +82,23 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let backend = device_snapshot.backend.clone();
-    let processor = Processor::new(backend.clone(), backend.clone());
-    // drop(device_snapshot) // Not needed
 
-    let mut current_state = match backend.get_app_state_version(name).await {
+    // Cast the backend to our extended store interfaces using the wrapper
+    let app_state_store: Arc<dyn crate::store::traits::AppStateStore> =
+        Arc::new(crate::store::traits::AppStateWrapper::new(backend.clone()));
+    let key_store: Arc<dyn crate::store::traits::AppStateKeyStore> =
+        Arc::new(crate::store::traits::AppStateWrapper::new(backend.clone()));
+
+    let processor = Processor::new(app_state_store.clone(), key_store);
+
+    let mut current_state = match app_state_store.get_app_state_version(name).await {
         Ok(s) => s,
         Err(e) => {
             error!("Failed to get app state version for {name}: {e:?}");
             return;
         }
     };
+
     if full_sync {
         current_state.version = 0;
         current_state.hash = [0; 128];

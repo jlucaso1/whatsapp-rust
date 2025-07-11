@@ -1,0 +1,49 @@
+[package]
+name = "whatsapp-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+whatsapp-proto = { path = "../whatsapp-proto" }
+serde = { version = "1.0.188", features = ["derive"] }
+
+# Time handling
+chrono = { version = "0.4", features = [
+    "now",
+    "serde",
+], default-features = false }
+prost = { version = "0.14.1", default-features = false }
+bytes = { version = "1.5", default-features = false }
+
+# Cryptography
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+ed25519-dalek = { version = "2.1.1" }
+curve25519-dalek = { version = "4.1.3", default-features = false, features = [
+    "serde",
+] }
+rand = { version = "0.8.5" }
+aes-gcm = { version = "0.10.2", features = [
+    "aes",
+    "alloc",
+], default-features = false }
+cbc = { version = "0.1.2", features = ["alloc"] }
+cipher = "0.4"
+aes = "0.8.3"
+sha2 = "0.10.6"
+hmac = "0.12.1"
+hkdf = "0.12.3"
+thiserror = "2.0.12"
+
+# Zlib decompression for WABinary
+flate2 = { version = "1.0", default-features = false, features = [
+    "any_zlib",
+    "libz-sys",
+] }
+hex = { version = "0.4", features = ["alloc"], default-features = false }
+once_cell = { version = "1.19", default-features = false, features = ["std"] }
+anyhow = { version = "1.0", default-features = false }
+serde_bytes = "0.11.17"
+subtle = "2.6.1"
+async-trait = "0.1.88"
+
+[dev-dependencies]

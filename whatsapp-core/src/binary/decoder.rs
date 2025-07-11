@@ -2,31 +2,28 @@ use crate::binary::error::{BinaryError, Result};
 use crate::binary::node::{AttrsRef, NodeContentRef, NodeRef};
 use crate::binary::token;
 use crate::types::jid::JidRef;
-use bytes::Buf;
 use std::borrow::Cow;
-use std::io::Cursor;
 
 pub(crate) struct Decoder<'a> {
-    reader: Cursor<&'a [u8]>,
+    data: &'a [u8],
+    position: usize,
 }
 
 impl<'a> Decoder<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        Self {
-            reader: Cursor::new(data),
-        }
+        Self { data, position: 0 }
     }
 
     pub(crate) fn is_finished(&self) -> bool {
-        !self.reader.has_remaining()
+        self.position >= self.data.len()
     }
 
     pub(crate) fn bytes_left(&self) -> usize {
-        self.reader.remaining()
+        self.data.len() - self.position
     }
 
     fn check_eos(&self, len: usize) -> Result<()> {
-        if self.reader.remaining() >= len {
+        if self.bytes_left() >= len {
             Ok(())
         } else {
             Err(BinaryError::Eof)
@@ -35,32 +32,46 @@ impl<'a> Decoder<'a> {
 
     fn read_u8(&mut self) -> Result<u8> {
         self.check_eos(1)?;
-        Ok(self.reader.get_u8())
+        let value = self.data[self.position];
+        self.position += 1;
+        Ok(value)
     }
 
     fn read_u16_be(&mut self) -> Result<u16> {
         self.check_eos(2)?;
-        Ok(self.reader.get_u16())
+        let value = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]);
+        self.position += 2;
+        Ok(value)
     }
 
     fn read_u20_be(&mut self) -> Result<u32> {
         self.check_eos(3)?;
-        let mut bytes = [0u8; 3];
-        bytes.copy_from_slice(&self.reader.chunk()[..3]);
-        self.reader.advance(3);
+        let bytes = [
+            self.data[self.position],
+            self.data[self.position + 1],
+            self.data[self.position + 2],
+        ];
+        self.position += 3;
         Ok(((bytes[0] as u32 & 0x0F) << 16) | ((bytes[1] as u32) << 8) | (bytes[2] as u32))
     }
 
     fn read_u32_be(&mut self) -> Result<u32> {
         self.check_eos(4)?;
-        Ok(self.reader.get_u32())
+        let value = u32::from_be_bytes([
+            self.data[self.position],
+            self.data[self.position + 1],
+            self.data[self.position + 2],
+            self.data[self.position + 3],
+        ]);
+        self.position += 4;
+        Ok(value)
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         self.check_eos(len)?;
-        let start = self.reader.position() as usize;
-        self.reader.advance(len);
-        Ok(&self.reader.get_ref()[start..start + len])
+        let slice = &self.data[self.position..self.position + len];
+        self.position += len;
+        Ok(slice)
     }
 
     fn read_string(&mut self, len: usize) -> Result<Cow<'a, str>> {
