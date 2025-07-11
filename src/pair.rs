@@ -40,12 +40,12 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     // 2. Extract QR code refs and generate full QR data strings (async)
                     let mut codes = Vec::new();
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content {
-                            if let Ok(r) = String::from_utf8(bytes.clone()) {
-                                let device_snapshot =
-                                    client.persistence_manager.get_device_snapshot().await;
-                                codes.push(make_qr_data(&device_snapshot, r));
-                            }
+                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content &&
+                           let Ok(r) = String::from_utf8(bytes.clone())
+                        {
+                            let device_snapshot =
+                                client.persistence_manager.get_device_snapshot().await;
+                            codes.push(make_qr_data(&device_snapshot, r));
                         }
                     }
 
