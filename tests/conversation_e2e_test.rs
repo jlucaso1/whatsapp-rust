@@ -8,6 +8,7 @@ use tempfile::TempDir; // For temporary store paths
 use tokio::sync::mpsc;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
+use whatsapp_rust::store::signal::DeviceStore; // Import DeviceStore
 // use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
 // use whatsapp_rust::store::Device; // Device is managed by PM
 use whatsapp_rust::store::commands::DeviceCommand;
@@ -158,6 +159,8 @@ async fn create_bundle_for_client(
     let device_store_for_signal = pm.get_device_arc().await;
 
     let prekey = device_store_for_signal
+        .lock()
+        .await
         .load_prekey(1) // Assuming prekey ID 1 for simplicity
         .await
         .unwrap()
@@ -166,6 +169,8 @@ async fn create_bundle_for_client(
     // Access fields from the snapshot for other parts
     let signed_prekey = device_snapshot.signed_pre_key.clone();
     let identity_key_pair = device_store_for_signal
+        .lock()
+        .await
         .get_identity_key_pair()
         .await
         .unwrap();
@@ -227,6 +232,8 @@ async fn test_send_receive_message() {
     // Ensure _prekeys_a is used in a way the compiler definitely sees
     let mut _prekeys_a = keyhelper::generate_pre_keys(1, 1);
     device_a_store_signal
+        .lock()
+        .await
         .store_prekey(1, _prekeys_a.remove(0))
         .await
         .unwrap(); // Use remove(0) to consume
@@ -254,6 +261,8 @@ async fn test_send_receive_message() {
     let device_b_store_signal = harness.pm_b.get_device_arc().await;
     let prekeys_b = keyhelper::generate_pre_keys(1, 1);
     device_b_store_signal
+        .lock()
+        .await
         .store_prekey(1, prekeys_b.into_iter().next().unwrap())
         .await
         .unwrap();
@@ -276,8 +285,11 @@ async fn test_send_receive_message() {
 
     // Client A processes the bundle to create a session for Client B
     {
-        let device_a_store_signal = harness.pm_a.get_device_arc().await;
-        let mut session_record_a_for_b = device_a_store_signal
+        let device_a_arc = harness.pm_a.get_device_arc().await;
+        let device_a_store_signal = DeviceStore::new(device_a_arc.clone());
+        let mut session_record_a_for_b = device_a_arc
+            .lock()
+            .await
             .load_session(&client_b_address)
             .await
             .unwrap();
@@ -299,8 +311,11 @@ async fn test_send_receive_message() {
     let plaintext_a_to_b = b"Hello from Client A!";
     let ciphertext_a_to_b: Vec<u8>;
     {
-        let device_a_store_signal = harness.pm_a.get_device_arc().await; // Use Arc<Mutex<Device>>
-        let mut session_record_a_for_b = device_a_store_signal
+        let device_a_arc = harness.pm_a.get_device_arc().await;
+        let device_a_store_signal = DeviceStore::new(device_a_arc.clone());
+        let mut session_record_a_for_b = device_a_arc
+            .lock()
+            .await
             .load_session(&client_b_address)
             .await
             .unwrap();
@@ -316,7 +331,9 @@ async fn test_send_receive_message() {
             "First message from A to B should be pkmsg"
         );
         ciphertext_a_to_b = encrypted_msg.serialize();
-        device_a_store_signal // Use Arc<Mutex<Device>>
+        device_a_arc
+            .lock()
+            .await
             .store_session(&client_b_address, &session_record_a_for_b)
             .await
             .unwrap();
@@ -331,14 +348,15 @@ async fn test_send_receive_message() {
         device_a_store_signal
             .store_session(&client_b_address, &updated_session_record)
             .await
-            .unwrap(); // Use Arc<Mutex<Device>>
+            .unwrap();
 
         info!("Client A sent first message to Client B.");
     }
 
     // 4. CLIENT B DECRYPTS FIRST MESSAGE FROM CLIENT A
     {
-        let device_b_store_signal = harness.pm_b.get_device_arc().await; // Use Arc<Mutex<Device>>
+        let device_b_arc = harness.pm_b.get_device_arc().await;
+        let device_b_store_signal = DeviceStore::new(device_b_arc.clone());
         let cipher_b = SessionCipher::new(device_b_store_signal.clone(), client_a_address.clone());
         let pkmsg =
             whatsapp_rust::signal::protocol::PreKeySignalMessage::deserialize(&ciphertext_a_to_b)
@@ -358,7 +376,7 @@ async fn test_send_receive_message() {
         let session_b_for_a = device_b_store_signal
             .load_session(&client_a_address)
             .await
-            .unwrap(); // Use Arc<Mutex<Device>>
+            .unwrap();
         assert!(
             !session_b_for_a.is_fresh(),
             "Client B's session for Client A should now be active"
@@ -369,8 +387,11 @@ async fn test_send_receive_message() {
     let plaintext_b_to_a = b"Hi Client A, I got your message!";
     let ciphertext_b_to_a: Vec<u8>;
     {
-        let device_b_store_signal = harness.pm_b.get_device_arc().await; // Use Arc<Mutex<Device>>
-        let mut session_record_b_for_a = device_b_store_signal
+        let device_b_arc = harness.pm_b.get_device_arc().await;
+        let device_b_store_signal = DeviceStore::new(device_b_arc.clone());
+        let mut session_record_b_for_a = device_b_arc
+            .lock()
+            .await
             .load_session(&client_a_address)
             .await
             .unwrap();
@@ -386,7 +407,9 @@ async fn test_send_receive_message() {
             "Reply message from B to A should be whisper_type"
         );
         ciphertext_b_to_a = encrypted_msg.serialize();
-        device_b_store_signal // Use Arc<Mutex<Device>>
+        device_b_arc
+            .lock()
+            .await
             .store_session(&client_a_address, &session_record_b_for_a)
             .await
             .unwrap();
@@ -395,8 +418,9 @@ async fn test_send_receive_message() {
 
     // 6. CLIENT A DECRYPTS THE REPLY FROM CLIENT B
     {
-        let device_a_store_signal = harness.pm_a.get_device_arc().await; // Use Arc<Mutex<Device>>
-        let cipher_a = SessionCipher::new(device_a_store_signal.clone(), client_b_address.clone());
+        let device_a_arc = harness.pm_a.get_device_arc().await; 
+        let device_a_store_signal = DeviceStore::new(device_a_arc);
+        let cipher_a = SessionCipher::new(device_a_store_signal, client_b_address.clone());
         let whisper_msg =
             whatsapp_rust::signal::protocol::SignalMessage::deserialize(&ciphertext_b_to_a)
                 .unwrap();

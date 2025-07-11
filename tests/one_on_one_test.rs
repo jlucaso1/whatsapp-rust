@@ -14,7 +14,7 @@ use whatsapp_rust::signal::{
     store::{PreKeyStore, SessionStore},
     util::keyhelper,
 };
-use whatsapp_rust::store::{Device, memory::MemoryStore};
+use whatsapp_rust::store::{Device, memory::MemoryStore, signal::DeviceRwLockWrapper};
 
 // Helper: Create a test device with isolated memory store
 async fn create_test_device(_name: &str) -> Arc<RwLock<Device>> {
@@ -83,8 +83,8 @@ async fn test_one_on_one_conversation() {
     // Alice processes the bundle to create a session for Bob
     {
         let alice_store = alice_device.clone();
-        let mut alice_session_record = alice_store.load_session(&bob_address).await.unwrap();
-        let alice_builder = SessionBuilder::new(alice_store.clone(), bob_address.clone());
+        let mut alice_session_record = alice_store.read().await.load_session(&bob_address).await.unwrap();
+        let alice_builder = SessionBuilder::new(DeviceRwLockWrapper::new(alice_store.clone()), bob_address.clone());
 
         alice_builder
             .process_bundle(&mut alice_session_record, &bob_bundle)
@@ -93,6 +93,8 @@ async fn test_one_on_one_conversation() {
 
         // Alice stores the new session
         alice_store
+            .write()
+            .await
             .store_session(&bob_address, &alice_session_record)
             .await
             .unwrap();
@@ -104,8 +106,8 @@ async fn test_one_on_one_conversation() {
     let ciphertext1: Vec<u8>;
     {
         let alice_store = alice_device.clone();
-        let mut alice_session_record = alice_store.load_session(&bob_address).await.unwrap();
-        let alice_cipher = SessionCipher::new(alice_store.clone(), bob_address.clone());
+        let mut alice_session_record = alice_store.read().await.load_session(&bob_address).await.unwrap();
+        let alice_cipher = SessionCipher::new(DeviceRwLockWrapper::new(alice_store.clone()), bob_address.clone());
 
         let encrypted_msg = alice_cipher
             .encrypt(&mut alice_session_record, plaintext1)
@@ -121,6 +123,8 @@ async fn test_one_on_one_conversation() {
         ciphertext1 = encrypted_msg.serialize();
 
         alice_store
+            .write()
+            .await
             .store_session(&bob_address, &alice_session_record)
             .await
             .unwrap();
@@ -128,11 +132,11 @@ async fn test_one_on_one_conversation() {
     // After Alice sends her first message, clear the pending pre-key so subsequent messages are SignalMessages
     {
         let alice_store = alice_device.clone();
-        let mut alice_session_record = alice_store.load_session(&bob_address).await.unwrap();
+        let mut alice_session_record = alice_store.read().await.load_session(&bob_address).await.unwrap();
         alice_session_record
             .session_state_mut()
             .clear_unacknowledged_prekey_message();
-        alice_store
+        alice_store.write().await
             .store_session(&bob_address, &alice_session_record)
             .await
             .unwrap();
@@ -142,7 +146,7 @@ async fn test_one_on_one_conversation() {
 
     {
         let bob_store = bob_device.clone();
-        let bob_cipher = SessionCipher::new(bob_store.clone(), alice_address.clone());
+        let bob_cipher = SessionCipher::new(DeviceRwLockWrapper::new(bob_store.clone()), alice_address.clone());
         let pkmsg = whatsapp_rust::signal::protocol::PreKeySignalMessage::deserialize(&ciphertext1)
             .unwrap();
 
@@ -157,7 +161,7 @@ async fn test_one_on_one_conversation() {
         );
 
         // After this, Bob should also have a session for Alice
-        let bob_session_for_alice = bob_store.load_session(&alice_address).await.unwrap();
+        let bob_session_for_alice = bob_store.read().await.load_session(&alice_address).await.unwrap();
 
         assert!(
             !bob_session_for_alice.is_fresh(),
@@ -171,8 +175,8 @@ async fn test_one_on_one_conversation() {
     let ciphertext2: Vec<u8>;
     {
         let bob_store = bob_device.clone();
-        let mut bob_session_record = bob_store.load_session(&alice_address).await.unwrap();
-        let bob_cipher = SessionCipher::new(bob_store.clone(), alice_address.clone());
+        let mut bob_session_record = bob_store.read().await.load_session(&alice_address).await.unwrap();
+        let bob_cipher = SessionCipher::new(DeviceRwLockWrapper::new(bob_store.clone()), alice_address.clone());
 
         let encrypted_msg = bob_cipher
             .encrypt(&mut bob_session_record, plaintext2)
@@ -187,7 +191,7 @@ async fn test_one_on_one_conversation() {
         );
         ciphertext2 = encrypted_msg.serialize();
 
-        bob_store
+        bob_store.write().await
             .store_session(&alice_address, &bob_session_record)
             .await
             .unwrap();
@@ -197,7 +201,7 @@ async fn test_one_on_one_conversation() {
 
     {
         let alice_store = alice_device.clone();
-        let alice_cipher = SessionCipher::new(alice_store.clone(), bob_address.clone());
+        let alice_cipher = SessionCipher::new(DeviceRwLockWrapper::new(alice_store.clone()), bob_address.clone());
         let whisper_msg =
             whatsapp_rust::signal::protocol::SignalMessage::deserialize(&ciphertext2).unwrap();
 
@@ -223,8 +227,8 @@ async fn test_one_on_one_conversation() {
         // Print Alice's session state before encrypting her follow-up
 
         // Reload Alice's session record after decrypting Bob's reply to ensure ratchet state is up-to-date
-        let mut alice_session_record = alice_store.load_session(&bob_address).await.unwrap();
-        let alice_cipher = SessionCipher::new(alice_store.clone(), bob_address.clone());
+        let mut alice_session_record = alice_store.read().await.load_session(&bob_address).await.unwrap();
+        let alice_cipher = SessionCipher::new(DeviceRwLockWrapper::new(alice_store.clone()), bob_address.clone());
 
         let encrypted_msg = alice_cipher
             .encrypt(&mut alice_session_record, plaintext3)
@@ -233,7 +237,7 @@ async fn test_one_on_one_conversation() {
 
         ciphertext3 = encrypted_msg.serialize();
 
-        alice_store
+        alice_store.write().await
             .store_session(&bob_address, &alice_session_record)
             .await
             .unwrap();
@@ -243,7 +247,7 @@ async fn test_one_on_one_conversation() {
 
     {
         let bob_store = bob_device.clone();
-        let bob_cipher = SessionCipher::new(bob_store.clone(), alice_address.clone());
+        let bob_cipher = SessionCipher::new(DeviceRwLockWrapper::new(bob_store.clone()), alice_address.clone());
 
         let whisper_msg =
             whatsapp_rust::signal::protocol::SignalMessage::deserialize(&ciphertext3).unwrap();

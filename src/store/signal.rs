@@ -5,6 +5,7 @@ use crate::store::Device;
 use async_trait::async_trait;
 use std::sync::Arc;
 use whatsapp_core::signal::address::SignalAddress;
+use whatsapp_core::signal::ecc::keys::EcPublicKey;
 use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
 use whatsapp_core::signal::sender_key_name::SenderKeyName;
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
@@ -45,19 +46,11 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
-        let key_bytes = identity_key.serialize();
+        // Use the raw public key bytes (32 bytes) instead of serialized format (33 bytes with type prefix)
+        let key_bytes = identity_key.public_key().public_key();
 
-        // Ensure we have exactly 32 bytes for the key
-        if key_bytes.len() != 32 {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid key length: expected 32, got {}", key_bytes.len()),
-            )) as StoreError);
-        }
-
-        let key_array: [u8; 32] = key_bytes.try_into().unwrap();
         self.backend
-            .put_identity(&address_str, key_array)
+            .put_identity(&address_str, key_bytes)
             .await
             .map_err(|e| Box::new(e) as StoreError)?;
         Ok(())
@@ -69,19 +62,11 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
         let address_str = address.to_string();
-        let key_bytes = identity_key.serialize();
+        // Use the raw public key bytes (32 bytes) instead of serialized format (33 bytes with type prefix)
+        let key_bytes = identity_key.public_key().public_key();
 
-        // Ensure we have exactly 32 bytes for the key
-        if key_bytes.len() != 32 {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid key length: expected 32, got {}", key_bytes.len()),
-            )) as StoreError);
-        }
-
-        let key_array: [u8; 32] = key_bytes.try_into().unwrap();
         self.backend
-            .is_trusted_identity(&address_str, &key_array)
+            .is_trusted_identity(&address_str, &key_bytes)
             .await
             .map_err(|e| Box::new(e) as StoreError)
     }
@@ -234,8 +219,201 @@ impl SenderKeyStore for Device {
     }
 }
 
-// Implement signal store traits on Arc<Mutex<Device>> for easier use in the main crate
 use tokio::sync::Mutex;
+
+// Additional wrappers for different Arc types used in tests
+
+// Wrapper for Arc<Device> used in group messaging tests
+pub struct DeviceArcWrapper(pub Arc<Device>);
+
+impl DeviceArcWrapper {
+    pub fn new(device: Arc<Device>) -> Self {
+        Self(device)
+    }
+}
+
+impl Clone for DeviceArcWrapper {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+#[async_trait]
+impl SenderKeyStore for DeviceArcWrapper {
+    async fn store_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+        record: SenderKeyRecord,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.store_sender_key(sender_key_name, record).await
+    }
+
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.load_sender_key(sender_key_name).await
+    }
+
+    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.delete_sender_key(sender_key_name).await
+    }
+}
+
+// Wrapper for Arc<RwLock<Device>> used in some tests
+use tokio::sync::RwLock;
+
+pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);
+
+impl DeviceRwLockWrapper {
+    pub fn new(device: Arc<RwLock<Device>>) -> Self {
+        Self(device)
+    }
+}
+
+impl Clone for DeviceRwLockWrapper {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+#[async_trait]
+impl IdentityKeyStore for DeviceRwLockWrapper {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
+        self.0.read().await.get_identity_key_pair().await
+    }
+
+    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
+        self.0.read().await.get_local_registration_id().await
+    }
+
+    async fn save_identity(
+        &self,
+        address: &SignalAddress,
+        identity_key: &IdentityKey,
+    ) -> Result<(), StoreError> {
+        self.0
+            .read()
+            .await
+            .save_identity(address, identity_key)
+            .await
+    }
+
+    async fn is_trusted_identity(
+        &self,
+        address: &SignalAddress,
+        identity_key: &IdentityKey,
+    ) -> Result<bool, StoreError> {
+        self.0
+            .read()
+            .await
+            .is_trusted_identity(address, identity_key)
+            .await
+    }
+}
+
+#[async_trait]
+impl PreKeyStore for DeviceRwLockWrapper {
+    async fn load_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
+        self.0.read().await.load_prekey(prekey_id).await
+    }
+
+    async fn store_prekey(
+        &self,
+        prekey_id: u32,
+        record: PreKeyRecordStructure,
+    ) -> Result<(), StoreError> {
+        self.0.read().await.store_prekey(prekey_id, record).await
+    }
+
+    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
+        self.0.read().await.contains_prekey(prekey_id).await
+    }
+
+    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
+        self.0.read().await.remove_prekey(prekey_id).await
+    }
+}
+
+#[async_trait]
+impl SignedPreKeyStore for DeviceRwLockWrapper {
+    async fn load_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
+        self.0
+            .read()
+            .await
+            .load_signed_prekey(signed_prekey_id)
+            .await
+    }
+
+    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
+        self.0.read().await.load_signed_prekeys().await
+    }
+
+    async fn store_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+        record: SignedPreKeyRecordStructure,
+    ) -> Result<(), StoreError> {
+        self.0
+            .read()
+            .await
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
+    }
+
+    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
+        self.0
+            .read()
+            .await
+            .contains_signed_prekey(signed_prekey_id)
+            .await
+    }
+
+    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
+        self.0
+            .read()
+            .await
+            .remove_signed_prekey(signed_prekey_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl SessionStore for DeviceRwLockWrapper {
+    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+        self.0.read().await.load_session(address).await
+    }
+
+    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
+        self.0.read().await.get_sub_device_sessions(name).await
+    }
+
+    async fn store_session(
+        &self,
+        address: &SignalAddress,
+        record: &SessionRecord,
+    ) -> Result<(), StoreError> {
+        self.0.read().await.store_session(address, record).await
+    }
+
+    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+        self.0.read().await.contains_session(address).await
+    }
+
+    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+        self.0.read().await.delete_session(address).await
+    }
+
+    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
+        self.0.read().await.delete_all_sessions(name).await
+    }
+}
 
 // Wrapper type to work around orphan rules
 pub struct DeviceStore(pub Arc<Mutex<Device>>);

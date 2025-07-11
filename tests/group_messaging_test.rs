@@ -17,7 +17,7 @@ use whatsapp_rust::signal::{
     sender_key_name::SenderKeyName,
     store::SenderKeyStore,
 };
-use whatsapp_rust::store::{Device, memory::MemoryStore};
+use whatsapp_rust::store::{Device, memory::MemoryStore, signal::DeviceArcWrapper};
 
 // Helper function to create a test device with an isolated memory store
 async fn create_test_device(_name: &str) -> Arc<Device> {
@@ -42,7 +42,7 @@ async fn test_group_messaging_end_to_end() {
     // === STEP 1: KEY DISTRIBUTION ===
     // Alice creates and "distributes" her sender key
     println!("--- Step 1: Alice creates and distributes sender key ---");
-    let alice_builder = GroupSessionBuilder::new(alice_device.clone());
+    let alice_builder = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let distribution_message = alice_builder
         .create(&sender_key_name)
         .await
@@ -58,7 +58,7 @@ async fn test_group_messaging_end_to_end() {
     println!("\n--- Step 2: Bob and Charlie process the key ---");
 
     // Bob processes the distribution message
-    let bob_builder = GroupSessionBuilder::new(bob_device.clone());
+    let bob_builder = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
     bob_builder
         .process(&sender_key_name, &distribution_message)
         .await
@@ -74,7 +74,7 @@ async fn test_group_messaging_end_to_end() {
     println!("Bob successfully processed the key.");
 
     // Charlie processes the distribution message
-    let charlie_builder = GroupSessionBuilder::new(charlie_device.clone());
+    let charlie_builder = GroupSessionBuilder::new(DeviceArcWrapper::new(charlie_device.clone()));
     charlie_builder
         .process(&sender_key_name, &distribution_message)
         .await
@@ -95,10 +95,10 @@ async fn test_group_messaging_end_to_end() {
     // === STEP 3: FIRST MESSAGE ENCRYPTION ===
     println!("\n--- Step 3: Alice encrypts and sends message 1 ---");
     let plaintext1 = b"Hello, group!";
-    let alice_builder_for_encrypt = GroupSessionBuilder::new(alice_device.clone());
+    let alice_builder_for_encrypt = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let alice_cipher = GroupCipher::new(
         sender_key_name.clone(),
-        alice_device.clone(),
+        DeviceArcWrapper::new(alice_device.clone()),
         alice_builder_for_encrypt,
     );
     let encrypted_message1 = alice_cipher
@@ -114,10 +114,10 @@ async fn test_group_messaging_end_to_end() {
     println!("\n--- Step 4: Bob and Charlie decrypt message 1 ---");
 
     // Bob decrypts the first message
-    let bob_builder_for_decrypt1 = GroupSessionBuilder::new(bob_device.clone());
+    let bob_builder_for_decrypt1 = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
     let bob_cipher = GroupCipher::new(
         sender_key_name.clone(),
-        bob_device.clone(),
+        DeviceArcWrapper::new(bob_device.clone()),
         bob_builder_for_decrypt1,
     );
     // Serialize and deserialize the message to get the verification data
@@ -136,10 +136,10 @@ async fn test_group_messaging_end_to_end() {
     println!("Bob decrypted message 1 successfully.");
 
     // Charlie decrypts the first message
-    let charlie_builder_for_decrypt1 = GroupSessionBuilder::new(charlie_device.clone());
+    let charlie_builder_for_decrypt1 = GroupSessionBuilder::new(DeviceArcWrapper::new(charlie_device.clone()));
     let charlie_cipher = GroupCipher::new(
         sender_key_name.clone(),
-        charlie_device.clone(),
+        DeviceArcWrapper::new(charlie_device.clone()),
         charlie_builder_for_decrypt1,
     );
     let decrypted1_charlie = charlie_cipher
@@ -155,10 +155,10 @@ async fn test_group_messaging_end_to_end() {
     // === STEP 5: SECOND MESSAGE ENCRYPTION (RATCHET TEST) ===
     println!("\n--- Step 5: Alice encrypts and sends message 2 (testing ratchet) ---");
     let plaintext2 = b"This is the second message.";
-    let alice_builder_for_encrypt2 = GroupSessionBuilder::new(alice_device.clone());
+    let alice_builder_for_encrypt2 = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let alice_cipher2 = GroupCipher::new(
         sender_key_name.clone(),
-        alice_device.clone(),
+        DeviceArcWrapper::new(alice_device.clone()),
         alice_builder_for_encrypt2,
     );
     let encrypted_message2 = alice_cipher2
@@ -179,10 +179,10 @@ async fn test_group_messaging_end_to_end() {
     println!("\n--- Step 6: Bob and Charlie decrypt message 2 ---");
 
     // Bob decrypts the second message
-    let bob_builder_for_decrypt2 = GroupSessionBuilder::new(bob_device.clone());
+    let bob_builder_for_decrypt2 = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
     let bob_cipher2 = GroupCipher::new(
         sender_key_name.clone(),
-        bob_device.clone(),
+        DeviceArcWrapper::new(bob_device.clone()),
         bob_builder_for_decrypt2,
     );
     // Serialize and deserialize the message to get the verification data
@@ -201,10 +201,10 @@ async fn test_group_messaging_end_to_end() {
     println!("Bob decrypted message 2 successfully.");
 
     // Charlie decrypts the second message
-    let charlie_builder_for_decrypt2 = GroupSessionBuilder::new(charlie_device.clone());
+    let charlie_builder_for_decrypt2 = GroupSessionBuilder::new(DeviceArcWrapper::new(charlie_device.clone()));
     let charlie_cipher2 = GroupCipher::new(
         sender_key_name.clone(),
-        charlie_device.clone(),
+        DeviceArcWrapper::new(charlie_device.clone()),
         charlie_builder_for_decrypt2,
     );
     let decrypted2_charlie = charlie_cipher2
@@ -271,11 +271,11 @@ async fn test_group_messaging_out_of_order() {
     let sender_key_name = SenderKeyName::new(group_id, alice_id);
 
     // Set up the initial key distribution
-    let alice_builder_setup = GroupSessionBuilder::new(alice_device.clone());
+    let alice_builder_setup = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let distribution_message = alice_builder_setup.create(&sender_key_name).await.unwrap();
 
     // Bob processes the distribution message
-    let bob_builder_setup = GroupSessionBuilder::new(bob_device.clone());
+    let bob_builder_setup = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
     bob_builder_setup
         .process(&sender_key_name, &distribution_message)
         .await
@@ -286,10 +286,10 @@ async fn test_group_messaging_out_of_order() {
     let plaintext2 = b"Message 2";
     let plaintext3 = b"Message 3";
 
-    let alice_builder_multi = GroupSessionBuilder::new(alice_device.clone());
+    let alice_builder_multi = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let alice_cipher_multi = GroupCipher::new(
         sender_key_name.clone(),
-        alice_device.clone(),
+        DeviceArcWrapper::new(alice_device.clone()),
         alice_builder_multi,
     );
 
@@ -302,9 +302,9 @@ async fn test_group_messaging_out_of_order() {
     assert!(msg2.iteration() < msg3.iteration());
 
     // Bob receives and decrypts messages in order: 1, 3, 2 (out of order)
-    let bob_builder_ooo = GroupSessionBuilder::new(bob_device.clone());
+    let bob_builder_ooo = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
     let bob_cipher_ooo =
-        GroupCipher::new(sender_key_name.clone(), bob_device.clone(), bob_builder_ooo);
+        GroupCipher::new(sender_key_name.clone(), DeviceArcWrapper::new(bob_device.clone()), bob_builder_ooo);
 
     // Decrypt message 1
     let serialized_msg1 = msg1.serialize();
