@@ -6,7 +6,7 @@ use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use Persis
                                                                    // use whatsapp_rust::store; // Not needed directly
                                                                    // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
 use std::time::Duration;
-use whatsapp_rust::types::events::Event;
+
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -38,26 +38,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let event_counter_clone = event_counter.clone();
     // let save_counter_clone = save_counter.clone(); // Not needed
 
-    client
-        .add_event_handler(Box::new(move |event: Arc<Event>| {
-            let event_counter_clone = event_counter_clone.clone();
-            // let save_counter_clone = save_counter_clone.clone(); // Not needed
+    // Subscribe to SelfPushNameUpdated events using the new typed event bus
+    let mut self_push_name_rx = client.subscribe_to_self_push_name_updated();
+    tokio::spawn(async move {
+        while let Ok(update) = self_push_name_rx.recv().await {
+            let event_num = event_counter.fetch_add(1, Ordering::SeqCst) + 1;
+            info!("📨 SelfPushNameUpdated event #{} received!", event_num);
+            info!("  From server: {}", update.from_server);
+            info!("  Old name: '{}'", update.old_name);
+            info!("  New name: '{}'", update.new_name);
 
-            tokio::spawn(async move {
-                if let Event::SelfPushNameUpdated(update) = &*event {
-                    let event_num = event_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                    info!("📨 SelfPushNameUpdated event #{} received!", event_num);
-                    info!("  From server: {}", update.from_server);
-                    info!("  Old name: '{}'", update.old_name);
-                    info!("  New name: '{}'", update.new_name);
-
-                    // PersistenceManager handles saving automatically.
-                    // We could log when the PM saves if needed for debugging, but not counting manual saves here.
-                    // info!("💾 PM will handle saving if state is dirty.");
-                }
-            });
-        }))
-        .await;
+            // PersistenceManager handles saving automatically.
+            // We could log when the PM saves if needed for debugging, but not counting manual saves here.
+            // info!("💾 PM will handle saving if state is dirty.");
+        }
+    });
 
     info!("\n=== Testing Batching Behavior (Event Counts with PersistenceManager) ===");
     let initial_name = client.get_push_name().await;
