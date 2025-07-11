@@ -158,7 +158,8 @@ impl Client {
 
             // PROACTIVE SESSION VALIDATION: Test encryption with existing session
             if !needs_new_session {
-                let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
+                let device_store_wrapper =
+                    crate::store::signal::DeviceStore::new(device_store.clone());
                 let test_cipher = SessionCipher::new(device_store_wrapper, signal_address.clone());
                 let test_data = b"test";
                 let mut test_session = session_record.clone();
@@ -185,7 +186,8 @@ impl Client {
                     .get(&device_jid)
                     .ok_or_else(|| anyhow::anyhow!("No prekey bundle for {}", device_jid))?;
 
-                let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
+                let device_store_wrapper =
+                    crate::store::signal::DeviceStore::new(device_store.clone());
                 let builder = SessionBuilder::new(device_store_wrapper, signal_address.clone());
                 builder.process_bundle(&mut session_record, bundle).await?;
                 is_prekey_msg = true;
@@ -337,8 +339,11 @@ impl Client {
         let distribution_message_bytes = skdm_for_encryption.encode_to_vec();
 
         // 3. Encrypt the actual message content with the shared group sender key.
-        let group_cipher =
-            GroupCipher::new(sender_key_name.clone(), device_store_wrapper.clone(), group_builder); // Use device_store
+        let group_cipher = GroupCipher::new(
+            sender_key_name.clone(),
+            device_store_wrapper.clone(),
+            group_builder,
+        ); // Use device_store
         let message_plaintext = message.encode_to_vec();
         let sk_msg_ciphertext = group_cipher
             .encrypt(&message_plaintext)
@@ -412,7 +417,9 @@ impl Client {
                 {
                     log::debug!("Migrating session from {pn_address} to {lid_address}");
                     // Corrected: load_session returns Result<SessionRecord, _>
-                    if let Ok(session_record_data) = device_store_wrapper.load_session(&pn_address).await {
+                    if let Ok(session_record_data) =
+                        device_store_wrapper.load_session(&pn_address).await
+                    {
                         // Only store if it's not a fresh/empty record, or handle is_fresh appropriately
                         if !session_record_data.is_fresh() {
                             let _ = device_store_wrapper
@@ -437,20 +444,20 @@ impl Client {
 
         for (wire_identity, encryption_identity, signal_address) in devices_to_process {
             // Load SessionRecord using device_store
-            let mut session_record =
-                device_store_wrapper
-                    .load_session(&signal_address)
-                    .await
-                    .map_err(|e| {
-                        // Corrected name
-                        anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
-                    })?; // Removed unwrap_or_default
+            let mut session_record = device_store_wrapper
+                .load_session(&signal_address)
+                .await
+                .map_err(|e| {
+                    // Corrected name
+                    anyhow::anyhow!("Failed to load session for {}: {}", signal_address, e)
+                })?; // Removed unwrap_or_default
 
             let mut needs_new_session = session_record.is_fresh();
 
             // PROACTIVE SESSION VALIDATION: Test encryption with existing session
             if !needs_new_session {
-                let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
+                let device_store_wrapper =
+                    crate::store::signal::DeviceStore::new(device_store.clone());
                 let test_cipher = SessionCipher::new(device_store_wrapper, signal_address.clone());
                 let test_data = b"test";
                 let mut test_session = session_record.clone();
@@ -473,8 +480,10 @@ impl Client {
 
             // If we fetched a bundle for this device, process it now.
             if let Some(bundle) = prekey_bundles.get(&wire_identity) {
-                let device_store_wrapper_builder = crate::store::signal::DeviceStore::new(device_store.clone());
-                let builder = SessionBuilder::new(device_store_wrapper_builder, signal_address.clone());
+                let device_store_wrapper_builder =
+                    crate::store::signal::DeviceStore::new(device_store.clone());
+                let builder =
+                    SessionBuilder::new(device_store_wrapper_builder, signal_address.clone());
                 if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
                     log::warn!(
                         "Failed to process prekey bundle for {wire_identity}: {e}. Skipping."
@@ -490,7 +499,8 @@ impl Client {
             }
 
             let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
-            let session_cipher = SessionCipher::new(device_store_wrapper.clone(), signal_address.clone());
+            let session_cipher =
+                SessionCipher::new(device_store_wrapper.clone(), signal_address.clone());
             let encrypted_distribution_message = session_cipher
                 .encrypt(&mut session_record, &distribution_message_bytes)
                 .await

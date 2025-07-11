@@ -1,12 +1,12 @@
-use whatsapp_core::signal;
-use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use whatsapp_core::store::error::{Result, StoreError};
 use crate::store::traits::*;
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use whatsapp_core::signal;
+use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
+use whatsapp_core::store::error::{Result, StoreError};
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use super::SerializableDevice;

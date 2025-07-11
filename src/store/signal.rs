@@ -1,6 +1,9 @@
 // Temporary stub implementations for Device signal store traits
 // TODO: Implement proper signal store methods matching whatsapp-core trait signatures
 
+use crate::store::Device;
+use async_trait::async_trait;
+use std::sync::Arc;
 use whatsapp_core::signal::address::SignalAddress;
 use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
 use whatsapp_core::signal::sender_key_name::SenderKeyName;
@@ -8,10 +11,7 @@ use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
 use whatsapp_core::signal::state::session_record::SessionRecord;
 use whatsapp_core::signal::store::*;
 use whatsapp_core::signal::util::keyhelper;
-use crate::store::Device;
-use async_trait::async_trait;
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
-use std::sync::Arc;
 
 // Use the StoreError from whatsapp-core signal module
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
@@ -36,10 +36,15 @@ impl IdentityKeyStore for Device {
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
         let key_bytes: [u8; 32] = identity_key.serialize().try_into().map_err(|_| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid key length")) as StoreError
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid key length",
+            )) as StoreError
         })?;
 
-        self.backend.put_identity(&address_str, key_bytes).await
+        self.backend
+            .put_identity(&address_str, key_bytes)
+            .await
             .map_err(|e| Box::new(e) as StoreError)?;
         Ok(())
     }
@@ -51,10 +56,15 @@ impl IdentityKeyStore for Device {
     ) -> Result<bool, StoreError> {
         let address_str = address.to_string();
         let key_bytes: [u8; 32] = identity_key.serialize().try_into().map_err(|_| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid key length")) as StoreError
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid key length",
+            )) as StoreError
         })?;
 
-        self.backend.is_trusted_identity(&address_str, &key_bytes).await
+        self.backend
+            .is_trusted_identity(&address_str, &key_bytes)
+            .await
             .map_err(|e| Box::new(e) as StoreError)
     }
 }
@@ -240,7 +250,11 @@ impl IdentityKeyStore for DeviceStore {
         address: &SignalAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
-        self.0.lock().await.save_identity(address, identity_key).await
+        self.0
+            .lock()
+            .await
+            .save_identity(address, identity_key)
+            .await
     }
 
     async fn is_trusted_identity(
@@ -248,7 +262,11 @@ impl IdentityKeyStore for DeviceStore {
         address: &SignalAddress,
         identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
-        self.0.lock().await.is_trusted_identity(address, identity_key).await
+        self.0
+            .lock()
+            .await
+            .is_trusted_identity(address, identity_key)
+            .await
     }
 }
 
@@ -284,7 +302,11 @@ impl SignedPreKeyStore for DeviceStore {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        self.0.lock().await.load_signed_prekey(signed_prekey_id).await
+        self.0
+            .lock()
+            .await
+            .load_signed_prekey(signed_prekey_id)
+            .await
     }
 
     async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
@@ -296,15 +318,27 @@ impl SignedPreKeyStore for DeviceStore {
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
     ) -> Result<(), StoreError> {
-        self.0.lock().await.store_signed_prekey(signed_prekey_id, record).await
+        self.0
+            .lock()
+            .await
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
     }
 
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        self.0.lock().await.contains_signed_prekey(signed_prekey_id).await
+        self.0
+            .lock()
+            .await
+            .contains_signed_prekey(signed_prekey_id)
+            .await
     }
 
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
-        self.0.lock().await.remove_signed_prekey(signed_prekey_id).await
+        self.0
+            .lock()
+            .await
+            .remove_signed_prekey(signed_prekey_id)
+            .await
     }
 }
 
@@ -346,7 +380,11 @@ impl SenderKeyStore for DeviceStore {
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
     ) -> Result<(), StoreError> {
-        self.0.lock().await.store_sender_key(sender_key_name, record).await
+        self.0
+            .lock()
+            .await
+            .store_sender_key(sender_key_name, record)
+            .await
     }
 
     async fn load_sender_key(

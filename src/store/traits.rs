@@ -1,7 +1,7 @@
 // Local traits for whatsapp-rust that depend on platform-specific types
 use async_trait::async_trait;
-use whatsapp_core::store::error::Result;
 use std::sync::Arc;
+use whatsapp_core::store::error::Result;
 
 #[async_trait]
 pub trait AppStateStore: Send + Sync {
@@ -40,7 +40,7 @@ impl AppStateStore for AppStateWrapper {
         // For now, return default - this is a temporary workaround
         Ok(Default::default())
     }
-    
+
     async fn set_app_state_version(
         &self,
         _name: &str,
@@ -56,7 +56,7 @@ impl AppStateKeyStore for AppStateWrapper {
     async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
         self.backend.get_app_state_sync_key(key_id).await
     }
-    
+
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         self.backend.set_app_state_sync_key(key_id, key).await
     }

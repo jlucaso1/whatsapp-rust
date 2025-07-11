@@ -71,7 +71,12 @@ impl Client {
             let device_store = self.persistence_manager.get_device_arc().await;
 
             // Delete the sender key record to force creation of a new one
-            if let Err(e) = device_store.lock().await.delete_sender_key(&sender_key_name).await {
+            if let Err(e) = device_store
+                .lock()
+                .await
+                .delete_sender_key(&sender_key_name)
+                .await
+            {
                 log::warn!(
                     "Failed to delete sender key for group {}: {}",
                     receipt.source.chat,
@@ -90,7 +95,12 @@ impl Client {
                 participant_jid.device as u32,
             );
 
-            if let Err(e) = device_store.lock().await.delete_session(&signal_address).await {
+            if let Err(e) = device_store
+                .lock()
+                .await
+                .delete_session(&signal_address)
+                .await
+            {
                 // It's not a critical error if the session file doesn't exist,
                 // especially when dealing with the primary device (:0).
                 log::warn!("Failed to delete session for {signal_address}: {e}");
@@ -105,7 +115,12 @@ impl Client {
             );
 
             let device_store = self.persistence_manager.get_device_arc().await;
-            if let Err(e) = device_store.lock().await.delete_session(&signal_address).await {
+            if let Err(e) = device_store
+                .lock()
+                .await
+                .delete_session(&signal_address)
+                .await
+            {
                 // It's not a critical error if the session file doesn't exist.
                 log::warn!("Failed to delete session for {signal_address}: {e}");
             } else {

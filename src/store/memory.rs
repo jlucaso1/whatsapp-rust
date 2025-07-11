@@ -1,10 +1,10 @@
 // Temporarily simplified memory store to get build working
 // TODO: Re-implement full trait compatibility
 
-use whatsapp_core::store::error::Result;
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
+use whatsapp_core::store::error::Result;
 
 type IdentityMap = GenericMemoryStore<String, [u8; 32]>;
 type SessionMap = GenericMemoryStore<String, Vec<u8>>;
@@ -52,7 +52,9 @@ impl SessionStore for MemoryStore {
     }
 
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
-        self.sessions.put(address.to_string(), session.to_vec()).await;
+        self.sessions
+            .put(address.to_string(), session.to_vec())
+            .await;
         Ok(())
     }
 

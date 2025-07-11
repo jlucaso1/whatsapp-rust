@@ -11,10 +11,7 @@ pub(crate) struct Decoder<'a> {
 
 impl<'a> Decoder<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        Self {
-            data,
-            position: 0,
-        }
+        Self { data, position: 0 }
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -42,10 +39,7 @@ impl<'a> Decoder<'a> {
 
     fn read_u16_be(&mut self) -> Result<u16> {
         self.check_eos(2)?;
-        let value = u16::from_be_bytes([
-            self.data[self.position],
-            self.data[self.position + 1],
-        ]);
+        let value = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]);
         self.position += 2;
         Ok(value)
     }
