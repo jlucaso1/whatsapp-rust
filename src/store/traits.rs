@@ -35,7 +35,7 @@ impl AppStateWrapper {
 
 #[async_trait]
 impl AppStateStore for AppStateWrapper {
-    async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState> {
+    async fn get_app_state_version(&self, _name: &str) -> Result<crate::appstate::hash::HashState> {
         // We need to cast to concrete type to access AppStateStore methods
         // For now, return default - this is a temporary workaround
         Ok(Default::default())
@@ -43,8 +43,8 @@ impl AppStateStore for AppStateWrapper {
     
     async fn set_app_state_version(
         &self,
-        name: &str,
-        state: crate::appstate::hash::HashState,
+        _name: &str,
+        _state: crate::appstate::hash::HashState,
     ) -> Result<()> {
         // Temporary implementation
         Ok(())
