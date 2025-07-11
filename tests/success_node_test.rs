@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use whatsapp_rust::binary::node::Node;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PM and Command, removed self
-                                                                                              // use whatsapp_rust::store::filestore::FileStore; // FileStore is managed by PM
+// use whatsapp_rust::store::filestore::FileStore; // FileStore is managed by PM
 
 #[tokio::test]
 async fn test_success_node_with_pushname() {

@@ -1,4 +1,4 @@
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use whatsapp_rust::crypto::xed25519;
 use x25519_dalek::{PublicKey, StaticSecret};
 

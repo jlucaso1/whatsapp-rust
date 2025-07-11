@@ -1,8 +1,8 @@
 use crate::client::Client;
 use crate::types::events::PairError;
 use log::{debug, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
@@ -123,7 +123,7 @@ pub(crate) async fn get_qr_channel_logic(
     let tx_clone = tx.clone();
     let closed_clone = closed.clone();
     let stop_emitter_tx_clone = stop_emitter_tx.clone();
-    
+
     tokio::spawn(async move {
         loop {
             if closed_clone.load(Ordering::Relaxed) {

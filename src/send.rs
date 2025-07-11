@@ -1,9 +1,9 @@
 use crate::client::Client;
+use crate::signal::SessionCipher;
 use crate::signal::address::SignalAddress;
 use crate::signal::session::SessionBuilder;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
-use crate::signal::SessionCipher;
 use crate::types::jid::Jid;
 use rand::Rng;
 use whatsapp_proto::whatsapp as wa;
@@ -44,7 +44,7 @@ fn participant_list_hash(devices: &[Jid]) -> String {
     let truncated_hash = &full_hash[..6];
 
     // Encode using base64 without padding
-    format!("2:{}", STANDARD_NO_PAD.encode(truncated_hash))
+    format!("2:{hash}", hash = STANDARD_NO_PAD.encode(truncated_hash))
 }
 
 impl Client {
@@ -163,14 +163,12 @@ impl Client {
 
                 match test_cipher.encrypt(&mut test_session, test_data).await {
                     Ok(_) => {
-                        log::debug!("Session validation passed for {}", device_jid);
+                        log::debug!("Session validation passed for {device_jid}");
                         // Session is good, use the original session_record
                     }
                     Err(e) => {
                         log::warn!(
-                            "Session validation failed for {}: {}. Fetching new pre-key.",
-                            device_jid,
-                            e
+                            "Session validation failed for {device_jid}: {e}. Fetching new pre-key."
                         );
                         needs_new_session = true;
                         // Reset to fresh session since the existing one is stale
@@ -256,7 +254,9 @@ impl Client {
                     content: Some(NodeContent::Bytes(device_identity_bytes)),
                 });
             } else {
-                return Err(anyhow::anyhow!("Cannot send pre-key message: device account identity is missing. Please re-pair."));
+                return Err(anyhow::anyhow!(
+                    "Cannot send pre-key message: device account identity is missing. Please re-pair."
+                ));
             }
         }
 
@@ -282,12 +282,12 @@ impl Client {
         request_id: String,
     ) -> Result<(), anyhow::Error> {
         use crate::binary::node::{Node, NodeContent};
+        use crate::signal::SessionCipher;
         use crate::signal::address::SignalAddress;
         use crate::signal::groups::builder::GroupSessionBuilder;
         use crate::signal::groups::cipher::GroupCipher;
         use crate::signal::sender_key_name::SenderKeyName;
         use crate::signal::session::SessionBuilder;
-        use crate::signal::SessionCipher;
         use prost::Message as ProtoMessage;
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -303,9 +303,9 @@ impl Client {
 
         // 1. Get all members of the group, then get all of their devices.
         let participants = self.query_group_info(&to).await?;
-        log::debug!("Group participants for {:?}: {:?}", to, participants);
+        log::debug!("Group participants for {to:?}: {participants:?}");
         let all_devices = self.get_user_devices(&participants).await?;
-        log::debug!("All devices for group {:?}: {:?}", to, all_devices);
+        log::debug!("All devices for group {to:?}: {all_devices:?}");
 
         let mut includes_prekey_message = false;
 
@@ -405,7 +405,7 @@ impl Client {
                         .await
                         .unwrap_or(false)
                 {
-                    log::debug!("Migrating session from {} to {}", pn_address, lid_address);
+                    log::debug!("Migrating session from {pn_address} to {lid_address}");
                     // Corrected: load_session returns Result<SessionRecord, _>
                     if let Ok(session_record_data) = device_store.load_session(&pn_address).await {
                         // Only store if it's not a fresh/empty record, or handle is_fresh appropriately
@@ -451,11 +451,13 @@ impl Client {
 
                 match test_cipher.encrypt(&mut test_session, test_data).await {
                     Ok(_) => {
-                        log::debug!("Group session validation passed for {}", wire_identity);
+                        log::debug!("Group session validation passed for {wire_identity}");
                         // Session is good, use the original session_record
                     }
                     Err(e) => {
-                        log::warn!("Group session validation failed for {}: {}. Will fetch new pre-key if available.", wire_identity, e);
+                        log::warn!(
+                            "Group session validation failed for {wire_identity}: {e}. Will fetch new pre-key if available."
+                        );
                         needs_new_session = true;
                         // Reset to fresh session since the existing one is stale
                         session_record = SessionRecord::new();
@@ -468,17 +470,14 @@ impl Client {
                 let builder = SessionBuilder::new(device_store.clone(), signal_address.clone());
                 if let Err(e) = builder.process_bundle(&mut session_record, bundle).await {
                     log::warn!(
-                        "Failed to process prekey bundle for {}: {}. Skipping.",
-                        wire_identity,
-                        e
+                        "Failed to process prekey bundle for {wire_identity}: {e}. Skipping."
                     );
                     continue;
                 }
             } else if needs_new_session {
                 // Session is fresh or stale, but no prekey bundle was fetched
                 log::warn!(
-                    "Device {} needs new session but no prekey bundle was fetched. Skipping.",
-                    wire_identity
+                    "Device {wire_identity} needs new session but no prekey bundle was fetched. Skipping."
                 );
                 continue;
             }

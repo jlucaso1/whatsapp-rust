@@ -14,8 +14,8 @@ use crate::signal::state::session_state::SessionState;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::sync::Arc;
-use whatsapp_proto::whatsapp::session_structure::chain::{ChainKey, MessageKey};
 use whatsapp_proto::whatsapp::PreKeyRecordStructure;
+use whatsapp_proto::whatsapp::session_structure::chain::{ChainKey, MessageKey};
 
 pub struct SessionCipher<S: SignalProtocolStore> {
     store: S,

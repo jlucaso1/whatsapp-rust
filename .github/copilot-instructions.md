@@ -32,6 +32,10 @@ cargo run --bin debug_device
 
 # Run main client (handles QR pairing automatically)
 cargo run
+
+# After modifications run format
+cargo fmt
+
 ```
 
 ### Key Testing Patterns
@@ -65,7 +69,7 @@ cargo run
 
 ### Key Files for Understanding
 - `src/main.rs`: Complete client lifecycle example with QR pairing and event handling
-- `src/handshake.rs`: WhatsApp authentication flow and server key verification  
+- `src/handshake.rs`: WhatsApp authentication flow and server key verification
 - `src/message.rs`: Message encryption/decryption and multi-device handling
 - `src/appstate/processor.rs`: App state mutation processing (contacts, chat settings)
 - `tests/conversation_e2e_test.rs`: Full E2E messaging test demonstrating proper usage patterns
@@ -83,7 +87,7 @@ cargo run
 - All crypto material (identity keys, sessions, prekeys) stored via backend abstraction
 
 ### Event System
-- Add handlers via `client.add_event_handler(Box::new(handler))` 
+- Add handlers via `client.add_event_handler(Box::new(handler))`
 - Events are `Arc<Event>` for efficient sharing across handlers
 - Critical events: `Event::Message`, `Event::LoggedOut`, `Event::Connected`, `Event::AppStateSyncComplete`
 

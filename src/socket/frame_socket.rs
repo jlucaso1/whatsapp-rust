@@ -3,16 +3,16 @@ use crate::socket::consts::{FRAME_LENGTH_SIZE, FRAME_MAX_SIZE, URL};
 use crate::socket::error::{Result, SocketError};
 use bytes::{Buf, BytesMut};
 use futures_util::{
-    stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;

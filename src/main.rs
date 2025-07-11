@@ -8,7 +8,6 @@ use whatsapp_rust::proto_helpers::MessageExt;
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 
-
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -44,8 +43,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         info!("----------------------------------------");
                         info!("Got new QR Code. Scan with your WhatsApp app.");
                         let qr_url = format!(
-                            "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={}",
-                            urlencoding::encode(&code)
+                            "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={code}",
+                            code = urlencoding::encode(&code)
                         );
                         info!("Scan this URL in a browser to see the QR code:\n  {qr_url}");
                         info!("----------------------------------------");
@@ -83,7 +82,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // The event handlers now use typed subscriptions instead of a generic handler
     let client_for_handler = client.clone();
     let pm_for_handler = persistence_manager.clone();
-    
+
     // Subscribe to LoggedOut events
     {
         let mut logged_out_rx = client.subscribe_to_logged_out();
@@ -143,10 +142,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             log::info!("Received 'send' command, sending a response.");
                             let response_text = "Hello from whatsapp-rust!"; // Updated text
                             if let Err(e) = client_clone
-                                .send_text_message(
-                                    info_node.source.chat.clone(),
-                                    response_text,
-                                )
+                                .send_text_message(info_node.source.chat.clone(), response_text)
                                 .await
                             {
                                 log::error!("Failed to send response message: {e:?}");

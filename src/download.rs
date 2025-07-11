@@ -3,8 +3,8 @@ use crate::crypto::cbc;
 use crate::crypto::hkdf;
 use async_trait::async_trait;
 
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use anyhow::{Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use whatsapp_proto::whatsapp::ExternalBlobReference;
@@ -89,11 +89,11 @@ impl Client {
 
         for host in &media_conn.hosts {
             let url = format!(
-                "https://{}{}?auth={}&token={}",
-                host.hostname,
-                direct_path,
-                media_conn.auth,
-                URL_SAFE_NO_PAD.encode(file_enc_sha256)
+                "https://{hostname}{direct_path}?auth={auth}&token={token}",
+                hostname = host.hostname,
+                direct_path = direct_path,
+                auth = media_conn.auth,
+                token = URL_SAFE_NO_PAD.encode(file_enc_sha256)
             );
 
             match self.download_and_decrypt(&url, media_key, app_info).await {

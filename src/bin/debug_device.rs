@@ -12,18 +12,12 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("----------------------------------------");
 
     let store_path = "./whatsapp_store"; // Default store path
-    info!(
-        "Attempting to load device using PersistenceManager from path: {}",
-        store_path
-    );
+    info!("Attempting to load device using PersistenceManager from path: {store_path}");
 
     let persistence_manager = match PersistenceManager::new(store_path).await {
         Ok(pm) => Arc::new(pm),
         Err(e) => {
-            info!(
-                "❌ Failed to initialize PersistenceManager: {}. Cannot display info.",
-                e
-            );
+            info!("❌ Failed to initialize PersistenceManager: {e}. Cannot display info.");
             info!("   Ensure the store path is correct and accessible.");
             return Ok(());
         }
@@ -77,7 +71,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     info!("    - Key Index: {:?}", details_struct.key_index); // Access field directly
                 }
                 Err(e) => {
-                    info!("    - Could not decode ADV Details: {}", e);
+                    info!("    - Could not decode ADV Details: {e}");
                 }
             }
         }

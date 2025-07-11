@@ -3,7 +3,7 @@ use crate::signal::state::sender_key_record::SenderKeyRecord;
 use crate::store::error::{Result, StoreError};
 use crate::store::traits::*;
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -86,7 +86,7 @@ impl FileStore {
         } else if let Ok(None) = &result {
             log::info!("FileStore: No device data found at path.");
         } else if let Err(e) = &result {
-            log::error!("FileStore: Error loading device data: {}", e);
+            log::error!("FileStore: Error loading device data: {e}");
         }
         result
     }
@@ -221,7 +221,7 @@ impl crate::store::traits::EventBufferStore for FileStore {
             }
         }
         if deleted_count > 0 {
-            log::info!(target: "Client/Store", "Deleted {} old event buffer entries.", deleted_count);
+            log::info!(target: "Client/Store", "Deleted {deleted_count} old event buffer entries.");
         }
         Ok(deleted_count)
     }

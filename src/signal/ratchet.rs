@@ -3,7 +3,7 @@ use whatsapp_proto::whatsapp::session_structure::chain::ChainKey;
 use super::ecc::curve;
 use super::ecc::keys::{EcPrivateKey, EcPublicKey};
 use super::kdf;
-use super::root_key::{RootKey, SessionKeyPair, ROOT_KEY_DERIVED_SECRETS_SIZE};
+use super::root_key::{ROOT_KEY_DERIVED_SECRETS_SIZE, RootKey, SessionKeyPair};
 
 pub mod parameters;
 const DISCONTINUITY: [u8; 32] = [0xFF; 32];

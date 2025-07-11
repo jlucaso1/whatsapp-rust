@@ -178,7 +178,7 @@ impl crate::store::traits::EventBufferStore for MemoryStore {
         let after = self.event_buffer.values().await.len();
         let deleted_count = before - after;
         if deleted_count > 0 {
-            log::info!(target: "Client/Store", "Deleted {} old event buffer entries from memory.", deleted_count);
+            log::info!(target: "Client/Store", "Deleted {deleted_count} old event buffer entries from memory.");
         }
         Ok(deleted_count)
     }

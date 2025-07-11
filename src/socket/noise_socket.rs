@@ -1,8 +1,8 @@
 use crate::socket::error::{Result, SocketError};
-use aes_gcm::aead::Aead;
 use aes_gcm::Aes256Gcm;
-use std::sync::atomic::{AtomicU32, Ordering};
+use aes_gcm::aead::Aead;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub fn generate_iv(counter: u32) -> [u8; 12] {
     let mut iv = [0u8; 12];

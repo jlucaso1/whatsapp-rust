@@ -8,7 +8,7 @@
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::montgomery::MontgomeryPoint;
-use curve25519_dalek::scalar::{clamp_integer, Scalar};
+use curve25519_dalek::scalar::{Scalar, clamp_integer};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
 use sha2::{Digest, Sha512};

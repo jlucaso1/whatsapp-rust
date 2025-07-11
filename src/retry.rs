@@ -96,16 +96,13 @@ impl Client {
                 if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
                     if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
                     {
-                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                        log::warn!("Failed to delete session for {signal_address}: {e}");
                     }
                 } else {
-                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                    log::warn!("Failed to delete session for {signal_address}: {e}");
                 }
             } else {
-                info!(
-                    "Deleted session for {} due to retry receipt",
-                    signal_address
-                );
+                info!("Deleted session for {signal_address} due to retry receipt");
             }
         } else {
             // For direct messages, only delete the pairwise session
@@ -120,16 +117,13 @@ impl Client {
                 if let Some(store_err) = e.downcast_ref::<crate::store::error::StoreError>() {
                     if !matches!(store_err, crate::store::error::StoreError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound)
                     {
-                        log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                        log::warn!("Failed to delete session for {signal_address}: {e}");
                     }
                 } else {
-                    log::warn!("Failed to delete session for {}: {}", signal_address, e);
+                    log::warn!("Failed to delete session for {signal_address}: {e}");
                 }
             } else {
-                info!(
-                    "Deleted session for {} due to retry receipt",
-                    signal_address
-                );
+                info!("Deleted session for {signal_address} due to retry receipt");
             }
         }
 

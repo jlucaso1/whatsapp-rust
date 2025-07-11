@@ -17,7 +17,7 @@ use whatsapp_rust::signal::{
     sender_key_name::SenderKeyName,
     store::SenderKeyStore,
 };
-use whatsapp_rust::store::{memory::MemoryStore, Device};
+use whatsapp_rust::store::{Device, memory::MemoryStore};
 
 // Helper function to create a test device with an isolated memory store
 async fn create_test_device(_name: &str) -> Arc<Device> {

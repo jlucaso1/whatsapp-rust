@@ -22,7 +22,7 @@ pub struct BufferedEvent {
 #[async_trait]
 pub trait EventBufferStore: Send + Sync {
     async fn get_buffered_event(&self, ciphertext_hash: &[u8; 32])
-        -> Result<Option<BufferedEvent>>;
+    -> Result<Option<BufferedEvent>>;
     async fn put_buffered_event(
         &self,
         ciphertext_hash: &[u8; 32],

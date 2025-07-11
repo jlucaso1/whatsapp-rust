@@ -1,10 +1,10 @@
 use crate::crypto::{gcm, hkdf};
 use crate::socket::error::{Result, SocketError};
-use crate::socket::noise_socket::{generate_iv, NoiseSocket};
-use aes_gcm::aead::{Aead, Payload};
+use crate::socket::noise_socket::{NoiseSocket, generate_iv};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, Payload};
 use sha2::{Digest, Sha256};
-use x25519_dalek::{x25519, StaticSecret};
+use x25519_dalek::{StaticSecret, x25519};
 
 pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

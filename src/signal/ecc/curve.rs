@@ -1,9 +1,9 @@
 use super::key_pair::EcKeyPair;
-use super::keys::{DjbEcPrivateKey, DjbEcPublicKey, EcPrivateKey, EcPublicKey, DJB_TYPE};
+use super::keys::{DJB_TYPE, DjbEcPrivateKey, DjbEcPublicKey, EcPrivateKey, EcPublicKey};
 use crate::crypto::xed25519;
 use rand::rngs::OsRng;
 use thiserror::Error;
-use x25519_dalek::{x25519, PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey, StaticSecret, x25519};
 
 #[derive(Debug, Error)]
 pub enum CurveError {

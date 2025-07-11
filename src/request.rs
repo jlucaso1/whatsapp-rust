@@ -63,7 +63,11 @@ impl Client {
         let count = self
             .id_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{}-{}", self.unique_id, count)
+        format!(
+            "{unique_id}-{count}",
+            unique_id = self.unique_id,
+            count = count
+        )
     }
 
     /// Generates a proper WhatsApp message ID in the format expected by the protocol.
@@ -96,7 +100,10 @@ impl Client {
         let hash = Sha256::digest(&data);
         let truncated_hash = &hash[..9]; // Use first 9 bytes for 18 hex chars
 
-        format!("3EB0{}", hex::encode(truncated_hash).to_uppercase())
+        format!(
+            "3EB0{hash}",
+            hash = hex::encode(truncated_hash).to_uppercase()
+        )
     }
 
     /// Sends an IQ (Info/Query) stanza and asynchronously waits for a response.
@@ -146,8 +153,8 @@ impl Client {
                     return Err(IqError::Disconnected(response_node));
                 }
 
-                if let Some(res_type) = response_node.attrs.get("type") &&
-                   res_type == "error"
+                if let Some(res_type) = response_node.attrs.get("type")
+                    && res_type == "error"
                 {
                     let error_child = response_node.get_optional_child_by_tag(&["error"]);
                     if let Some(error_node) = error_child {
@@ -182,8 +189,8 @@ impl Client {
     /// Handles an incoming IQ response by forwarding it to the waiting task.
     pub async fn handle_iq_response(&self, node: Node) -> bool {
         let id_opt = node.attrs.get("id").cloned();
-        if let Some(id) = id_opt &&
-           let Some(waiter) = self.response_waiters.lock().await.remove(&id)
+        if let Some(id) = id_opt
+            && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {
             if waiter.send(node).is_err() {
                 warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");

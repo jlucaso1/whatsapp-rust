@@ -1,5 +1,5 @@
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

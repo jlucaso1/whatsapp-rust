@@ -1,5 +1,5 @@
 use crate::crypto::key_pair::KeyPair;
-use crate::socket::{consts, FrameSocket, NoiseHandshake, NoiseSocket};
+use crate::socket::{FrameSocket, NoiseHandshake, NoiseSocket, consts};
 use crate::store::WA_CERT_PUB_KEY;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use ed25519_dalek::Verifier;
@@ -8,7 +8,7 @@ use log::{debug, info};
 use prost::Message;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use whatsapp_proto::whatsapp::cert_chain::noise_certificate;
 use whatsapp_proto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 

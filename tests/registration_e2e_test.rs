@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::pair::pair_with_qr_code;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
-                                                                   // use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
-                                                                   // use whatsapp_rust::store::Device; // Device is managed by PM
+// use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
+// use whatsapp_rust::store::Device; // Device is managed by PM
 use whatsapp_rust::store::commands::DeviceCommand; // For direct store manipulation in tests
 use whatsapp_rust::types::events::Event;
 
@@ -170,7 +170,7 @@ async fn test_qr_code_generation() {
     assert_eq!(parts[0], "test_ref_123", "First part should be the ref");
 
     // Verify that the other parts are valid base64
-    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
     assert!(
         B64.decode(parts[1]).is_ok(),
