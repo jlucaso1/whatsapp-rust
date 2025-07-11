@@ -10,7 +10,6 @@ use whatsapp_core::signal::sender_key_name::SenderKeyName;
 use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
 use whatsapp_core::signal::state::session_record::SessionRecord;
 use whatsapp_core::signal::store::*;
-use whatsapp_core::signal::util::keyhelper;
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 // Use the StoreError from whatsapp-core signal module
@@ -20,9 +19,20 @@ type StoreError = Box<dyn std::error::Error + Send + Sync>;
 #[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        // TODO: Convert from KeyPair to IdentityKeyPair properly
-        // For now, create a new one from the private key
-        Ok(keyhelper::generate_identity_key_pair())
+        // Convert from our KeyPair to signal protocol IdentityKeyPair
+        let private_key = self.identity_key.private_key;
+        let public_key = self.identity_key.public_key;
+        
+        use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
+        use whatsapp_core::signal::ecc::keys::{DjbEcPublicKey, DjbEcPrivateKey};
+        use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
+        
+        let djb_public_key = DjbEcPublicKey::new(public_key);
+        let djb_private_key = DjbEcPrivateKey::new(private_key);
+        let identity_key = IdentityKey::new(djb_public_key.clone());
+        let key_pair = EcKeyPair::new(djb_public_key, djb_private_key);
+        
+        Ok(IdentityKeyPair::new(identity_key, key_pair))
     }
 
     async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
@@ -35,15 +45,19 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
-        let key_bytes: [u8; 32] = identity_key.serialize().try_into().map_err(|_| {
-            Box::new(std::io::Error::new(
+        let key_bytes = identity_key.serialize();
+        
+        // Ensure we have exactly 32 bytes for the key
+        if key_bytes.len() != 32 {
+            return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid key length",
-            )) as StoreError
-        })?;
-
+                format!("Invalid key length: expected 32, got {}", key_bytes.len()),
+            )) as StoreError);
+        }
+        
+        let key_array: [u8; 32] = key_bytes.try_into().unwrap();
         self.backend
-            .put_identity(&address_str, key_bytes)
+            .put_identity(&address_str, key_array)
             .await
             .map_err(|e| Box::new(e) as StoreError)?;
         Ok(())
@@ -55,15 +69,19 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
         let address_str = address.to_string();
-        let key_bytes: [u8; 32] = identity_key.serialize().try_into().map_err(|_| {
-            Box::new(std::io::Error::new(
+        let key_bytes = identity_key.serialize();
+        
+        // Ensure we have exactly 32 bytes for the key
+        if key_bytes.len() != 32 {
+            return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid key length",
-            )) as StoreError
-        })?;
-
+                format!("Invalid key length: expected 32, got {}", key_bytes.len()),
+            )) as StoreError);
+        }
+        
+        let key_array: [u8; 32] = key_bytes.try_into().unwrap();
         self.backend
-            .is_trusted_identity(&address_str, &key_bytes)
+            .is_trusted_identity(&address_str, &key_array)
             .await
             .map_err(|e| Box::new(e) as StoreError)
     }
@@ -76,9 +94,9 @@ impl PreKeyStore for Device {
         &self,
         prekey_id: u32,
     ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-        // TODO: Implement proper prekey loading
-        let _ = prekey_id;
-        Ok(None)
+        self.backend
+            .load_prekey(prekey_id)
+            .await
     }
 
     async fn store_prekey(
@@ -86,21 +104,21 @@ impl PreKeyStore for Device {
         prekey_id: u32,
         record: PreKeyRecordStructure,
     ) -> Result<(), StoreError> {
-        // TODO: Implement proper prekey storage
-        let _ = (prekey_id, record);
-        Ok(())
+        self.backend
+            .store_prekey(prekey_id, record)
+            .await
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
-        // TODO: Implement proper prekey existence check
-        let _ = prekey_id;
-        Ok(false)
+        self.backend
+            .contains_prekey(prekey_id)
+            .await
     }
 
     async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
-        // TODO: Implement proper prekey removal
-        let _ = prekey_id;
-        Ok(())
+        self.backend
+            .remove_prekey(prekey_id)
+            .await
     }
 }
 
@@ -111,14 +129,16 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        // TODO: Implement proper signed prekey loading
-        let _ = signed_prekey_id;
-        Ok(None)
+        self.backend
+            .load_signed_prekey(signed_prekey_id)
+            .await
     }
 
     async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-        // TODO: Implement proper signed prekey loading
-        Ok(Vec::new())
+        self.backend
+            .load_signed_prekeys()
+            .await
+            
     }
 
     async fn store_signed_prekey(
@@ -126,21 +146,24 @@ impl SignedPreKeyStore for Device {
         signed_prekey_id: u32,
         record: SignedPreKeyRecordStructure,
     ) -> Result<(), StoreError> {
-        // TODO: Implement proper signed prekey storage
-        let _ = (signed_prekey_id, record);
-        Ok(())
+        self.backend
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
+            
     }
 
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        // TODO: Implement proper signed prekey existence check
-        let _ = signed_prekey_id;
-        Ok(false)
+        self.backend
+            .contains_signed_prekey(signed_prekey_id)
+            .await
+            
     }
 
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
-        // TODO: Implement proper signed prekey removal
-        let _ = signed_prekey_id;
-        Ok(())
+        self.backend
+            .remove_signed_prekey(signed_prekey_id)
+            .await
+            
     }
 }
 
@@ -148,13 +171,22 @@ impl SignedPreKeyStore for Device {
 #[async_trait]
 impl SessionStore for Device {
     async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
-        // TODO: Implement proper session loading - for now return a new session
-        let _ = address;
-        Ok(SessionRecord::new())
+        let address_str = address.to_string();
+        match self.backend.get_session(&address_str).await {
+            Ok(Some(session_data)) => {
+                // Deserialize the session data into a SessionRecord using bincode
+                bincode::serde::decode_from_slice(&session_data, bincode::config::standard())
+                    .map(|(record, _)| record)
+                    .map_err(|e| Box::new(e) as StoreError)
+            }
+            Ok(None) => Ok(SessionRecord::new()),
+            Err(e) => Err(Box::new(e) as StoreError),
+        }
     }
 
     async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
-        // TODO: Implement proper sub device session listing
+        // TODO: Implement proper sub device session listing by querying backend
+        // For now, this requires extending the Backend trait to support this query
         let _ = name;
         Ok(Vec::new())
     }
@@ -164,25 +196,36 @@ impl SessionStore for Device {
         address: &SignalAddress,
         record: &SessionRecord,
     ) -> Result<(), StoreError> {
-        // TODO: Implement proper session storage
-        let _ = (address, record);
-        Ok(())
+        let address_str = address.to_string();
+        // Serialize the session record using bincode
+        let session_data = bincode::serde::encode_to_vec(record, bincode::config::standard())
+            .map_err(|e| Box::new(e) as StoreError)?;
+        
+        self.backend
+            .put_session(&address_str, &session_data)
+            .await
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
     async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
-        // TODO: Implement proper session existence check
-        let _ = address;
-        Ok(false)
+        let address_str = address.to_string();
+        self.backend
+            .has_session(&address_str)
+            .await
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
     async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
-        // TODO: Implement proper session deletion
-        let _ = address;
-        Ok(())
+        let address_str = address.to_string();
+        self.backend
+            .delete_session(&address_str)
+            .await
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
     async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
-        // TODO: Implement proper all sessions deletion
+        // TODO: Implement proper all sessions deletion by extending Backend trait
+        // For now, this is a simplified implementation
         let _ = name;
         Ok(())
     }
@@ -196,24 +239,26 @@ impl SenderKeyStore for Device {
         sender_key_name: &SenderKeyName,
         record: SenderKeyRecord,
     ) -> Result<(), StoreError> {
-        // TODO: Implement proper sender key storage
-        let _ = (sender_key_name, record);
-        Ok(())
+        self.backend
+            .store_sender_key(sender_key_name, record)
+            .await
     }
 
     async fn load_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
     ) -> Result<SenderKeyRecord, StoreError> {
-        // TODO: Implement proper sender key loading - for now return a new record
-        let _ = sender_key_name;
-        Ok(SenderKeyRecord::new())
+        self.backend
+            .load_sender_key(sender_key_name)
+            .await
+            
     }
 
     async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
-        // TODO: Implement proper sender key deletion
-        let _ = sender_key_name;
-        Ok(())
+        self.backend
+            .delete_sender_key(sender_key_name)
+            .await
+            
     }
 }
 
