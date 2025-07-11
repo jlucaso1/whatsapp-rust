@@ -48,5 +48,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build Rust dependencies
-        run: cargo build
+      - name: Fetch Rust dependencies
+        run: cargo fetch
