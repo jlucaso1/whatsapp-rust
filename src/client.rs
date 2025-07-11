@@ -6,7 +6,7 @@ use crate::qrcode;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
 
 use crate::handlers;
-use crate::types::events::{ConnectFailureReason, Event};
+use crate::types::events::{ConnectFailureReason, Event, EventBus};
 use crate::types::presence::Presence;
 
 // New modules for refactored logic
@@ -16,21 +16,16 @@ use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, broadcast};
 use tokio::time::{sleep, Duration};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use whatsapp_proto::whatsapp as wa;
 
-pub type EventHandler = Box<dyn Fn(Arc<Event>) + Send + Sync>;
-pub(crate) struct WrappedHandler {
-    pub(crate) id: usize,
-    handler: EventHandler,
-}
-static NEXT_HANDLER_ID: AtomicUsize = AtomicUsize::new(1);
+
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -69,7 +64,7 @@ pub struct Client {
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::binary::Node>>>>,
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
-    pub(crate) event_handlers: Arc<RwLock<Vec<WrappedHandler>>>,
+    pub(crate) event_bus: Arc<EventBus>,
 
     /// Manages per-chat locks to allow for concurrent message processing
     /// from different chats while serializing messages within the same chat.
@@ -110,7 +105,7 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
-            event_handlers: Arc::new(RwLock::new(Vec::new())),
+            event_bus: Arc::new(EventBus::new()),
 
             // Initialize the per-chat locks map
             chat_locks: Arc::new(DashMap::new()),
@@ -639,24 +634,6 @@ impl Client {
         false
     }
 
-    pub(crate) async fn add_event_handler_internal(&self, handler: EventHandler) -> usize {
-        let id = NEXT_HANDLER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let wrapped = WrappedHandler { id, handler };
-        self.event_handlers.write().await.push(wrapped);
-        id
-    }
-
-    pub async fn add_event_handler(&self, handler: EventHandler) {
-        self.add_event_handler_internal(handler).await;
-    }
-
-    pub async fn remove_event_handler(&self, id: usize) -> bool {
-        let mut handlers = self.event_handlers.write().await;
-        let initial_len = handlers.len();
-        handlers.retain(|h| h.id != id);
-        handlers.len() < initial_len
-    }
-
     pub async fn get_qr_channel(
         &self,
     ) -> Result<mpsc::Receiver<qrcode::QrCodeEvent>, qrcode::QrError> {
@@ -674,11 +651,207 @@ impl Client {
     }
 
     pub async fn dispatch_event(&self, event: Event) {
-        let event_arc = Arc::new(event);
-        let handlers = self.event_handlers.read().await;
-        for wrapped in handlers.iter() {
-            (wrapped.handler)(event_arc.clone());
+        // Send events to their respective typed channels
+        // Ignore send errors as they indicate no subscribers, which is expected
+        match event {
+            Event::Connected(data) => {
+                let _ = self.event_bus.connected.send(Arc::new(data));
+            }
+            Event::Disconnected(data) => {
+                let _ = self.event_bus.disconnected.send(Arc::new(data));
+            }
+            Event::PairSuccess(data) => {
+                let _ = self.event_bus.pair_success.send(Arc::new(data));
+            }
+            Event::PairError(data) => {
+                let _ = self.event_bus.pair_error.send(Arc::new(data));
+            }
+            Event::LoggedOut(data) => {
+                let _ = self.event_bus.logged_out.send(Arc::new(data));
+            }
+            Event::Qr(data) => {
+                let _ = self.event_bus.qr.send(Arc::new(data));
+            }
+            Event::QrScannedWithoutMultidevice(data) => {
+                let _ = self.event_bus.qr_scanned_without_multidevice.send(Arc::new(data));
+            }
+            Event::ClientOutdated(data) => {
+                let _ = self.event_bus.client_outdated.send(Arc::new(data));
+            }
+            Event::Message(msg, info) => {
+                let _ = self.event_bus.message.send(Arc::new((msg, info)));
+            }
+            Event::Receipt(data) => {
+                let _ = self.event_bus.receipt.send(Arc::new(data));
+            }
+            Event::UndecryptableMessage(data) => {
+                let _ = self.event_bus.undecryptable_message.send(Arc::new(data));
+            }
+            Event::Notification(data) => {
+                let _ = self.event_bus.notification.send(Arc::new(data));
+            }
+            Event::ChatPresence(data) => {
+                let _ = self.event_bus.chat_presence.send(Arc::new(data));
+            }
+            Event::Presence(data) => {
+                let _ = self.event_bus.presence.send(Arc::new(data));
+            }
+            Event::PictureUpdate(data) => {
+                let _ = self.event_bus.picture_update.send(Arc::new(data));
+            }
+            Event::UserAboutUpdate(data) => {
+                let _ = self.event_bus.user_about_update.send(Arc::new(data));
+            }
+            Event::JoinedGroup(data) => {
+                let _ = self.event_bus.joined_group.send(Arc::new(data));
+            }
+            Event::GroupInfoUpdate { jid, update } => {
+                let _ = self.event_bus.group_info_update.send(Arc::new((jid, update)));
+            }
+            Event::ContactUpdate(data) => {
+                let _ = self.event_bus.contact_update.send(Arc::new(data));
+            }
+            Event::PushNameUpdate(data) => {
+                let _ = self.event_bus.push_name_update.send(Arc::new(data));
+            }
+            Event::SelfPushNameUpdated(data) => {
+                let _ = self.event_bus.self_push_name_updated.send(Arc::new(data));
+            }
+            Event::PinUpdate(data) => {
+                let _ = self.event_bus.pin_update.send(Arc::new(data));
+            }
+            Event::MuteUpdate(data) => {
+                let _ = self.event_bus.mute_update.send(Arc::new(data));
+            }
+            Event::ArchiveUpdate(data) => {
+                let _ = self.event_bus.archive_update.send(Arc::new(data));
+            }
+            Event::StreamReplaced(data) => {
+                let _ = self.event_bus.stream_replaced.send(Arc::new(data));
+            }
+            Event::TemporaryBan(data) => {
+                let _ = self.event_bus.temporary_ban.send(Arc::new(data));
+            }
+            Event::ConnectFailure(data) => {
+                let _ = self.event_bus.connect_failure.send(Arc::new(data));
+            }
+            Event::StreamError(data) => {
+                let _ = self.event_bus.stream_error.send(Arc::new(data));
+            }
         }
+    }
+
+    // Typed event subscription methods
+    pub fn subscribe_to_connected(&self) -> broadcast::Receiver<Arc<crate::types::events::Connected>> {
+        self.event_bus.connected.subscribe()
+    }
+
+    pub fn subscribe_to_disconnected(&self) -> broadcast::Receiver<Arc<crate::types::events::Disconnected>> {
+        self.event_bus.disconnected.subscribe()
+    }
+
+    pub fn subscribe_to_pair_success(&self) -> broadcast::Receiver<Arc<crate::types::events::PairSuccess>> {
+        self.event_bus.pair_success.subscribe()
+    }
+
+    pub fn subscribe_to_pair_error(&self) -> broadcast::Receiver<Arc<crate::types::events::PairError>> {
+        self.event_bus.pair_error.subscribe()
+    }
+
+    pub fn subscribe_to_logged_out(&self) -> broadcast::Receiver<Arc<crate::types::events::LoggedOut>> {
+        self.event_bus.logged_out.subscribe()
+    }
+
+    pub fn subscribe_to_qr(&self) -> broadcast::Receiver<Arc<crate::types::events::Qr>> {
+        self.event_bus.qr.subscribe()
+    }
+
+    pub fn subscribe_to_qr_scanned_without_multidevice(&self) -> broadcast::Receiver<Arc<crate::types::events::QrScannedWithoutMultidevice>> {
+        self.event_bus.qr_scanned_without_multidevice.subscribe()
+    }
+
+    pub fn subscribe_to_client_outdated(&self) -> broadcast::Receiver<Arc<crate::types::events::ClientOutdated>> {
+        self.event_bus.client_outdated.subscribe()
+    }
+
+    pub fn subscribe_to_messages(&self) -> broadcast::Receiver<Arc<(Box<whatsapp_proto::whatsapp::Message>, crate::types::message::MessageInfo)>> {
+        self.event_bus.message.subscribe()
+    }
+
+    pub fn subscribe_to_receipts(&self) -> broadcast::Receiver<Arc<crate::types::events::Receipt>> {
+        self.event_bus.receipt.subscribe()
+    }
+
+    pub fn subscribe_to_undecryptable_messages(&self) -> broadcast::Receiver<Arc<crate::types::events::UndecryptableMessage>> {
+        self.event_bus.undecryptable_message.subscribe()
+    }
+
+    pub fn subscribe_to_notifications(&self) -> broadcast::Receiver<Arc<crate::binary::node::Node>> {
+        self.event_bus.notification.subscribe()
+    }
+
+    pub fn subscribe_to_chat_presence(&self) -> broadcast::Receiver<Arc<crate::types::events::ChatPresenceUpdate>> {
+        self.event_bus.chat_presence.subscribe()
+    }
+
+    pub fn subscribe_to_presence(&self) -> broadcast::Receiver<Arc<crate::types::events::PresenceUpdate>> {
+        self.event_bus.presence.subscribe()
+    }
+
+    pub fn subscribe_to_picture_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PictureUpdate>> {
+        self.event_bus.picture_update.subscribe()
+    }
+
+    pub fn subscribe_to_user_about_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::UserAboutUpdate>> {
+        self.event_bus.user_about_update.subscribe()
+    }
+
+    pub fn subscribe_to_joined_groups(&self) -> broadcast::Receiver<Arc<Box<whatsapp_proto::whatsapp::Conversation>>> {
+        self.event_bus.joined_group.subscribe()
+    }
+
+    pub fn subscribe_to_group_info_updates(&self) -> broadcast::Receiver<Arc<(crate::types::jid::Jid, Box<whatsapp_proto::whatsapp::SyncActionValue>)>> {
+        self.event_bus.group_info_update.subscribe()
+    }
+
+    pub fn subscribe_to_contact_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::ContactUpdate>> {
+        self.event_bus.contact_update.subscribe()
+    }
+
+    pub fn subscribe_to_push_name_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PushNameUpdate>> {
+        self.event_bus.push_name_update.subscribe()
+    }
+
+    pub fn subscribe_to_self_push_name_updated(&self) -> broadcast::Receiver<Arc<crate::types::events::SelfPushNameUpdated>> {
+        self.event_bus.self_push_name_updated.subscribe()
+    }
+
+    pub fn subscribe_to_pin_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::PinUpdate>> {
+        self.event_bus.pin_update.subscribe()
+    }
+
+    pub fn subscribe_to_mute_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::MuteUpdate>> {
+        self.event_bus.mute_update.subscribe()
+    }
+
+    pub fn subscribe_to_archive_updates(&self) -> broadcast::Receiver<Arc<crate::types::events::ArchiveUpdate>> {
+        self.event_bus.archive_update.subscribe()
+    }
+
+    pub fn subscribe_to_stream_replaced(&self) -> broadcast::Receiver<Arc<crate::types::events::StreamReplaced>> {
+        self.event_bus.stream_replaced.subscribe()
+    }
+
+    pub fn subscribe_to_temporary_ban(&self) -> broadcast::Receiver<Arc<crate::types::events::TemporaryBan>> {
+        self.event_bus.temporary_ban.subscribe()
+    }
+
+    pub fn subscribe_to_connect_failure(&self) -> broadcast::Receiver<Arc<crate::types::events::ConnectFailure>> {
+        self.event_bus.connect_failure.subscribe()
+    }
+
+    pub fn subscribe_to_stream_error(&self) -> broadcast::Receiver<Arc<crate::types::events::StreamError>> {
+        self.event_bus.stream_error.subscribe()
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {

@@ -7,7 +7,7 @@ use whatsapp_rust::proto_helpers::MessageExt;
 // use whatsapp_rust::store::filestore::FileStore; // FileStore is encapsulated in PersistenceManager
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
-use whatsapp_rust::types::events::Event;
+
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -80,69 +80,83 @@ async fn main() -> Result<(), anyhow::Error> {
         });
     }
 
-    // The event handler now uses persistence_manager to process commands for state changes
+    // The event handlers now use typed subscriptions instead of a generic handler
     let client_for_handler = client.clone();
     let pm_for_handler = persistence_manager.clone();
-    client
-        .add_event_handler(Box::new(move |event: Arc<Event>| {
-            let client_clone = client_for_handler.clone();
-            let pm_clone = pm_for_handler.clone(); // Clone Arc for the async block
-            tokio::spawn(async move {
-                match &*event {
-                    Event::LoggedOut(logout_event) => {
-                        info!("Received logout event: {:?}", logout_event.reason);
-                        // Potentially clear device ID, etc. using a command
-                        // pm_clone.process_command(DeviceCommand::SetId(None)).await;
-                        // pm_clone.process_command(DeviceCommand::SetLid(None)).await;
-                        // pm_clone.process_command(DeviceCommand::SetAccount(None)).await;
+    
+    // Subscribe to LoggedOut events
+    {
+        let mut logged_out_rx = client.subscribe_to_logged_out();
+        let _pm_clone = pm_for_handler.clone();
+        tokio::spawn(async move {
+            while let Ok(logout_event) = logged_out_rx.recv().await {
+                info!("Received logout event: {:?}", logout_event.reason);
+                // Potentially clear device ID, etc. using a command
+                // _pm_clone.process_command(DeviceCommand::SetId(None)).await;
+                // _pm_clone.process_command(DeviceCommand::SetLid(None)).await;
+                // _pm_clone.process_command(DeviceCommand::SetAccount(None)).await;
+            }
+        });
+    }
+
+    // Subscribe to SelfPushNameUpdated events
+    {
+        let mut self_push_name_rx = client.subscribe_to_self_push_name_updated();
+        let pm_clone = pm_for_handler.clone();
+        tokio::spawn(async move {
+            while let Ok(update) = self_push_name_rx.recv().await {
+                info!(
+                    "Received SelfPushNameUpdated event from '{}' to '{}'.",
+                    update.old_name, update.new_name
+                );
+                // Send command to update push name
+                pm_clone
+                    .process_command(DeviceCommand::SetPushName(update.new_name.clone()))
+                    .await;
+                // The background saver will handle saving.
+            }
+        });
+    }
+
+    // Subscribe to Message events
+    {
+        let mut message_rx = client.subscribe_to_messages();
+        let client_clone = client_for_handler.clone();
+        tokio::spawn(async move {
+            while let Ok(message_data) = message_rx.recv().await {
+                let (msg, info_node) = &*message_data;
+                // Renamed 'info' to 'info_node' to avoid conflict
+                if let Some(text) = msg.text_content() {
+                    if text == "send" {
+                        log::info!("Received 'send' command, sending a response.");
+                        let response_text = "Hello from whatsapp-rust!"; // Updated text
+                        if let Err(e) = client_clone
+                            .send_text_message(info_node.source.chat.clone(), response_text)
+                            .await
+                        {
+                            log::error!("Failed to send response message: {e:?}");
+                        }
                     }
-                    Event::SelfPushNameUpdated(update) => {
-                        info!(
-                            "Received SelfPushNameUpdated event from '{}' to '{}'.",
-                            update.old_name, update.new_name
-                        );
-                        // Send command to update push name
-                        pm_clone
-                            .process_command(DeviceCommand::SetPushName(update.new_name.clone()))
-                            .await;
-                        // The background saver will handle saving.
-                    }
-                    Event::Message(msg, info_node) => {
-                        // Renamed 'info' to 'info_node' to avoid conflict
-                        if let Some(text) = msg.text_content() {
-                            if text == "send" {
-                                log::info!("Received 'send' command, sending a response.");
-                                let response_text = "Hello from whatsapp-rust!"; // Updated text
-                                if let Err(e) = client_clone
-                                    .send_text_message(info_node.source.chat.clone(), response_text)
-                                    .await
-                                {
-                                    log::error!("Failed to send response message: {e:?}");
-                                }
-                            }
-                        } else if let Some(ext_text) = msg.extended_text_message.as_ref() {
-                            if let Some(text) = ext_text.text.as_ref() {
-                                if text == "send" {
-                                    log::info!("Received 'send' command, sending a response.");
-                                    let response_text = "Hello from whatsapp-rust!"; // Updated text
-                                    if let Err(e) = client_clone
-                                        .send_text_message(
-                                            info_node.source.chat.clone(),
-                                            response_text,
-                                        )
-                                        .await
-                                    {
-                                        log::error!("Failed to send response message: {e:?}");
-                                    }
-                                }
+                } else if let Some(ext_text) = msg.extended_text_message.as_ref() {
+                    if let Some(text) = ext_text.text.as_ref() {
+                        if text == "send" {
+                            log::info!("Received 'send' command, sending a response.");
+                            let response_text = "Hello from whatsapp-rust!"; // Updated text
+                            if let Err(e) = client_clone
+                                .send_text_message(
+                                    info_node.source.chat.clone(),
+                                    response_text,
+                                )
+                                .await
+                            {
+                                log::error!("Failed to send response message: {e:?}");
                             }
                         }
                     }
-                    _ => {}
                 }
-            });
-        }))
-        .await;
+            }
+        });
+    }
 
     // The main run loop
     client.run().await;
