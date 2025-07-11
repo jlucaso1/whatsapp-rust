@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use whatsapp_rust::types::jid::Jid;
+use whatsapp_core::types::jid::Jid;
 
 #[test]
 fn test_jid_parsing_and_serialization() {
