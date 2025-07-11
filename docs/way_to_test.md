@@ -260,7 +260,7 @@ async fn test_pairing_and_keepalive() {
 
 You can now run your automated test with Cargo:
 ```bash
-cargo test -- --nocapture
+cargo test -- --no-capture
 ```
 The `--nocapture` flag allows you to see the `log` output from the test run, which is extremely helpful for debugging.
 

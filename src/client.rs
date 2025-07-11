@@ -339,13 +339,11 @@ impl Client {
 
     pub async fn process_node(self: &Arc<Self>, node: Node) {
         if node.tag == "iq" {
-            if let Some(sync_node) = node.get_optional_child("sync") {
-                if let Some(collection_node) = sync_node.get_optional_child("collection") {
-                    let name = collection_node.attrs().string("name");
-                    debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
-                } else {
-                    debug!(target: "Client/Recv", "{node}");
-                }
+            if let Some(sync_node) = node.get_optional_child("sync") &&
+               let Some(collection_node) = sync_node.get_optional_child("collection")
+            {
+                let name = collection_node.attrs().string("name");
+                debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
             } else {
                 debug!(target: "Client/Recv", "{node}");
             }
@@ -1017,15 +1015,14 @@ impl Client {
             let participant_jid = attrs.jid("jid");
 
             // --- MODIFICATION START ---
-            if let Some(lid_jid_str) = attrs.optional_string("lid") {
-                if !lid_jid_str.is_empty() {
-                    if let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>() {
-                        log::debug!("Found LID-PN mapping: {} <-> {}", participant_jid, lid_jid);
-                        // Store both ways for easy lookup
-                        lid_pn_map.insert(participant_jid.clone(), lid_jid.clone());
-                        lid_pn_map.insert(lid_jid, participant_jid.clone());
-                    }
-                }
+            if let Some(lid_jid_str) = attrs.optional_string("lid") &&
+               !lid_jid_str.is_empty() &&
+               let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>()
+            {
+                log::debug!("Found LID-PN mapping: {} <-> {}", participant_jid, lid_jid);
+                // Store both ways for easy lookup
+                lid_pn_map.insert(participant_jid.clone(), lid_jid.clone());
+                lid_pn_map.insert(lid_jid, participant_jid.clone());
             }
             // --- MODIFICATION END ---
 

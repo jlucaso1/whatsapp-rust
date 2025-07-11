@@ -146,28 +146,28 @@ impl Client {
                     return Err(IqError::Disconnected(response_node));
                 }
 
-                if let Some(res_type) = response_node.attrs.get("type") {
-                    if res_type == "error" {
-                        let error_child = response_node.get_optional_child_by_tag(&["error"]);
-                        if let Some(error_node) = error_child {
-                            let mut parser = crate::binary::attrs::AttrParser::new(error_node);
-                            let code = parser.optional_u64("code").unwrap_or(0) as u16;
-                            let text = parser.optional_string("text").unwrap_or("").to_string();
-                            if !parser.ok() {
-                                warn!(
-                                    target: "Client/IQ",
-                                    "Attribute parsing errors in IQ error response: {:?}",
-                                    parser.errors
-                                );
-                            }
-                            return Err(IqError::ServerError { code, text });
+                if let Some(res_type) = response_node.attrs.get("type") &&
+                   res_type == "error"
+                {
+                    let error_child = response_node.get_optional_child_by_tag(&["error"]);
+                    if let Some(error_node) = error_child {
+                        let mut parser = crate::binary::attrs::AttrParser::new(error_node);
+                        let code = parser.optional_u64("code").unwrap_or(0) as u16;
+                        let text = parser.optional_string("text").unwrap_or("").to_string();
+                        if !parser.ok() {
+                            warn!(
+                                target: "Client/IQ",
+                                "Attribute parsing errors in IQ error response: {:?}",
+                                parser.errors
+                            );
                         }
-                        // Fallback for a malformed error response with no child
-                        return Err(IqError::ServerError {
-                            code: 0,
-                            text: "Malformed error response".to_string(),
-                        });
+                        return Err(IqError::ServerError { code, text });
                     }
+                    // Fallback for a malformed error response with no child
+                    return Err(IqError::ServerError {
+                        code: 0,
+                        text: "Malformed error response".to_string(),
+                    });
                 }
                 Ok(response_node)
             }
@@ -182,13 +182,13 @@ impl Client {
     /// Handles an incoming IQ response by forwarding it to the waiting task.
     pub async fn handle_iq_response(&self, node: Node) -> bool {
         let id_opt = node.attrs.get("id").cloned();
-        if let Some(id) = id_opt {
-            if let Some(waiter) = self.response_waiters.lock().await.remove(&id) {
-                if waiter.send(node).is_err() {
-                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");
-                }
-                return true;
+        if let Some(id) = id_opt &&
+           let Some(waiter) = self.response_waiters.lock().await.remove(&id)
+        {
+            if waiter.send(node).is_err() {
+                warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");
             }
+            return true;
         }
         false
     }

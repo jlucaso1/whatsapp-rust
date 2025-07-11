@@ -21,4 +21,4 @@ jobs:
     - name: Install protobuf-compiler
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
     - name: Run tests
-      run: cargo test -- --nocapture
+      run: cargo test -- --no-capture
