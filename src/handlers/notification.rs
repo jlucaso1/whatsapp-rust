@@ -43,8 +43,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
 
                 if old_name != new_push_name {
                     info!(
-                        "Received push name '{}' via account_sync notification, updating store.",
-                        new_push_name
+                        "Received push name '{new_push_name}' via account_sync notification, updating store."
                     );
                     // Use command to update push name
                     client
@@ -69,7 +68,9 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                         if let Err(e) = client_clone.send_presence(Presence::Available).await {
                             warn!("Failed to send presence after account_sync update: {e:?}");
                         } else {
-                            info!("✅ Successfully sent presence after receiving push_name via account_sync");
+                            info!(
+                                "✅ Successfully sent presence after receiving push_name via account_sync"
+                            );
                         }
                     });
                 }
@@ -83,7 +84,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
             }
         }
         _ => {
-            warn!(target: "Client", "TODO: Implement handler for <notification type='{}'>", notification_type);
+            warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
             client
                 .dispatch_event(Event::Notification(node.clone()))
                 .await;

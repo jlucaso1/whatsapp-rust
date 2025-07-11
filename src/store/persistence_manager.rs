@@ -1,11 +1,11 @@
 use super::error::StoreError;
+use crate::store::Device; // Removed SerializableDevice
 use crate::store::filestore::FileStore;
 use crate::store::traits::Backend;
-use crate::store::Device; // Removed SerializableDevice
 use log::{error, info}; // Removed warn
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
-use tokio::time::{sleep, Duration}; // Assuming StoreError is pub in store/error.rs
+use tokio::time::{Duration, sleep}; // Assuming StoreError is pub in store/error.rs
 
 pub struct PersistenceManager {
     device: Arc<Mutex<Device>>,
@@ -22,7 +22,10 @@ impl PersistenceManager {
         let device_data_opt = filestore.load_device_data().await?;
 
         let device = if let Some(serializable_device) = device_data_opt {
-            info!("PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.", serializable_device.push_name);
+            info!(
+                "PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.",
+                serializable_device.push_name
+            );
             let mut dev = Device::new(filestore.clone() as Arc<dyn Backend>);
             dev.load_from_serializable(serializable_device);
             dev
@@ -100,11 +103,11 @@ impl PersistenceManager {
 
                 // Attempt to save, but don't let save errors crash the loop
                 if let Err(e) = self.save_to_disk().await {
-                    error!("Error saving device state in background: {}", e);
+                    error!("Error saving device state in background: {e}");
                 }
             }
         });
-        info!("Background saver task started with interval {:?}", interval);
+        info!("Background saver task started with interval {interval:?}");
     }
 
     // Graceful shutdown for the saver (optional, depending on requirements)
@@ -112,11 +115,11 @@ impl PersistenceManager {
     // For simplicity, we'll omit this unless specifically requested.
 }
 
-use super::commands::{apply_command_to_device, DeviceCommand};
+use super::commands::{DeviceCommand, apply_command_to_device};
 
 impl PersistenceManager {
     pub async fn process_command(&self, command: DeviceCommand) {
-        info!("Processing command: {:?}", command);
+        info!("Processing command: {command:?}");
         self.modify_device(|device| {
             apply_command_to_device(device, command);
         })
@@ -138,7 +141,7 @@ impl PersistenceManager {
                 Ok(())
             }
             Err(e) => {
-                error!("PersistenceManager: Forced save_now failed: {}", e);
+                error!("PersistenceManager: Forced save_now failed: {e}");
                 Err(e)
             }
         }

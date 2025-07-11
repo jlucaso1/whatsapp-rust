@@ -4,8 +4,8 @@ use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::jid::SERVER_JID;
 use log::{debug, info, warn};
 use rand::Rng;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 // Constants ported from whatsmeow/keepalive.go

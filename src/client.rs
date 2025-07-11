@@ -16,11 +16,11 @@ use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex, Notify, broadcast};
-use tokio::time::{sleep, Duration};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::time::{Duration, sleep};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use whatsapp_proto::whatsapp as wa;
@@ -35,8 +35,6 @@ macro_rules! generate_subscription_methods {
         )*
     };
 }
-
-
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -321,7 +319,7 @@ impl Client {
                     // Delete entries older than 14 days, similar to whatsmeow
                     let cutoff = chrono::Utc::now() - chrono::Duration::days(14);
                     if let Err(e) = backend.delete_old_buffered_events(cutoff).await {
-                        log::warn!("Failed to clean up old event buffer entries: {:?}", e);
+                        log::warn!("Failed to clean up old event buffer entries: {e:?}");
                     }
                 });
             }
@@ -339,8 +337,8 @@ impl Client {
 
     pub async fn process_node(self: &Arc<Self>, node: Node) {
         if node.tag == "iq" {
-            if let Some(sync_node) = node.get_optional_child("sync") &&
-               let Some(collection_node) = sync_node.get_optional_child("collection")
+            if let Some(sync_node) = node.get_optional_child("sync")
+                && let Some(collection_node) = sync_node.get_optional_child("collection")
             {
                 let name = collection_node.attrs().string("name");
                 debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
@@ -446,13 +444,13 @@ impl Client {
                 // Use command to update LID
                 let current_device = self.persistence_manager.get_device_snapshot().await;
                 if current_device.lid.as_ref() != Some(&lid) {
-                    info!(target: "Client", "Updating LID from server to '{}'", lid);
+                    info!(target: "Client", "Updating LID from server to '{lid}'");
                     self.persistence_manager
                         .process_command(DeviceCommand::SetLid(Some(lid)))
                         .await;
                 }
             } else {
-                warn!(target: "Client", "Failed to parse LID from success stanza: {}", lid_str);
+                warn!(target: "Client", "Failed to parse LID from success stanza: {lid_str}");
             }
         } else {
             warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
@@ -466,7 +464,7 @@ impl Client {
             let old_name = current_device.push_name.clone();
 
             if old_name != new_name {
-                info!(target: "Client", "Updating push name from server to '{}'", new_name);
+                info!(target: "Client", "Updating push name from server to '{new_name}'");
                 self.persistence_manager
                     .process_command(DeviceCommand::SetPushName(new_name.clone()))
                     .await;
@@ -502,7 +500,9 @@ impl Client {
 
             // Now, attempt to send presence. This might fail if push_name is still empty, which is OK.
             if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                warn!("Could not send initial presence: {e:?}. This is expected if push_name is not yet known.");
+                warn!(
+                    "Could not send initial presence: {e:?}. This is expected if push_name is not yet known."
+                );
             }
 
             client_clone
@@ -682,7 +682,10 @@ impl Client {
                 let _ = self.event_bus.qr.send(Arc::new(data));
             }
             Event::QrScannedWithoutMultidevice(data) => {
-                let _ = self.event_bus.qr_scanned_without_multidevice.send(Arc::new(data));
+                let _ = self
+                    .event_bus
+                    .qr_scanned_without_multidevice
+                    .send(Arc::new(data));
             }
             Event::ClientOutdated(data) => {
                 let _ = self.event_bus.client_outdated.send(Arc::new(data));
@@ -715,7 +718,10 @@ impl Client {
                 let _ = self.event_bus.joined_group.send(Arc::new(data));
             }
             Event::GroupInfoUpdate { jid, update } => {
-                let _ = self.event_bus.group_info_update.send(Arc::new((jid, update)));
+                let _ = self
+                    .event_bus
+                    .group_info_update
+                    .send(Arc::new((jid, update)));
             }
             Event::ContactUpdate(data) => {
                 let _ = self.event_bus.contact_update.send(Arc::new(data));
@@ -786,7 +792,7 @@ impl Client {
     /// This recreates the old behavior where all events are sent to a single channel
     pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        
+
         // Helper macro for standard single-value events
         macro_rules! forward_simple_events {
             ($(($method_name:ident, $event_variant:ident)),* $(,)?) => {
@@ -860,9 +866,9 @@ impl Client {
             tokio::spawn(async move {
                 while let Ok(data) = recv.recv().await {
                     let (jid, update) = &*data;
-                    let event = Event::GroupInfoUpdate { 
-                        jid: jid.clone(), 
-                        update: update.clone() 
+                    let event = Event::GroupInfoUpdate {
+                        jid: jid.clone(),
+                        update: update.clone(),
                     };
                     if tx.send(event).is_err() {
                         break;
@@ -1015,11 +1021,11 @@ impl Client {
             let participant_jid = attrs.jid("jid");
 
             // --- MODIFICATION START ---
-            if let Some(lid_jid_str) = attrs.optional_string("lid") &&
-               !lid_jid_str.is_empty() &&
-               let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>()
+            if let Some(lid_jid_str) = attrs.optional_string("lid")
+                && !lid_jid_str.is_empty()
+                && let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>()
             {
-                log::debug!("Found LID-PN mapping: {} <-> {}", participant_jid, lid_jid);
+                log::debug!("Found LID-PN mapping: {participant_jid} <-> {lid_jid}");
                 // Store both ways for easy lookup
                 lid_pn_map.insert(participant_jid.clone(), lid_jid.clone());
                 lid_pn_map.insert(lid_jid, participant_jid.clone());
@@ -1100,9 +1106,7 @@ impl Client {
             let user_jid = user_node.attrs().jid("jid");
             let device_list_node = user_node
                 .get_optional_child_by_tag(&["devices", "device-list"])
-                .ok_or_else(|| {
-                    anyhow::anyhow!(format!("<device-list> not found for user {}", user_jid))
-                })?;
+                .ok_or_else(|| anyhow::anyhow!("<device-list> not found for user {user_jid}"))?;
 
             for device_node in device_list_node.get_children_by_tag("device") {
                 let device_id_str = device_node.attrs().string("id");

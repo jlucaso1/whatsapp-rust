@@ -1,8 +1,8 @@
 use aes::Aes256;
 use cbc::{Decryptor, Encryptor};
 use cipher::{
-    block_padding::{NoPadding, Pkcs7},
     BlockDecryptMut, BlockEncryptMut, KeyIvInit,
+    block_padding::{NoPadding, Pkcs7},
 };
 use thiserror::Error;
 

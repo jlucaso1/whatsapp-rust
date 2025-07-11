@@ -77,7 +77,7 @@ impl Client {
                     )
                     .await
                 {
-                    log::warn!("Failed to save decrypted event to buffer: {:?}", e);
+                    log::warn!("Failed to save decrypted event to buffer: {e:?}");
                 }
                 Ok(plaintext)
             }
@@ -86,10 +86,7 @@ impl Client {
                     .put_buffered_event(&ciphertext_hash, None, chrono::Utc::now())
                     .await
                 {
-                    log::warn!(
-                        "Failed to save failed event hash to buffer: {:?}",
-                        store_err
-                    );
+                    log::warn!("Failed to save failed event hash to buffer: {store_err:?}");
                 }
                 Err(DecryptionError::Crypto(e))
             }
@@ -187,7 +184,7 @@ impl Client {
                     self.buffered_decrypt(&ciphertext, decrypt_closure).await
                 }
                 _ => {
-                    log::warn!("Unsupported enc type: {}", enc_type);
+                    log::warn!("Unsupported enc type: {enc_type}");
                     continue;
                 }
             };
@@ -197,7 +194,7 @@ impl Client {
                     let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
                         Ok(p) => p,
                         Err(e) => {
-                            log::error!("Failed to unpad message: {}", e);
+                            log::error!("Failed to unpad message: {e}");
                             continue;
                         }
                     };
@@ -212,8 +209,8 @@ impl Client {
                     match wa::Message::decode(plaintext) {
                         Ok(original_msg) => {
                             let mut msg_ref: &wa::Message = &original_msg;
-                            if let Some(dsm) = original_msg.device_sent_message.as_ref() &&
-                               let Some(inner) = dsm.message.as_ref()
+                            if let Some(dsm) = original_msg.device_sent_message.as_ref()
+                                && let Some(inner) = dsm.message.as_ref()
                             {
                                 msg_ref = inner;
                             }
@@ -277,8 +274,7 @@ impl Client {
                         }
                         Err(e) => {
                             log::warn!(
-                                "Failed to unmarshal decrypted plaintext into wa::Message: {}",
-                                e
+                                "Failed to unmarshal decrypted plaintext into wa::Message: {e}"
                             );
                         }
                     }
@@ -351,14 +347,14 @@ impl Client {
     pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let key_store = device_snapshot.backend.clone(); // This is Arc<dyn Backend>
-                                                         // drop(device_snapshot); // Not needed
+        // drop(device_snapshot); // Not needed
 
         for key in &keys.keys {
-            if let Some(key_id_proto) = &key.key_id &&
-               let Some(key_id) = &key_id_proto.key_id &&
-               let Some(key_data) = &key.key_data &&
-               let Some(fingerprint) = &key_data.fingerprint &&
-               let Some(data) = &key_data.key_data
+            if let Some(key_id_proto) = &key.key_id
+                && let Some(key_id) = &key_id_proto.key_id
+                && let Some(key_data) = &key.key_data
+                && let Some(fingerprint) = &key_data.fingerprint
+                && let Some(data) = &key_data.key_data
             {
                 let fingerprint_bytes = fingerprint.encode_to_vec();
                 let new_key = crate::store::traits::AppStateSyncKey {
@@ -367,9 +363,7 @@ impl Client {
                     timestamp: key_data.timestamp(),
                 };
 
-                if let Err(e) =
-                    key_store.set_app_state_sync_key(key_id, new_key).await
-                {
+                if let Err(e) = key_store.set_app_state_sync_key(key_id, new_key).await {
                     log::error!(
                         "Failed to store app state sync key {:?}: {:?}",
                         hex::encode(key_id),
@@ -396,7 +390,9 @@ impl Client {
         let axolotl_bytes = match &skdm.axolotl_sender_key_distribution_message {
             Some(b) => b,
             None => {
-                log::warn!("SenderKeyDistributionMessage missing axolotl_sender_key_distribution_message field");
+                log::warn!(
+                    "SenderKeyDistributionMessage missing axolotl_sender_key_distribution_message field"
+                );
                 return;
             }
         };
@@ -407,7 +403,7 @@ impl Client {
         let dist_msg_result = SenderKeyDistributionMessage::decode(axolotl_bytes.as_slice())
             .or_else(|e| {
                 if !axolotl_bytes.is_empty() {
-                    log::warn!("Failed to decode raw SenderKeyDistributionMessage, trying with version byte stripped: {:?}", e);
+                    log::warn!("Failed to decode raw SenderKeyDistributionMessage, trying with version byte stripped: {e:?}");
                     SenderKeyDistributionMessage::decode(&axolotl_bytes[1..])
                 } else {
                     Err(e)
@@ -417,10 +413,7 @@ impl Client {
         let dist_msg = match dist_msg_result {
             Ok(msg) => msg,
             Err(e) => {
-                log::error!(
-                    "Failed to decode Signal SenderKeyDistributionMessage: {:?}",
-                    e
-                );
+                log::error!("Failed to decode Signal SenderKeyDistributionMessage: {e:?}");
                 return;
             }
         };
@@ -434,13 +427,11 @@ impl Client {
         match builder.process(&sender_key_name, &dist_msg).await {
             Ok(_) => {
                 log::info!(
-                    "Successfully processed sender key distribution message from {} for group {}",
-                    sender_jid,
-                    group_jid
+                    "Successfully processed sender key distribution message from {sender_jid} for group {group_jid}"
                 );
             }
             Err(e) => {
-                log::error!("Failed to process sender key distribution message: {:?}", e);
+                log::error!("Failed to process sender key distribution message: {e:?}");
             }
         }
     }

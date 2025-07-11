@@ -126,25 +126,34 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             if let Ok(mut patch) = wa::SyncdPatch::decode(b.as_slice()) {
                                 // --- External blob integration ---
                                 if let Some(external_ref) = patch.external_mutations.take() {
-                                    info!("Found patch with external mutations. Attempting download...");
+                                    info!(
+                                        "Found patch with external mutations. Attempting download..."
+                                    );
                                     match client.download(&external_ref).await {
                                         Ok(decrypted_blob) => {
                                             match wa::SyncdMutations::decode(
                                                 decrypted_blob.as_slice(),
                                             ) {
                                                 Ok(downloaded_mutations) => {
-                                                    info!("Successfully downloaded and parsed {} external mutations.", downloaded_mutations.mutations.len());
+                                                    info!(
+                                                        "Successfully downloaded and parsed {} external mutations.",
+                                                        downloaded_mutations.mutations.len()
+                                                    );
                                                     patch.mutations =
                                                         downloaded_mutations.mutations;
                                                 }
                                                 Err(e) => {
-                                                    error!("Failed to parse downloaded mutations blob: {e}. Skipping patch.");
+                                                    error!(
+                                                        "Failed to parse downloaded mutations blob: {e}. Skipping patch."
+                                                    );
                                                     continue; // Skip this patch
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Failed to download external mutations: {e}. Skipping patch.");
+                                            error!(
+                                                "Failed to download external mutations: {e}. Skipping patch."
+                                            );
                                             continue; // Skip this patch
                                         }
                                     }
@@ -219,8 +228,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             if final_name != batch_start_name {
                                 info!(
                                     target: "Client/AppState",
-                                    "Received push name '{}' via app state sync, updating store.",
-                                    final_name
+                                    "Received push name '{final_name}' via app state sync, updating store."
                                 );
                                 // Use command to update push name
                                 client
@@ -252,9 +260,13 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                             )
                                             .await
                                         {
-                                            warn!("Failed to send presence after app_state_sync update: {e:?}");
+                                            warn!(
+                                                "Failed to send presence after app_state_sync update: {e:?}"
+                                            );
                                         } else {
-                                            info!("✅ Successfully sent presence after receiving push_name via app_state_sync");
+                                            info!(
+                                                "✅ Successfully sent presence after receiving push_name via app_state_sync"
+                                            );
                                         }
                                     });
                                 }

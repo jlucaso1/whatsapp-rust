@@ -1,12 +1,11 @@
 use log::{error, info};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
-                                                                   // use whatsapp_rust::store; // Not needed directly
-                                                                   // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
+// use whatsapp_rust::store; // Not needed directly
+// use whatsapp_rust::store::filestore::FileStore; // Handled by PM
 use std::time::Duration;
-
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -189,7 +188,9 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Key observations:");
     info!("• Single updates fire 1 event (saves handled by PM).");
     info!("• Manual updates fire individual events (expected behavior, saves by PM).");
-    info!("• Duplicate updates are filtered out (0 events fired, saves by PM if initial state was different).");
+    info!(
+        "• Duplicate updates are filtered out (0 events fired, saves by PM if initial state was different)."
+    );
     info!("• Server-side app state sync will batch multiple mutations efficiently");
     info!("\nTo test server-side batching:");
     info!("1. Run the main application: cargo run");

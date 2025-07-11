@@ -14,10 +14,7 @@ impl Client {
 
         let receipt_type = ReceiptType::from(receipt_type_str.to_string());
 
-        info!(
-            "Received receipt type '{:?}' for message {} from {}",
-            receipt_type, id, from
-        );
+        info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
         let from_clone = from.clone();
         let sender = if from.is_group() {

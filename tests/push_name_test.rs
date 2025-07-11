@@ -3,8 +3,8 @@ use tempfile::TempDir;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PM // Use Commands
-                                                                   // use whatsapp_rust::store; // No longer needed directly
-                                                                   // use whatsapp_rust::store::filestore::FileStore; // Handled by PM
+// use whatsapp_rust::store; // No longer needed directly
+// use whatsapp_rust::store::filestore::FileStore; // Handled by PM
 use whatsapp_rust::types::presence::Presence;
 
 #[tokio::test]
@@ -80,9 +80,10 @@ async fn test_push_name_persistence() {
     match client.send_presence(Presence::Available).await {
         Err(e) => {
             // The error should NOT be about missing push_name
-            assert!(!e
-                .to_string()
-                .contains("Cannot send presence without a push name set"));
+            assert!(
+                !e.to_string()
+                    .contains("Cannot send presence without a push name set")
+            );
         }
         Ok(_) => {
             // This shouldn't happen in a test environment without a real connection
@@ -112,9 +113,10 @@ async fn test_push_name_empty_validation() {
     // Test that send_presence fails with empty push_name
     match client.send_presence(Presence::Available).await {
         Err(e) => {
-            assert!(e
-                .to_string()
-                .contains("Cannot send presence without a push name set"));
+            assert!(
+                e.to_string()
+                    .contains("Cannot send presence without a push name set")
+            );
         }
         Ok(_) => {
             panic!("send_presence should fail with empty push_name");

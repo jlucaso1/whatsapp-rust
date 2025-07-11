@@ -6,15 +6,15 @@ use tokio::sync::RwLock;
 
 use whatsapp_rust::signal::store::IdentityKeyStore;
 use whatsapp_rust::signal::{
+    SessionBuilder, SessionCipher,
     address::SignalAddress,
     ecc::keys::{DjbEcPublicKey, EcPublicKey},
     protocol::{Ciphertext, PREKEY_TYPE, WHISPER_TYPE},
     state::{prekey_bundle::PreKeyBundle, record},
     store::{PreKeyStore, SessionStore},
     util::keyhelper,
-    SessionBuilder, SessionCipher,
 };
-use whatsapp_rust::store::{memory::MemoryStore, Device};
+use whatsapp_rust::store::{Device, memory::MemoryStore};
 
 // Helper: Create a test device with isolated memory store
 async fn create_test_device(_name: &str) -> Arc<RwLock<Device>> {

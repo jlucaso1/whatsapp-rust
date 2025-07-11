@@ -8,8 +8,8 @@ use tempfile::TempDir; // For temporary store paths
 use tokio::sync::mpsc;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Use PersistenceManager
-                                                                   // use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
-                                                                   // use whatsapp_rust::store::Device; // Device is managed by PM
+// use whatsapp_rust::store::memory::MemoryStore; // PM uses FileStore by default
+// use whatsapp_rust::store::Device; // Device is managed by PM
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::types::events::Event; // For direct store manipulation in tests
 
@@ -137,12 +137,12 @@ async fn test_conversation_setup() {
 
 use whatsapp_rust::signal::store::{IdentityKeyStore, PreKeyStore, SessionStore};
 use whatsapp_rust::signal::{
+    SessionBuilder, SessionCipher,
     address::SignalAddress,
     ecc::keys::{DjbEcPublicKey, EcPublicKey},
     protocol::{Ciphertext, PREKEY_TYPE, WHISPER_TYPE},
     state::{prekey_bundle::PreKeyBundle, record},
     util::keyhelper,
-    SessionBuilder, SessionCipher,
 }; // Added IdentityKeyStore
 
 // Helper to create a PreKeyBundle, adapted from one_on_one_test.rs

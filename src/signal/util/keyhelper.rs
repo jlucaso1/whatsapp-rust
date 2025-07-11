@@ -6,7 +6,7 @@ use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
 use crate::signal::state::record;
 use chrono::Utc;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 pub fn generate_identity_key_pair() -> IdentityKeyPair {

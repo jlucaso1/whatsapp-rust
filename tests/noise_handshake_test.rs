@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, Payload};
 use whatsapp_rust::crypto::{gcm, hkdf};
 use whatsapp_rust::socket::consts;
-use x25519_dalek::{x25519, StaticSecret};
+use x25519_dalek::{StaticSecret, x25519};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)

@@ -15,10 +15,10 @@ use whatsapp_rust::signal::protocol::Ciphertext;
 use whatsapp_rust::signal::state::record;
 use whatsapp_rust::signal::store::{IdentityKeyStore, PreKeyStore, SessionStore};
 use whatsapp_rust::signal::{
-    address::SignalAddress, state::prekey_bundle::PreKeyBundle, util::keyhelper, SessionBuilder,
-    SessionCipher,
+    SessionBuilder, SessionCipher, address::SignalAddress, state::prekey_bundle::PreKeyBundle,
+    util::keyhelper,
 };
-use whatsapp_rust::store::{memory::MemoryStore, Device};
+use whatsapp_rust::store::{Device, memory::MemoryStore};
 
 // Helper function to create a test device with a memory store
 async fn create_test_device(_jid_str: &str) -> Arc<RwLock<Device>> {

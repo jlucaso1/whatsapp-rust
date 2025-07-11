@@ -157,7 +157,7 @@ impl Client {
         let id = match id {
             Ok(val) => val,
             Err(e) => {
-                log::warn!("Could not parse pre-key ID: {}. Skipping this key.", e);
+                log::warn!("Could not parse pre-key ID: {e}. Skipping this key.");
                 return Ok(None);
             } // Gracefully ignore invalid one-time pre-keys
         };

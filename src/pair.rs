@@ -3,8 +3,8 @@ use crate::client::Client;
 use crate::crypto::xed25519;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::{Jid, SERVER_JID};
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use hmac::{Hmac, Mac};
 use log::{debug, error, info, warn};
 use prost::Message;
@@ -40,8 +40,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     // 2. Extract QR code refs and generate full QR data strings (async)
                     let mut codes = Vec::new();
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content &&
-                           let Ok(r) = String::from_utf8(bytes.clone())
+                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
+                            && let Ok(r) = String::from_utf8(bytes.clone())
                         {
                             let device_snapshot =
                                 client.persistence_manager.get_device_snapshot().await;
@@ -176,7 +176,9 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             ) {
                 Ok(identity) => identity,
                 Err(e) => {
-                    error!("FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}");
+                    error!(
+                        "FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}"
+                    );
                     client
                         .dispatch_event(Event::PairError(PairError {
                             id: jid.clone(),
@@ -309,7 +311,7 @@ async fn do_pair_crypto(
     device_identity_bytes: &[u8],
 ) -> Result<(Vec<u8>, u32), PairCryptoError> {
     let device_snapshot = persistence_manager.get_device_snapshot().await; // Get snapshot
-                                                                           // 1. Unmarshal HMAC container and verify HMAC
+    // 1. Unmarshal HMAC container and verify HMAC
     let hmac_container =
         wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes).map_err(|e| {
             PairCryptoError {
@@ -324,7 +326,7 @@ async fn do_pair_crypto(
         && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
     let mut mac = HmacSha256::new_from_slice(&device_snapshot.adv_secret_key).unwrap(); // Use snapshot
-                                                                                        // Get details and hmac as slices, handling potential None values
+    // Get details and hmac as slices, handling potential None values
     let details_bytes = hmac_container
         .details
         .as_deref()
@@ -507,7 +509,7 @@ pub async fn pair_with_qr_code(
 
     // 5. Send the final pairing IQ stanza to the server
     let master_jid = device_snapshot.id.clone().unwrap(); // Use snapshot
-                                                          // drop(store_guard) // Not needed
+    // drop(store_guard) // Not needed
 
     let response_content = Node {
         tag: "pair-device-sign".into(),
