@@ -35,14 +35,14 @@ async fn main() -> Result<(), anyhow::Error> {
     // let save_counter = Arc::new(AtomicUsize::new(0)); // PersistenceManager handles saves
 
     // Add event handler to count events
-    let event_counter_clone = event_counter.clone();
     // let save_counter_clone = save_counter.clone(); // Not needed
 
     // Subscribe to SelfPushNameUpdated events using the new typed event bus
+    let event_counter_clone = event_counter.clone();
     let mut self_push_name_rx = client.subscribe_to_self_push_name_updated();
     tokio::spawn(async move {
         while let Ok(update) = self_push_name_rx.recv().await {
-            let event_num = event_counter.fetch_add(1, Ordering::SeqCst) + 1;
+            let event_num = event_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
             info!("📨 SelfPushNameUpdated event #{} received!", event_num);
             info!("  From server: {}", update.from_server);
             info!("  Old name: '{}'", update.old_name);
