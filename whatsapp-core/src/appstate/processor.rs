@@ -82,7 +82,7 @@ impl ProcessorUtils {
         Ok((new_mutations, current_state))
     }
 
-    /// Decode a single mutation 
+    /// Decode a single mutation
     /// Platform-independent core logic
     pub fn decode_mutation(
         keys: &keys::ExpandedAppStateKeys,

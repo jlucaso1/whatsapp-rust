@@ -1,5 +1,9 @@
 // Re-export types from core
-pub use whatsapp_core::appstate::{processor::{Mutation, PatchList, ProcessorUtils}, hash::HashState, errors::{AppStateError, Result}};
+pub use whatsapp_core::appstate::{
+    errors::{AppStateError, Result},
+    hash::HashState,
+    processor::{Mutation, PatchList, ProcessorUtils},
+};
 
 use crate::store::traits::{AppStateKeyStore, AppStateStore};
 use std::sync::Arc;
@@ -22,7 +26,7 @@ impl Processor {
     ) -> Result<(Vec<Mutation>, HashState)> {
         // Create a key lookup closure that uses our async key store
         let _key_store = self.key_store.clone();
-        
+
         let key_lookup = |_key_id: &[u8]| -> Option<Vec<u8>> {
             // For this sync version, we'll need to use a different approach
             // since we can't use async closures easily

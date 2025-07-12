@@ -99,7 +99,6 @@ impl MessageUtils {
 
     /// Creates a participant list hash (pure function)
     pub fn participant_list_hash(devices: &[crate::types::jid::Jid]) -> String {
-
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
         jids.sort();
 
@@ -114,6 +113,9 @@ impl MessageUtils {
         let truncated_hash = &full_hash[..6];
 
         // Encode using base64 without padding
-        format!("2:{hash}", hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash))
+        format!(
+            "2:{hash}",
+            hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash)
+        )
     }
 }

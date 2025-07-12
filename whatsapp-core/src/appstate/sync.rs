@@ -53,7 +53,7 @@ impl SyncUtils {
     pub fn parse_sync_response(resp_node: &Node) -> Option<(bool, Vec<wa::SyncdPatch>)> {
         let sync_node = resp_node.get_optional_child("sync")?;
         let collection_node = sync_node.get_optional_child("collection")?;
-        
+
         let mut attrs = collection_node.attrs();
         let has_more = attrs.optional_bool("has_more_patches");
 
