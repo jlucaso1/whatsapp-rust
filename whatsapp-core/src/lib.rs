@@ -1,6 +1,7 @@
 pub mod binary;
 pub mod crypto;
 pub mod download;
+pub mod handshake;
 pub mod pair;
 pub mod prekeys;
 pub mod proto_helpers;
