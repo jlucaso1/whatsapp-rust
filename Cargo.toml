@@ -6,7 +6,6 @@ name = "whatsapp-rust"
 version = "0.1.0"
 edition = "2024"
 
-
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -53,7 +52,6 @@ tokio = { version = "1.45.1", features = [
 log = "0.4.27"
 tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
 anyhow = { version = "1.0", default-features = false }
-base64 = { version = "0.22.1", default-features = false }
 urlencoding = "2.1"
 md5 = { version = "0.7.0", default-features = false }
 async-trait = "0.1.88"
@@ -62,6 +60,7 @@ ureq = "3.0.12"
 dashmap = "6.1.0"
 
 [dev-dependencies]
+base64 = { version = "0.22.1", default-features = false }
 tempfile = "3.20"
 
 [profile.release]

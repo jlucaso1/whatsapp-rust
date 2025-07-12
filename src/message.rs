@@ -58,13 +58,23 @@ impl Client {
         let backend = device_snapshot.backend.clone();
         // drop(device_snapshot); // Not needed
 
-        if let Some(_buffered_event) = backend
-            .get_buffered_event(&ciphertext_hash)
-            .await
-            .unwrap_or(None)
-        {
-            log::debug!(target: "Client/Recv", "Ignoring message: event was already processed (hash: {})", hex::encode(ciphertext_hash));
-            return Err(DecryptionError::AlreadyProcessed);
+        match backend.get_buffered_event(&ciphertext_hash).await {
+            Ok(Some(_)) => {
+                log::debug!(target: "Client/Recv", "Ignoring message: event was already processed (hash: {})", hex::encode(ciphertext_hash));
+                return Err(DecryptionError::AlreadyProcessed);
+            }
+            Ok(None) => {
+                // Message not found in buffer, proceed to decrypt.
+            }
+            Err(e) => {
+                // An error occurred, but we should probably still try to decrypt to avoid dropping a message.
+                // However, this means deduplication is not working. Log a warning.
+                log::warn!(
+                    "Failed to check event buffer for hash {}: {}. Proceeding with decryption, but this may be a duplicate.",
+                    hex::encode(ciphertext_hash),
+                    e
+                );
+            }
         }
 
         match decrypt_fn().await {
