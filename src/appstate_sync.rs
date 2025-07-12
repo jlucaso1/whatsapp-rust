@@ -197,7 +197,8 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             .persistence_manager
                             .get_device_snapshot()
                             .await
-                            .push_name;
+                            .push_name
+                            .clone();
 
                         // Process all mutations in this batch
                         let mut latest_push_name = None;
