@@ -1,5 +1,3 @@
-use crate::appstate::keys::ALL_PATCH_NAMES;
-use crate::appstate_sync::app_state_sync;
 use crate::binary::node::Node;
 use crate::client::Client;
 use crate::proto_helpers::MessageExt;
@@ -258,9 +256,9 @@ impl Client {
                                             self_clone
                                                 .handle_app_state_sync_key_share(&key_share_clone)
                                                 .await;
-                                            for name in ALL_PATCH_NAMES {
-                                                app_state_sync(&self_clone, name, false).await;
-                                            }
+                                            // Do not re-trigger syncs here. This was causing an infinite loop.
+                                            // The sync that requested the keys will be re-triggered by the
+                                            // server with a new 'dirty' or 'server_sync' notification.
                                         });
                                     }
                                 } else {

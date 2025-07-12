@@ -259,11 +259,13 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                     Err(e) => {
                         if let crate::appstate::errors::AppStateError::KeysNotFound(missing) = e {
                             info!(
-                                "Requesting {} missing app state keys for sync of '{}'",
+                                "Requesting {} missing app state keys for sync of '{}'. Will retry on next server notification.",
                                 missing.len(),
                                 name
                             );
                             request_app_state_keys(client, missing).await;
+                            // Stop this sync run. The sync will be re-triggered by the server.
+                            has_more = false;
                         } else {
                             error!("Failed to decode patches for {name}: {e:?}");
                             has_more = false;

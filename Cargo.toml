@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "whatsapp-core", "whatsapp-proto"]
+members = [".", "analyser", "whatsapp-core", "whatsapp-proto"]
 
 [package]
 name = "whatsapp-rust"
