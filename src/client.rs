@@ -96,7 +96,7 @@ pub struct Client {
 impl Client {
     pub async fn new(persistence_manager: Arc<PersistenceManager>) -> Self {
         let mut unique_id_bytes = [0u8; 2];
-        rand::thread_rng().fill_bytes(&mut unique_id_bytes);
+        rand::rng().fill_bytes(&mut unique_id_bytes);
 
         // Get initial device state and create core client
         let device_snapshot = persistence_manager.get_device_snapshot().await;

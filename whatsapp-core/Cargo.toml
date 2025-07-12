@@ -23,7 +23,7 @@ ed25519-dalek = { version = "2.2.0" }
 curve25519-dalek = { version = "4.2.0", default-features = false, features = [
     "serde",
 ] }
-rand = { version = "0.8.5" }
+rand = { version = "0.9", features = ["os_rng"] }
 aes-gcm = { version = "0.10.2", features = [
     "aes",
     "alloc",

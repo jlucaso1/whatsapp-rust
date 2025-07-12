@@ -55,7 +55,7 @@ impl Client {
         let mut error_count = 0u32;
 
         loop {
-            let interval_ms = rand::thread_rng().gen_range(
+            let interval_ms = rand::rng().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
             );
             let interval = Duration::from_millis(interval_ms as u64);

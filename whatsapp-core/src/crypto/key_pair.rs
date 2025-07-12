@@ -1,5 +1,6 @@
 use crate::crypto::xed25519;
 use ed25519_dalek::Signature;
+use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -21,7 +22,9 @@ pub struct KeyPair {
 impl KeyPair {
     /// Generates a new random X25519 key pair.
     pub fn new() -> Self {
-        let private = StaticSecret::random_from_rng(OsRng);
+        let mut p_bytes = [0u8; 32];
+        OsRng.try_fill_bytes(&mut p_bytes).expect("RNG failure");
+        let private = StaticSecret::from(p_bytes);
         let public = PublicKey::from(&private);
         Self {
             public_key: *public.as_bytes(),

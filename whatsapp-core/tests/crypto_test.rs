@@ -1,13 +1,12 @@
-use rand::{RngCore, rngs::OsRng};
+use rand::{TryRngCore, rngs::OsRng};
 use whatsapp_core::crypto::xed25519;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[test]
 fn test_xeddsa_sign_verify_roundtrip() {
     // 1. Setup keys
-    let mut csprng = OsRng;
     let mut priv_bytes = [0u8; 32];
-    csprng.fill_bytes(&mut priv_bytes);
+    OsRng.try_fill_bytes(&mut priv_bytes).unwrap();
 
     let dalek_priv_key = StaticSecret::from(priv_bytes);
     let dalek_pub_key = PublicKey::from(&dalek_priv_key);

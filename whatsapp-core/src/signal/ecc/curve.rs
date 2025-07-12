@@ -1,6 +1,7 @@
 use super::key_pair::EcKeyPair;
 use super::keys::{DJB_TYPE, DjbEcPrivateKey, DjbEcPublicKey, EcPrivateKey, EcPublicKey};
 use crate::crypto::xed25519;
+use rand::TryRngCore;
 use rand::rngs::OsRng;
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret, x25519};
@@ -13,7 +14,9 @@ pub enum CurveError {
 
 // Corresponds to GenerateKeyPair()
 pub fn generate_key_pair() -> EcKeyPair {
-    let private = StaticSecret::random_from_rng(OsRng);
+    let mut p_bytes = [0u8; 32];
+    OsRng.try_fill_bytes(&mut p_bytes).unwrap();
+    let private = StaticSecret::from(p_bytes);
     let public = PublicKey::from(&private);
     EcKeyPair::new(
         DjbEcPublicKey::new(*public.as_bytes()),

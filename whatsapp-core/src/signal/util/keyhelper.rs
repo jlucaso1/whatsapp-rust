@@ -6,7 +6,7 @@ use crate::signal::ecc::keys::EcPublicKey;
 use crate::signal::identity::{IdentityKey, IdentityKeyPair};
 use crate::signal::state::record;
 use chrono::Utc;
-use rand::{Rng, thread_rng};
+use rand::{Rng, rng};
 use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 pub fn generate_identity_key_pair() -> IdentityKeyPair {
@@ -45,14 +45,14 @@ pub fn generate_sender_signing_key() -> EcKeyPair {
 }
 pub fn generate_sender_key() -> Vec<u8> {
     let mut key = vec![0u8; 32];
-    thread_rng().fill(&mut key[..]);
+    rng().fill(&mut key[..]);
     key
 }
 pub fn generate_sender_key_id() -> u32 {
-    thread_rng().r#gen::<u32>()
+    rng().random::<u32>()
 }
 /// Generates a registration ID. Clients should only do this once, at install time.
 pub fn generate_registration_id() -> u32 {
     // The valid range is 1-16380
-    thread_rng().gen_range(1..=16380)
+    rng().random_range(1..=16380)
 }

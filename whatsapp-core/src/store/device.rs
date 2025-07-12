@@ -70,7 +70,7 @@ impl Device {
         let identity_key = KeyPair::new();
         let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
         let mut adv_secret_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut adv_secret_key);
+        rand::rng().fill_bytes(&mut adv_secret_key);
 
         Self {
             id: None,
