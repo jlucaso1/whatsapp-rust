@@ -1,46 +1,15 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
+use crate::binary::node::Node;
 use crate::client::Client;
 use crate::socket::error::SocketError;
-use crate::types::jid::Jid;
 use log::warn;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
 
-// Additional imports for message ID generation
-use rand::RngCore;
-use sha2::{Digest, Sha256};
-use std::time::{SystemTime, UNIX_EPOCH};
+// Re-export core types
+pub use whatsapp_core::request::{InfoQuery, InfoQueryType, RequestUtils};
 
-/// Represents the type of an IQ stanza.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InfoQueryType {
-    Set,
-    Get,
-}
-
-impl InfoQueryType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            InfoQueryType::Set => "set",
-            InfoQueryType::Get => "get",
-        }
-    }
-}
-
-/// Defines an IQ request to be sent to the server.
-#[derive(Debug, Clone)]
-pub struct InfoQuery<'a> {
-    pub namespace: &'a str,
-    pub query_type: InfoQueryType,
-    pub to: Jid,
-    pub target: Option<Jid>,
-    pub id: Option<String>,
-    pub content: Option<NodeContent>,
-    pub timeout: Option<Duration>,
-}
-
-/// Custom error types for IQ operations.
+/// Platform-specific IQ error that includes socket errors
 #[derive(Debug, Error)]
 pub enum IqError {
     #[error("IQ request timed out")]
@@ -57,53 +26,37 @@ pub enum IqError {
     InternalChannelClosed,
 }
 
+impl From<whatsapp_core::request::IqError> for IqError {
+    fn from(err: whatsapp_core::request::IqError) -> Self {
+        match err {
+            whatsapp_core::request::IqError::Timeout => Self::Timeout,
+            whatsapp_core::request::IqError::NotConnected => Self::NotConnected,
+            whatsapp_core::request::IqError::Disconnected(node) => Self::Disconnected(node),
+            whatsapp_core::request::IqError::ServerError { code, text } => {
+                Self::ServerError { code, text }
+            }
+            whatsapp_core::request::IqError::InternalChannelClosed => Self::InternalChannelClosed,
+            whatsapp_core::request::IqError::Network(msg) => Self::Socket(SocketError::Crypto(msg)),
+        }
+    }
+}
+
 impl Client {
     /// Generates a new unique request ID string.
     pub fn generate_request_id(&self) -> String {
-        let count = self
-            .id_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!(
-            "{unique_id}-{count}",
-            unique_id = self.unique_id,
-            count = count
-        )
+        self.get_request_utils().generate_request_id()
     }
 
     /// Generates a proper WhatsApp message ID in the format expected by the protocol.
-    /// Message IDs are used for chat messages and must follow the 3EB0... format
-    /// to ensure proper synchronization across devices and support for features
-    /// like receipts, replies, reactions, and message revokes.
     pub async fn generate_message_id(&self) -> String {
-        let mut data = Vec::with_capacity(8 + 20 + 16);
-
-        // 1. Add current unix timestamp (8 bytes)
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        data.extend_from_slice(&timestamp.to_be_bytes());
-
-        // 2. Add own JID if available (best effort)
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        if let Some(jid) = &device_snapshot.id {
-            data.extend_from_slice(jid.user.as_bytes());
-            data.extend_from_slice(b"@c.us"); // whatsmeow uses legacy server here
-        }
+        self.get_request_utils()
+            .generate_message_id(device_snapshot.id.as_ref())
+    }
 
-        // 3. Add random bytes (16 bytes)
-        let mut random_bytes = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut random_bytes);
-        data.extend_from_slice(&random_bytes);
-
-        // 4. Hash, truncate, and format with 3EB0 prefix
-        let hash = Sha256::digest(&data);
-        let truncated_hash = &hash[..9]; // Use first 9 bytes for 18 hex chars
-
-        format!(
-            "3EB0{hash}",
-            hash = hex::encode(truncated_hash).to_uppercase()
-        )
+    /// Gets the request utilities instance
+    fn get_request_utils(&self) -> RequestUtils {
+        RequestUtils::with_counter(self.unique_id.clone(), self.id_counter.clone())
     }
 
     /// Sends an IQ (Info/Query) stanza and asynchronously waits for a response.
@@ -120,22 +73,8 @@ impl Client {
             .await
             .insert(req_id.clone(), tx);
 
-        let mut attrs = Attrs::new();
-        attrs.insert("id".into(), req_id.clone());
-        attrs.insert("xmlns".into(), query.namespace.into());
-        attrs.insert("type".into(), query.query_type.as_str().into());
-        attrs.insert("to".into(), query.to.to_string());
-        if let Some(target) = query.target {
-            if !target.is_empty() {
-                attrs.insert("target".into(), target.to_string());
-            }
-        }
-
-        let node = Node {
-            tag: "iq".into(),
-            attrs,
-            content: query.content,
-        };
+        let request_utils = self.get_request_utils();
+        let node = request_utils.build_iq_node(&query, Some(req_id.clone()));
 
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
@@ -149,33 +88,8 @@ impl Client {
 
         match timeout(query.timeout.unwrap_or(default_timeout), rx).await {
             Ok(Ok(response_node)) => {
-                if response_node.tag == "stream:error" || response_node.tag == "xmlstreamend" {
-                    return Err(IqError::Disconnected(response_node));
-                }
-
-                if let Some(res_type) = response_node.attrs.get("type")
-                    && res_type == "error"
-                {
-                    let error_child = response_node.get_optional_child_by_tag(&["error"]);
-                    if let Some(error_node) = error_child {
-                        let mut parser = crate::binary::attrs::AttrParser::new(error_node);
-                        let code = parser.optional_u64("code").unwrap_or(0) as u16;
-                        let text = parser.optional_string("text").unwrap_or("").to_string();
-                        if !parser.ok() {
-                            warn!(
-                                target: "Client/IQ",
-                                "Attribute parsing errors in IQ error response: {:?}",
-                                parser.errors
-                            );
-                        }
-                        return Err(IqError::ServerError { code, text });
-                    }
-                    // Fallback for a malformed error response with no child
-                    return Err(IqError::ServerError {
-                        code: 0,
-                        text: "Malformed error response".to_string(),
-                    });
-                }
+                // Use core logic to parse the response
+                request_utils.parse_iq_response(&response_node)?;
                 Ok(response_node)
             }
             Ok(Err(_)) => Err(IqError::InternalChannelClosed),

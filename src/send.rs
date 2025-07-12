@@ -5,47 +5,9 @@ use crate::signal::session::SessionBuilder;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
 use crate::types::jid::Jid;
-use rand::Rng;
+use whatsapp_core::client::MessageUtils;
 use whatsapp_proto::whatsapp as wa;
 use whatsapp_proto::whatsapp::message::DeviceSentMessage;
-
-// Group messaging imports
-use base64::Engine;
-use sha2::{Digest, Sha256};
-
-// Helper function to pad messages for encryption
-fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-
-    let mut pad_val = rng.r#gen::<u8>() & 0x0F;
-    if pad_val == 0 {
-        pad_val = 0x0F;
-    }
-
-    let padding = vec![pad_val; pad_val as usize];
-    plaintext.extend_from_slice(&padding);
-    plaintext
-}
-
-use base64::engine::general_purpose::STANDARD_NO_PAD;
-
-fn participant_list_hash(devices: &[Jid]) -> String {
-    let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
-    jids.sort();
-
-    // Concatenate all JIDs into a single string before hashing
-    let concatenated_jids = jids.join("");
-
-    let mut hasher = Sha256::new();
-    hasher.update(concatenated_jids.as_bytes());
-    let full_hash = hasher.finalize();
-
-    // Truncate the hash to the first 6 bytes
-    let truncated_hash = &full_hash[..6];
-
-    // Encode using base64 without padding
-    format!("2:{hash}", hash = STANDARD_NO_PAD.encode(truncated_hash))
-}
 
 impl Client {
     /// Sends a text message to the given JID.
@@ -56,7 +18,7 @@ impl Client {
         };
         // Generate a new ID for a new message and call the internal implementation.
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, content, request_id).await
+        self.send_message_impl(to, content, request_id, false).await
     }
 
     /// Encrypts and sends a protobuf message to the given JID.
@@ -66,8 +28,11 @@ impl Client {
         to: Jid,
         message: wa::Message,
         request_id: String,
+        peer: bool,
     ) -> Result<(), anyhow::Error> {
-        if to.is_group() {
+        if peer {
+            self.send_peer_message(to, message, request_id).await
+        } else if to.is_group() {
             self.send_group_message(to, message, request_id).await
         } else {
             self.send_dm_message(to, message, request_id).await
@@ -93,7 +58,7 @@ impl Client {
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
 
-        let padded_message_plaintext = pad_message_v2(message.encode_to_vec());
+        let padded_message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
         let dsm = wa::Message {
             device_sent_message: Some(Box::new(DeviceSentMessage {
                 destination_jid: Some(to.to_string()),
@@ -102,7 +67,7 @@ impl Client {
             })),
             ..Default::default()
         };
-        let padded_dsm_plaintext = pad_message_v2(dsm.encode_to_vec());
+        let padded_dsm_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
 
         let participants = vec![to.clone(), own_jid.clone()];
         let all_devices = self.get_user_devices(&participants).await?;
@@ -275,6 +240,64 @@ impl Client {
             ]
             .into(),
             content: Some(NodeContent::Nodes(message_content_nodes)),
+        };
+
+        self.send_node(stanza).await.map_err(|e| e.into())
+    }
+
+    // Peer message logic (for protocol messages like AppStateSyncKeyRequest)
+    async fn send_peer_message(
+        &self,
+        to: Jid,
+        message: wa::Message,
+        request_id: String,
+    ) -> Result<(), anyhow::Error> {
+        use crate::binary::node::{Node, NodeContent};
+        use prost::Message as ProtoMessage;
+
+        let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+
+        // Only encrypt for the one target device.
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store);
+
+        let signal_address = SignalAddress::new(to.user.clone(), to.device as u32);
+
+        let mut session_record = device_store_wrapper
+            .load_session(&signal_address)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to load session: {}", e))?;
+        let cipher = SessionCipher::new(device_store_wrapper.clone(), signal_address.clone());
+        let encrypted_message = cipher
+            .encrypt(&mut session_record, &plaintext)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to encrypt peer message: {}", e))?;
+        device_store_wrapper
+            .store_session(&signal_address, &session_record)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to store session: {}", e))?;
+
+        let enc_node = Node {
+            tag: "enc".to_string(),
+            attrs: [
+                ("v".to_string(), "2".to_string()),
+                ("type".to_string(), "msg".to_string()),
+            ]
+            .into(),
+            content: Some(NodeContent::Bytes(encrypted_message.serialize())),
+        };
+
+        // Note the `category="peer"` attribute, which is important.
+        let stanza = Node {
+            tag: "message".to_string(),
+            attrs: [
+                ("to".to_string(), to.to_string()),
+                ("id".to_string(), request_id),
+                ("type".to_string(), "text".to_string()),
+                ("category".to_string(), "peer".to_string()),
+            ]
+            .into(),
+            content: Some(NodeContent::Nodes(vec![enc_node])),
         };
 
         self.send_node(stanza).await.map_err(|e| e.into())
@@ -582,7 +605,7 @@ impl Client {
         // The skmsg is always at the top level of the message content.
         message_content_nodes.push(sk_msg_node);
 
-        let phash = participant_list_hash(&all_devices);
+        let phash = whatsapp_core::client::MessageUtils::participant_list_hash(&all_devices);
         let stanza = Node {
             tag: "message".to_string(),
             attrs: [

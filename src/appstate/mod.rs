@@ -1,5 +1,5 @@
-pub mod errors;
-pub mod hash;
-pub mod keys;
-pub mod lthash;
+// Re-export core appstate modules
+pub use whatsapp_core::appstate::{errors, hash, keys, lthash};
+
+// Platform-specific processor wrapper
 pub mod processor;

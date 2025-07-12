@@ -16,7 +16,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let pm = match PersistenceManager::new("./whatsapp_store_batch_test").await {
         Ok(manager) => Arc::new(manager),
         Err(e) => {
-            error!("Failed to initialize PersistenceManager: {}", e);
+            error!("Failed to initialize PersistenceManager: {e}");
             return Err(e.into());
         }
     };
@@ -27,7 +27,7 @@ async fn main() -> Result<(), anyhow::Error> {
         pm_clone_for_saver.run_background_saver(Duration::from_secs(5));
     });
 
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Counter to track how many events we receive
     let event_counter = Arc::new(AtomicUsize::new(0));
@@ -42,7 +42,7 @@ async fn main() -> Result<(), anyhow::Error> {
     tokio::spawn(async move {
         while let Ok(update) = self_push_name_rx.recv().await {
             let event_num = event_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-            info!("📨 SelfPushNameUpdated event #{} received!", event_num);
+            info!("📨 SelfPushNameUpdated event #{event_num} received!");
             info!("  From server: {}", update.from_server);
             info!("  Old name: '{}'", update.old_name);
             info!("  New name: '{}'", update.new_name);
@@ -55,7 +55,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     info!("\n=== Testing Batching Behavior (Event Counts with PersistenceManager) ===");
     let initial_name = client.get_push_name().await;
-    info!("Initial push name: '{}'", initial_name);
+    info!("Initial push name: '{initial_name}'");
 
     // Reset counters
     event_counter.store(0, Ordering::SeqCst);
@@ -64,7 +64,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Test 1: Single update
     info!("\n--- Test 1: Single Update ---");
     let test_name_1 = "Batch Test 1";
-    info!("Setting push name to: '{}'", test_name_1);
+    info!("Setting push name to: '{test_name_1}'");
 
     client.set_push_name(test_name_1.to_string()).await?;
 
@@ -75,7 +75,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // let saves_after_1 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Single update complete");
-    info!("  Events fired: {}", events_after_1);
+    info!("  Events fired: {events_after_1}");
     // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
 
     if events_after_1 == 1 {
@@ -83,8 +83,7 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("✅ Single update event behavior is correct");
     } else {
         error!(
-            "❌ Single update event behavior is incorrect (expected 1 event, got {})",
-            events_after_1
+            "❌ Single update event behavior is incorrect (expected 1 event, got {events_after_1})"
         );
     }
 
@@ -120,7 +119,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // let saves_after_2 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Multiple updates complete");
-    info!("  Events fired: {}", events_after_2);
+    info!("  Events fired: {events_after_2}");
     // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
     info!(
         "  Expected: {} events", // Removed saves from expected log
@@ -147,11 +146,11 @@ async fn main() -> Result<(), anyhow::Error> {
     // save_counter.store(0, Ordering::SeqCst); // Removed
 
     let current_name = client.get_push_name().await;
-    info!("Current name: '{}'", current_name);
+    info!("Current name: '{current_name}'");
     info!("Setting to same name 3 times...");
 
     for i in 1..=3 {
-        info!("Duplicate update #{}: Setting to '{}'", i, current_name);
+        info!("Duplicate update #{i}: Setting to '{current_name}'");
         client.set_push_name(current_name.clone()).await?;
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
@@ -163,7 +162,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // let saves_after_3 = save_counter.load(Ordering::SeqCst); // Removed
 
     info!("✅ Duplicate updates complete");
-    info!("  Events fired: {}", events_after_3);
+    info!("  Events fired: {events_after_3}");
     // info!("  Saves performed by PM: (background task, not directly counted)"); // Adjusted log
 
     if events_after_3 == 0 {
@@ -171,8 +170,7 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("✅ Duplicate update filtering is working correctly (0 events fired)");
     } else {
         error!(
-            "❌ Duplicate update filtering is not working (expected 0 events, got {})",
-            events_after_3
+            "❌ Duplicate update filtering is not working (expected 0 events, got {events_after_3})"
         );
     }
 
@@ -181,7 +179,7 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("\n--- Restoring Original Name ---");
         client.set_push_name(initial_name.clone()).await?;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // Increased delay
-        info!("✅ Original name '{}' restored", initial_name);
+        info!("✅ Original name '{initial_name}' restored");
     }
 
     info!("\n=== Batching Test Complete (with PersistenceManager) ===");
