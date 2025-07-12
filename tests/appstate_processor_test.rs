@@ -67,7 +67,6 @@ async fn test_decode_mutation_success() {
                 id: Some(key_id_bytes.to_vec()),
             }),
         }),
-        ..Default::default()
     };
 
     // 5. Run the test
@@ -128,7 +127,6 @@ async fn test_decode_mutation_bad_mac_fails() {
                 id: Some(key_id_bytes.to_vec()),
             }),
         }),
-        ..Default::default()
     };
 
     let mut output_mutations = Vec::new();

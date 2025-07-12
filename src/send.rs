@@ -42,7 +42,10 @@ fn participant_list_hash(devices: &[Jid]) -> String {
     let truncated_hash = &full_hash[..6];
 
     // Encode using base64 without padding
-    format!("2:{hash}", hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash))
+    format!(
+        "2:{hash}",
+        hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash)
+    )
 }
 
 impl Client {

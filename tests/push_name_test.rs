@@ -13,15 +13,11 @@ async fn test_push_name_persistence() {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("test_store_persistence");
     let store_path_str = store_path.to_str().unwrap().to_string();
-    log::info!(
-        "[test_push_name_persistence] Store path: {store_path_str}"
-    );
+    log::info!("[test_push_name_persistence] Store path: {store_path_str}");
 
     // Phase 1: Setup and save
     {
-        log::info!(
-            "[test_push_name_persistence] Initializing pm1 for path: {store_path_str}"
-        );
+        log::info!("[test_push_name_persistence] Initializing pm1 for path: {store_path_str}");
         let pm1 = Arc::new(
             PersistenceManager::new(store_path_str.clone())
                 .await
@@ -42,9 +38,7 @@ async fn test_push_name_persistence() {
     }
 
     // Phase 2: Reload
-    log::info!(
-        "[test_push_name_persistence] Initializing pm_reloaded for path: {store_path_str}"
-    );
+    log::info!("[test_push_name_persistence] Initializing pm_reloaded for path: {store_path_str}");
     let pm_reloaded = Arc::new(
         PersistenceManager::new(store_path_str.clone())
             .await

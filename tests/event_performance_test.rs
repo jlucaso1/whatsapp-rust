@@ -7,9 +7,12 @@ use whatsapp_rust::types::events::{Connected, Disconnected, Event, EventBus};
 use whatsapp_rust::types::jid::Jid;
 use whatsapp_rust::types::message::{MessageInfo, MessageSource};
 
+/// Type alias to reduce type complexity for handler list
+type HandlerList = Arc<RwLock<Vec<Box<dyn Fn(Arc<Event>) + Send + Sync>>>>;
+
 /// Mock implementation of the old event handler system for comparison
 struct OldEventHandler {
-    handlers: Arc<RwLock<Vec<Box<dyn Fn(Arc<Event>) + Send + Sync>>>>,
+    handlers: HandlerList,
 }
 
 impl OldEventHandler {
@@ -125,7 +128,7 @@ async fn test_selective_event_delivery() {
     let connected_counter = connected_count.clone();
     let mut connected_rx = event_bus.connected.subscribe();
     tokio::spawn(async move {
-        while let Ok(_) = connected_rx.recv().await {
+        while (connected_rx.recv().await).is_ok() {
             connected_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     });
@@ -134,7 +137,7 @@ async fn test_selective_event_delivery() {
     let disconnected_counter = disconnected_count.clone();
     let mut disconnected_rx = event_bus.disconnected.subscribe();
     tokio::spawn(async move {
-        while let Ok(_) = disconnected_rx.recv().await {
+        while (disconnected_rx.recv().await).is_ok() {
             disconnected_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     });
@@ -143,7 +146,7 @@ async fn test_selective_event_delivery() {
     let message_counter = message_count.clone();
     let mut message_rx = event_bus.message.subscribe();
     tokio::spawn(async move {
-        while let Ok(_) = message_rx.recv().await {
+        while (message_rx.recv().await).is_ok() {
             message_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     });
@@ -199,12 +202,8 @@ async fn test_selective_event_delivery() {
     let disconnected_received = disconnected_count.load(std::sync::atomic::Ordering::Relaxed);
     let message_received = message_count.load(std::sync::atomic::Ordering::Relaxed);
 
-    println!(
-        "Connected events sent: 100, received: {connected_received}"
-    );
-    println!(
-        "Disconnected events sent: 50, received: {disconnected_received}"
-    );
+    println!("Connected events sent: 100, received: {connected_received}");
+    println!("Disconnected events sent: 50, received: {disconnected_received}");
     println!("Message events sent: 75, received: {message_received}");
 
     // Verify that subscribers only received their specific event types
@@ -253,7 +252,7 @@ async fn test_throughput_comparison() {
     for _ in 0..num_handlers {
         let mut rx = event_bus.connected.subscribe();
         _receivers.push(tokio::spawn(
-            async move { while let Ok(_) = rx.recv().await {} },
+            async move { while (rx.recv().await).is_ok() {} },
         ));
     }
 
@@ -294,7 +293,7 @@ async fn test_memory_efficiency() {
     // Create tasks that only handle specific events
     let connected_task = tokio::spawn(async move {
         let mut count = 0;
-        while let Ok(_) = connected_rx.recv().await {
+        while (connected_rx.recv().await).is_ok() {
             count += 1;
             if count >= 100 {
                 break;
@@ -305,7 +304,7 @@ async fn test_memory_efficiency() {
 
     let message_task = tokio::spawn(async move {
         let mut count = 0;
-        while let Ok(_) = message_rx.recv().await {
+        while (message_rx.recv().await).is_ok() {
             count += 1;
             if count >= 100 {
                 break;
