@@ -64,7 +64,10 @@ impl RequestUtils {
         }
     }
 
-    pub fn with_counter(unique_id: String, id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Self {
+    pub fn with_counter(
+        unique_id: String,
+        id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
         Self {
             unique_id,
             id_counter,
@@ -121,13 +124,13 @@ impl RequestUtils {
     /// Builds an IQ node from the given InfoQuery
     pub fn build_iq_node(&self, query: &InfoQuery<'_>, req_id: Option<String>) -> Node {
         let id = req_id.unwrap_or_else(|| self.generate_request_id());
-        
+
         let mut attrs = Attrs::new();
         attrs.insert("id".into(), id);
         attrs.insert("xmlns".into(), query.namespace.into());
         attrs.insert("type".into(), query.query_type.as_str().into());
         attrs.insert("to".into(), query.to.to_string());
-        
+
         if let Some(target) = &query.target {
             if !target.is_empty() {
                 attrs.insert("target".into(), target.to_string());
@@ -163,7 +166,7 @@ impl RequestUtils {
                 text: "Malformed error response".to_string(),
             });
         }
-        
+
         Ok(())
     }
 }

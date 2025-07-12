@@ -77,7 +77,11 @@ impl HandshakeUtils {
             });
         }
 
-        Ok((server_ephemeral, server_static_ciphertext, certificate_ciphertext))
+        Ok((
+            server_ephemeral,
+            server_static_ciphertext,
+            certificate_ciphertext,
+        ))
     }
 
     /// Verifies the server's certificate chain
@@ -99,13 +103,13 @@ impl HandshakeUtils {
             )
         })?;
         let wa_root_pk = VerifyingKey::from(edwards_point);
-        let intermediate_sig = Signature::from_slice(
-            intermediate
-                .signature
-                .as_ref()
-                .ok_or_else(|| HandshakeError::CertVerification("Missing intermediate sig".into()))?,
-        )
-        .map_err(|e| HandshakeError::CertVerification(format!("Invalid intermediate sig: {e}")))?;
+        let intermediate_sig =
+            Signature::from_slice(intermediate.signature.as_ref().ok_or_else(|| {
+                HandshakeError::CertVerification("Missing intermediate sig".into())
+            })?)
+            .map_err(|e| {
+                HandshakeError::CertVerification(format!("Invalid intermediate sig: {e}"))
+            })?;
 
         wa_root_pk
             .verify(
@@ -115,7 +119,9 @@ impl HandshakeUtils {
                 &intermediate_sig,
             )
             .map_err(|e| {
-                HandshakeError::CertVerification(format!("Intermediate cert verification failed: {e}"))
+                HandshakeError::CertVerification(format!(
+                    "Intermediate cert verification failed: {e}"
+                ))
             })?;
 
         // Unmarshal details and perform further checks
@@ -160,9 +166,9 @@ impl HandshakeUtils {
 
         intermediate_pk
             .verify(
-                leaf.details
-                    .as_ref()
-                    .ok_or_else(|| HandshakeError::CertVerification("Missing leaf details".into()))?,
+                leaf.details.as_ref().ok_or_else(|| {
+                    HandshakeError::CertVerification("Missing leaf details".into())
+                })?,
                 &leaf_sig,
             )
             .map_err(|e| {

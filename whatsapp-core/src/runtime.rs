@@ -7,9 +7,13 @@ use async_trait::async_trait;
 pub trait NetworkTransport: Send + Sync {
     /// Send a node over the network
     async fn send_node(&self, node: Node) -> Result<(), anyhow::Error>;
-    
+
     /// Wait for a response to an IQ with the given ID
-    async fn wait_for_response(&self, id: &str, timeout: std::time::Duration) -> Result<Node, anyhow::Error>;
+    async fn wait_for_response(
+        &self,
+        id: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Node, anyhow::Error>;
 }
 
 /// Trait for dispatching events to the outside world.
@@ -36,22 +40,22 @@ impl ProcessResult {
             events_to_dispatch: Vec::new(),
         }
     }
-    
+
     pub fn with_node(mut self, node: Node) -> Self {
         self.nodes_to_send.push(node);
         self
     }
-    
+
     pub fn with_event(mut self, event: crate::types::events::Event) -> Self {
         self.events_to_dispatch.push(event);
         self
     }
-    
+
     pub fn with_nodes(mut self, nodes: Vec<Node>) -> Self {
         self.nodes_to_send.extend(nodes);
         self
     }
-    
+
     pub fn with_events(mut self, events: Vec<crate::types::events::Event>) -> Self {
         self.events_to_dispatch.extend(events);
         self

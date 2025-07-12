@@ -57,7 +57,7 @@ pub struct RecentMessageKey {
 pub struct Client {
     /// Core protocol client (platform-independent)
     pub core: whatsapp_core::client::CoreClient,
-    
+
     pub persistence_manager: Arc<PersistenceManager>,
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 

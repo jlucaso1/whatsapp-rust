@@ -46,14 +46,14 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                         {
                             let device_snapshot =
                                 client.persistence_manager.get_device_snapshot().await;
-                            
+
                             // Convert to core DeviceState
                             let device_state = DeviceState {
                                 identity_key: device_snapshot.identity_key.clone(),
                                 noise_key: device_snapshot.noise_key.clone(),
                                 adv_secret_key: device_snapshot.adv_secret_key,
                             };
-                            
+
                             codes.push(PairUtils::make_qr_data(&device_state, r));
                         }
                     }
@@ -233,7 +233,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             if let Err(send_err) = client.send_node(error_node).await {
                 error!("Failed to send pair error node: {send_err}");
             }
-            
+
             let pair_error_event = crate::types::events::PairError {
                 id: jid,
                 lid,
@@ -282,7 +282,7 @@ pub async fn pair_with_qr_code(
     // Send the final pairing IQ stanza to the server
     let master_jid = device_snapshot.id.clone().unwrap();
     let req_id = client.generate_request_id();
-    
+
     let iq = PairUtils::build_master_pair_iq(&master_jid, encrypted, req_id);
 
     client.send_node(iq).await?;

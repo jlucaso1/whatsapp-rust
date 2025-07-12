@@ -1,5 +1,5 @@
-use crate::store::Device;
 use crate::runtime::ProcessResult;
+use crate::store::Device;
 
 /// Core client containing only platform-independent protocol logic
 pub struct CoreClient {
@@ -15,17 +15,14 @@ impl CoreClient {
 
     /// Processes an incoming message/event and returns the result
     /// This is a pure function that doesn't perform any I/O
-    pub fn process_incoming_data(
-        &self,
-        _data: &[u8],
-    ) -> ProcessResult {
+    pub fn process_incoming_data(&self, _data: &[u8]) -> ProcessResult {
         // TODO: Implement core message processing logic
         // This would include:
         // - Binary protocol parsing
         // - Message decryption
         // - Event generation
         // But without any I/O operations
-        
+
         ProcessResult::new()
     }
 
@@ -40,7 +37,7 @@ impl CoreClient {
         // - Message encryption
         // - Binary protocol encoding
         // But without any network operations
-        
+
         ProcessResult::new()
     }
 
@@ -100,7 +97,7 @@ impl MessageUtils {
 
     /// Creates a participant list hash (pure function)
     pub fn participant_list_hash(devices: &[crate::types::jid::Jid]) -> String {
-        use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
         use sha2::{Digest, Sha256};
 
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();

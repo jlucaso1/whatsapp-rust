@@ -14,8 +14,8 @@ pub mod traits;
 // Re-export traits from both whatsapp-core and local extensions
 pub use crate::store::traits::*;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SerializableDevice {
@@ -85,7 +85,7 @@ impl Device {
         self.core.account = loaded.account;
         self.core.push_name = loaded.push_name;
     }
-    
+
     pub fn get_client_payload(&self) -> wa::ClientPayload {
         match &self.core.id {
             Some(jid) => clientpayload::get_login_payload(jid),

@@ -32,7 +32,9 @@ impl From<whatsapp_core::request::IqError> for IqError {
             whatsapp_core::request::IqError::Timeout => Self::Timeout,
             whatsapp_core::request::IqError::NotConnected => Self::NotConnected,
             whatsapp_core::request::IqError::Disconnected(node) => Self::Disconnected(node),
-            whatsapp_core::request::IqError::ServerError { code, text } => Self::ServerError { code, text },
+            whatsapp_core::request::IqError::ServerError { code, text } => {
+                Self::ServerError { code, text }
+            }
             whatsapp_core::request::IqError::InternalChannelClosed => Self::InternalChannelClosed,
             whatsapp_core::request::IqError::Network(msg) => Self::Socket(SocketError::Crypto(msg)),
         }
@@ -48,7 +50,8 @@ impl Client {
     /// Generates a proper WhatsApp message ID in the format expected by the protocol.
     pub async fn generate_message_id(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        self.get_request_utils().generate_message_id(device_snapshot.id.as_ref())
+        self.get_request_utils()
+            .generate_message_id(device_snapshot.id.as_ref())
     }
 
     /// Gets the request utilities instance

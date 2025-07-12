@@ -1,8 +1,8 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::crypto::xed25519;
 use crate::types::jid::{Jid, SERVER_JID};
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use hmac::{Hmac, Mac};
 use prost::Message;
 use sha2::Sha256;
@@ -107,13 +107,11 @@ impl PairUtils {
         device_identity_bytes: &[u8],
     ) -> Result<(Vec<u8>, u32), PairCryptoError> {
         // 1. Unmarshal HMAC container and verify HMAC
-        let hmac_container =
-            wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes).map_err(|e| {
-                PairCryptoError {
-                    code: 500,
-                    text: "internal-error",
-                    source: e.into(),
-                }
+        let hmac_container = wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes)
+            .map_err(|e| PairCryptoError {
+                code: 500,
+                text: "internal-error",
+                source: e.into(),
             })?;
 
         // Determine if this is a hosted account

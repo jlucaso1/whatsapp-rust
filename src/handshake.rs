@@ -4,7 +4,7 @@ use prost::Message;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
-use whatsapp_core::handshake::{HandshakeUtils, HandshakeError as CoreHandshakeError};
+use whatsapp_core::handshake::{HandshakeError as CoreHandshakeError, HandshakeUtils};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -70,7 +70,7 @@ pub async fn do_handshake(
     );
 
     // 4. Parse ServerHello using core utilities
-    let (server_ephemeral_raw, server_static_ciphertext, certificate_ciphertext) = 
+    let (server_ephemeral_raw, server_static_ciphertext, certificate_ciphertext) =
         HandshakeUtils::parse_server_hello(&resp_frame)?;
 
     let server_ephemeral: [u8; 32] = server_ephemeral_raw.try_into().unwrap();
@@ -86,9 +86,11 @@ pub async fn do_handshake(
     );
 
     // 6. Decrypt server static key
-    let static_decrypted = nh
-        .decrypt(&server_static_ciphertext)
-        .map_err(|e| HandshakeError::Core(CoreHandshakeError::Crypto(format!("Failed to decrypt server static: {e}"))))?;
+    let static_decrypted = nh.decrypt(&server_static_ciphertext).map_err(|e| {
+        HandshakeError::Core(CoreHandshakeError::Crypto(format!(
+            "Failed to decrypt server static: {e}"
+        )))
+    })?;
 
     if static_decrypted.len() != 32 {
         return Err(HandshakeError::Core(CoreHandshakeError::InvalidLength {
@@ -107,15 +109,17 @@ pub async fn do_handshake(
     );
 
     // 7. Decrypt and verify server certificate
-    let cert_decrypted = nh
-        .decrypt(&certificate_ciphertext)
-        .map_err(|e| HandshakeError::Core(CoreHandshakeError::Crypto(format!("Failed to decrypt certificate: {e}"))))?;
+    let cert_decrypted = nh.decrypt(&certificate_ciphertext).map_err(|e| {
+        HandshakeError::Core(CoreHandshakeError::Crypto(format!(
+            "Failed to decrypt certificate: {e}"
+        )))
+    })?;
 
     debug!("Successfully decrypted certificate, verifying...");
     HandshakeUtils::verify_server_cert(&cert_decrypted, &static_decrypted_arr)?;
     info!("Server certificate verified successfully");
 
-    // 8. Send ClientFinish using core utilities  
+    // 8. Send ClientFinish using core utilities
     let encrypted_pubkey = nh
         .encrypt(&device.noise_key.public_key)
         .map_err(|e| HandshakeError::Core(CoreHandshakeError::Crypto(e.to_string())))?;
@@ -159,4 +163,3 @@ pub async fn do_handshake(
     info!(target: "Client", "Handshake complete, switching to encrypted communication");
     Ok(noise_socket)
 }
-

@@ -66,7 +66,7 @@ impl Device {
     /// Creates a new, unregistered device with fresh keys
     pub fn new() -> Self {
         use rand::RngCore;
-        
+
         let identity_key = KeyPair::new();
         let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
         let mut adv_secret_key = [0u8; 32];

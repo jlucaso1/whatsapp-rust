@@ -1,16 +1,20 @@
 use crate::client::Client;
 use crate::mediaconn::MediaConn;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 // Re-export core types and functionality
-pub use whatsapp_core::download::{Downloadable, DownloadUtils, MediaType};
+pub use whatsapp_core::download::{DownloadUtils, Downloadable, MediaType};
 
 impl From<&MediaConn> for whatsapp_core::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
         whatsapp_core::download::MediaConnection {
-            hosts: conn.hosts.iter().map(|h| whatsapp_core::download::MediaHost {
-                hostname: h.hostname.clone(),
-            }).collect(),
+            hosts: conn
+                .hosts
+                .iter()
+                .map(|h| whatsapp_core::download::MediaHost {
+                    hostname: h.hostname.clone(),
+                })
+                .collect(),
             auth: conn.auth.clone(),
         }
     }
@@ -19,7 +23,7 @@ impl From<&MediaConn> for whatsapp_core::download::MediaConnection {
 impl Client {
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
         let media_conn = self.refresh_media_conn(false).await?;
-        
+
         // Convert to core types
         let core_media_conn = whatsapp_core::download::MediaConnection::from(&media_conn);
         let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
@@ -68,6 +72,10 @@ impl Client {
         .await??;
 
         // Use core decryption logic
-        DownloadUtils::decrypt_downloaded_media(&encrypted_data, &request.media_key, request.app_info)
+        DownloadUtils::decrypt_downloaded_media(
+            &encrypted_data,
+            &request.media_key,
+            request.app_info,
+        )
     }
 }

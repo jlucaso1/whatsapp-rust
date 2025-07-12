@@ -4,7 +4,7 @@ use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::types::jid::{Jid, SERVER_JID};
 use log;
 
-// Re-export core utilities  
+// Re-export core utilities
 pub use whatsapp_core::prekeys::PreKeyUtils;
 
 impl Client {
@@ -28,12 +28,12 @@ impl Client {
             .await?;
 
         let bundles = PreKeyUtils::parse_prekeys_response(&resp_node)?;
-        
+
         // Add logging for any failed bundles (driver responsibility)
         for (jid, _) in &bundles {
             log::debug!("Successfully parsed pre-key bundle for {}", jid);
         }
-        
+
         Ok(bundles)
     }
 }

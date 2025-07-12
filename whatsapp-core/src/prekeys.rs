@@ -53,10 +53,7 @@ impl PreKeyUtils {
         Ok(bundles)
     }
 
-    fn node_to_pre_key_bundle(
-        jid: &Jid,
-        node: &Node,
-    ) -> Result<PreKeyBundle, anyhow::Error> {
+    fn node_to_pre_key_bundle(jid: &Jid, node: &Node) -> Result<PreKeyBundle, anyhow::Error> {
         fn extract_bytes(node: Option<&Node>) -> Result<Vec<u8>, anyhow::Error> {
             match node.and_then(|n| n.content.as_ref()) {
                 Some(NodeContent::Bytes(b)) => Ok(b.clone()),

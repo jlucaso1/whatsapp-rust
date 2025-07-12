@@ -1,7 +1,7 @@
-pub mod traits;
-pub mod error;
 pub mod commands;
 pub mod device;
+pub mod error;
+pub mod traits;
 
-pub use device::Device;
 pub use commands::*;
+pub use device::Device;
