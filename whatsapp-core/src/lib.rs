@@ -1,5 +1,7 @@
 pub mod binary;
 pub mod crypto;
+pub mod download;
+pub mod prekeys;
 pub mod proto_helpers;
 pub mod request;
 pub mod runtime;
