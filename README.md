@@ -63,6 +63,9 @@ The core of the end-to-end encryption implementation.
 - `✅` **Session Management (`signal/session.rs`)**:
   - `✅` Decryption of both `PreKeySignalMessage` and `SignalMessage` is working correctly.
   - `✅` Encryption for 1-on-1 chats is implemented, correctly handling multi-device `DeviceSentMessage` payloads.
+- `⏳` **Group Messaging (`signal/groups/`)**:
+  - `✅` Decryption of group messages (`skmsg`) is functional. The client can correctly receive and process messages sent to groups it is a part of.
+  - `⏳` Encryption of group messages is partially implemented but contains a bug causing sent messages to be malformed or undecryptable by recipients. The core cryptographic logic passes local tests, suggesting a subtle issue in message construction or key distribution when interacting with the live server.
 - `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported and are in use.
 - `✅` **Store Traits & Implementations (`store/`, `signal/store.rs`)**: The necessary traits and backend implementations for the protocol are defined and functional.
 
@@ -70,27 +73,22 @@ The core of the end-to-end encryption implementation.
 
 ## Roadmap & Next Steps
 
-The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
+The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection for one-on-one chats. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
 
-The current focus is on building out higher-level features and improving the robustness of the client.
+The current focus is on completing and stabilizing group messaging functionality.
 
-### Phase 1: Full App State and Event Handling (Current Focus)
+### Phase 1: Complete Group Messaging (Highest Priority)
+
+1.  **Debug Group Message Sending**:
+    - **Task**: Investigate and fix the issue with sending group messages. While the client can successfully decrypt incoming group messages, outgoing messages are currently corrupted and cannot be decrypted by other participants. The problem likely lies in the final stanza construction or the pairwise encryption of the `SenderKeyDistributionMessage`.
+    - **Why**: This is the final and most critical step to achieving full E2E messaging feature parity.
+
+### Phase 2: App State and Media
 
 1.  **Process App State Mutations**:
 
     - **Task**: Implement the logic in `appstate/processor.rs` to take the decrypted `Mutation` objects and apply them to the client's store. This includes updating contacts, chat settings (mute, archive), and more.
     - **Why**: This will give the client awareness of the user's account state and is essential for a fully-featured bot or client.
-
-2.  **Expand Event Emitter**:
-    - **Task**: As app state and other notifications are processed, emit more specific events (e.g., `Event::ContactUpdate`, `Event::ChatUpdate`) for the library user to consume.
-    - **Why**: A rich event system is crucial for building interactive applications.
-
-### Phase 2: Group Messaging and Media
-
-1.  **Implement Group Messaging**:
-
-    - **Task**: Port the `SenderKey` (SKMSG) part of the Signal Protocol. This involves creating, distributing, and using sender keys to encrypt and decrypt messages in group chats.
-    - **Why**: This is the next major E2EE feature required for interacting with groups.
 
 2.  **Implement Media Uploads/Downloads**:
     - **Task**: Add support for encrypting/uploading and downloading/decrypting media files (images, videos, documents). This involves handling media connection details (`mediaconn.rs`).
@@ -99,4 +97,4 @@ The current focus is on building out higher-level features and improving the rob
 ### Phase 3: Robustness and Feature Parity
 
 1.  **Full `usync` Implementation**: Implement a robust `get_user_devices` function using `usync` IQs to ensure device lists are always up-to-date.
-2.  **Expand Node Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
+2.  **Expand Event Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
