@@ -33,8 +33,7 @@ async fn test_signal_identity_trust_always_returns_true() {
         .await;
     assert!(
         save_result.is_ok(),
-        "Saving identity should succeed: {:?}",
-        save_result
+        "Saving identity should succeed: {save_result:?}"
     );
 
     // Check if the key is trusted - should ALWAYS return true in our implementation

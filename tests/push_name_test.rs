@@ -14,15 +14,13 @@ async fn test_push_name_persistence() {
     let store_path = temp_dir.path().join("test_store_persistence");
     let store_path_str = store_path.to_str().unwrap().to_string();
     log::info!(
-        "[test_push_name_persistence] Store path: {}",
-        store_path_str
+        "[test_push_name_persistence] Store path: {store_path_str}"
     );
 
     // Phase 1: Setup and save
     {
         log::info!(
-            "[test_push_name_persistence] Initializing pm1 for path: {}",
-            store_path_str
+            "[test_push_name_persistence] Initializing pm1 for path: {store_path_str}"
         );
         let pm1 = Arc::new(
             PersistenceManager::new(store_path_str.clone())
@@ -45,8 +43,7 @@ async fn test_push_name_persistence() {
 
     // Phase 2: Reload
     log::info!(
-        "[test_push_name_persistence] Initializing pm_reloaded for path: {}",
-        store_path_str
+        "[test_push_name_persistence] Initializing pm_reloaded for path: {store_path_str}"
     );
     let pm_reloaded = Arc::new(
         PersistenceManager::new(store_path_str.clone())
@@ -63,13 +60,12 @@ async fn test_push_name_persistence() {
         reloaded_snapshot.id
     );
 
-    let client = Arc::new(Client::new(pm_reloaded.clone()));
+    let client = Arc::new(Client::new(pm_reloaded.clone()).await);
 
     // Test that push name is set correctly
     let current_push_name = client.get_push_name().await;
     log::info!(
-        "[test_push_name_persistence] Push name from client.get_push_name(): '{}'",
-        current_push_name
+        "[test_push_name_persistence] Push name from client.get_push_name(): '{current_push_name}'"
     );
     assert_eq!(current_push_name, "Test User");
     assert!(client.is_ready_for_presence().await);
@@ -104,7 +100,7 @@ async fn test_push_name_empty_validation() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Test that push name is empty
     assert_eq!(client.get_push_name().await, "");
@@ -136,7 +132,7 @@ async fn test_push_name_set_and_get() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Test setting push name
     client
@@ -177,7 +173,7 @@ async fn test_device_state_reload() {
 
     // Phase 2: Create a new PersistenceManager instance to reload from the same path
     let pm2 = Arc::new(PersistenceManager::new(store_path_str).await.unwrap());
-    let client = Arc::new(Client::new(pm2.clone()));
+    let client = Arc::new(Client::new(pm2.clone()).await);
 
     // Test that push name was persisted and reloaded correctly
     assert_eq!(client.get_push_name().await, "Original User");
@@ -205,11 +201,11 @@ async fn test_debug_info() {
     )))
     .await;
 
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Test debug info
     let debug_info = client.get_device_debug_info().await;
-    println!("Debug info: {}", debug_info);
+    println!("Debug info: {debug_info}");
     assert!(debug_info.contains("Debug User"));
     assert!(debug_info.contains("1234567890"));
     assert!(debug_info.contains("Ready for Presence: true"));

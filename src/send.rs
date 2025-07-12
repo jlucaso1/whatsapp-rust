@@ -10,7 +10,7 @@ use whatsapp_proto::whatsapp as wa;
 use whatsapp_proto::whatsapp::message::DeviceSentMessage;
 
 // Group messaging imports
-use base64::Engine;
+use base64::prelude::*;
 use sha2::{Digest, Sha256};
 
 // Helper function to pad messages for encryption
@@ -27,8 +27,6 @@ fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
     plaintext
 }
 
-use base64::engine::general_purpose::STANDARD_NO_PAD;
-
 fn participant_list_hash(devices: &[Jid]) -> String {
     let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
     jids.sort();
@@ -44,7 +42,7 @@ fn participant_list_hash(devices: &[Jid]) -> String {
     let truncated_hash = &full_hash[..6];
 
     // Encode using base64 without padding
-    format!("2:{hash}", hash = STANDARD_NO_PAD.encode(truncated_hash))
+    format!("2:{hash}", hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash))
 }
 
 impl Client {

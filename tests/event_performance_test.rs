@@ -46,7 +46,7 @@ async fn test_event_dispatch_latency_comparison() {
     let handler_counts = [1, 10, 50, 100, 500, 1000];
 
     for &count in &handler_counts {
-        println!("\nTesting with {} handlers/subscribers:", count);
+        println!("\nTesting with {count} handlers/subscribers:");
 
         // Test old system
         let old_system = OldEventHandler::new();
@@ -106,7 +106,7 @@ async fn test_event_dispatch_latency_comparison() {
             new_duration,
             new_duration.as_nanos() as f64 / 1000.0 / 1000.0
         );
-        println!("  Improvement: {:.2}x faster", improvement);
+        println!("  Improvement: {improvement:.2}x faster");
     }
 }
 
@@ -200,14 +200,12 @@ async fn test_selective_event_delivery() {
     let message_received = message_count.load(std::sync::atomic::Ordering::Relaxed);
 
     println!(
-        "Connected events sent: 100, received: {}",
-        connected_received
+        "Connected events sent: 100, received: {connected_received}"
     );
     println!(
-        "Disconnected events sent: 50, received: {}",
-        disconnected_received
+        "Disconnected events sent: 50, received: {disconnected_received}"
     );
-    println!("Message events sent: 75, received: {}", message_received);
+    println!("Message events sent: 75, received: {message_received}");
 
     // Verify that subscribers only received their specific event types
     assert_eq!(
@@ -268,8 +266,8 @@ async fn test_throughput_comparison() {
     let new_throughput_time = start.elapsed();
     let new_throughput = num_events as f64 / new_throughput_time.as_secs_f64();
 
-    println!("Old system throughput: {:.0} events/sec", old_throughput);
-    println!("New system throughput: {:.0} events/sec", new_throughput);
+    println!("Old system throughput: {old_throughput:.0} events/sec");
+    println!("New system throughput: {new_throughput:.0} events/sec");
     println!(
         "Throughput improvement: {:.2}x",
         new_throughput / old_throughput
@@ -350,8 +348,8 @@ async fn test_memory_efficiency() {
     let connected_count = connected_task.await.unwrap();
     let message_count = message_task.await.unwrap();
 
-    println!("Connected events processed: {}", connected_count);
-    println!("Message events processed: {}", message_count);
+    println!("Connected events processed: {connected_count}");
+    println!("Message events processed: {message_count}");
     println!("✅ Memory efficient - tasks only process events they subscribe to");
 
     assert_eq!(connected_count, 100);
