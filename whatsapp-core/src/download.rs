@@ -1,6 +1,7 @@
 use crate::crypto::{cbc, hkdf};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;

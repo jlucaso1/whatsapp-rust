@@ -48,6 +48,6 @@ anyhow = { version = "1.0", default-features = false }
 serde_bytes = "0.11.17"
 subtle = "2.6.1"
 async-trait = "0.1.88"
-base64 = { version = "0.22.1", default-features = false }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
