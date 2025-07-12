@@ -19,8 +19,8 @@ bytes = { version = "1.5", default-features = false }
 
 # Cryptography
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
-ed25519-dalek = { version = "2.1.1" }
-curve25519-dalek = { version = "4.1.3", default-features = false, features = [
+ed25519-dalek = { version = "2.2.0" }
+curve25519-dalek = { version = "4.2.0", default-features = false, features = [
     "serde",
 ] }
 rand = { version = "0.8.5" }
@@ -34,7 +34,7 @@ aes = "0.8.3"
 sha2 = "0.10.6"
 hmac = "0.12.1"
 hkdf = "0.12.3"
-md5 = "0.7"
+md5 = "0.8.0"
 thiserror = "2.0.12"
 
 # Zlib decompression for WABinary
