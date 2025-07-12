@@ -1,6 +1,7 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::crypto::xed25519;
 use crate::types::jid::{Jid, SERVER_JID};
+use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use prost::Message;
@@ -264,8 +265,12 @@ impl PairUtils {
         let dut_identity_pub_b64 = parts[2];
         // The ADV secret is not used by the phone side.
 
-        let dut_noise_pub_bytes = BASE64_STANDARD.decode(dut_noise_pub_b64)?;
-        let dut_identity_pub_bytes = BASE64_STANDARD.decode(dut_identity_pub_b64)?;
+        let dut_noise_pub_bytes = BASE64_STANDARD
+            .decode(dut_noise_pub_b64)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let dut_identity_pub_bytes = BASE64_STANDARD
+            .decode(dut_identity_pub_b64)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         let dut_noise_pub: [u8; 32] = dut_noise_pub_bytes
             .try_into()

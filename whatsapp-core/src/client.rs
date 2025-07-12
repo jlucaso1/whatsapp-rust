@@ -1,5 +1,6 @@
 use crate::runtime::ProcessResult;
 use crate::store::Device;
+use base64::Engine as _;
 use base64::prelude::*;
 use sha2::{Digest, Sha256};
 
