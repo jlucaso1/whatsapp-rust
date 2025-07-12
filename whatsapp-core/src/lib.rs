@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod client;
 pub mod crypto;
 pub mod download;
 pub mod handshake;

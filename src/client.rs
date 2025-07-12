@@ -55,9 +55,10 @@ pub struct RecentMessageKey {
 }
 
 pub struct Client {
-    // pub store: std::sync::Arc<tokio::sync::RwLock<store::Device>>, // Replaced with persistence_manager
+    /// Core protocol client (platform-independent)
+    pub core: whatsapp_core::client::CoreClient,
+    
     pub persistence_manager: Arc<PersistenceManager>,
-
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 
     pub(crate) is_logged_in: Arc<AtomicBool>,
@@ -93,13 +94,16 @@ pub struct Client {
 }
 
 impl Client {
-    // pub fn new(store: store::Device) -> Self { // Old constructor
-    pub fn new(persistence_manager: Arc<PersistenceManager>) -> Self {
+    pub async fn new(persistence_manager: Arc<PersistenceManager>) -> Self {
         let mut unique_id_bytes = [0u8; 2];
         rand::thread_rng().fill_bytes(&mut unique_id_bytes);
 
+        // Get initial device state and create core client
+        let device_snapshot = persistence_manager.get_device_snapshot().await;
+        let core = whatsapp_core::client::CoreClient::new(device_snapshot.core.clone());
+
         Self {
-            // store: std::sync::Arc::new(tokio::sync::RwLock::new(store)), // Old store
+            core,
             persistence_manager,
             media_conn: Arc::new(Mutex::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
