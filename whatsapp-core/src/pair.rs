@@ -1,8 +1,7 @@
 use crate::binary::node::{Node, NodeContent};
 use crate::crypto::xed25519;
 use crate::types::jid::{Jid, SERVER_JID};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
+use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use prost::Message;
 use sha2::Sha256;
@@ -50,9 +49,9 @@ pub struct PairUtils;
 impl PairUtils {
     /// Constructs the full QR code string from the ref and device keys.
     pub fn make_qr_data(device_state: &DeviceState, ref_str: String) -> String {
-        let noise_b64 = B64.encode(device_state.noise_key.public_key);
-        let identity_b64 = B64.encode(device_state.identity_key.public_key);
-        let adv_b64 = B64.encode(device_state.adv_secret_key);
+        let noise_b64 = BASE64_STANDARD.encode(device_state.noise_key.public_key);
+        let identity_b64 = BASE64_STANDARD.encode(device_state.identity_key.public_key);
+        let adv_b64 = BASE64_STANDARD.encode(device_state.adv_secret_key);
 
         [ref_str, noise_b64, identity_b64, adv_b64].join(",")
     }
@@ -265,8 +264,8 @@ impl PairUtils {
         let dut_identity_pub_b64 = parts[2];
         // The ADV secret is not used by the phone side.
 
-        let dut_noise_pub_bytes = B64.decode(dut_noise_pub_b64)?;
-        let dut_identity_pub_bytes = B64.decode(dut_identity_pub_b64)?;
+        let dut_noise_pub_bytes = BASE64_STANDARD.decode(dut_noise_pub_b64)?;
+        let dut_identity_pub_bytes = BASE64_STANDARD.decode(dut_identity_pub_b64)?;
 
         let dut_noise_pub: [u8; 32] = dut_noise_pub_bytes
             .try_into()

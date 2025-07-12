@@ -34,17 +34,16 @@ impl LtHash {
     }
 }
 
-fn perform_pointwise_with_overflow(base: &mut [u8; 128], input: &[u8; 128], subtract: bool) {
-    for i in (0..128).step_by(2) {
-        let x = u16::from_le_bytes(base[i..i + 2].try_into().unwrap());
-        let y = u16::from_le_bytes(input[i..i + 2].try_into().unwrap());
-
-        let result = if subtract {
-            x.wrapping_sub(y)
+fn perform_pointwise_with_overflow(base: &mut [u8; 128], other: &[u8; 128], subtract: bool) {
+    let mut carry: u16 = 0;
+    for i in 0..128 {
+        let mut result = base[i] as u16 + carry;
+        if subtract {
+            result = result.wrapping_sub(other[i] as u16);
         } else {
-            x.wrapping_add(y)
-        };
-
-        base[i..i + 2].copy_from_slice(&result.to_le_bytes());
+            result += other[i] as u16;
+        }
+        base[i] = (result & 0xff) as u8;
+        carry = result >> 8;
     }
 }

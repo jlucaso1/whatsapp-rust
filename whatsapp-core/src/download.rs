@@ -1,7 +1,7 @@
 use crate::crypto::{cbc, hkdf};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use whatsapp_proto::whatsapp::ExternalBlobReference;
@@ -115,7 +115,7 @@ impl DownloadUtils {
                 hostname = host.hostname,
                 direct_path = direct_path,
                 auth = media_conn.auth,
-                token = URL_SAFE_NO_PAD.encode(file_enc_sha256)
+                token = BASE64_URL_SAFE_NO_PAD.encode(file_enc_sha256)
             );
 
             requests.push(DownloadRequest {
