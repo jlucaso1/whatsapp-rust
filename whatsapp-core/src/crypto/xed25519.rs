@@ -10,7 +10,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::scalar::{Scalar, clamp_integer};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use rand::RngCore;
+use rand::TryRngCore;
 use sha2::{Digest, Sha512};
 
 // Internal struct to organize methods, not exposed publicly.
@@ -49,9 +49,8 @@ pub fn sign(private_key_bytes: &[u8; 32], message: &[u8]) -> [u8; 64] {
     let private_key = PrivateKey(*private_key_bytes);
     let (ed25519_private, ed25519_public) = private_key.calculate_key_pair(0);
 
-    let mut rng = rand::rngs::OsRng;
     let mut nonce = [0u8; 64];
-    rng.fill_bytes(&mut nonce);
+    rand::rngs::OsRng.try_fill_bytes(&mut nonce).unwrap();
 
     let padding: [u8; 32] = hash_i_padding(1);
     let mut hasher = Sha512::new();

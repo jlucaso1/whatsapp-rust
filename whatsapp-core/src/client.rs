@@ -62,9 +62,9 @@ impl MessageUtils {
     /// Pads a message for encryption (pure function)
     pub fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
         use rand::Rng;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
-        let mut pad_val = rng.r#gen::<u8>() & 0x0F;
+        let mut pad_val = rng.random::<u8>() & 0x0F;
         if pad_val == 0 {
             pad_val = 0x0F;
         }

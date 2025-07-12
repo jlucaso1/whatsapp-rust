@@ -108,7 +108,7 @@ impl RequestUtils {
 
         // 3. Add random bytes (16 bytes)
         let mut random_bytes = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut random_bytes);
+        rand::rng().fill_bytes(&mut random_bytes);
         data.extend_from_slice(&random_bytes);
 
         // 4. Hash, truncate, and format with 3EB0 prefix
