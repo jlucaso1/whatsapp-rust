@@ -46,7 +46,7 @@ impl TestHarness {
                 .await
                 .expect("Failed to create PersistenceManager for Client A"),
         );
-        let client_a = Arc::new(Client::new(pm_a.clone()));
+        let client_a = Arc::new(Client::new(pm_a.clone()).await);
 
         let temp_dir_b = TempDir::new().unwrap();
         let store_path_b = temp_dir_b.path().join("client_b_store");
@@ -55,7 +55,7 @@ impl TestHarness {
                 .await
                 .expect("Failed to create PersistenceManager for Client B"),
         );
-        let client_b = Arc::new(Client::new(pm_b.clone()));
+        let client_b = Arc::new(Client::new(pm_b.clone()).await);
 
         // Create event channels using the new typed event bus
         let client_a_events_rx = client_a.subscribe_to_all_events();
@@ -66,8 +66,8 @@ impl TestHarness {
             pm_a,
             client_b,
             pm_b,
-            client_a_events_rx: client_a_events_rx,
-            client_b_events_rx: client_b_events_rx,
+            client_a_events_rx,
+            client_b_events_rx,
             _temp_dir_a: temp_dir_a,
             _temp_dir_b: temp_dir_b,
         }
@@ -274,8 +274,7 @@ async fn test_send_receive_message() {
         .await;
 
     info!(
-        "Simulated pairing complete for Client A ({}) and Client B ({}).",
-        client_a_address, client_b_address
+        "Simulated pairing complete for Client A ({client_a_address}) and Client B ({client_b_address})."
     );
 
     // 2. SESSION ESTABLISHMENT (CLIENT A -> CLIENT B)

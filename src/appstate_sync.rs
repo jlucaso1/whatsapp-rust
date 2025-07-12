@@ -1,37 +1,29 @@
-use crate::appstate::processor::{PatchList, Processor};
-use crate::binary::node::{Attrs, Node, NodeContent};
+// Re-export appstate utilities from core
+pub use whatsapp_core::appstate::*;
+
+// Import platform-specific types
+use crate::appstate::processor::Processor;
 use crate::client::Client;
-use crate::request::{InfoQuery, InfoQueryType};
 use crate::types::events::{ContactUpdate, Event};
 use crate::types::jid::{self, Jid};
 use log::{error, info, warn};
+use processor::PatchList;
 use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
 use whatsapp_proto::whatsapp as wa;
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
-    use whatsapp_proto::whatsapp::message::protocol_message;
-
-    let key_ids = keys
-        .into_iter()
-        .map(|id| wa::message::AppStateSyncKeyId { key_id: Some(id) })
-        .collect();
-
-    let msg = wa::Message {
-        protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-            r#type: Some(protocol_message::Type::AppStateSyncKeyRequest as i32),
-            app_state_sync_key_request: Some(wa::message::AppStateSyncKeyRequest { key_ids }),
-            ..Default::default()
-        })),
-        ..Default::default()
-    };
+    let msg = sync::SyncUtils::build_app_state_key_request(keys);
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     if let Some(own_jid) = device_snapshot.id.clone() {
         let own_non_ad = own_jid.to_non_ad();
         let request_id = client.generate_message_id().await;
-        if let Err(e) = client.send_message_impl(own_non_ad, msg, request_id).await {
+        if let Err(e) = client
+            .send_message_impl(own_non_ad, msg, request_id, true)
+            .await
+        {
             warn!("Failed to send app state key request: {e:?}");
         }
     } else {
@@ -44,33 +36,16 @@ pub async fn fetch_app_state_patches(
     name: &str,
     version: u64,
     is_full_sync: bool,
-) -> Result<Node, crate::request::IqError> {
-    let mut attrs = Attrs::new();
-    attrs.insert("name".to_string(), name.to_string());
-    attrs.insert("return_snapshot".to_string(), is_full_sync.to_string());
-    if !is_full_sync {
-        attrs.insert("version".to_string(), version.to_string());
-    }
+) -> Result<crate::binary::node::Node, crate::request::IqError> {
+    let sync_node = sync::SyncUtils::build_fetch_patches_query(name, version, is_full_sync);
 
-    let collection_node = Node {
-        tag: "collection".to_string(),
-        attrs,
-        content: None,
-    };
-
-    let sync_node = Node {
-        tag: "sync".to_string(),
-        attrs: Attrs::new(),
-        content: Some(NodeContent::Nodes(vec![collection_node])),
-    };
-
-    let iq = InfoQuery {
+    let iq = crate::request::InfoQuery {
         namespace: "w:sync:app:state",
-        query_type: InfoQueryType::Set,
+        query_type: crate::request::InfoQueryType::Set,
         to: jid::SERVER_JID.parse().unwrap(),
         target: None,
         id: None,
-        content: Some(NodeContent::Nodes(vec![sync_node])),
+        content: Some(crate::binary::node::NodeContent::Nodes(vec![sync_node])),
         timeout: None,
     };
 
@@ -197,7 +172,8 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                             .persistence_manager
                             .get_device_snapshot()
                             .await
-                            .push_name;
+                            .push_name
+                            .clone();
 
                         // Process all mutations in this batch
                         let mut latest_push_name = None;

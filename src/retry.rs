@@ -129,7 +129,7 @@ impl Client {
         }
 
         // Resend the original message
-        self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id)
+        self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
             .await?; // Use _impl to send with original ID
         Ok(())
     }

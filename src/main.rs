@@ -24,7 +24,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     info!("Creating client...");
     // Client::new now expects Arc<PersistenceManager>
-    let client = Arc::new(Client::new(persistence_manager.clone()));
+    let client = Arc::new(Client::new(persistence_manager.clone()).await);
 
     // If not logged in, start the QR pairing process
     // Access device state via persistence_manager

@@ -40,7 +40,7 @@ impl TestHarness {
                 .await
                 .expect("Failed to create PersistenceManager for Master Client"),
         );
-        let master_client = Arc::new(Client::new(pm_master.clone()));
+        let master_client = Arc::new(Client::new(pm_master.clone()).await);
 
         let temp_dir_dut = TempDir::new().unwrap();
         let store_path_dut = temp_dir_dut.path().join("dut_store");
@@ -49,7 +49,7 @@ impl TestHarness {
                 .await
                 .expect("Failed to create PersistenceManager for DUT Client"),
         );
-        let dut_client = Arc::new(Client::new(pm_dut.clone()));
+        let dut_client = Arc::new(Client::new(pm_dut.clone()).await);
 
         // Create an event channel for the DUT using the new typed event bus
         let dut_events_rx = dut_client.subscribe_to_all_events();
@@ -59,7 +59,7 @@ impl TestHarness {
             pm_master,
             dut_client,
             pm_dut,
-            dut_events_rx: dut_events_rx,
+            dut_events_rx,
             _temp_dir_master: temp_dir_master,
             _temp_dir_dut: temp_dir_dut,
         }
@@ -81,7 +81,7 @@ async fn test_pairing_and_keepalive() {
         whatsapp_rust::pair::make_qr_data(&dut_device_snapshot, "test_ref_12345".to_string());
     // drop(dut_device_snapshot); // Not needed
 
-    info!("📱 Generated QR code: {}", qr_code);
+    info!("📱 Generated QR code: {qr_code}");
 
     // Verify QR code format
     let parts: Vec<&str> = qr_code.split(',').collect();
@@ -111,7 +111,7 @@ async fn test_pairing_and_keepalive() {
         Err(e) => {
             // We expect this to fail due to network issues in the test environment
             // but the crypto logic should have worked up to the network call
-            info!("⚠️ Pairing failed as expected due to network: {}", e);
+            info!("⚠️ Pairing failed as expected due to network: {e}");
 
             // Verify it's a network-related error, not a crypto error
             let error_str = e.to_string();
@@ -121,8 +121,7 @@ async fn test_pairing_and_keepalive() {
                     || error_str.contains("network")
                     || error_str.contains("connection")
                     || error_str.contains("WebSocket"),
-                "Should fail due to network issues, not crypto. Error: {}",
-                error_str
+                "Should fail due to network issues, not crypto. Error: {error_str}"
             );
         }
     }
@@ -170,34 +169,34 @@ async fn test_qr_code_generation() {
     assert_eq!(parts[0], "test_ref_123", "First part should be the ref");
 
     // Verify that the other parts are valid base64
-    use base64::{Engine, engine::general_purpose::STANDARD as B64};
+    use base64::prelude::*;
 
     assert!(
-        B64.decode(parts[1]).is_ok(),
+        BASE64_STANDARD.decode(parts[1]).is_ok(),
         "Noise public key should be valid base64"
     );
     assert!(
-        B64.decode(parts[2]).is_ok(),
+        BASE64_STANDARD.decode(parts[2]).is_ok(),
         "Identity public key should be valid base64"
     );
     assert!(
-        B64.decode(parts[3]).is_ok(),
+        BASE64_STANDARD.decode(parts[3]).is_ok(),
         "ADV secret should be valid base64"
     );
 
     // Verify key lengths
     assert_eq!(
-        B64.decode(parts[1]).unwrap().len(),
+        BASE64_STANDARD.decode(parts[1]).unwrap().len(),
         32,
         "Noise public key should be 32 bytes"
     );
     assert_eq!(
-        B64.decode(parts[2]).unwrap().len(),
+        BASE64_STANDARD.decode(parts[2]).unwrap().len(),
         32,
         "Identity public key should be 32 bytes"
     );
     assert_eq!(
-        B64.decode(parts[3]).unwrap().len(),
+        BASE64_STANDARD.decode(parts[3]).unwrap().len(),
         32,
         "ADV secret should be 32 bytes"
     );

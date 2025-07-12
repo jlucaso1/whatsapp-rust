@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 whatsapp-proto = { path = "../whatsapp-proto" }
 serde = { version = "1.0.188", features = ["derive"] }
+serde-big-array = "0.5"
+serde_json = "1.0"
 
 # Time handling
 chrono = { version = "0.4", features = [
@@ -32,6 +34,7 @@ aes = "0.8.3"
 sha2 = "0.10.6"
 hmac = "0.12.1"
 hkdf = "0.12.3"
+md5 = "0.7"
 thiserror = "2.0.12"
 
 # Zlib decompression for WABinary
@@ -45,5 +48,6 @@ anyhow = { version = "1.0", default-features = false }
 serde_bytes = "0.11.17"
 subtle = "2.6.1"
 async-trait = "0.1.88"
+base64 = { version = "0.22.1", default-features = false }
 
 [dev-dependencies]

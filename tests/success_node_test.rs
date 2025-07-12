@@ -18,7 +18,7 @@ async fn test_success_node_with_pushname() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Create a success node with pushname attribute
     let mut attrs = HashMap::new();
@@ -64,7 +64,7 @@ async fn test_success_node_without_pushname() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Create a success node without pushname attribute
     let mut attrs = HashMap::new();
@@ -99,7 +99,7 @@ async fn test_success_node_empty_pushname() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Create a success node with empty pushname attribute
     let mut attrs = HashMap::new();
@@ -135,7 +135,7 @@ async fn test_success_node_pushname_update() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Set an initial push name
     client
@@ -174,7 +174,7 @@ async fn test_success_node_no_update_same_pushname() {
             .await
             .unwrap(),
     );
-    let client = Arc::new(Client::new(pm.clone()));
+    let client = Arc::new(Client::new(pm.clone()).await);
 
     // Set an initial push name
     client.set_push_name("Same Name".to_string()).await.unwrap();
