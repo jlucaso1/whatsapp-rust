@@ -299,21 +299,31 @@ impl Client {
 
     /// Marks a message as processed and adds it to both the in-memory cache and persistent storage
     pub async fn mark_message_as_processed(&self, key: RecentMessageKey) {
-        // Add to in-memory cache first for immediate effect
-        {
-            let mut cache = self.processed_messages_cache.lock().await;
-            cache.insert(key.clone());
-        }
-
-        // Convert to wacore type and send to persistence manager
+        // Convert to wacore type and send to persistence manager first
         let wacore_key = wacore::store::device::ProcessedMessageKey {
-            to: key.to,
-            id: key.id,
+            to: key.to.clone(),
+            id: key.id.clone(),
         };
         
         self.persistence_manager
             .process_command(wacore::store::commands::DeviceCommand::AddProcessedMessage(wacore_key))
             .await;
+
+        // Rebuild in-memory cache from the updated persistent storage
+        // This ensures the cache respects the cap and maintains consistency
+        {
+            let mut cache = self.processed_messages_cache.lock().await;
+            cache.clear();
+            
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            for processed_msg in &device_snapshot.core.processed_messages {
+                let key = RecentMessageKey {
+                    to: processed_msg.to.clone(),
+                    id: processed_msg.id.clone(),
+                };
+                cache.insert(key);
+            }
+        }
     }
 
     /// Processes an encrypted frame from the WebSocket.
