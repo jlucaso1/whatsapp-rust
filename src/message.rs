@@ -5,8 +5,8 @@ use crate::proto_helpers::MessageExt;
 use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
+use crate::signal::store::{IdentityKeyStore, SenderKeyStore, SessionStore};
 use crate::signal::{address::SignalAddress, session::SessionCipher};
-use crate::signal::store::{IdentityKeyStore, SessionStore, SenderKeyStore};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
@@ -89,7 +89,9 @@ impl Client {
                 "pkmsg" | "msg" => {
                     // Capture bundle before decryption for direct messages
                     if self.capture_manager.is_enabled() {
-                        let _ = self.capture_direct_message_bundle(&info, &enc_node, &ciphertext).await;
+                        let _ = self
+                            .capture_direct_message_bundle(&info, enc_node, &ciphertext)
+                            .await;
                     }
 
                     use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
@@ -127,7 +129,9 @@ impl Client {
 
                     // Capture bundle before decryption for group messages
                     if self.capture_manager.is_enabled() {
-                        let _ = self.capture_group_message_bundle(&info, &enc_node, &ciphertext).await;
+                        let _ = self
+                            .capture_group_message_bundle(&info, enc_node, &ciphertext)
+                            .await;
                     }
 
                     let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
@@ -434,14 +438,14 @@ impl Client {
             info.source.sender.user.clone(),
             info.source.sender.device as u32,
         );
-        
+
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        
+
         // Get session record via Device's SessionStore implementation
         let session_record = match device_snapshot.load_session(&signal_address).await {
             Ok(session) => session,
             Err(e) => {
-                log::warn!("Failed to load session for capture: {}", e);
+                log::warn!("Failed to load session for capture: {e}");
                 wacore::signal::state::session_record::SessionRecord::new()
             }
         };
@@ -450,7 +454,7 @@ impl Client {
         let recipient_identity_keys = match device_snapshot.get_identity_key_pair().await {
             Ok(keys) => keys,
             Err(e) => {
-                log::warn!("Failed to get identity key pair for capture: {}", e);
+                log::warn!("Failed to get identity key pair for capture: {e}");
                 return Ok(());
             }
         };
@@ -497,7 +501,7 @@ impl Client {
         let session_record = match device_snapshot.load_session(&signal_address).await {
             Ok(session) => session,
             Err(e) => {
-                log::warn!("Failed to load session for group capture: {}", e);
+                log::warn!("Failed to load session for group capture: {e}");
                 wacore::signal::state::session_record::SessionRecord::new()
             }
         };
@@ -506,7 +510,7 @@ impl Client {
         let sender_key_record = match device_snapshot.load_sender_key(&sender_key_name).await {
             Ok(sender_key) => sender_key,
             Err(e) => {
-                log::warn!("Failed to load sender key for group capture: {}", e);
+                log::warn!("Failed to load sender key for group capture: {e}");
                 wacore::signal::state::sender_key_record::SenderKeyRecord::new()
             }
         };

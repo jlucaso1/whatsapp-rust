@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::fs;
 use tokio::sync::Mutex;
 
-use wacore::signal::state::session_record::SessionRecord;
-use wacore::signal::state::sender_key_record::SenderKeyRecord;
 use wacore::signal::identity::IdentityKeyPair;
+use wacore::signal::state::sender_key_record::SenderKeyRecord;
+use wacore::signal::state::session_record::SessionRecord;
 
 #[derive(Debug, Clone)]
 pub struct CaptureManager {
@@ -73,26 +73,42 @@ impl CaptureManager {
 
             // Save binary files
             fs::write(bundle_dir.join("message.bin"), &bundle.message_bin).await?;
-            fs::write(bundle_dir.join("sender_identity_key.bin"), &bundle.sender_identity_key_bin).await?;
+            fs::write(
+                bundle_dir.join("sender_identity_key.bin"),
+                &bundle.sender_identity_key_bin,
+            )
+            .await?;
 
             // Save JSON files
             let session_json = serde_json::to_string_pretty(&bundle.recipient_session)?;
             fs::write(bundle_dir.join("recipient_session.json"), session_json).await?;
 
             let identity_json = serde_json::to_string_pretty(&bundle.recipient_identity_keys)?;
-            fs::write(bundle_dir.join("recipient_identity_keys.json"), identity_json).await?;
+            fs::write(
+                bundle_dir.join("recipient_identity_keys.json"),
+                identity_json,
+            )
+            .await?;
 
             if let Some(ref prekey) = bundle.recipient_prekey {
                 fs::write(bundle_dir.join("recipient_prekey.json"), prekey).await?;
             }
 
             if let Some(ref signed_prekey) = bundle.recipient_signed_prekey {
-                fs::write(bundle_dir.join("recipient_signed_prekey.json"), signed_prekey).await?;
+                fs::write(
+                    bundle_dir.join("recipient_signed_prekey.json"),
+                    signed_prekey,
+                )
+                .await?;
             }
 
-            fs::write(bundle_dir.join("expected_plaintext.txt"), &bundle.expected_plaintext).await?;
+            fs::write(
+                bundle_dir.join("expected_plaintext.txt"),
+                &bundle.expected_plaintext,
+            )
+            .await?;
 
-            log::info!("Captured direct message bundle: {}", message_id);
+            log::info!("Captured direct message bundle: {message_id}");
         }
 
         Ok(())
@@ -114,18 +130,30 @@ impl CaptureManager {
 
             // Save binary files
             fs::write(bundle_dir.join("message.bin"), &bundle.message_bin).await?;
-            fs::write(bundle_dir.join("sender_identity_key.bin"), &bundle.sender_identity_key_bin).await?;
+            fs::write(
+                bundle_dir.join("sender_identity_key.bin"),
+                &bundle.sender_identity_key_bin,
+            )
+            .await?;
 
             // Save JSON files
             let session_json = serde_json::to_string_pretty(&bundle.recipient_session)?;
             fs::write(bundle_dir.join("recipient_session.json"), session_json).await?;
 
             let sender_key_json = serde_json::to_string_pretty(&bundle.recipient_sender_key)?;
-            fs::write(bundle_dir.join("recipient_sender_key.json"), sender_key_json).await?;
+            fs::write(
+                bundle_dir.join("recipient_sender_key.json"),
+                sender_key_json,
+            )
+            .await?;
 
-            fs::write(bundle_dir.join("expected_plaintext.txt"), &bundle.expected_plaintext).await?;
+            fs::write(
+                bundle_dir.join("expected_plaintext.txt"),
+                &bundle.expected_plaintext,
+            )
+            .await?;
 
-            log::info!("Captured group message bundle: {}", message_id);
+            log::info!("Captured group message bundle: {message_id}");
         }
 
         Ok(())

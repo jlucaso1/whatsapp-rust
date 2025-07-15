@@ -29,7 +29,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Check for capture mode environment variable
     if let Ok(capture_path) = env::var("WHATSAPP_CAPTURE_BUNDLES") {
-        info!("📦 Enabling capture mode: {}", capture_path);
+        info!("📦 Enabling capture mode: {capture_path}");
         client.enable_capture_mode(&capture_path).await;
     }
 

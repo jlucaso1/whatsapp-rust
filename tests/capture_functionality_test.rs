@@ -1,11 +1,8 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::fs;
-use whatsapp_rust::{
-    client::Client,
-    store::persistence_manager::PersistenceManager,
-};
 use wacore::signal::identity::IdentityKeyPair;
+use whatsapp_rust::{client::Client, store::persistence_manager::PersistenceManager};
 
 #[tokio::test]
 async fn test_capture_mode_functionality() {
@@ -16,7 +13,7 @@ async fn test_capture_mode_functionality() {
     // Create a temporary directory for the client store
     let temp_store = TempDir::new().unwrap();
     let store_path = temp_store.path().join("capture_test_store");
-    
+
     // Create a temporary directory for capture output
     let temp_capture = TempDir::new().unwrap();
     let capture_path = temp_capture.path().join("captured_bundles");
@@ -30,24 +27,33 @@ async fn test_capture_mode_functionality() {
     let client = Arc::new(Client::new(pm).await);
 
     // Test capture mode activation
-    assert!(!client.is_capture_enabled(), "Capture should be disabled by default");
+    assert!(
+        !client.is_capture_enabled(),
+        "Capture should be disabled by default"
+    );
 
     client.enable_capture_mode(&capture_path).await;
-    assert!(client.is_capture_enabled(), "Capture should be enabled after activation");
+    assert!(
+        client.is_capture_enabled(),
+        "Capture should be enabled after activation"
+    );
 
     // Test that capture directory is set up correctly
     // Since we can't easily trigger actual message capture without a full connection,
     // we'll just verify the basic functionality works
     client.disable_capture_mode();
-    assert!(!client.is_capture_enabled(), "Capture should be disabled after deactivation");
+    assert!(
+        !client.is_capture_enabled(),
+        "Capture should be disabled after deactivation"
+    );
 
     println!("✅ Capture mode functionality test passed");
 }
 
 #[tokio::test]
 async fn test_capture_manager_bundle_creation() {
-    use whatsapp_rust::capture::{CaptureManager, DirectMessageBundle};
     use wacore::signal::state::session_record::SessionRecord;
+    use whatsapp_rust::capture::{CaptureManager, DirectMessageBundle};
 
     let temp_dir = TempDir::new().unwrap();
     let capture_path = temp_dir.path().join("test_bundles");
@@ -75,10 +81,10 @@ async fn test_capture_manager_bundle_creation() {
     // Verify files were created
     let bundle_dir = capture_path.join("test_message_001");
     assert!(bundle_dir.exists(), "Bundle directory should be created");
-    
+
     let expected_files = [
         "message.bin",
-        "sender_identity_key.bin", 
+        "sender_identity_key.bin",
         "recipient_session.json",
         "recipient_identity_keys.json",
         "expected_plaintext.txt",
@@ -86,7 +92,7 @@ async fn test_capture_manager_bundle_creation() {
 
     for file in &expected_files {
         let file_path = bundle_dir.join(file);
-        assert!(file_path.exists(), "File {} should exist", file);
+        assert!(file_path.exists(), "File {file} should exist");
     }
 
     // Verify content of one file
