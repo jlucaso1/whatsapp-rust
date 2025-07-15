@@ -3,10 +3,10 @@ use log::info;
 use prost::Message;
 use std::path::PathBuf;
 use std::sync::Arc;
+use wacore::appstate::hash::HashState;
 use wacore::signal::state::{sender_key_record::SenderKeyRecord, session_record::SessionRecord};
 use wacore::store::traits::AppStateSyncKey;
 use waproto::whatsapp as wa;
-use whatsapp_rust::appstate::hash::HashState;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 
 #[derive(Parser)]
