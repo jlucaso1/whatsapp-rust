@@ -13,13 +13,15 @@ use waproto::whatsapp as wa;
 async fn test_patch_mac_validation_with_index_value_map() {
     // 1. Setup initial state with some existing data in index_value_map
     let mut initial_state = HashState::default();
-    
+
     // Add some existing entries to simulate previous SET operations
     let existing_index_mac_bytes = b"existing_index_123";
     let existing_index_mac = BASE64_STANDARD.encode(existing_index_mac_bytes);
     let existing_value_mac = b"existing_value_mac_32_bytes_long".to_vec();
-    initial_state.index_value_map.insert(existing_index_mac.clone(), existing_value_mac.clone());
-    
+    initial_state
+        .index_value_map
+        .insert(existing_index_mac.clone(), existing_value_mac.clone());
+
     // Update the hash to reflect this existing entry
     WA_PATCH_INTEGRITY.subtract_then_add_in_place(
         &mut initial_state.hash,
@@ -54,7 +56,7 @@ async fn test_patch_mac_validation_with_index_value_map() {
     // 3. Calculate the expected patch MAC
     let mut expected_final_hash = initial_state.hash;
     let new_value_mac = extract_value_mac(&set_mutation);
-    
+
     WA_PATCH_INTEGRITY.subtract_then_add_in_place(
         &mut expected_final_hash,
         &[&existing_value_mac],
@@ -93,23 +95,38 @@ async fn test_patch_mac_validation_with_index_value_map() {
     };
 
     // 6. Test: Decode patches should succeed
-    let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state.clone(), key_lookup);
-    
-    assert!(result.is_ok(), "Patch decoding should succeed with valid MAC");
+    let result =
+        ProcessorUtils::decode_patches_core(&patch_list, initial_state.clone(), key_lookup);
+
+    assert!(
+        result.is_ok(),
+        "Patch decoding should succeed with valid MAC"
+    );
     let (mutations, final_state) = result.unwrap();
-    
+
     // 7. Verify results
     assert_eq!(mutations.len(), 2, "Should have 2 decoded mutations");
     assert_eq!(final_state.version, 2, "Version should be updated");
-    
+
     // Verify index_value_map was updated correctly
-    assert!(!final_state.index_value_map.contains_key(&existing_index_mac), "Old entry should be removed");
-    
+    assert!(
+        !final_state
+            .index_value_map
+            .contains_key(&existing_index_mac),
+        "Old entry should be removed"
+    );
+
     let new_index_mac_b64 = BASE64_STANDARD.encode(new_index_mac);
-    assert!(final_state.index_value_map.contains_key(&new_index_mac_b64), "New entry should be added");
-    
+    assert!(
+        final_state.index_value_map.contains_key(&new_index_mac_b64),
+        "New entry should be added"
+    );
+
     // Verify final hash matches expected
-    assert_eq!(final_state.hash, expected_final_hash, "Final hash should match expected value");
+    assert_eq!(
+        final_state.hash, expected_final_hash,
+        "Final hash should match expected value"
+    );
 }
 
 #[tokio::test]
@@ -118,8 +135,10 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
     let mut initial_state = HashState::default();
     let existing_index_mac = BASE64_STANDARD.encode(b"existing_index_123");
     let existing_value_mac = b"existing_value_mac_32_bytes_long".to_vec();
-    initial_state.index_value_map.insert(existing_index_mac, existing_value_mac.clone());
-    
+    initial_state
+        .index_value_map
+        .insert(existing_index_mac, existing_value_mac.clone());
+
     WA_PATCH_INTEGRITY.subtract_then_add_in_place(
         &mut initial_state.hash,
         &[],
@@ -171,9 +190,9 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
 
     // Test: Should fail with mismatching patch MAC
     let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state, key_lookup);
-    
+
     println!("Test result: {:?}", result);
-    
+
     assert!(result.is_err(), "Should fail with wrong patch MAC");
     match result.unwrap_err() {
         wacore::appstate::errors::AppStateError::MismatchingPatchMAC => {
@@ -189,7 +208,7 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
 async fn test_missing_previous_set_value_error() {
     // Test that REMOVE operation fails when there's no previous SET
     let initial_state = HashState::default(); // Empty state
-    
+
     let key_data = b"some-secret-app-state-key-data-!";
     let keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"my_key_id";
@@ -233,9 +252,15 @@ async fn test_missing_previous_set_value_error() {
     };
 
     let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state, key_lookup);
-    
-    assert!(result.is_err(), "Should fail when trying to remove non-existent entry");
-    assert!(matches!(result.unwrap_err(), wacore::appstate::errors::AppStateError::MissingPreviousSetValue(_)));
+
+    assert!(
+        result.is_err(),
+        "Should fail when trying to remove non-existent entry"
+    );
+    assert!(matches!(
+        result.unwrap_err(),
+        wacore::appstate::errors::AppStateError::MissingPreviousSetValue(_)
+    ));
 }
 
 // Helper function to create a test mutation
@@ -255,7 +280,7 @@ fn create_test_mutation(
         }),
         ..Default::default()
     };
-    
+
     let sync_action_data = wa::SyncActionData {
         index: Some(index_json.as_bytes().to_vec()),
         value: Some(sync_action_value),
@@ -273,12 +298,8 @@ fn create_test_mutation(
     content.extend_from_slice(&ciphertext);
 
     // Generate value MAC
-    let value_mac = hmac_sha512::generate_content_mac(
-        operation,
-        &content,
-        key_id_bytes,
-        &keys.value_mac,
-    );
+    let value_mac =
+        hmac_sha512::generate_content_mac(operation, &content, key_id_bytes, &keys.value_mac);
 
     let mut value_blob = content;
     value_blob.extend_from_slice(&value_mac);
@@ -311,7 +332,7 @@ fn extract_value_mac(mutation: &wa::SyncdMutation) -> Vec<u8> {
         .blob
         .as_ref()
         .unwrap();
-    
+
     // Last 32 bytes are the value MAC
     value_blob[value_blob.len() - 32..].to_vec()
 }

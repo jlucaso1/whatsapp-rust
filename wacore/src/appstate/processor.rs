@@ -84,11 +84,13 @@ impl ProcessorUtils {
 
                 for mutation in &patch_mutations {
                     let index_mac_b64 = BASE64_STANDARD.encode(&mutation.index_mac);
-                    
+
                     match mutation.operation {
                         wa::syncd_mutation::SyncdOperation::Remove => {
                             // For REMOVE operations, we need the old value MAC from index_value_map
-                            if let Some(old_value_mac) = current_state.index_value_map.get(&index_mac_b64) {
+                            if let Some(old_value_mac) =
+                                current_state.index_value_map.get(&index_mac_b64)
+                            {
                                 subtract_macs_data.push(old_value_mac.clone());
                             } else {
                                 return Err(AppStateError::MissingPreviousSetValue(index_mac_b64));
@@ -102,7 +104,8 @@ impl ProcessorUtils {
                 }
 
                 // Convert to slice references
-                let subtract_macs: Vec<&[u8]> = subtract_macs_data.iter().map(|v| v.as_slice()).collect();
+                let subtract_macs: Vec<&[u8]> =
+                    subtract_macs_data.iter().map(|v| v.as_slice()).collect();
                 let add_macs: Vec<&[u8]> = add_macs_data.iter().map(|v| v.as_slice()).collect();
 
                 // Calculate expected patch MAC using LT-Hash
@@ -125,24 +128,29 @@ impl ProcessorUtils {
 
             for mutation in &patch_mutations {
                 let index_mac_b64 = BASE64_STANDARD.encode(&mutation.index_mac);
-                
+
                 match mutation.operation {
                     wa::syncd_mutation::SyncdOperation::Remove => {
                         // Remove from index_value_map and collect for hash subtraction
-                        if let Some(old_value_mac) = current_state.index_value_map.remove(&index_mac_b64) {
+                        if let Some(old_value_mac) =
+                            current_state.index_value_map.remove(&index_mac_b64)
+                        {
                             subtract_macs_data.push(old_value_mac);
                         }
                     }
                     wa::syncd_mutation::SyncdOperation::Set => {
                         // Add to index_value_map and collect for hash addition
                         add_macs_data.push(mutation.value_mac.clone());
-                        current_state.index_value_map.insert(index_mac_b64, mutation.value_mac.clone());
+                        current_state
+                            .index_value_map
+                            .insert(index_mac_b64, mutation.value_mac.clone());
                     }
                 }
             }
 
             // Convert to slice references for hash update
-            let subtract_macs: Vec<&[u8]> = subtract_macs_data.iter().map(|v| v.as_slice()).collect();
+            let subtract_macs: Vec<&[u8]> =
+                subtract_macs_data.iter().map(|v| v.as_slice()).collect();
             let add_macs: Vec<&[u8]> = add_macs_data.iter().map(|v| v.as_slice()).collect();
 
             // Update the hash state
