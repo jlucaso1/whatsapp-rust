@@ -3,7 +3,15 @@ use crate::types::jid::Jid;
 use once_cell::sync::Lazy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use waproto::whatsapp as wa;
+
+/// Represents a processed message key for deduplication
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProcessedMessageKey {
+    pub to: Jid,
+    pub id: String,
+}
 
 // A static, lazily-initialized base payload
 static BASE_CLIENT_PAYLOAD: Lazy<wa::ClientPayload> = Lazy::new(|| wa::ClientPayload {
@@ -60,6 +68,8 @@ pub struct Device {
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
+    #[serde(default)]
+    pub processed_messages: VecDeque<ProcessedMessageKey>,
 }
 
 impl Default for Device {
@@ -88,6 +98,7 @@ impl Device {
             adv_secret_key,
             account: None,
             push_name: String::new(),
+            processed_messages: VecDeque::new(),
         }
     }
 

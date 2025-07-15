@@ -20,7 +20,6 @@ type PreKeyMap = GenericMemoryStore<u32, PreKeyRecordStructure>;
 type SignedPreKeyMap = GenericMemoryStore<u32, SignedPreKeyRecordStructure>;
 type SenderKeyMap = GenericMemoryStore<String, SenderKeyRecord>;
 type AppStateSyncKeyMap = GenericMemoryStore<Vec<u8>, AppStateSyncKey>;
-type BufferedEventMap = GenericMemoryStore<[u8; 32], BufferedEvent>;
 
 #[derive(Default)]
 pub struct MemoryStore {
@@ -31,7 +30,6 @@ pub struct MemoryStore {
     signed_prekeys: SignedPreKeyMap,
     sender_keys: SenderKeyMap,
     app_state_sync_keys: AppStateSyncKeyMap,
-    buffered_events: BufferedEventMap,
 }
 
 impl MemoryStore {
@@ -116,38 +114,6 @@ impl AppStateKeyStore for MemoryStore {
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         self.app_state_sync_keys.put(key_id.to_vec(), key).await;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl EventBufferStore for MemoryStore {
-    async fn get_buffered_event(
-        &self,
-        ciphertext_hash: &[u8; 32],
-    ) -> Result<Option<BufferedEvent>> {
-        Ok(self.buffered_events.get(ciphertext_hash).await)
-    }
-
-    async fn put_buffered_event(
-        &self,
-        ciphertext_hash: &[u8; 32],
-        plaintext: Option<Vec<u8>>,
-        server_timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> Result<()> {
-        let event = BufferedEvent {
-            plaintext,
-            insert_time: server_timestamp,
-        };
-        self.buffered_events.put(*ciphertext_hash, event).await;
-        Ok(())
-    }
-
-    async fn delete_old_buffered_events(
-        &self,
-        _older_than: chrono::DateTime<chrono::Utc>,
-    ) -> Result<usize> {
-        // For now, don't delete anything in memory store
-        Ok(0)
     }
 }
 

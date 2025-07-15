@@ -11,30 +11,6 @@ pub struct AppStateSyncKey {
     pub timestamp: i64,
 }
 
-// --- Event Buffer for deduplication ---
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BufferedEvent {
-    pub plaintext: Option<Vec<u8>>,
-    pub insert_time: chrono::DateTime<chrono::Utc>,
-}
-
-#[async_trait]
-pub trait EventBufferStore: Send + Sync {
-    async fn get_buffered_event(&self, ciphertext_hash: &[u8; 32])
-    -> Result<Option<BufferedEvent>>;
-    async fn put_buffered_event(
-        &self,
-        ciphertext_hash: &[u8; 32],
-        plaintext: Option<Vec<u8>>,
-        server_timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> Result<()>;
-    async fn delete_old_buffered_events(
-        &self,
-        older_than: chrono::DateTime<chrono::Utc>,
-    ) -> Result<usize>;
-}
-
 #[async_trait]
 pub trait IdentityStore: Send + Sync {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
@@ -74,7 +50,6 @@ pub trait Backend:
     + SessionStore
     // + AppStateStore  // TODO: Re-enable when appstate module is in core
     + AppStateKeyStore
-    + EventBufferStore
     + signal::store::PreKeyStore
     + signal::store::SignedPreKeyStore
     + signal::store::SenderKeyStore
@@ -88,7 +63,6 @@ impl<T> Backend for T where
         + SessionStore
         // + AppStateStore  // TODO: Re-enable when appstate module is in core
         + AppStateKeyStore
-        + EventBufferStore
         + signal::store::PreKeyStore
         + signal::store::SignedPreKeyStore
         + signal::store::SenderKeyStore

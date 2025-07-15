@@ -26,7 +26,6 @@ impl FileStore {
         fs::create_dir_all(store.path_for("sender_keys")).await?;
         fs::create_dir_all(store.path_for("appstate/keys")).await?;
         fs::create_dir_all(store.path_for("appstate/versions")).await?;
-        fs::create_dir_all(store.path_for("event_buffer")).await?;
 
         Ok(store)
     }
@@ -160,69 +159,6 @@ impl SessionStore for FileStore {
             .path_for("sessions")
             .join(Self::sanitize_filename(address));
         Ok(path.exists())
-    }
-}
-
-// --- EventBufferStore implementation for FileStore ---
-#[async_trait]
-// --- EventBufferStore implementation for FileStore ---
-#[async_trait]
-impl crate::store::traits::EventBufferStore for FileStore {
-    async fn get_buffered_event(
-        &self,
-        ciphertext_hash: &[u8; 32],
-    ) -> Result<Option<crate::store::traits::BufferedEvent>> {
-        let path = self
-            .path_for("event_buffer")
-            .join(hex::encode(ciphertext_hash));
-        self.read_bincode(&path).await
-    }
-
-    async fn put_buffered_event(
-        &self,
-        ciphertext_hash: &[u8; 32],
-        plaintext: Option<Vec<u8>>,
-        _server_timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> Result<()> {
-        let event = crate::store::traits::BufferedEvent {
-            plaintext,
-            insert_time: chrono::Utc::now(),
-        };
-        let path = self
-            .path_for("event_buffer")
-            .join(hex::encode(ciphertext_hash));
-        self.write_bincode(&path, &event).await
-    }
-
-    async fn delete_old_buffered_events(
-        &self,
-        older_than: chrono::DateTime<chrono::Utc>,
-    ) -> Result<usize> {
-        use tokio::fs;
-
-        let mut deleted_count = 0;
-        let dir_path = self.path_for("event_buffer");
-        let mut entries = match fs::read_dir(dir_path).await {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(StoreError::Io(e)),
-        };
-
-        while let Some(entry) = entries.next_entry().await.map_err(StoreError::Io)? {
-            if let Ok(metadata) = entry.metadata().await {
-                if let Ok(modified_time) = metadata.modified() {
-                    // Convert SystemTime to chrono::DateTime<Utc>
-                    let modified_chrono: chrono::DateTime<chrono::Utc> = modified_time.into();
-                    if modified_chrono < older_than && fs::remove_file(entry.path()).await.is_ok() {
-                        deleted_count += 1;
-                    }
-                }
-            }
-        }
-        if deleted_count > 0 {
-            log::info!(target: "Client/Store", "Deleted {deleted_count} old event buffer entries.");
-        }
-        Ok(deleted_count)
     }
 }
 

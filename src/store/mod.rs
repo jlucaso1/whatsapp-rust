@@ -14,6 +14,7 @@ pub mod traits;
 // Re-export traits from both wacore and local extensions
 pub use crate::store::traits::*;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -28,6 +29,8 @@ pub struct SerializableDevice {
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
+    #[serde(default)]
+    pub processed_messages: VecDeque<wacore::store::device::ProcessedMessageKey>,
 }
 
 /// Platform-specific Device wrapper that contains core device data plus backend
@@ -71,6 +74,7 @@ impl Device {
             adv_secret_key: self.core.adv_secret_key,
             account: self.core.account.clone(),
             push_name: self.core.push_name.clone(),
+            processed_messages: self.core.processed_messages.clone(),
         }
     }
 
@@ -84,6 +88,7 @@ impl Device {
         self.core.adv_secret_key = loaded.adv_secret_key;
         self.core.account = loaded.account;
         self.core.push_name = loaded.push_name;
+        self.core.processed_messages = loaded.processed_messages;
     }
 
     pub fn get_client_payload(&self) -> wa::ClientPayload {
