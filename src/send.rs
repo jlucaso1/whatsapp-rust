@@ -321,10 +321,10 @@ impl Client {
         use prost::Message as ProtoMessage;
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_lid = device_snapshot
-            .lid
+        let own_jid = device_snapshot
+            .id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?;
+            .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?;
         let device_store = self.persistence_manager.get_device_arc().await;
 
         // Add message to cache for potential retries
@@ -341,9 +341,9 @@ impl Client {
 
         // 2. Create the SenderKeyDistributionMessage to be sent to participants who need it.
         // The sender identifier for group messages must be a unique identifier
-        // for the sending device within the group context. Using the LID's
-        // signal address (user:device) is the correct approach.
-        let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
+        // for the sending device within the group context. Using the public JID's
+        // signal address (user:device) ensures other participants can find our key.
+        let sender_address = SignalAddress::new(own_jid.user.clone(), own_jid.device as u32);
         let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
         let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
         let group_builder = GroupSessionBuilder::new(device_store_wrapper.clone()); // Use device_store
