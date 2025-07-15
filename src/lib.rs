@@ -9,6 +9,7 @@ pub mod types {
 
 // Platform-specific modules remain here
 pub mod appstate_sync;
+pub mod capture;
 pub mod client;
 pub mod download;
 pub mod error;

@@ -1,4 +1,5 @@
 use log::{error, info, warn};
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use whatsapp_rust::client::Client;
@@ -25,6 +26,12 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Creating client...");
     // Client::new now expects Arc<PersistenceManager>
     let client = Arc::new(Client::new(persistence_manager.clone()).await);
+
+    // Check for capture mode environment variable
+    if let Ok(capture_path) = env::var("WHATSAPP_CAPTURE_BUNDLES") {
+        info!("📦 Enabling capture mode: {}", capture_path);
+        client.enable_capture_mode(&capture_path).await;
+    }
 
     // If not logged in, start the QR pairing process
     // Access device state via persistence_manager

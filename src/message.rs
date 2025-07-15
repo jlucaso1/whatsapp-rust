@@ -6,6 +6,7 @@ use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::signal::{address::SignalAddress, session::SessionCipher};
+use crate::signal::store::{IdentityKeyStore, SessionStore, SenderKeyStore};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
@@ -86,6 +87,11 @@ impl Client {
 
             let result = match enc_type.as_str() {
                 "pkmsg" | "msg" => {
+                    // Capture bundle before decryption for direct messages
+                    if self.capture_manager.is_enabled() {
+                        let _ = self.capture_direct_message_bundle(&info, &enc_node, &ciphertext).await;
+                    }
+
                     use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
                     let ciphertext_enum = if enc_type == "pkmsg" {
                         PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
@@ -118,6 +124,12 @@ impl Client {
                         log::warn!("Received skmsg in non-group chat, skipping.");
                         continue;
                     }
+
+                    // Capture bundle before decryption for group messages
+                    if self.capture_manager.is_enabled() {
+                        let _ = self.capture_group_message_bundle(&info, &enc_node, &ciphertext).await;
+                    }
+
                     let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
                         .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
 
@@ -403,5 +415,112 @@ impl Client {
                 log::error!("Failed to process sender key distribution message: {e:?}");
             }
         }
+    }
+
+    // Capture methods for E2E testing
+    async fn capture_direct_message_bundle(
+        &self,
+        info: &crate::types::message::MessageInfo,
+        _enc_node: &crate::binary::node::Node,
+        ciphertext: &[u8],
+    ) -> Result<(), anyhow::Error> {
+        use crate::capture::DirectMessageBundle;
+
+        // Get sender identity key - we'll need to implement this properly
+        let sender_identity_key_bin = vec![]; // TODO: Extract from actual message
+
+        // Get current session record before decryption using Device as SessionStore
+        let signal_address = crate::signal::address::SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+        
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        
+        // Get session record via Device's SessionStore implementation
+        let session_record = match device_snapshot.load_session(&signal_address).await {
+            Ok(session) => session,
+            Err(e) => {
+                log::warn!("Failed to load session for capture: {}", e);
+                wacore::signal::state::session_record::SessionRecord::new()
+            }
+        };
+
+        // Get identity keys via Device's IdentityKeyStore implementation
+        let recipient_identity_keys = match device_snapshot.get_identity_key_pair().await {
+            Ok(keys) => keys,
+            Err(e) => {
+                log::warn!("Failed to get identity key pair for capture: {}", e);
+                return Ok(());
+            }
+        };
+
+        let bundle = DirectMessageBundle {
+            message_bin: ciphertext.to_vec(),
+            sender_identity_key_bin,
+            recipient_session: session_record,
+            recipient_identity_keys,
+            recipient_prekey: None, // TODO: Get from prekey store if pkmsg
+            recipient_signed_prekey: None, // TODO: Get from signed prekey store if pkmsg
+            expected_plaintext: format!("CAPTURED_MESSAGE_{}", info.id), // Placeholder
+        };
+
+        self.capture_manager
+            .capture_direct_message_bundle(&info.id, bundle)
+            .await
+    }
+
+    async fn capture_group_message_bundle(
+        &self,
+        info: &crate::types::message::MessageInfo,
+        _enc_node: &crate::binary::node::Node,
+        ciphertext: &[u8],
+    ) -> Result<(), anyhow::Error> {
+        use crate::capture::GroupMessageBundle;
+
+        // Get sender identity key - we'll need to implement this properly
+        let sender_identity_key_bin = vec![]; // TODO: Extract from actual message
+
+        // Get current session record and sender key record before decryption
+        let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
+            info.source.chat.to_string(),
+            info.source.sender.user.clone(),
+        );
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        // Get session record (for SKDM) via Device's SessionStore implementation
+        let signal_address = crate::signal::address::SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+        let session_record = match device_snapshot.load_session(&signal_address).await {
+            Ok(session) => session,
+            Err(e) => {
+                log::warn!("Failed to load session for group capture: {}", e);
+                wacore::signal::state::session_record::SessionRecord::new()
+            }
+        };
+
+        // Get sender key record via Device's SenderKeyStore implementation
+        let sender_key_record = match device_snapshot.load_sender_key(&sender_key_name).await {
+            Ok(sender_key) => sender_key,
+            Err(e) => {
+                log::warn!("Failed to load sender key for group capture: {}", e);
+                wacore::signal::state::sender_key_record::SenderKeyRecord::new()
+            }
+        };
+
+        let bundle = GroupMessageBundle {
+            message_bin: ciphertext.to_vec(),
+            sender_identity_key_bin,
+            recipient_session: session_record,
+            recipient_sender_key: sender_key_record,
+            expected_plaintext: format!("CAPTURED_GROUP_MESSAGE_{}", info.id), // Placeholder
+        };
+
+        self.capture_manager
+            .capture_group_message_bundle(&info.id, bundle)
+            .await
     }
 }

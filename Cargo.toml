@@ -9,6 +9,10 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "debug_decrypt"
+path = "src/bin/debug_decrypt.rs"
+
 [dependencies]
 wacore = { path = "./wacore" }
 waproto = { path = "./waproto" }
