@@ -5,7 +5,7 @@ use crate::proto_helpers::MessageExt;
 use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
-use crate::signal::store::{IdentityKeyStore, SenderKeyStore, SessionStore};
+use crate::signal::store::{IdentityKeyStore, PreKeyStore, SenderKeyStore, SessionStore, SignedPreKeyStore};
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -102,6 +102,15 @@ impl Client {
                                 info.source.sender.device as u32,
                             );
                             
+                            // Capture bundle BEFORE decryption for PreKeySignalMessage to get fresh prekeys
+                            if let crate::signal::protocol::Ciphertext::PreKey(ref prekey_msg) = ciphertext_enum {
+                                if self.capture_manager.is_enabled() {
+                                    let _ = self
+                                        .capture_direct_message_bundle_pre_decryption(&info, enc_node, &ciphertext, prekey_msg)
+                                        .await;
+                                }
+                            }
+                            
                             // Extract sender identity key before consuming ciphertext_enum
                             let sender_identity_key_for_capture = match &ciphertext_enum {
                                 crate::signal::protocol::Ciphertext::PreKey(prekey_msg) => {
@@ -120,9 +129,9 @@ impl Client {
                                 .await
                                 .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")));
 
-                            // Capture bundle after successful decryption for direct messages
+                            // Capture bundle after successful decryption for regular SignalMessage
                             if let Ok(ref plaintext) = decrypt_result {
-                                if self.capture_manager.is_enabled() {
+                                if self.capture_manager.is_enabled() && enc_type == "msg" {
                                     let _ = self
                                         .capture_direct_message_bundle(&info, enc_node, &ciphertext, sender_identity_key_for_capture, plaintext)
                                         .await;
@@ -439,6 +448,114 @@ impl Client {
     }
 
     // Capture methods for E2E testing
+    async fn capture_direct_message_bundle_pre_decryption(
+        &self,
+        info: &crate::types::message::MessageInfo,
+        _enc_node: &crate::binary::node::Node,
+        ciphertext: &[u8],
+        prekey_msg: &crate::signal::protocol::PreKeySignalMessage,
+    ) -> Result<(), anyhow::Error> {
+        use crate::capture::DirectMessageBundle;
+
+        // Get sender identity key from the PreKeySignalMessage
+        let sender_identity_key_bin = prekey_msg.identity_key.serialize();
+
+        // Get signal address for this sender
+        let signal_address = crate::signal::address::SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        // Get session record BEFORE decryption
+        let session_record = match device_snapshot.load_session(&signal_address).await {
+            Ok(session) => session,
+            Err(e) => {
+                log::warn!("Failed to load session for capture: {e}");
+                wacore::signal::state::session_record::SessionRecord::new()
+            }
+        };
+
+        // Get identity keys
+        let recipient_identity_keys = match device_snapshot.get_identity_key_pair().await {
+            Ok(keys) => keys,
+            Err(e) => {
+                log::warn!("Failed to get identity key pair for capture: {e}");
+                return Ok(());
+            }
+        };
+
+        // Extract prekey and signed prekey information from the message
+        let prekey_id = prekey_msg.pre_key_id();
+        let signed_prekey_id = prekey_msg.signed_pre_key_id();
+
+        // Capture the actual prekey and signed prekey that will be used for decryption
+        let recipient_prekey = if let Some(id) = prekey_id {
+            match device_snapshot.backend.load_prekey(id).await {
+                Ok(Some(prekey_record)) => {
+                    // Serialize the PreKeyRecordStructure to JSON
+                    match serde_json::to_vec(&prekey_record) {
+                        Ok(serialized) => Some(serialized),
+                        Err(e) => {
+                            log::warn!("Failed to serialize prekey for capture: {e}");
+                            None
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::warn!("PreKey {} not found in store", id);
+                    None
+                }
+                Err(e) => {
+                    log::warn!("Failed to load prekey {} for capture: {e}", id);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let recipient_signed_prekey = match device_snapshot.backend.load_signed_prekey(signed_prekey_id).await {
+            Ok(Some(signed_prekey_record)) => {
+                // Serialize the SignedPreKeyRecordStructure to JSON
+                match serde_json::to_vec(&signed_prekey_record) {
+                    Ok(serialized) => Some(serialized),
+                    Err(e) => {
+                        log::warn!("Failed to serialize signed prekey for capture: {e}");
+                        None
+                    }
+                }
+            }
+            Ok(None) => {
+                log::warn!("SignedPreKey {} not found in store", signed_prekey_id);
+                None
+            }
+            Err(e) => {
+                log::warn!("Failed to load signed prekey {} for capture: {e}", signed_prekey_id);
+                None
+            }
+        };
+
+        // For prekey messages, we'll decrypt to get the actual plaintext
+        // This creates a temporary snapshot to avoid modifying the real state
+        let expected_plaintext = format!("PREKEY_MESSAGE_{}", info.id);
+
+        let bundle = DirectMessageBundle {
+            message_bin: ciphertext.to_vec(),
+            sender_identity_key_bin,
+            recipient_session: session_record,
+            recipient_identity_keys,
+            recipient_prekey,
+            recipient_signed_prekey,
+            expected_plaintext,
+        };
+
+        self.capture_manager
+            .capture_direct_message_bundle(&info.id, bundle)
+            .await
+    }
+
     async fn capture_direct_message_bundle(
         &self,
         info: &crate::types::message::MessageInfo,

@@ -14,7 +14,7 @@ use wacore::signal::{
     groups::builder::GroupSessionBuilder,
     groups::message::SenderKeyMessage,
     identity::{IdentityKey, IdentityKeyPair},
-    protocol::{Ciphertext, SignalMessage},
+    protocol::{Ciphertext, PreKeySignalMessage, SignalMessage},
     sender_key_name::SenderKeyName,
     state::{session_record::SessionRecord, sender_key_record::SenderKeyRecord},
     store::{IdentityKeyStore, PreKeyStore, SessionStore, SignedPreKeyStore, SenderKeyStore},
@@ -229,6 +229,46 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
         serde_json::from_str(&identity_keys_json)
             .context("Failed to parse recipient_identity_keys.json")?;
 
+    // Load optional prekey files
+    let prekey_file = bundle_path.join("recipient_prekey.json");
+    let signed_prekey_file = bundle_path.join("recipient_signed_prekey.json");
+
+    let recipient_prekey = if prekey_file.exists() {
+        match fs::read(&prekey_file).await {
+            Ok(data) => match serde_json::from_slice::<PreKeyRecordStructure>(&data) {
+                Ok(prekey) => Some(prekey),
+                Err(e) => {
+                    println!("⚠️  Failed to parse recipient_prekey.json: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                println!("⚠️  Failed to read recipient_prekey.json: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let recipient_signed_prekey = if signed_prekey_file.exists() {
+        match fs::read(&signed_prekey_file).await {
+            Ok(data) => match serde_json::from_slice::<SignedPreKeyRecordStructure>(&data) {
+                Ok(signed_prekey) => Some(signed_prekey),
+                Err(e) => {
+                    println!("⚠️  Failed to parse recipient_signed_prekey.json: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                println!("⚠️  Failed to read recipient_signed_prekey.json: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Parse sender identity key - skip prefix byte if present
     let sender_identity_key = if sender_identity_key_bin.len() == 33 && sender_identity_key_bin[0] == 0x05 {
         // Remove the prefix byte and convert to 32-byte array
@@ -252,6 +292,12 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
         "  - Session has {} previous states",
         recipient_session.previous_states().len()
     );
+    if recipient_prekey.is_some() {
+        println!("  - Has prekey data");
+    }
+    if recipient_signed_prekey.is_some() {
+        println!("  - Has signed prekey data");
+    }
     println!("  - Expected plaintext: \"{}\"", expected_plaintext.trim());
 
     // Determine message type by checking the first byte
@@ -276,12 +322,55 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
         recipient_session
     );
 
+    // Add prekeys to the store if available
+    if let Some(ref prekey) = recipient_prekey {
+        if let Some(prekey_id) = prekey.id {
+            store.prekeys.insert(prekey_id, prekey.clone());
+            println!("  - Loaded prekey ID: {}", prekey_id);
+        }
+    }
+
+    if let Some(ref signed_prekey) = recipient_signed_prekey {
+        if let Some(signed_prekey_id) = signed_prekey.id {
+            store.signed_prekeys.insert(signed_prekey_id, signed_prekey.clone());
+            println!("  - Loaded signed prekey ID: {}", signed_prekey_id);
+        }
+    }
+
     // Attempt decryption if we have enough information
     let decryption_result = if msg_type == 3 {
-        // PreKeySignalMessage - these require prekeys that aren't captured in current bundles
-        println!("⚠️  PreKeySignalMessage decryption requires prekeys not available in bundle");
-        println!("   Current bundles capture post-decryption state (after prekey consumption)");
-        None
+        // PreKeySignalMessage - attempt decryption if we have prekeys
+        if recipient_prekey.is_some() && recipient_signed_prekey.is_some() {
+            match PreKeySignalMessage::deserialize(&message_bin) {
+                Ok(prekey_msg) => {
+                    let cipher = SessionCipher::new(store, sender_address.clone());
+                    match cipher.decrypt(Ciphertext::PreKey(prekey_msg)).await {
+                        Ok(plaintext) => {
+                            let plaintext_str = if plaintext.is_ascii() && plaintext.len() < 1000 {
+                                String::from_utf8_lossy(&plaintext).to_string()
+                            } else {
+                                format!("<{} bytes of binary data>", plaintext.len())
+                            };
+                            println!("🔓 Decrypted plaintext: \"{}\"", plaintext_str);
+                            Some(plaintext)
+                        }
+                        Err(e) => {
+                            println!("⚠️  Failed to decrypt PreKeySignalMessage: {e}");
+                            println!("   This may be due to missing prekeys or incorrect bundle state");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️  Failed to parse PreKeySignalMessage: {e}");
+                    None
+                }
+            }
+        } else {
+            println!("⚠️  PreKeySignalMessage decryption requires prekeys not available in bundle");
+            println!("   Bundle missing prekey files - captured post-decryption");
+            None
+        }
     } else {
         // SignalMessage - attempt decryption
         match SignalMessage::deserialize(&message_bin) {
