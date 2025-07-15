@@ -1,10 +1,9 @@
 use clap::{Parser, Subcommand};
 use log::info;
 use prost::Message;
-use serde_json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use wacore::signal::state::{session_record::SessionRecord, sender_key_record::SenderKeyRecord};
+use wacore::signal::state::{sender_key_record::SenderKeyRecord, session_record::SessionRecord};
 use wacore::store::traits::AppStateSyncKey;
 use waproto::whatsapp as wa;
 use whatsapp_rust::appstate::hash::HashState;
@@ -13,7 +12,9 @@ use whatsapp_rust::store::persistence_manager::PersistenceManager;
 #[derive(Parser)]
 #[command(name = "debug_device")]
 #[command(about = "WhatsApp Rust Store Inspection Tool")]
-#[command(long_about = "A comprehensive CLI tool for inspecting WhatsApp store data including device info, sessions, keys, and app state")]
+#[command(
+    long_about = "A comprehensive CLI tool for inspecting WhatsApp store data including device info, sessions, keys, and app state"
+)]
 struct Cli {
     /// Store path (default: ./whatsapp_store)
     #[arg(short, long, default_value = "./whatsapp_store")]
@@ -78,9 +79,10 @@ async fn main() -> Result<(), anyhow::Error> {
         Commands::Session { jid } => inspect_session(&cli.store_path, &jid, cli.json).await,
         Commands::Prekey { id } => inspect_prekey(&cli.store_path, id, cli.json).await,
         Commands::SignedPrekey { id } => inspect_signed_prekey(&cli.store_path, id, cli.json).await,
-        Commands::SenderKey { group_jid, sender_jid } => {
-            inspect_sender_key(&cli.store_path, &group_jid, &sender_jid, cli.json).await
-        }
+        Commands::SenderKey {
+            group_jid,
+            sender_jid,
+        } => inspect_sender_key(&cli.store_path, &group_jid, &sender_jid, cli.json).await,
         Commands::AppstateVersion { collection } => {
             inspect_appstate_version(&cli.store_path, &collection, cli.json).await
         }
@@ -91,7 +93,6 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), anyhow::Error> {
-
     if !json_output {
         info!("=== WhatsApp Rust Device Debug Utility ===");
         info!("----------------------------------------");
@@ -206,10 +207,16 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
     Ok(())
 }
 
-async fn inspect_session(store_path: &str, jid: &str, json_output: bool) -> Result<(), anyhow::Error> {
+async fn inspect_session(
+    store_path: &str,
+    jid: &str,
+    json_output: bool,
+) -> Result<(), anyhow::Error> {
     let sanitized_jid = sanitize_filename(jid);
-    let session_path = PathBuf::from(store_path).join("sessions").join(&sanitized_jid);
-    
+    let session_path = PathBuf::from(store_path)
+        .join("sessions")
+        .join(&sanitized_jid);
+
     if !session_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -226,9 +233,10 @@ async fn inspect_session(store_path: &str, jid: &str, json_output: bool) -> Resu
     }
 
     let data = tokio::fs::read(&session_path).await?;
-    let session_record: SessionRecord = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode session data: {e}"))?
-        .0;
+    let session_record: SessionRecord =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode session data: {e}"))?
+            .0;
 
     if json_output {
         let session_info = serde_json::json!({
@@ -249,7 +257,10 @@ async fn inspect_session(store_path: &str, jid: &str, json_output: bool) -> Resu
         info!("JID: {jid}");
         info!("Path: {}", session_path.display());
         info!("Is Fresh: {}", session_record.is_fresh());
-        info!("Previous States Count: {}", session_record.previous_states().len());
+        info!(
+            "Previous States Count: {}",
+            session_record.previous_states().len()
+        );
         info!("✅ Session record loaded successfully");
         info!("Note: Detailed session state not shown for security reasons");
     }
@@ -258,8 +269,10 @@ async fn inspect_session(store_path: &str, jid: &str, json_output: bool) -> Resu
 }
 
 async fn inspect_prekey(store_path: &str, id: u32, json_output: bool) -> Result<(), anyhow::Error> {
-    let prekey_path = PathBuf::from(store_path).join("prekeys").join(id.to_string());
-    
+    let prekey_path = PathBuf::from(store_path)
+        .join("prekeys")
+        .join(id.to_string());
+
     if !prekey_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -276,9 +289,10 @@ async fn inspect_prekey(store_path: &str, id: u32, json_output: bool) -> Result<
     }
 
     let data = tokio::fs::read(&prekey_path).await?;
-    let prekey: wa::PreKeyRecordStructure = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode pre-key data: {e}"))?
-        .0;
+    let prekey: wa::PreKeyRecordStructure =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode pre-key data: {e}"))?
+            .0;
 
     if json_output {
         let prekey_info = serde_json::json!({
@@ -307,9 +321,15 @@ async fn inspect_prekey(store_path: &str, id: u32, json_output: bool) -> Result<
     Ok(())
 }
 
-async fn inspect_signed_prekey(store_path: &str, id: u32, json_output: bool) -> Result<(), anyhow::Error> {
-    let signed_prekey_path = PathBuf::from(store_path).join("signed_prekeys").join(id.to_string());
-    
+async fn inspect_signed_prekey(
+    store_path: &str,
+    id: u32,
+    json_output: bool,
+) -> Result<(), anyhow::Error> {
+    let signed_prekey_path = PathBuf::from(store_path)
+        .join("signed_prekeys")
+        .join(id.to_string());
+
     if !signed_prekey_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -326,9 +346,10 @@ async fn inspect_signed_prekey(store_path: &str, id: u32, json_output: bool) -> 
     }
 
     let data = tokio::fs::read(&signed_prekey_path).await?;
-    let signed_prekey: wa::SignedPreKeyRecordStructure = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode signed pre-key data: {e}"))?
-        .0;
+    let signed_prekey: wa::SignedPreKeyRecordStructure =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode signed pre-key data: {e}"))?
+            .0;
 
     if json_output {
         let signed_prekey_info = serde_json::json!({
@@ -365,10 +386,17 @@ async fn inspect_signed_prekey(store_path: &str, id: u32, json_output: bool) -> 
     Ok(())
 }
 
-async fn inspect_sender_key(store_path: &str, group_jid: &str, sender_jid: &str, json_output: bool) -> Result<(), anyhow::Error> {
-    let filename = sanitize_filename(&format!("{}_{}", group_jid, sender_jid));
-    let sender_key_path = PathBuf::from(store_path).join("sender_keys").join(&filename);
-    
+async fn inspect_sender_key(
+    store_path: &str,
+    group_jid: &str,
+    sender_jid: &str,
+    json_output: bool,
+) -> Result<(), anyhow::Error> {
+    let filename = sanitize_filename(&format!("{group_jid}_{sender_jid}"));
+    let sender_key_path = PathBuf::from(store_path)
+        .join("sender_keys")
+        .join(&filename);
+
     if !sender_key_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -385,9 +413,10 @@ async fn inspect_sender_key(store_path: &str, group_jid: &str, sender_jid: &str,
     }
 
     let data = tokio::fs::read(&sender_key_path).await?;
-    let sender_key_record: SenderKeyRecord = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode sender key data: {e}"))?
-        .0;
+    let sender_key_record: SenderKeyRecord =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode sender key data: {e}"))?
+            .0;
 
     if json_output {
         let sender_key_info = serde_json::json!({
@@ -408,7 +437,10 @@ async fn inspect_sender_key(store_path: &str, group_jid: &str, sender_jid: &str,
         info!("Sender JID: {sender_jid}");
         info!("Path: {}", sender_key_path.display());
         info!("Is Empty: {}", sender_key_record.is_empty());
-        info!("Has Current State: {}", sender_key_record.sender_key_state().is_some());
+        info!(
+            "Has Current State: {}",
+            sender_key_record.sender_key_state().is_some()
+        );
         info!("✅ Sender key record loaded successfully");
         info!("Note: Detailed key material not shown for security reasons");
     }
@@ -416,10 +448,16 @@ async fn inspect_sender_key(store_path: &str, group_jid: &str, sender_jid: &str,
     Ok(())
 }
 
-async fn inspect_appstate_version(store_path: &str, collection: &str, json_output: bool) -> Result<(), anyhow::Error> {
+async fn inspect_appstate_version(
+    store_path: &str,
+    collection: &str,
+    json_output: bool,
+) -> Result<(), anyhow::Error> {
     let sanitized_collection = sanitize_filename(collection);
-    let version_path = PathBuf::from(store_path).join("appstate/versions").join(&sanitized_collection);
-    
+    let version_path = PathBuf::from(store_path)
+        .join("appstate/versions")
+        .join(&sanitized_collection);
+
     if !version_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -436,9 +474,10 @@ async fn inspect_appstate_version(store_path: &str, collection: &str, json_outpu
     }
 
     let data = tokio::fs::read(&version_path).await?;
-    let hash_state: HashState = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode app state version data: {e}"))?
-        .0;
+    let hash_state: HashState =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode app state version data: {e}"))?
+            .0;
 
     if json_output {
         let version_info = serde_json::json!({
@@ -452,14 +491,18 @@ async fn inspect_appstate_version(store_path: &str, collection: &str, json_outpu
         info!("=== App State Version Inspection ===");
         info!("Collection: {collection}");
         info!("Path: {}", version_path.display());
-        info!("Hash State: {:#?}", hash_state);
+        info!("Hash State: {hash_state:#?}");
         info!("✅ App state version loaded successfully");
     }
 
     Ok(())
 }
 
-async fn inspect_appstate_key(store_path: &str, key_id: &str, json_output: bool) -> Result<(), anyhow::Error> {
+async fn inspect_appstate_key(
+    store_path: &str,
+    key_id: &str,
+    json_output: bool,
+) -> Result<(), anyhow::Error> {
     // Validate hex input
     if hex::decode(key_id).is_err() {
         if json_output {
@@ -475,7 +518,7 @@ async fn inspect_appstate_key(store_path: &str, key_id: &str, json_output: bool)
     }
 
     let key_path = PathBuf::from(store_path).join("appstate/keys").join(key_id);
-    
+
     if !key_path.exists() {
         if json_output {
             let error_obj = serde_json::json!({
@@ -492,9 +535,10 @@ async fn inspect_appstate_key(store_path: &str, key_id: &str, json_output: bool)
     }
 
     let data = tokio::fs::read(&key_path).await?;
-    let sync_key: AppStateSyncKey = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-        .map_err(|e| anyhow::anyhow!("Failed to decode app state key data: {e}"))?
-        .0;
+    let sync_key: AppStateSyncKey =
+        bincode::serde::decode_from_slice(&data, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("Failed to decode app state key data: {e}"))?
+            .0;
 
     if json_output {
         let key_info = serde_json::json!({
