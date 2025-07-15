@@ -320,10 +320,10 @@ impl Client {
         use prost::Message as ProtoMessage;
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_lid = device_snapshot
-            .lid
+        let own_jid = device_snapshot
+            .id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in: lid missing"))?;
+            .ok_or_else(|| anyhow::anyhow!("Not logged in: id missing"))?;
         let device_store = self.persistence_manager.get_device_arc().await;
 
         // Add message to cache for potential retries
@@ -340,9 +340,9 @@ impl Client {
 
         // 2. Create the SenderKeyDistributionMessage to be sent to participants who need it.
         // The sender identifier for group messages must be a unique identifier
-        // for the sending device within the group context. Using the LID's
-        // signal address (user:device) is the correct approach.
-        let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
+        // for the sending device within the group context. Using the public JID's
+        // signal address (user:device) ensures other participants can find our key.
+        let sender_address = SignalAddress::new(own_jid.user.clone(), own_jid.device as u32);
         let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
         let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store.clone());
         let group_builder = GroupSessionBuilder::new(device_store_wrapper.clone()); // Use device_store
@@ -350,13 +350,17 @@ impl Client {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
         })?;
 
-        // The axolotl protocol message (distribution_message) must be wrapped in a wa::Message
-        // before being encrypted for each participant.
+        // The `axolotl_sender_key_distribution_message` field is meant to contain the bytes
+        // of the `SenderKeyDistributionMessage` itself. This is the correct encoding.
+        let axolotl_bytes = distribution_message.encode_to_vec();
+
+        // Now, wrap this in the final message payload.
         let skdm_for_encryption = wa::Message {
             sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
                 group_id: Some(to.to_string()),
-                axolotl_sender_key_distribution_message: Some(distribution_message.encode_to_vec()),
+                axolotl_sender_key_distribution_message: Some(axolotl_bytes),
             }),
+            // messageContextInfo should be removed from this payload according to Go code analysis.
             ..Default::default()
         };
         let distribution_message_bytes = skdm_for_encryption.encode_to_vec();
