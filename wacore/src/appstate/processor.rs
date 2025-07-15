@@ -159,9 +159,6 @@ impl Processor {
 pub struct ProcessorUtils;
 
 impl ProcessorUtils {
-    // The decode_patches_core function is GONE.
-
-    // This function remains.
     pub fn decode_mutation(
         keys: &keys::ExpandedAppStateKeys,
         mutation: &wa::SyncdMutation,

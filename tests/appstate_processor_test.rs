@@ -1,18 +1,36 @@
 use prost::Message;
 use std::sync::Arc;
-use waproto::whatsapp as wa;
-use whatsapp_rust::appstate::{
+use wacore::appstate::{
+    errors::AppStateError,
     keys,
-    processor::{Mutation, Processor},
+    processor::{Mutation, Processor, ProcessorUtils},
 };
-use whatsapp_rust::crypto::{cbc, hmac_sha512};
-use whatsapp_rust::store::memory::MemoryStore;
+use wacore::crypto::{cbc, hmac_sha512};
+use waproto::whatsapp as wa;
+
+#[allow(dead_code)]
+struct DummyKeyStore;
+#[async_trait::async_trait]
+impl wacore::store::traits::AppStateKeyStore for DummyKeyStore {
+    async fn get_app_state_sync_key(
+        &self,
+        _key_id: &[u8],
+    ) -> wacore::store::error::Result<Option<wacore::store::traits::AppStateSyncKey>> {
+        Ok(None)
+    }
+    async fn set_app_state_sync_key(
+        &self,
+        _key_id: &[u8],
+        _key: wacore::store::traits::AppStateSyncKey,
+    ) -> wacore::store::error::Result<()> {
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn test_decode_mutation_success() {
-    // 1. Setup
-    let store = Arc::new(MemoryStore::new());
-    let processor = Processor::new(store.clone(), store.clone());
+    let key_store = Arc::new(DummyKeyStore);
+    let _processor = Processor::new(key_store);
 
     // Generate some fake keys
     let key_data = b"some-secret-app-state-key-data-!";
@@ -71,9 +89,8 @@ async fn test_decode_mutation_success() {
 
     // 5. Run the test
     let mut output_mutations = Vec::<Mutation>::new();
-    let result = processor
-        .decode_mutation(&expanded_keys, &mutation_proto, &mut output_mutations)
-        .await;
+    let result =
+        ProcessorUtils::decode_mutation(&expanded_keys, &mutation_proto, &mut output_mutations);
 
     // 6. Assert
     assert!(result.is_ok(), "Decoding failed: {:?}", result.err());
@@ -87,9 +104,8 @@ async fn test_decode_mutation_success() {
 
 #[tokio::test]
 async fn test_decode_mutation_bad_mac_fails() {
-    // Setup is similar to the success test...
-    let store = Arc::new(MemoryStore::new());
-    let processor = Processor::new(store.clone(), store.clone());
+    let key_store = Arc::new(DummyKeyStore);
+    let _processor = Processor::new(key_store);
     let key_data = b"some-secret-app-state-key-data-!";
     let expanded_keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"my_key_id";
@@ -130,14 +146,13 @@ async fn test_decode_mutation_bad_mac_fails() {
     };
 
     let mut output_mutations = Vec::new();
-    let result = processor
-        .decode_mutation(&expanded_keys, &mutation_proto, &mut output_mutations)
-        .await;
+    let result =
+        ProcessorUtils::decode_mutation(&expanded_keys, &mutation_proto, &mut output_mutations);
 
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
-        whatsapp_rust::appstate::errors::AppStateError::MismatchingContentMAC
+        AppStateError::MismatchingContentMAC
     ));
     assert!(output_mutations.is_empty());
 }
