@@ -191,7 +191,7 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
     // Test: Should fail with mismatching patch MAC
     let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state, key_lookup);
 
-    println!("Test result: {:?}", result);
+    println!("Test result: {result:?}");
 
     assert!(result.is_err(), "Should fail with wrong patch MAC");
     match result.unwrap_err() {
@@ -199,7 +199,7 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
             println!("✅ Got expected MismatchingPatchMAC error");
         }
         other => {
-            panic!("Expected MismatchingPatchMAC, got: {:?}", other);
+            panic!("Expected MismatchingPatchMAC, got: {other:?}");
         }
     }
 }
