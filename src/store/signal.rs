@@ -100,7 +100,7 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        // First, check if the requested ID matches the one we hold directly.
+        // Only check if the requested ID matches the one we hold directly.
         if signed_prekey_id == self.signed_pre_key.key_id {
             use wacore::signal::ecc::key_pair::EcKeyPair;
             use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
@@ -119,30 +119,38 @@ impl SignedPreKeyStore for Device {
             );
             return Ok(Some(record));
         }
-        // Otherwise, delegate to the underlying store.
-        self.backend.load_signed_prekey(signed_prekey_id).await
+        // If the ID doesn't match, we don't have it.
+        Ok(None)
     }
 
     async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-        self.backend.load_signed_prekeys().await
+        log::warn!("Device: load_signed_prekeys() - returning empty list. Only the device's own signed pre-key should be accessed via load_signed_prekey().");
+        Ok(Vec::new())
     }
 
     async fn store_signed_prekey(
         &self,
         signed_prekey_id: u32,
-        record: SignedPreKeyRecordStructure,
+        _record: SignedPreKeyRecordStructure,
     ) -> Result<(), StoreError> {
-        self.backend
-            .store_signed_prekey(signed_prekey_id, record)
-            .await
+        log::warn!(
+            "Device: store_signed_prekey({}) - no-op. Signed pre-keys should only be set once during device creation/pairing and managed via PersistenceManager.",
+            signed_prekey_id
+        );
+        Ok(())
     }
 
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        self.backend.contains_signed_prekey(signed_prekey_id).await
+        // Only return true for the device's own signed pre-key
+        Ok(signed_prekey_id == self.signed_pre_key.key_id)
     }
 
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
-        self.backend.remove_signed_prekey(signed_prekey_id).await
+        log::warn!(
+            "Device: remove_signed_prekey({}) - no-op. Signed pre-keys are managed via PersistenceManager and should not be removed individually.",
+            signed_prekey_id
+        );
+        Ok(())
     }
 }
 

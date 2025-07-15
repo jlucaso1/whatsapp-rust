@@ -23,7 +23,6 @@ impl FileStore {
         fs::create_dir_all(store.path_for("sessions")).await?;
         fs::create_dir_all(store.path_for("identities")).await?;
         fs::create_dir_all(store.path_for("prekeys")).await?;
-        fs::create_dir_all(store.path_for("signed_prekeys")).await?;
         fs::create_dir_all(store.path_for("sender_keys")).await?;
         fs::create_dir_all(store.path_for("appstate/keys")).await?;
         fs::create_dir_all(store.path_for("appstate/versions")).await?;
@@ -262,63 +261,7 @@ impl signal::store::PreKeyStore for FileStore {
     }
 }
 
-#[async_trait]
-impl signal::store::SignedPreKeyStore for FileStore {
-    async fn load_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> std::result::Result<Option<SignedPreKeyRecordStructure>, SignalStoreError> {
-        let path = self
-            .path_for("signed_prekeys")
-            .join(signed_prekey_id.to_string());
-        Ok(self.read_bincode(&path).await?)
-    }
 
-    async fn load_signed_prekeys(
-        &self,
-    ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
-        let mut result = Vec::new();
-        let mut entries = fs::read_dir(self.path_for("signed_prekeys")).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            if let Some(record) = self.read_bincode(&entry.path()).await? {
-                result.push(record);
-            }
-        }
-        Ok(result)
-    }
-
-    async fn store_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-        record: SignedPreKeyRecordStructure,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let path = self
-            .path_for("signed_prekeys")
-            .join(signed_prekey_id.to_string());
-        Ok(self.write_bincode(&path, &record).await?)
-    }
-
-    async fn contains_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> std::result::Result<bool, SignalStoreError> {
-        Ok(self
-            .path_for("signed_prekeys")
-            .join(signed_prekey_id.to_string())
-            .exists())
-    }
-
-    async fn remove_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let path = self
-            .path_for("signed_prekeys")
-            .join(signed_prekey_id.to_string());
-        fs::remove_file(path).await?;
-        Ok(())
-    }
-}
 
 #[async_trait]
 impl signal::store::SenderKeyStore for FileStore {
@@ -366,6 +309,61 @@ impl signal::store::SenderKeyStore for FileStore {
                 Err(e)
             }
         })?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl signal::store::SignedPreKeyStore for FileStore {
+    async fn load_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<Option<SignedPreKeyRecordStructure>, SignalStoreError> {
+        log::debug!(
+            "FileStore: load_signed_prekey({}) - returning None. Signed pre-keys should only be accessed via Device.",
+            signed_prekey_id
+        );
+        Ok(None)
+    }
+
+    async fn load_signed_prekeys(
+        &self,
+    ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
+        log::debug!("FileStore: load_signed_prekeys() - returning empty list. Signed pre-keys should only be accessed via Device.");
+        Ok(Vec::new())
+    }
+
+    async fn store_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+        _record: SignedPreKeyRecordStructure,
+    ) -> std::result::Result<(), SignalStoreError> {
+        log::warn!(
+            "FileStore: store_signed_prekey({}) - no-op. Signed pre-keys are stored in device.bin only.",
+            signed_prekey_id
+        );
+        Ok(())
+    }
+
+    async fn contains_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<bool, SignalStoreError> {
+        log::debug!(
+            "FileStore: contains_signed_prekey({}) - returning false. Signed pre-keys should only be accessed via Device.",
+            signed_prekey_id
+        );
+        Ok(false)
+    }
+
+    async fn remove_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<(), SignalStoreError> {
+        log::warn!(
+            "FileStore: remove_signed_prekey({}) - no-op. Signed pre-keys are managed via device.bin only.",
+            signed_prekey_id
+        );
         Ok(())
     }
 }
