@@ -124,7 +124,9 @@ impl SignedPreKeyStore for Device {
     }
 
     async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-        log::warn!("Device: load_signed_prekeys() - returning empty list. Only the device's own signed pre-key should be accessed via load_signed_prekey().");
+        log::warn!(
+            "Device: load_signed_prekeys() - returning empty list. Only the device's own signed pre-key should be accessed via load_signed_prekey()."
+        );
         Ok(Vec::new())
     }
 

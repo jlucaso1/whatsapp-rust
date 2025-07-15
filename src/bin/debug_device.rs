@@ -40,11 +40,6 @@ enum Commands {
         /// Pre-key ID to inspect
         id: u32,
     },
-    /// Inspect a signed pre-key
-    SignedPrekey {
-        /// Signed pre-key ID to inspect
-        id: u32,
-    },
     /// Inspect a group sender key
     SenderKey {
         /// Group JID
@@ -78,7 +73,6 @@ async fn main() -> Result<(), anyhow::Error> {
     match cli.command.unwrap() {
         Commands::Session { jid } => inspect_session(&cli.store_path, &jid, cli.json).await,
         Commands::Prekey { id } => inspect_prekey(&cli.store_path, id, cli.json).await,
-        Commands::SignedPrekey { id } => inspect_signed_prekey(&cli.store_path, id, cli.json).await,
         Commands::SenderKey {
             group_jid,
             sender_jid,
@@ -316,71 +310,6 @@ async fn inspect_prekey(store_path: &str, id: u32, json_output: bool) -> Result<
         }
         info!("Has Private Key: {}", prekey.private_key.is_some());
         info!("✅ Pre-key record loaded successfully");
-    }
-
-    Ok(())
-}
-
-async fn inspect_signed_prekey(
-    store_path: &str,
-    id: u32,
-    json_output: bool,
-) -> Result<(), anyhow::Error> {
-    let signed_prekey_path = PathBuf::from(store_path)
-        .join("signed_prekeys")
-        .join(id.to_string());
-
-    if !signed_prekey_path.exists() {
-        if json_output {
-            let error_obj = serde_json::json!({
-                "error": format!("Signed pre-key file not found for ID: {id}"),
-                "path": signed_prekey_path.to_string_lossy(),
-                "success": false
-            });
-            println!("{}", serde_json::to_string_pretty(&error_obj)?);
-        } else {
-            info!("❌ Signed pre-key file not found for ID: {id}");
-            info!("   Path: {}", signed_prekey_path.display());
-        }
-        return Ok(());
-    }
-
-    let data = tokio::fs::read(&signed_prekey_path).await?;
-    let signed_prekey: wa::SignedPreKeyRecordStructure =
-        bincode::serde::decode_from_slice(&data, bincode::config::standard())
-            .map_err(|e| anyhow::anyhow!("Failed to decode signed pre-key data: {e}"))?
-            .0;
-
-    if json_output {
-        let signed_prekey_info = serde_json::json!({
-            "success": true,
-            "signed_prekey_id": id,
-            "path": signed_prekey_path.to_string_lossy(),
-            "signed_prekey": {
-                "id": signed_prekey.id,
-                "public_key": signed_prekey.public_key.as_ref().map(hex::encode),
-                "private_key": signed_prekey.private_key.as_ref().map(|_| "<hidden>"),
-                "signature": signed_prekey.signature.as_ref().map(hex::encode),
-                "timestamp": signed_prekey.timestamp,
-            }
-        });
-        println!("{}", serde_json::to_string_pretty(&signed_prekey_info)?);
-    } else {
-        info!("=== Signed Pre-Key Inspection ===");
-        info!("Signed Pre-Key ID: {id}");
-        info!("Path: {}", signed_prekey_path.display());
-        info!("Record ID: {:?}", signed_prekey.id);
-        if let Some(public_key) = &signed_prekey.public_key {
-            info!("Public Key: {}", hex::encode(public_key));
-        }
-        info!("Has Private Key: {}", signed_prekey.private_key.is_some());
-        if let Some(signature) = &signed_prekey.signature {
-            info!("Signature: {}", hex::encode(signature));
-        }
-        if let Some(timestamp) = signed_prekey.timestamp {
-            info!("Timestamp: {timestamp}");
-        }
-        info!("✅ Signed pre-key record loaded successfully");
     }
 
     Ok(())

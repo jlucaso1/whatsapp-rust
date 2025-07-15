@@ -261,8 +261,6 @@ impl signal::store::PreKeyStore for FileStore {
     }
 }
 
-
-
 #[async_trait]
 impl signal::store::SenderKeyStore for FileStore {
     async fn store_sender_key(
@@ -329,7 +327,9 @@ impl signal::store::SignedPreKeyStore for FileStore {
     async fn load_signed_prekeys(
         &self,
     ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
-        log::debug!("FileStore: load_signed_prekeys() - returning empty list. Signed pre-keys should only be accessed via Device.");
+        log::debug!(
+            "FileStore: load_signed_prekeys() - returning empty list. Signed pre-keys should only be accessed via Device."
+        );
         Ok(Vec::new())
     }
 
