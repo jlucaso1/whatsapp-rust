@@ -1,8 +1,7 @@
+use wacore::appstate::errors::AppStateError;
 // Re-export appstate utilities from core
 pub use wacore::appstate::*;
 
-// Import platform-specific types
-use crate::appstate::processor::Processor;
 use crate::client::Client;
 use crate::types::events::{ContactUpdate, Event};
 use crate::types::jid::{self, Jid};
@@ -11,6 +10,7 @@ use processor::PatchList;
 use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
+use wacore::appstate::processor::Processor;
 use waproto::whatsapp as wa;
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
@@ -64,7 +64,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
     let key_store: Arc<dyn crate::store::traits::AppStateKeyStore> =
         Arc::new(crate::store::traits::AppStateWrapper::new(backend.clone()));
 
-    let processor = Processor::new(app_state_store.clone(), key_store);
+    let processor = Processor::new(key_store);
 
     let mut current_state = match app_state_store.get_app_state_version(name).await {
         Ok(s) => s,
@@ -257,7 +257,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                         }
                     }
                     Err(e) => {
-                        if let crate::appstate::errors::AppStateError::KeysNotFound(missing) = e {
+                        if let AppStateError::KeysNotFound(missing) = e {
                             info!(
                                 "Requesting {} missing app state keys for sync of '{}'. Will retry on next server notification.",
                                 missing.len(),
