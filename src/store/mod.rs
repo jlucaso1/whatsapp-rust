@@ -2,7 +2,6 @@ pub mod signal;
 use wacore::crypto::key_pair::{KeyPair, PreKey};
 use wacore::types::jid::Jid;
 use waproto::whatsapp as wa;
-pub mod clientpayload;
 pub mod commands; // Device commands for the persistence manager
 pub mod error;
 pub mod filestore;
@@ -84,16 +83,5 @@ impl Device {
         self.core.adv_secret_key = loaded.adv_secret_key;
         self.core.account = loaded.account;
         self.core.push_name = loaded.push_name;
-    }
-
-    pub fn get_client_payload(&self) -> wa::ClientPayload {
-        match &self.core.id {
-            Some(jid) => clientpayload::get_login_payload(jid),
-            None => clientpayload::get_registration_payload(
-                self.core.registration_id,
-                &self.core.identity_key.public_key,
-                &self.core.signed_pre_key,
-            ),
-        }
     }
 }
