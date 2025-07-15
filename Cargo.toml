@@ -58,6 +58,8 @@ async-trait = "0.1.88"
 scopeguard = "1.2"
 ureq = "3.0.12"
 dashmap = "6.1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 base64 = { version = "0.22.1", default-features = false }

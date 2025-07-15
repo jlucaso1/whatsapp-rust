@@ -42,10 +42,10 @@ fn test_jid_parsing_and_serialization() {
 #[test]
 fn test_invalid_jid_parsing() {
     // This will parse as a server JID, which is correct.
-    assert!(matches!(Jid::from_str("invalidjid"), Ok(_)));
+    assert!(Jid::from_str("invalidjid").is_ok());
 
     // This will also parse as a valid JID (server = "server:device").
-    assert!(matches!(Jid::from_str("user@server:device"), Ok(_)));
+    assert!(Jid::from_str("user@server:device").is_ok());
 }
 
 #[test]

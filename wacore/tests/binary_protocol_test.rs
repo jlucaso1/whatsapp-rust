@@ -104,7 +104,7 @@ fn test_unmarshal_ref_leftover_data_error() {
     if let Err(e) = result {
         match e {
             wacore::binary::BinaryError::LeftoverData(n) => assert_eq!(n, 3),
-            _ => panic!("Expected LeftoverData error, got {:?}", e),
+            _ => panic!("Expected LeftoverData error, got {e:?}"),
         }
     }
 }
