@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use waproto::whatsapp::{self as wa, SenderKeyDistributionMessage};
 
-use crate::error::decryption::DecryptionError;
 use crate::client::RecentMessageKey;
+use crate::error::decryption::DecryptionError;
 
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
     if version < 3 {
@@ -40,7 +40,6 @@ fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Err
 }
 
 impl Client {
-
     pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
@@ -87,17 +86,13 @@ impl Client {
 
             let result = match enc_type.as_str() {
                 "pkmsg" | "msg" => {
-                    use crate::signal::protocol::{
-                        Ciphertext, PreKeySignalMessage, SignalMessage,
-                    };
+                    use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
                     let ciphertext_enum = if enc_type == "pkmsg" {
                         PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
                     } else {
                         SignalMessage::deserialize(&ciphertext).map(Ciphertext::Whisper)
                     }
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e)
-                    });
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e));
 
                     match ciphertext_enum {
                         Ok(ciphertext_enum) => {
@@ -124,9 +119,7 @@ impl Client {
                         continue;
                     }
                     let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
-                        });
+                        .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
 
                     match sk_msg_result {
                         Ok((sk_msg, data_to_verify)) => {
@@ -136,8 +129,9 @@ impl Client {
                             );
                             let device_store_for_group =
                                 self.persistence_manager.get_device_arc().await;
-                            let device_store_wrapper =
-                                crate::store::signal::DeviceStore::new(device_store_for_group.clone());
+                            let device_store_wrapper = crate::store::signal::DeviceStore::new(
+                                device_store_for_group.clone(),
+                            );
                             let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
                                 device_store_wrapper.clone(),
                             );
@@ -248,7 +242,7 @@ impl Client {
                             );
                         }
                     }
-                    
+
                     // Mark message as processed after successful decryption and handling
                     self.mark_message_as_processed(message_key.clone()).await;
                 }

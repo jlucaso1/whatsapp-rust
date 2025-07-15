@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use tokio;
+use wacore::types::jid::Jid;
 use whatsapp_rust::client::{Client, RecentMessageKey};
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
-use wacore::types::jid::Jid;
 
 #[tokio::test]
 async fn test_processed_message_deduplication() {
@@ -99,9 +99,21 @@ async fn test_processed_message_cap() {
     assert!(!client.has_message_been_processed(&message_keys[4]).await);
 
     // But the recent messages should still be processed
-    assert!(client.has_message_been_processed(&message_keys[num_messages - 1]).await);
-    assert!(client.has_message_been_processed(&message_keys[num_messages - 2]).await);
-    assert!(client.has_message_been_processed(&message_keys[num_messages - 10]).await);
+    assert!(
+        client
+            .has_message_been_processed(&message_keys[num_messages - 1])
+            .await
+    );
+    assert!(
+        client
+            .has_message_been_processed(&message_keys[num_messages - 2])
+            .await
+    );
+    assert!(
+        client
+            .has_message_been_processed(&message_keys[num_messages - 10])
+            .await
+    );
 
     println!("✅ Event buffer capping test passed!");
 }

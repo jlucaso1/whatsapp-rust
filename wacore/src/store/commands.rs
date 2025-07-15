@@ -39,19 +39,18 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::AddProcessedMessage(key) => {
             const MAX_PROCESSED_MESSAGES: usize = 2000;
-            
+
             device.processed_messages.push_back(key);
-            
+
             // Cap the queue at MAX_PROCESSED_MESSAGES entries
             while device.processed_messages.len() > MAX_PROCESSED_MESSAGES {
                 device.processed_messages.pop_front();
             }
-        }
-        // DeviceCommand::CompletePairing { id, lid, account } => {
-        //     device.id = Some(id);
-        //     device.lid = Some(lid);
-        //     device.account = Some(account);
-        //     // Potentially update other device fields related to pairing
-        // }
+        } // DeviceCommand::CompletePairing { id, lid, account } => {
+          //     device.id = Some(id);
+          //     device.lid = Some(lid);
+          //     device.account = Some(account);
+          //     // Potentially update other device fields related to pairing
+          // }
     }
 }

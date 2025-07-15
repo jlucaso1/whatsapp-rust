@@ -90,7 +90,7 @@ pub struct Client {
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
-    
+
     /// In-memory cache for fast duplicate message detection
     pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
 }
@@ -103,7 +103,7 @@ impl Client {
         // Get initial device state and create core client
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
-        
+
         // Initialize processed messages cache from device state
         let processed_messages_cache = {
             let mut cache = HashSet::new();
@@ -304,9 +304,11 @@ impl Client {
             to: key.to.clone(),
             id: key.id.clone(),
         };
-        
+
         self.persistence_manager
-            .process_command(wacore::store::commands::DeviceCommand::AddProcessedMessage(wacore_key))
+            .process_command(wacore::store::commands::DeviceCommand::AddProcessedMessage(
+                wacore_key,
+            ))
             .await;
 
         // Rebuild in-memory cache from the updated persistent storage
@@ -314,7 +316,7 @@ impl Client {
         {
             let mut cache = self.processed_messages_cache.lock().await;
             cache.clear();
-            
+
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             for processed_msg in &device_snapshot.core.processed_messages {
                 let key = RecentMessageKey {
