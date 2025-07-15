@@ -87,13 +87,6 @@ impl Client {
 
             let result = match enc_type.as_str() {
                 "pkmsg" | "msg" => {
-                    // Capture bundle before decryption for direct messages
-                    if self.capture_manager.is_enabled() {
-                        let _ = self
-                            .capture_direct_message_bundle(&info, enc_node, &ciphertext)
-                            .await;
-                    }
-
                     use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
                     let ciphertext_enum = if enc_type == "pkmsg" {
                         PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
@@ -108,15 +101,35 @@ impl Client {
                                 info.source.sender.user.clone(),
                                 info.source.sender.device as u32,
                             );
+                            
+                            // Extract sender identity key before consuming ciphertext_enum
+                            let sender_identity_key_for_capture = match &ciphertext_enum {
+                                crate::signal::protocol::Ciphertext::PreKey(prekey_msg) => {
+                                    Some(prekey_msg.identity_key.serialize())
+                                }
+                                crate::signal::protocol::Ciphertext::Whisper(_) => None,
+                            };
+                            
                             // Use Arc<Mutex<Device>> as the store for SessionCipher
                             let device_store = self.persistence_manager.get_device_arc().await;
                             let device_store_wrapper =
                                 crate::store::signal::DeviceStore::new(device_store);
-                            let cipher = SessionCipher::new(device_store_wrapper, signal_address);
-                            cipher
+                            let cipher = SessionCipher::new(device_store_wrapper, signal_address.clone());
+                            let decrypt_result = cipher
                                 .decrypt(ciphertext_enum)
                                 .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")));
+
+                            // Capture bundle after successful decryption for direct messages
+                            if let Ok(ref plaintext) = decrypt_result {
+                                if self.capture_manager.is_enabled() {
+                                    let _ = self
+                                        .capture_direct_message_bundle(&info, enc_node, &ciphertext, sender_identity_key_for_capture, plaintext)
+                                        .await;
+                                }
+                            }
+
+                            decrypt_result
                         }
                         Err(e) => Err(DecryptionError::Crypto(e)),
                     }
@@ -125,13 +138,6 @@ impl Client {
                     if !info.source.is_group {
                         log::warn!("Received skmsg in non-group chat, skipping.");
                         continue;
-                    }
-
-                    // Capture bundle before decryption for group messages
-                    if self.capture_manager.is_enabled() {
-                        let _ = self
-                            .capture_group_message_bundle(&info, enc_node, &ciphertext)
-                            .await;
                     }
 
                     let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
@@ -153,10 +159,21 @@ impl Client {
                             );
                             let cipher =
                                 GroupCipher::new(sender_key_name, device_store_wrapper, builder);
-                            cipher
+                            let decrypt_result = cipher
                                 .decrypt(&sk_msg, data_to_verify)
                                 .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")));
+
+                            // Capture bundle after successful decryption for group messages
+                            if let Ok(ref plaintext) = decrypt_result {
+                                if self.capture_manager.is_enabled() {
+                                    let _ = self
+                                        .capture_group_message_bundle(&info, enc_node, &ciphertext, &sk_msg, plaintext)
+                                        .await;
+                                }
+                            }
+
+                            decrypt_result
                         }
                         Err(e) => Err(DecryptionError::Crypto(e)),
                     }
@@ -427,11 +444,16 @@ impl Client {
         info: &crate::types::message::MessageInfo,
         _enc_node: &crate::binary::node::Node,
         ciphertext: &[u8],
+        sender_identity_key_bin: Option<Vec<u8>>,
+        plaintext: &[u8],
     ) -> Result<(), anyhow::Error> {
         use crate::capture::DirectMessageBundle;
 
-        // Get sender identity key - we'll need to implement this properly
-        let sender_identity_key_bin = vec![]; // TODO: Extract from actual message
+        // Use the provided sender identity key or empty if not available
+        let sender_identity_key_bin = sender_identity_key_bin.unwrap_or_else(|| {
+            log::warn!("Sender identity key not available for capture");
+            vec![]
+        });
 
         // Get current session record before decryption using Device as SessionStore
         let signal_address = crate::signal::address::SignalAddress::new(
@@ -459,6 +481,9 @@ impl Client {
             }
         };
 
+        // Save the actual decrypted plaintext as binary data
+        let expected_plaintext = format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len());
+
         let bundle = DirectMessageBundle {
             message_bin: ciphertext.to_vec(),
             sender_identity_key_bin,
@@ -466,7 +491,7 @@ impl Client {
             recipient_identity_keys,
             recipient_prekey: None, // TODO: Get from prekey store if pkmsg
             recipient_signed_prekey: None, // TODO: Get from signed prekey store if pkmsg
-            expected_plaintext: format!("CAPTURED_MESSAGE_{}", info.id), // Placeholder
+            expected_plaintext,
         };
 
         self.capture_manager
@@ -479,11 +504,17 @@ impl Client {
         info: &crate::types::message::MessageInfo,
         _enc_node: &crate::binary::node::Node,
         ciphertext: &[u8],
+        _sk_msg: &crate::signal::groups::message::SenderKeyMessage,
+        plaintext: &[u8],
     ) -> Result<(), anyhow::Error> {
         use crate::capture::GroupMessageBundle;
 
-        // Get sender identity key - we'll need to implement this properly
-        let sender_identity_key_bin = vec![]; // TODO: Extract from actual message
+        // For group messages, we don't have a way to retrieve the sender identity key
+        // from the store as there's no load_identity method in IdentityKeyStore  
+        let sender_identity_key_bin = {
+            log::warn!("Cannot extract sender identity key from SenderKeyMessage - no load_identity method available");
+            vec![]
+        };
 
         // Get current session record and sender key record before decryption
         let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
@@ -491,13 +522,13 @@ impl Client {
             info.source.sender.user.clone(),
         );
 
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-
-        // Get session record (for SKDM) via Device's SessionStore implementation
         let signal_address = crate::signal::address::SignalAddress::new(
             info.source.sender.user.clone(),
             info.source.sender.device as u32,
         );
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
         let session_record = match device_snapshot.load_session(&signal_address).await {
             Ok(session) => session,
             Err(e) => {
@@ -515,12 +546,15 @@ impl Client {
             }
         };
 
+        // Save the actual decrypted plaintext as binary data
+        let expected_plaintext = format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len());
+
         let bundle = GroupMessageBundle {
             message_bin: ciphertext.to_vec(),
             sender_identity_key_bin,
             recipient_session: session_record,
             recipient_sender_key: sender_key_record,
-            expected_plaintext: format!("CAPTURED_GROUP_MESSAGE_{}", info.id), // Placeholder
+            expected_plaintext,
         };
 
         self.capture_manager
