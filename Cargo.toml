@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "analyser", "whatsapp-core", "whatsapp-proto"]
+members = [".", "analyser", "wacore", "waproto"]
 
 [package]
 name = "whatsapp-rust"
@@ -10,8 +10,8 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-whatsapp-core = { path = "./whatsapp-core" }
-whatsapp-proto = { path = "./whatsapp-proto" }
+wacore = { path = "./wacore" }
+waproto = { path = "./waproto" }
 serde = { version = "1.0.188", features = ["derive"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 

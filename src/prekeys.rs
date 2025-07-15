@@ -5,7 +5,7 @@ use crate::types::jid::{Jid, SERVER_JID};
 use log;
 
 // Re-export core utilities
-pub use whatsapp_core::prekeys::PreKeyUtils;
+pub use wacore::prekeys::PreKeyUtils;
 
 impl Client {
     /// Fetches pre-key bundles for a list of JIDs.

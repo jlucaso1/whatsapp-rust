@@ -2646,12 +2646,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
 
 [[package]]
+name = "wacore"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "base64",
+ "bytes",
+ "cbc",
+ "chrono",
+ "cipher",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "flate2",
+ "hex",
+ "hkdf",
+ "hmac",
+ "md5",
+ "once_cell",
+ "prost",
+ "rand 0.9.1",
+ "serde",
+ "serde-big-array",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.12",
+ "waproto",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
 dependencies = [
  "try-lock",
+]
+
+[[package]]
+name = "waproto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-build",
+ "serde",
 ]
 
 [[package]]
@@ -2769,49 +2812,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "whatsapp-core"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-gcm",
- "anyhow",
- "async-trait",
- "base64",
- "bytes",
- "cbc",
- "chrono",
- "cipher",
- "curve25519-dalek",
- "ed25519-dalek",
- "flate2",
- "hex",
- "hkdf",
- "hmac",
- "md5",
- "once_cell",
- "prost",
- "rand 0.9.1",
- "serde",
- "serde-big-array",
- "serde_bytes",
- "serde_json",
- "sha2",
- "subtle",
- "thiserror 2.0.12",
- "whatsapp-proto",
- "x25519-dalek",
-]
-
-[[package]]
-name = "whatsapp-proto"
-version = "0.1.0"
-dependencies = [
- "prost",
- "prost-build",
- "serde",
-]
-
-[[package]]
 name = "whatsapp-rust"
 version = "0.1.0"
 dependencies = [
@@ -2843,8 +2843,8 @@ dependencies = [
  "tokio-tungstenite",
  "ureq",
  "urlencoding",
- "whatsapp-core",
- "whatsapp-proto",
+ "wacore",
+ "waproto",
  "x25519-dalek",
 ]
 

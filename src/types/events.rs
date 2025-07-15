@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
 pub struct SelfPushNameUpdated {

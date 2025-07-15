@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 use whatsapp_rust::types::events::{Connected, Disconnected, Event, EventBus};
 use whatsapp_rust::types::jid::Jid;
 use whatsapp_rust::types::message::{MessageInfo, MessageSource};

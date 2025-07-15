@@ -1,19 +1,19 @@
 // Temporary stub implementations for Device signal store traits
-// TODO: Implement proper signal store methods matching whatsapp-core trait signatures
+// TODO: Implement proper signal store methods matching wacore trait signatures
 
 use crate::store::Device;
 use async_trait::async_trait;
 use std::sync::Arc;
-use whatsapp_core::signal::address::SignalAddress;
-use whatsapp_core::signal::ecc::keys::EcPublicKey;
-use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
-use whatsapp_core::signal::sender_key_name::SenderKeyName;
-use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use whatsapp_core::signal::state::session_record::SessionRecord;
-use whatsapp_core::signal::store::*;
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use wacore::signal::address::SignalAddress;
+use wacore::signal::ecc::keys::EcPublicKey;
+use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
+use wacore::signal::sender_key_name::SenderKeyName;
+use wacore::signal::state::sender_key_record::SenderKeyRecord;
+use wacore::signal::state::session_record::SessionRecord;
+use wacore::signal::store::*;
+use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-// Use the StoreError from whatsapp-core signal module
+// Use the StoreError from wacore signal module
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 // --- IdentityKeyStore ---
@@ -24,9 +24,9 @@ impl IdentityKeyStore for Device {
         let private_key = self.identity_key.private_key;
         let public_key = self.identity_key.public_key;
 
-        use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
-        use whatsapp_core::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
-        use whatsapp_core::signal::identity::{IdentityKey, IdentityKeyPair};
+        use wacore::signal::ecc::key_pair::EcKeyPair;
+        use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+        use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
 
         let djb_public_key = DjbEcPublicKey::new(public_key);
         let djb_private_key = DjbEcPrivateKey::new(private_key);
@@ -102,14 +102,14 @@ impl SignedPreKeyStore for Device {
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         // First, check if the requested ID matches the one we hold directly.
         if signed_prekey_id == self.signed_pre_key.key_id {
-            use whatsapp_core::signal::ecc::key_pair::EcKeyPair;
-            use whatsapp_core::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+            use wacore::signal::ecc::key_pair::EcKeyPair;
+            use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
 
             let key_pair = EcKeyPair::new(
                 DjbEcPublicKey::new(self.signed_pre_key.key_pair.public_key),
                 DjbEcPrivateKey::new(self.signed_pre_key.key_pair.private_key),
             );
-            let record = whatsapp_core::signal::state::record::new_signed_pre_key_record(
+            let record = wacore::signal::state::record::new_signed_pre_key_record(
                 self.signed_pre_key.key_id,
                 key_pair,
                 self.signed_pre_key

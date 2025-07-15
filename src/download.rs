@@ -3,15 +3,15 @@ use crate::mediaconn::MediaConn;
 use anyhow::{Result, anyhow};
 
 // Re-export core types and functionality
-pub use whatsapp_core::download::{DownloadUtils, Downloadable, MediaType};
+pub use wacore::download::{DownloadUtils, Downloadable, MediaType};
 
-impl From<&MediaConn> for whatsapp_core::download::MediaConnection {
+impl From<&MediaConn> for wacore::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
-        whatsapp_core::download::MediaConnection {
+        wacore::download::MediaConnection {
             hosts: conn
                 .hosts
                 .iter()
-                .map(|h| whatsapp_core::download::MediaHost {
+                .map(|h| wacore::download::MediaHost {
                     hostname: h.hostname.clone(),
                 })
                 .collect(),
@@ -25,7 +25,7 @@ impl Client {
         let media_conn = self.refresh_media_conn(false).await?;
 
         // Convert to core types
-        let core_media_conn = whatsapp_core::download::MediaConnection::from(&media_conn);
+        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
         let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
 
         for request in requests {
@@ -47,7 +47,7 @@ impl Client {
 
     async fn download_and_decrypt_with_request(
         &self,
-        request: &whatsapp_core::download::DownloadRequest,
+        request: &wacore::download::DownloadRequest,
     ) -> Result<Vec<u8>> {
         let url_clone = request.url.clone();
         let encrypted_data = tokio::task::spawn_blocking(move || {

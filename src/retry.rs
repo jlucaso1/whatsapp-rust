@@ -5,7 +5,7 @@ use crate::types::events::Receipt;
 use crate::types::jid::Jid;
 use log::info;
 use std::sync::Arc;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 impl Client {
     /// Add a message to the recent message cache (with eviction)

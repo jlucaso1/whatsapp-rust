@@ -1,6 +1,6 @@
 use prost::Message;
 use std::sync::Arc;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 use whatsapp_rust::appstate::{
     keys,
     processor::{Mutation, Processor},
