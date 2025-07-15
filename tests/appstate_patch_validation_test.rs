@@ -1,12 +1,46 @@
+use async_trait::async_trait;
 use base64::Engine as _;
 use base64::prelude::*;
 use prost::Message;
+use std::sync::Arc;
 use wacore::appstate::{
     hash::HashState,
     keys,
     lthash::WA_PATCH_INTEGRITY,
-    processor::{PatchList, ProcessorUtils},
+    processor::{PatchList, Processor},
 };
+use wacore::store::traits::{AppStateKeyStore, AppStateSyncKey};
+
+// Dummy key store for tests
+struct TestKeyStore {
+    key_id: Vec<u8>,
+    key_data: Vec<u8>,
+}
+
+#[async_trait]
+impl AppStateKeyStore for TestKeyStore {
+    async fn get_app_state_sync_key(
+        &self,
+        key_id: &[u8],
+    ) -> wacore::store::error::Result<Option<AppStateSyncKey>> {
+        if key_id == self.key_id.as_slice() {
+            Ok(Some(AppStateSyncKey {
+                key_data: self.key_data.clone(),
+                fingerprint: vec![],
+                timestamp: 0,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+    async fn set_app_state_sync_key(
+        &self,
+        _key_id: &[u8],
+        _key: AppStateSyncKey,
+    ) -> wacore::store::error::Result<()> {
+        Ok(())
+    }
+}
 use waproto::whatsapp as wa;
 
 #[tokio::test]
@@ -86,17 +120,16 @@ async fn test_patch_mac_validation_with_index_value_map() {
     };
 
     // 5. Create key lookup function
-    let key_lookup = |key_id: &[u8]| -> Option<Vec<u8>> {
-        if key_id == key_id_bytes {
-            Some(key_data.to_vec())
-        } else {
-            None
-        }
-    };
 
     // 6. Test: Decode patches should succeed
-    let result =
-        ProcessorUtils::decode_patches_core(&patch_list, initial_state.clone(), key_lookup);
+    let key_store = Arc::new(TestKeyStore {
+        key_id: key_id_bytes.to_vec(),
+        key_data: key_data.to_vec(),
+    });
+    let processor = Processor::new(key_store);
+    let result = processor
+        .decode_patches(&patch_list, initial_state.clone())
+        .await;
 
     assert!(
         result.is_ok(),
@@ -180,18 +213,15 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
         snapshot: None,
     };
 
-    let key_lookup = |key_id: &[u8]| -> Option<Vec<u8>> {
-        if key_id == key_id_bytes {
-            Some(key_data.to_vec())
-        } else {
-            None
-        }
-    };
-
     // Test: Should fail with mismatching patch MAC
-    let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state, key_lookup);
+    let key_store = Arc::new(TestKeyStore {
+        key_id: key_id_bytes.to_vec(),
+        key_data: key_data.to_vec(),
+    });
+    let processor = Processor::new(key_store);
+    let result = processor.decode_patches(&patch_list, initial_state).await;
 
-    println!("Test result: {result:?}");
+    println!("Test result: {:?}", result);
 
     assert!(result.is_err(), "Should fail with wrong patch MAC");
     match result.unwrap_err() {
@@ -243,15 +273,12 @@ async fn test_missing_previous_set_value_error() {
         snapshot: None,
     };
 
-    let key_lookup = |key_id: &[u8]| -> Option<Vec<u8>> {
-        if key_id == key_id_bytes {
-            Some(key_data.to_vec())
-        } else {
-            None
-        }
-    };
-
-    let result = ProcessorUtils::decode_patches_core(&patch_list, initial_state, key_lookup);
+    let key_store = Arc::new(TestKeyStore {
+        key_id: key_id_bytes.to_vec(),
+        key_data: key_data.to_vec(),
+    });
+    let processor = Processor::new(key_store);
+    let result = processor.decode_patches(&patch_list, initial_state).await;
 
     assert!(
         result.is_err(),

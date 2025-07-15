@@ -4,6 +4,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use wacore::appstate::hash::HashState;
 use wacore::signal;
 use wacore::signal::state::sender_key_record::SenderKeyRecord;
 use wacore::store::error::{Result, StoreError};
@@ -319,18 +320,14 @@ impl AppStateKeyStore for FileStore {
 
 #[async_trait]
 impl AppStateStore for FileStore {
-    async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState> {
+    async fn get_app_state_version(&self, name: &str) -> Result<HashState> {
         let path = self
             .path_for("appstate/versions")
             .join(Self::sanitize_filename(name));
         Ok(self.read_bincode(&path).await?.unwrap_or_default())
     }
 
-    async fn set_app_state_version(
-        &self,
-        name: &str,
-        state: crate::appstate::hash::HashState,
-    ) -> Result<()> {
+    async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()> {
         let path = self
             .path_for("appstate/versions")
             .join(Self::sanitize_filename(name));

@@ -4,6 +4,7 @@
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
+use wacore::appstate::hash::HashState;
 use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::signal::state::sender_key_record::SenderKeyRecord;
 use wacore::signal::store::{PreKeyStore, SenderKeyStore, SignedPreKeyStore};
@@ -15,7 +16,7 @@ use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type IdentityMap = GenericMemoryStore<String, [u8; 32]>;
 type SessionMap = GenericMemoryStore<String, Vec<u8>>;
-type AppStateVersionMap = GenericMemoryStore<String, crate::appstate::hash::HashState>;
+type AppStateVersionMap = GenericMemoryStore<String, HashState>;
 type PreKeyMap = GenericMemoryStore<u32, PreKeyRecordStructure>;
 type SignedPreKeyMap = GenericMemoryStore<u32, SignedPreKeyRecordStructure>;
 type SenderKeyMap = GenericMemoryStore<String, SenderKeyRecord>;
@@ -85,7 +86,7 @@ impl SessionStore for MemoryStore {
 
 #[async_trait]
 impl AppStateStore for MemoryStore {
-    async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState> {
+    async fn get_app_state_version(&self, name: &str) -> Result<HashState> {
         Ok(self
             .app_state_versions
             .get(&name.to_string())
@@ -93,11 +94,7 @@ impl AppStateStore for MemoryStore {
             .unwrap_or_default())
     }
 
-    async fn set_app_state_version(
-        &self,
-        name: &str,
-        state: crate::appstate::hash::HashState,
-    ) -> Result<()> {
+    async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()> {
         self.app_state_versions.put(name.to_string(), state).await;
         Ok(())
     }

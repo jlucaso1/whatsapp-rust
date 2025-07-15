@@ -1,16 +1,12 @@
 // Local traits for whatsapp-rust that depend on platform-specific types
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore::store::error::Result;
+use wacore::{appstate::hash::HashState, store::error::Result};
 
 #[async_trait]
 pub trait AppStateStore: Send + Sync {
-    async fn get_app_state_version(&self, name: &str) -> Result<crate::appstate::hash::HashState>;
-    async fn set_app_state_version(
-        &self,
-        name: &str,
-        state: crate::appstate::hash::HashState,
-    ) -> Result<()>;
+    async fn get_app_state_version(&self, name: &str) -> Result<HashState>;
+    async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()>;
 }
 
 // Re-export the core traits
@@ -35,17 +31,13 @@ impl AppStateWrapper {
 
 #[async_trait]
 impl AppStateStore for AppStateWrapper {
-    async fn get_app_state_version(&self, _name: &str) -> Result<crate::appstate::hash::HashState> {
+    async fn get_app_state_version(&self, _name: &str) -> Result<HashState> {
         // We need to cast to concrete type to access AppStateStore methods
         // For now, return default - this is a temporary workaround
         Ok(Default::default())
     }
 
-    async fn set_app_state_version(
-        &self,
-        _name: &str,
-        _state: crate::appstate::hash::HashState,
-    ) -> Result<()> {
+    async fn set_app_state_version(&self, _name: &str, _state: HashState) -> Result<()> {
         // Temporary implementation
         Ok(())
     }
