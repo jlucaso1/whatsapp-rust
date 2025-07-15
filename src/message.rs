@@ -13,9 +13,8 @@ use std::sync::Arc;
 
 use waproto::whatsapp::{self as wa, SenderKeyDistributionMessage};
 
+use crate::client::RecentMessageKey;
 use crate::error::decryption::DecryptionError;
-
-use sha2::{Digest, Sha256};
 
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
     if version < 3 {
@@ -41,66 +40,6 @@ fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Err
 }
 
 impl Client {
-    async fn buffered_decrypt<F, Fut>(
-        &self,
-        ciphertext: &[u8],
-        decrypt_fn: F,
-    ) -> Result<Vec<u8>, DecryptionError>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Vec<u8>, anyhow::Error>>,
-    {
-        let ciphertext_hash: [u8; 32] = Sha256::digest(ciphertext).into();
-
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let backend = device_snapshot.backend.clone();
-        // drop(device_snapshot); // Not needed
-
-        match backend.get_buffered_event(&ciphertext_hash).await {
-            Ok(Some(_)) => {
-                log::debug!(target: "Client/Recv", "Ignoring message: event was already processed (hash: {})", hex::encode(ciphertext_hash));
-                return Err(DecryptionError::AlreadyProcessed);
-            }
-            Ok(None) => {
-                // Message not found in buffer, proceed to decrypt.
-            }
-            Err(e) => {
-                // An error occurred, but we should probably still try to decrypt to avoid dropping a message.
-                // However, this means deduplication is not working. Log a warning.
-                log::warn!(
-                    "Failed to check event buffer for hash {}: {}. Proceeding with decryption, but this may be a duplicate.",
-                    hex::encode(ciphertext_hash),
-                    e
-                );
-            }
-        }
-
-        match decrypt_fn().await {
-            Ok(plaintext) => {
-                if let Err(e) = backend
-                    .put_buffered_event(
-                        &ciphertext_hash,
-                        Some(plaintext.clone()),
-                        chrono::Utc::now(),
-                    )
-                    .await
-                {
-                    log::warn!("Failed to save decrypted event to buffer: {e:?}");
-                }
-                Ok(plaintext)
-            }
-            Err(e) => {
-                if let Err(store_err) = backend
-                    .put_buffered_event(&ciphertext_hash, None, chrono::Utc::now())
-                    .await
-                {
-                    log::warn!("Failed to save failed event hash to buffer: {store_err:?}");
-                }
-                Err(DecryptionError::Crypto(e))
-            }
-        }
-    }
-
     pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
@@ -109,6 +48,18 @@ impl Client {
                 return;
             }
         };
+
+        // Create message key for deduplication
+        let message_key = RecentMessageKey {
+            to: info.source.chat.clone(),
+            id: info.id.clone(),
+        };
+
+        // Check if message has already been processed
+        if self.has_message_been_processed(&message_key).await {
+            log::debug!(target: "Client/Recv", "Ignoring message: already processed (to: {}, id: {})", message_key.to, message_key.id);
+            return;
+        }
 
         let enc_nodes = node.get_children_by_tag("enc");
         if enc_nodes.is_empty() {
@@ -135,65 +86,64 @@ impl Client {
 
             let result = match enc_type.as_str() {
                 "pkmsg" | "msg" => {
-                    let decrypt_closure = || async {
-                        use crate::signal::protocol::{
-                            Ciphertext, PreKeySignalMessage, SignalMessage,
-                        };
-                        let ciphertext_enum = if enc_type == "pkmsg" {
-                            PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
-                        } else {
-                            SignalMessage::deserialize(&ciphertext).map(Ciphertext::Whisper)
-                        }
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e)
-                        })?;
+                    use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
+                    let ciphertext_enum = if enc_type == "pkmsg" {
+                        PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
+                    } else {
+                        SignalMessage::deserialize(&ciphertext).map(Ciphertext::Whisper)
+                    }
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e));
 
-                        let signal_address = SignalAddress::new(
-                            info.source.sender.user.clone(),
-                            info.source.sender.device as u32,
-                        );
-                        // Use Arc<Mutex<Device>> as the store for SessionCipher
-                        let device_store = self.persistence_manager.get_device_arc().await;
-                        let device_store_wrapper =
-                            crate::store::signal::DeviceStore::new(device_store);
-                        let cipher = SessionCipher::new(device_store_wrapper, signal_address);
-                        cipher
-                            .decrypt(ciphertext_enum)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{e}"))
-                    };
-                    self.buffered_decrypt(&ciphertext, decrypt_closure).await
+                    match ciphertext_enum {
+                        Ok(ciphertext_enum) => {
+                            let signal_address = SignalAddress::new(
+                                info.source.sender.user.clone(),
+                                info.source.sender.device as u32,
+                            );
+                            // Use Arc<Mutex<Device>> as the store for SessionCipher
+                            let device_store = self.persistence_manager.get_device_arc().await;
+                            let device_store_wrapper =
+                                crate::store::signal::DeviceStore::new(device_store);
+                            let cipher = SessionCipher::new(device_store_wrapper, signal_address);
+                            cipher
+                                .decrypt(ciphertext_enum)
+                                .await
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                        }
+                        Err(e) => Err(DecryptionError::Crypto(e)),
+                    }
                 }
                 "skmsg" => {
                     if !info.source.is_group {
                         log::warn!("Received skmsg in non-group chat, skipping.");
                         continue;
                     }
-                    let decrypt_closure = || async {
-                        let (sk_msg, data_to_verify) = SenderKeyMessage::deserialize(&ciphertext)
-                            .map_err(|e| {
-                            anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e)
-                        })?;
+                    let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
+                        .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
 
-                        let sender_key_name = SenderKeyName::new(
-                            info.source.chat.to_string(),
-                            info.source.sender.user.clone(),
-                        );
-                        let device_store_for_group =
-                            self.persistence_manager.get_device_arc().await;
-                        let device_store_wrapper =
-                            crate::store::signal::DeviceStore::new(device_store_for_group.clone());
-                        let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
-                            device_store_wrapper.clone(),
-                        );
-                        let cipher =
-                            GroupCipher::new(sender_key_name, device_store_wrapper, builder);
-                        cipher
-                            .decrypt(&sk_msg, data_to_verify)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{e}"))
-                    };
-                    self.buffered_decrypt(&ciphertext, decrypt_closure).await
+                    match sk_msg_result {
+                        Ok((sk_msg, data_to_verify)) => {
+                            let sender_key_name = SenderKeyName::new(
+                                info.source.chat.to_string(),
+                                info.source.sender.user.clone(),
+                            );
+                            let device_store_for_group =
+                                self.persistence_manager.get_device_arc().await;
+                            let device_store_wrapper = crate::store::signal::DeviceStore::new(
+                                device_store_for_group.clone(),
+                            );
+                            let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
+                                device_store_wrapper.clone(),
+                            );
+                            let cipher =
+                                GroupCipher::new(sender_key_name, device_store_wrapper, builder);
+                            cipher
+                                .decrypt(&sk_msg, data_to_verify)
+                                .await
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                        }
+                        Err(e) => Err(DecryptionError::Crypto(e)),
+                    }
                 }
                 _ => {
                     log::warn!("Unsupported enc type: {enc_type}");
@@ -207,6 +157,8 @@ impl Client {
                         Ok(p) => p,
                         Err(e) => {
                             log::error!("Failed to unpad message: {e}");
+                            // Mark as processed even if unpadding failed
+                            self.mark_message_as_processed(message_key.clone()).await;
                             continue;
                         }
                     };
@@ -290,8 +242,10 @@ impl Client {
                             );
                         }
                     }
+
+                    // Mark message as processed after successful decryption and handling
+                    self.mark_message_as_processed(message_key.clone()).await;
                 }
-                Err(DecryptionError::AlreadyProcessed) => {}
                 Err(DecryptionError::Crypto(e)) => {
                     log::error!(
                         "Failed to decrypt message (type: {}) from {}: {:?}",
@@ -299,6 +253,8 @@ impl Client {
                         info.source.sender,
                         e
                     );
+                    // Mark as processed even if decryption failed to prevent repeated attempts
+                    self.mark_message_as_processed(message_key.clone()).await;
                 }
             }
         }

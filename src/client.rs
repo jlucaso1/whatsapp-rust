@@ -15,7 +15,7 @@ use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
@@ -48,7 +48,7 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RecentMessageKey {
     pub to: crate::types::jid::Jid,
     pub id: String,
@@ -90,7 +90,9 @@ pub struct Client {
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
-    pub(crate) last_buffer_cleanup: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
+
+    /// In-memory cache for fast duplicate message detection
+    pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
 }
 
 impl Client {
@@ -101,6 +103,20 @@ impl Client {
         // Get initial device state and create core client
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
+
+        // Initialize processed messages cache from device state
+        let processed_messages_cache = {
+            let mut cache = HashSet::new();
+            for processed_msg in &device_snapshot.core.processed_messages {
+                // Convert from wacore::ProcessedMessageKey to client::RecentMessageKey
+                let key = RecentMessageKey {
+                    to: processed_msg.to.clone(),
+                    id: processed_msg.id.clone(),
+                };
+                cache.insert(key);
+            }
+            Arc::new(Mutex::new(cache))
+        };
 
         Self {
             core,
@@ -133,7 +149,7 @@ impl Client {
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
-            last_buffer_cleanup: Arc::new(Mutex::new(None)),
+            processed_messages_cache,
         }
     }
     // REMOVED: get_group_participants stub. Use query_group_info instead.
@@ -275,6 +291,43 @@ impl Client {
         }
     }
 
+    /// Checks if a message has already been processed (for deduplication)
+    pub async fn has_message_been_processed(&self, key: &RecentMessageKey) -> bool {
+        let cache = self.processed_messages_cache.lock().await;
+        cache.contains(key)
+    }
+
+    /// Marks a message as processed and adds it to both the in-memory cache and persistent storage
+    pub async fn mark_message_as_processed(&self, key: RecentMessageKey) {
+        // Convert to wacore type and send to persistence manager first
+        let wacore_key = wacore::store::device::ProcessedMessageKey {
+            to: key.to.clone(),
+            id: key.id.clone(),
+        };
+
+        self.persistence_manager
+            .process_command(wacore::store::commands::DeviceCommand::AddProcessedMessage(
+                wacore_key,
+            ))
+            .await;
+
+        // Rebuild in-memory cache from the updated persistent storage
+        // This ensures the cache respects the cap and maintains consistency
+        {
+            let mut cache = self.processed_messages_cache.lock().await;
+            cache.clear();
+
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            for processed_msg in &device_snapshot.core.processed_messages {
+                let key = RecentMessageKey {
+                    to: processed_msg.to.clone(),
+                    id: processed_msg.id.clone(),
+                };
+                cache.insert(key);
+            }
+        }
+    }
+
     /// Processes an encrypted frame from the WebSocket.
     /// This is the entry point for all incoming frames after the handshake.
     pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
@@ -302,32 +355,6 @@ impl Client {
                 return;
             }
         };
-
-        // --- Periodic cleanup of event buffer (every 12 hours) ---
-        {
-            let mut last_cleanup = self.last_buffer_cleanup.lock().await;
-            let now = chrono::Utc::now();
-            let needs_cleanup = last_cleanup
-                .map(|t| (now - t).num_hours() >= 12)
-                .unwrap_or(true);
-            if needs_cleanup {
-                *last_cleanup = Some(now);
-                let pm_clone = self.persistence_manager.clone(); // Use persistence_manager
-                tokio::spawn(async move {
-                    // Access backend through persistence_manager's device's backend
-                    // This requires PersistenceManager to expose a way to get the backend,
-                    // or for Device to hold an Arc<dyn Backend> that PM initializes.
-                    // Assuming Device has `backend: Arc<dyn Backend>`
-                    let device_snapshot = pm_clone.get_device_snapshot().await;
-                    let backend = device_snapshot.backend.clone();
-                    // Delete entries older than 14 days, similar to whatsmeow
-                    let cutoff = chrono::Utc::now() - chrono::Duration::days(14);
-                    if let Err(e) = backend.delete_old_buffered_events(cutoff).await {
-                        log::warn!("Failed to clean up old event buffer entries: {e:?}");
-                    }
-                });
-            }
-        }
 
         match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
