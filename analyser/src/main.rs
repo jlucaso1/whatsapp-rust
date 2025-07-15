@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     let handle = tokio::spawn(async move {
         while let Some(h) = handler.next().await {
             if let Err(err) = h {
-                log::debug!("Browser handler error: {}", err);
+                log::debug!("Browser handler error: {err}");
             }
         }
     });
@@ -188,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     let console_task = tokio::spawn(async move {
         while let Some(event) = console_events.next().await {
-            if let Some(first_arg) = event.args.get(0) {
+            if let Some(first_arg) = event.args.first() {
                 if let Some(val) = &first_arg.value {
                     if let Some(s) = val.as_str() {
                         let is_analyser_log = s.starts_with("[ANALYZER]");
@@ -217,9 +217,9 @@ async fn main() -> anyhow::Result<()> {
                                 .join(" ");
 
                             if is_analyser_log {
-                                log::info!(target: "analyser::web", "{}", full_message);
+                                log::info!(target: "analyser::web", "{full_message}");
                             } else {
-                                log::debug!(target: "analyser::web", "{}", full_message);
+                                log::debug!(target: "analyser::web", "{full_message}");
                             }
                         }
                     }
@@ -229,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if let Err(err) = page.evaluate(MONKEY_PATCH_SCRIPT).await {
-        log::error!("Failed to inject script: {:?}", err);
+        log::error!("Failed to inject script: {err:?}");
     }
 
     log::info!("Script injected. Listening for logs. Press Ctrl+C to exit.");
