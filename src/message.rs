@@ -5,7 +5,9 @@ use crate::proto_helpers::MessageExt;
 use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
-use crate::signal::store::{IdentityKeyStore, PreKeyStore, SenderKeyStore, SessionStore, SignedPreKeyStore};
+use crate::signal::store::{
+    IdentityKeyStore, PreKeyStore, SenderKeyStore, SessionStore, SignedPreKeyStore,
+};
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -101,16 +103,23 @@ impl Client {
                                 info.source.sender.user.clone(),
                                 info.source.sender.device as u32,
                             );
-                            
+
                             // Capture bundle BEFORE decryption for PreKeySignalMessage to get fresh prekeys
-                            if let crate::signal::protocol::Ciphertext::PreKey(ref prekey_msg) = ciphertext_enum {
+                            if let crate::signal::protocol::Ciphertext::PreKey(ref prekey_msg) =
+                                ciphertext_enum
+                            {
                                 if self.capture_manager.is_enabled() {
                                     let _ = self
-                                        .capture_direct_message_bundle_pre_decryption(&info, enc_node, &ciphertext, prekey_msg)
+                                        .capture_direct_message_bundle_pre_decryption(
+                                            &info,
+                                            enc_node,
+                                            &ciphertext,
+                                            prekey_msg,
+                                        )
                                         .await;
                                 }
                             }
-                            
+
                             // Extract sender identity key before consuming ciphertext_enum
                             let sender_identity_key_for_capture = match &ciphertext_enum {
                                 crate::signal::protocol::Ciphertext::PreKey(prekey_msg) => {
@@ -118,12 +127,13 @@ impl Client {
                                 }
                                 crate::signal::protocol::Ciphertext::Whisper(_) => None,
                             };
-                            
+
                             // Use Arc<Mutex<Device>> as the store for SessionCipher
                             let device_store = self.persistence_manager.get_device_arc().await;
                             let device_store_wrapper =
                                 crate::store::signal::DeviceStore::new(device_store);
-                            let cipher = SessionCipher::new(device_store_wrapper, signal_address.clone());
+                            let cipher =
+                                SessionCipher::new(device_store_wrapper, signal_address.clone());
                             let decrypt_result = cipher
                                 .decrypt(ciphertext_enum)
                                 .await
@@ -133,7 +143,13 @@ impl Client {
                             if let Ok(ref plaintext) = decrypt_result {
                                 if self.capture_manager.is_enabled() && enc_type == "msg" {
                                     let _ = self
-                                        .capture_direct_message_bundle(&info, enc_node, &ciphertext, sender_identity_key_for_capture, plaintext)
+                                        .capture_direct_message_bundle(
+                                            &info,
+                                            enc_node,
+                                            &ciphertext,
+                                            sender_identity_key_for_capture,
+                                            plaintext,
+                                        )
                                         .await;
                                 }
                             }
@@ -177,7 +193,13 @@ impl Client {
                             if let Ok(ref plaintext) = decrypt_result {
                                 if self.capture_manager.is_enabled() {
                                     let _ = self
-                                        .capture_group_message_bundle(&info, enc_node, &ciphertext, &sk_msg, plaintext)
+                                        .capture_group_message_bundle(
+                                            &info,
+                                            enc_node,
+                                            &ciphertext,
+                                            &sk_msg,
+                                            plaintext,
+                                        )
                                         .await;
                                 }
                             }
@@ -504,11 +526,11 @@ impl Client {
                     }
                 }
                 Ok(None) => {
-                    log::warn!("PreKey {} not found in store", id);
+                    log::warn!("PreKey {id} not found in store");
                     None
                 }
                 Err(e) => {
-                    log::warn!("Failed to load prekey {} for capture: {e}", id);
+                    log::warn!("Failed to load prekey {id} for capture: {e}");
                     None
                 }
             }
@@ -516,7 +538,11 @@ impl Client {
             None
         };
 
-        let recipient_signed_prekey = match device_snapshot.backend.load_signed_prekey(signed_prekey_id).await {
+        let recipient_signed_prekey = match device_snapshot
+            .backend
+            .load_signed_prekey(signed_prekey_id)
+            .await
+        {
             Ok(Some(signed_prekey_record)) => {
                 // Serialize the SignedPreKeyRecordStructure to JSON
                 match serde_json::to_vec(&signed_prekey_record) {
@@ -528,11 +554,11 @@ impl Client {
                 }
             }
             Ok(None) => {
-                log::warn!("SignedPreKey {} not found in store", signed_prekey_id);
+                log::warn!("SignedPreKey {signed_prekey_id} not found in store");
                 None
             }
             Err(e) => {
-                log::warn!("Failed to load signed prekey {} for capture: {e}", signed_prekey_id);
+                log::warn!("Failed to load signed prekey {signed_prekey_id} for capture: {e}");
                 None
             }
         };
@@ -627,9 +653,11 @@ impl Client {
         use crate::capture::GroupMessageBundle;
 
         // For group messages, we don't have a way to retrieve the sender identity key
-        // from the store as there's no load_identity method in IdentityKeyStore  
+        // from the store as there's no load_identity method in IdentityKeyStore
         let sender_identity_key_bin = {
-            log::warn!("Cannot extract sender identity key from SenderKeyMessage - no load_identity method available");
+            log::warn!(
+                "Cannot extract sender identity key from SenderKeyMessage - no load_identity method available"
+            );
             vec![]
         };
 

@@ -1,23 +1,23 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use async_trait::async_trait;
 
 // Import Signal Protocol components for decryption
 use wacore::signal::{
     SessionCipher,
     address::SignalAddress,
     ecc::keys::DjbEcPublicKey,
-    groups::cipher::GroupCipher,
     groups::builder::GroupSessionBuilder,
+    groups::cipher::GroupCipher,
     groups::message::SenderKeyMessage,
     identity::{IdentityKey, IdentityKeyPair},
     protocol::{Ciphertext, PreKeySignalMessage, SignalMessage},
     sender_key_name::SenderKeyName,
-    state::{session_record::SessionRecord, sender_key_record::SenderKeyRecord},
-    store::{IdentityKeyStore, PreKeyStore, SessionStore, SignedPreKeyStore, SenderKeyStore},
+    state::{sender_key_record::SenderKeyRecord, session_record::SessionRecord},
+    store::{IdentityKeyStore, PreKeyStore, SenderKeyStore, SessionStore, SignedPreKeyStore},
 };
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
@@ -37,18 +37,28 @@ type StoreError = Box<dyn std::error::Error + Send + Sync>;
 #[async_trait]
 impl IdentityKeyStore for DebugMemoryStore {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        self.identity_key_pair.clone().ok_or_else(|| "No identity key pair".into())
+        self.identity_key_pair
+            .clone()
+            .ok_or_else(|| "No identity key pair".into())
     }
 
     async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
         Ok(self.registration_id)
     }
 
-    async fn save_identity(&self, _address: &SignalAddress, _identity_key: &IdentityKey) -> Result<(), StoreError> {
+    async fn save_identity(
+        &self,
+        _address: &SignalAddress,
+        _identity_key: &IdentityKey,
+    ) -> Result<(), StoreError> {
         Ok(()) // For testing, we don't need to save
     }
 
-    async fn is_trusted_identity(&self, _address: &SignalAddress, _identity_key: &IdentityKey) -> Result<bool, StoreError> {
+    async fn is_trusted_identity(
+        &self,
+        _address: &SignalAddress,
+        _identity_key: &IdentityKey,
+    ) -> Result<bool, StoreError> {
         Ok(true) // Trust all identities for testing
     }
 }
@@ -64,7 +74,11 @@ impl SessionStore for DebugMemoryStore {
         Ok(vec![])
     }
 
-    async fn store_session(&self, _address: &SignalAddress, _record: &SessionRecord) -> Result<(), StoreError> {
+    async fn store_session(
+        &self,
+        _address: &SignalAddress,
+        _record: &SessionRecord,
+    ) -> Result<(), StoreError> {
         Ok(()) // For testing, we don't need to store
     }
 
@@ -84,11 +98,18 @@ impl SessionStore for DebugMemoryStore {
 
 #[async_trait]
 impl PreKeyStore for DebugMemoryStore {
-    async fn load_prekey(&self, prekey_id: u32) -> Result<Option<PreKeyRecordStructure>, StoreError> {
+    async fn load_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
         Ok(self.prekeys.get(&prekey_id).cloned())
     }
 
-    async fn store_prekey(&self, _prekey_id: u32, _record: PreKeyRecordStructure) -> Result<(), StoreError> {
+    async fn store_prekey(
+        &self,
+        _prekey_id: u32,
+        _record: PreKeyRecordStructure,
+    ) -> Result<(), StoreError> {
         Ok(()) // For testing, we don't need to store
     }
 
@@ -103,7 +124,10 @@ impl PreKeyStore for DebugMemoryStore {
 
 #[async_trait]
 impl SignedPreKeyStore for DebugMemoryStore {
-    async fn load_signed_prekey(&self, signed_prekey_id: u32) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
+    async fn load_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         Ok(self.signed_prekeys.get(&signed_prekey_id).cloned())
     }
 
@@ -111,7 +135,11 @@ impl SignedPreKeyStore for DebugMemoryStore {
         Ok(self.signed_prekeys.values().cloned().collect())
     }
 
-    async fn store_signed_prekey(&self, _signed_prekey_id: u32, _record: SignedPreKeyRecordStructure) -> Result<(), StoreError> {
+    async fn store_signed_prekey(
+        &self,
+        _signed_prekey_id: u32,
+        _record: SignedPreKeyRecordStructure,
+    ) -> Result<(), StoreError> {
         Ok(()) // For testing, we don't need to store
     }
 
@@ -126,12 +154,23 @@ impl SignedPreKeyStore for DebugMemoryStore {
 
 #[async_trait]
 impl SenderKeyStore for DebugMemoryStore {
-    async fn store_sender_key(&self, _sender_key_name: &SenderKeyName, _record: SenderKeyRecord) -> Result<(), StoreError> {
+    async fn store_sender_key(
+        &self,
+        _sender_key_name: &SenderKeyName,
+        _record: SenderKeyRecord,
+    ) -> Result<(), StoreError> {
         Ok(()) // For testing, we don't need to store
     }
 
-    async fn load_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<SenderKeyRecord, StoreError> {
-        let key = format!("{}:{}", sender_key_name.group_id(), sender_key_name.sender_id());
+    async fn load_sender_key(
+        &self,
+        sender_key_name: &SenderKeyName,
+    ) -> Result<SenderKeyRecord, StoreError> {
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         Ok(self.sender_keys.get(&key).cloned().unwrap_or_default())
     }
 
@@ -225,9 +264,8 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
     let recipient_session: SessionRecord =
         serde_json::from_str(&session_json).context("Failed to parse recipient_session.json")?;
 
-    let recipient_identity_keys: IdentityKeyPair =
-        serde_json::from_str(&identity_keys_json)
-            .context("Failed to parse recipient_identity_keys.json")?;
+    let recipient_identity_keys: IdentityKeyPair = serde_json::from_str(&identity_keys_json)
+        .context("Failed to parse recipient_identity_keys.json")?;
 
     // Load optional prekey files
     let prekey_file = bundle_path.join("recipient_prekey.json");
@@ -270,24 +308,34 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
     };
 
     // Parse sender identity key - skip prefix byte if present
-    let sender_identity_key = if sender_identity_key_bin.len() == 33 && sender_identity_key_bin[0] == 0x05 {
+    let sender_identity_key = if sender_identity_key_bin.len() == 33
+        && sender_identity_key_bin[0] == 0x05
+    {
         // Remove the prefix byte and convert to 32-byte array
-        let key_bytes: [u8; 32] = sender_identity_key_bin[1..].try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid sender identity key: failed to extract 32 bytes after prefix"))?;
+        let key_bytes: [u8; 32] = sender_identity_key_bin[1..].try_into().map_err(|_| {
+            anyhow::anyhow!("Invalid sender identity key: failed to extract 32 bytes after prefix")
+        })?;
         IdentityKey::new(DjbEcPublicKey::new(key_bytes))
     } else if sender_identity_key_bin.len() == 32 {
         // Already 32 bytes, use directly
-        let key_bytes: [u8; 32] = sender_identity_key_bin.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid sender identity key: failed to convert to 32-byte array"))?;
+        let key_bytes: [u8; 32] = sender_identity_key_bin.try_into().map_err(|_| {
+            anyhow::anyhow!("Invalid sender identity key: failed to convert to 32-byte array")
+        })?;
         IdentityKey::new(DjbEcPublicKey::new(key_bytes))
     } else {
-        anyhow::bail!("Invalid sender identity key length: expected 32 or 33 bytes (with prefix), got {}", sender_identity_key_bin.len());
+        anyhow::bail!(
+            "Invalid sender identity key length: expected 32 or 33 bytes (with prefix), got {}",
+            sender_identity_key_bin.len()
+        );
     };
 
     println!("✅ Bundle structure validation successful!");
     println!("📋 Bundle contents:");
     println!("  - Message size: {} bytes", message_bin.len());
-    println!("  - Sender identity key: {} bytes", sender_identity_key.serialize().len());
+    println!(
+        "  - Sender identity key: {} bytes",
+        sender_identity_key.serialize().len()
+    );
     println!(
         "  - Session has {} previous states",
         recipient_session.previous_states().len()
@@ -304,36 +352,45 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
     if message_bin.is_empty() {
         anyhow::bail!("Empty message file");
     }
-    
+
     let version_byte = message_bin[0];
     let msg_type = version_byte & 0x0F;
-    
-    println!("📝 Message type: {}", if msg_type == 3 { "PreKeySignalMessage" } else { "SignalMessage" });
+
+    println!(
+        "📝 Message type: {}",
+        if msg_type == 3 {
+            "PreKeySignalMessage"
+        } else {
+            "SignalMessage"
+        }
+    );
 
     // Create store with loaded session and identity
     let mut store = DebugMemoryStore::default();
     store.identity_key_pair = Some(recipient_identity_keys.clone());
     store.registration_id = 1;
-    
-    // Add the session to the store  
+
+    // Add the session to the store
     let sender_address = SignalAddress::new("sender".to_string(), 1);
     store.sessions.insert(
         format!("{}:{}", sender_address.name(), sender_address.device_id()),
-        recipient_session
+        recipient_session,
     );
 
     // Add prekeys to the store if available
     if let Some(ref prekey) = recipient_prekey {
         if let Some(prekey_id) = prekey.id {
             store.prekeys.insert(prekey_id, prekey.clone());
-            println!("  - Loaded prekey ID: {}", prekey_id);
+            println!("  - Loaded prekey ID: {prekey_id}");
         }
     }
 
     if let Some(ref signed_prekey) = recipient_signed_prekey {
         if let Some(signed_prekey_id) = signed_prekey.id {
-            store.signed_prekeys.insert(signed_prekey_id, signed_prekey.clone());
-            println!("  - Loaded signed prekey ID: {}", signed_prekey_id);
+            store
+                .signed_prekeys
+                .insert(signed_prekey_id, signed_prekey.clone());
+            println!("  - Loaded signed prekey ID: {signed_prekey_id}");
         }
     }
 
@@ -351,12 +408,14 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
                             } else {
                                 format!("<{} bytes of binary data>", plaintext.len())
                             };
-                            println!("🔓 Decrypted plaintext: \"{}\"", plaintext_str);
+                            println!("🔓 Decrypted plaintext: \"{plaintext_str}\"");
                             Some(plaintext)
                         }
                         Err(e) => {
                             println!("⚠️  Failed to decrypt PreKeySignalMessage: {e}");
-                            println!("   This may be due to missing prekeys or incorrect bundle state");
+                            println!(
+                                "   This may be due to missing prekeys or incorrect bundle state"
+                            );
                             None
                         }
                     }
@@ -383,12 +442,14 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
                         } else {
                             format!("<{} bytes of binary data>", plaintext.len())
                         };
-                        println!("🔓 Decrypted plaintext: \"{}\"", plaintext_str);
+                        println!("🔓 Decrypted plaintext: \"{plaintext_str}\"");
                         Some(plaintext)
                     }
                     Err(e) => {
                         println!("⚠️  Failed to decrypt SignalMessage: {e}");
-                        println!("   This may be due to session state being captured after decryption");
+                        println!(
+                            "   This may be due to session state being captured after decryption"
+                        );
                         None
                     }
                 }
@@ -399,19 +460,22 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
             }
         }
     };
-    
+
     // Validate structure and content regardless of decryption success
     let expected_trimmed = expected_plaintext.trim();
-    
+
     if let Some(plaintext) = decryption_result {
         // We successfully decrypted - validate the content
         let expected_bytes = expected_trimmed.as_bytes();
-        
+
         if plaintext == expected_bytes {
             println!("✅ Decryption validation successful! Plaintext matches expected value.");
         } else if expected_trimmed.starts_with("PROTOBUF_MESSAGE_BYTES_") {
             // This is a protobuf message, just check that we decrypted something
-            println!("✅ Decryption validation successful! Decrypted {} bytes of protobuf data.", plaintext.len());
+            println!(
+                "✅ Decryption validation successful! Decrypted {} bytes of protobuf data.",
+                plaintext.len()
+            );
         } else {
             let plaintext_str = if plaintext.is_ascii() && plaintext.len() < 1000 {
                 String::from_utf8_lossy(&plaintext).to_string()
@@ -427,14 +491,15 @@ async fn validate_direct_message_bundle(bundle_path: &Path) -> Result<()> {
     } else {
         // Decryption failed, but we can still validate bundle structure
         if expected_trimmed.starts_with("PROTOBUF_MESSAGE_BYTES_") {
-            let expected_size: usize = expected_trimmed.strip_prefix("PROTOBUF_MESSAGE_BYTES_")
+            let expected_size: usize = expected_trimmed
+                .strip_prefix("PROTOBUF_MESSAGE_BYTES_")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
             println!("✅ Bundle structure validation successful!");
-            println!("   Expected plaintext size: {} bytes", expected_size);
+            println!("   Expected plaintext size: {expected_size} bytes");
         } else {
             println!("✅ Bundle structure validation successful!");
-            println!("   Expected plaintext: \"{}\"", expected_trimmed);
+            println!("   Expected plaintext: \"{expected_trimmed}\"");
         }
         println!("   Note: Full decryption validation skipped due to bundle limitations");
     }
@@ -473,14 +538,16 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
     let recipient_session: SessionRecord =
         serde_json::from_str(&session_json).context("Failed to parse recipient_session.json")?;
 
-    let recipient_sender_key: SenderKeyRecord =
-        serde_json::from_str(&sender_key_json)
-            .context("Failed to parse recipient_sender_key.json")?;
+    let recipient_sender_key: SenderKeyRecord = serde_json::from_str(&sender_key_json)
+        .context("Failed to parse recipient_sender_key.json")?;
 
     println!("✅ Bundle structure validation successful!");
     println!("📋 Bundle contents:");
     println!("  - Message size: {} bytes", message_bin.len());
-    println!("  - Sender identity key: {} bytes", sender_identity_key_bin.len());
+    println!(
+        "  - Sender identity key: {} bytes",
+        sender_identity_key_bin.len()
+    );
     println!(
         "  - Session has {} previous states",
         recipient_session.previous_states().len()
@@ -492,12 +559,16 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
     // Create store with loaded sender key
     let mut store = DebugMemoryStore::default();
     store.registration_id = 1;
-    
+
     // Add the sender key to the store
     let sender_key_name = SenderKeyName::new("group_id".to_string(), "sender_id".to_string());
     store.sender_keys.insert(
-        format!("{}:{}", sender_key_name.group_id(), sender_key_name.sender_id()),
-        recipient_sender_key
+        format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        ),
+        recipient_sender_key,
     );
 
     // Attempt group message decryption
@@ -506,7 +577,7 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
             // Create group cipher and attempt decryption
             let group_session_builder = GroupSessionBuilder::new(store.clone());
             let group_cipher = GroupCipher::new(sender_key_name, store, group_session_builder);
-            
+
             match group_cipher.decrypt(&sender_key_message, signed_data).await {
                 Ok(plaintext) => {
                     let plaintext_str = if plaintext.is_ascii() && plaintext.len() < 1000 {
@@ -514,12 +585,14 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
                     } else {
                         format!("<{} bytes of binary data>", plaintext.len())
                     };
-                    println!("🔓 Decrypted plaintext: \"{}\"", plaintext_str);
+                    println!("🔓 Decrypted plaintext: \"{plaintext_str}\"");
                     Some(plaintext)
                 }
                 Err(e) => {
                     println!("⚠️  Failed to decrypt SenderKeyMessage: {e}");
-                    println!("   This may be due to sender key state being captured after decryption");
+                    println!(
+                        "   This may be due to sender key state being captured after decryption"
+                    );
                     None
                 }
             }
@@ -529,19 +602,22 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
             None
         }
     };
-    
+
     // Validate structure and content regardless of decryption success
     let expected_trimmed = expected_plaintext.trim();
-    
+
     if let Some(plaintext) = decryption_result {
         // We successfully decrypted - validate the content
         let expected_bytes = expected_trimmed.as_bytes();
-        
+
         if plaintext == expected_bytes {
             println!("✅ Decryption validation successful! Plaintext matches expected value.");
         } else if expected_trimmed.starts_with("PROTOBUF_MESSAGE_BYTES_") {
             // This is a protobuf message, just check that we decrypted something
-            println!("✅ Decryption validation successful! Decrypted {} bytes of protobuf data.", plaintext.len());
+            println!(
+                "✅ Decryption validation successful! Decrypted {} bytes of protobuf data.",
+                plaintext.len()
+            );
         } else {
             let plaintext_str = if plaintext.is_ascii() && plaintext.len() < 1000 {
                 String::from_utf8_lossy(&plaintext).to_string()
@@ -557,14 +633,15 @@ async fn validate_group_message_bundle(bundle_path: &Path) -> Result<()> {
     } else {
         // Decryption failed, but we can still validate bundle structure
         if expected_trimmed.starts_with("PROTOBUF_MESSAGE_BYTES_") {
-            let expected_size: usize = expected_trimmed.strip_prefix("PROTOBUF_MESSAGE_BYTES_")
+            let expected_size: usize = expected_trimmed
+                .strip_prefix("PROTOBUF_MESSAGE_BYTES_")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
             println!("✅ Bundle structure validation successful!");
-            println!("   Expected plaintext size: {} bytes", expected_size);
+            println!("   Expected plaintext size: {expected_size} bytes");
         } else {
             println!("✅ Bundle structure validation successful!");
-            println!("   Expected plaintext: \"{}\"", expected_trimmed);
+            println!("   Expected plaintext: \"{expected_trimmed}\"");
         }
         println!("   Note: Full decryption validation skipped due to bundle limitations");
     }
