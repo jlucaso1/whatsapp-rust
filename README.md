@@ -71,6 +71,29 @@ The core of the end-to-end encryption implementation.
 
 ---
 
+## Build Process
+
+This project pre-compiles the Protocol Buffer definitions into Rust code to simplify the build process for developers and CI/CD environments. You do not need to have the `protobuf-compiler` (`protoc`) installed to build and run this project.
+
+### Regenerating Protobuf Code
+
+If you make changes to `waproto/src/whatsapp.proto`, you will need to regenerate the corresponding Rust code.
+
+**Prerequisites:**
+
+- You must have the protobuf compiler installed. On Debian/Ubuntu, you can install it with:
+  ```sh
+  sudo apt-get update && sudo apt-get install -y protobuf-compiler
+  ```
+
+**Command:**
+
+- To regenerate the files, run the following command from the root of the repository:
+  ```sh
+  GENERATE_PROTO=1 cargo build -p waproto
+  ```
+  This command will execute the `waproto/build.rs` script, which regenerates `waproto/src/whatsapp.rs`. Remember to commit the updated generated file to the repository.
+
 ## Roadmap & Next Steps
 
 The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection for one-on-one chats. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
