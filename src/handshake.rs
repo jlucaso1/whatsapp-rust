@@ -4,7 +4,7 @@ use prost::Message;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
-use whatsapp_core::handshake::{HandshakeError as CoreHandshakeError, HandshakeUtils};
+use wacore::handshake::{HandshakeError as CoreHandshakeError, HandshakeUtils};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -29,7 +29,7 @@ pub async fn do_handshake(
     frames_rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>,
 ) -> Result<Arc<NoiseSocket>> {
     // 1. Initial setup and create ephemeral keys for this session
-    let ephemeral_kp = whatsapp_core::crypto::key_pair::KeyPair::new();
+    let ephemeral_kp = wacore::crypto::key_pair::KeyPair::new();
     // Use the WhatsApp connection header constant
     let wa_header = &consts::WA_CONN_HEADER;
 

@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tokio::time::{Duration, sleep};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 // Macro to generate typed event subscription methods
 macro_rules! generate_subscription_methods {
@@ -56,7 +56,7 @@ pub struct RecentMessageKey {
 
 pub struct Client {
     /// Core protocol client (platform-independent)
-    pub core: whatsapp_core::client::CoreClient,
+    pub core: wacore::client::CoreClient,
 
     pub persistence_manager: Arc<PersistenceManager>,
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
@@ -100,7 +100,7 @@ impl Client {
 
         // Get initial device state and create core client
         let device_snapshot = persistence_manager.get_device_snapshot().await;
-        let core = whatsapp_core::client::CoreClient::new(device_snapshot.core.clone());
+        let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
 
         Self {
             core,
@@ -770,7 +770,7 @@ impl Client {
         (subscribe_to_qr, Arc<crate::types::events::Qr>, qr),
         (subscribe_to_qr_scanned_without_multidevice, Arc<crate::types::events::QrScannedWithoutMultidevice>, qr_scanned_without_multidevice),
         (subscribe_to_client_outdated, Arc<crate::types::events::ClientOutdated>, client_outdated),
-        (subscribe_to_messages, Arc<(Box<whatsapp_proto::whatsapp::Message>, crate::types::message::MessageInfo)>, message),
+        (subscribe_to_messages, Arc<(Box<waproto::whatsapp::Message>, crate::types::message::MessageInfo)>, message),
         (subscribe_to_receipts, Arc<crate::types::events::Receipt>, receipt),
         (subscribe_to_undecryptable_messages, Arc<crate::types::events::UndecryptableMessage>, undecryptable_message),
         (subscribe_to_notifications, Arc<crate::binary::node::Node>, notification),
@@ -778,8 +778,8 @@ impl Client {
         (subscribe_to_presence, Arc<crate::types::events::PresenceUpdate>, presence),
         (subscribe_to_picture_updates, Arc<crate::types::events::PictureUpdate>, picture_update),
         (subscribe_to_user_about_updates, Arc<crate::types::events::UserAboutUpdate>, user_about_update),
-        (subscribe_to_joined_groups, Arc<Box<whatsapp_proto::whatsapp::Conversation>>, joined_group),
-        (subscribe_to_group_info_updates, Arc<(crate::types::jid::Jid, Box<whatsapp_proto::whatsapp::SyncActionValue>)>, group_info_update),
+        (subscribe_to_joined_groups, Arc<Box<waproto::whatsapp::Conversation>>, joined_group),
+        (subscribe_to_group_info_updates, Arc<(crate::types::jid::Jid, Box<waproto::whatsapp::SyncActionValue>)>, group_info_update),
         (subscribe_to_contact_updates, Arc<crate::types::events::ContactUpdate>, contact_update),
         (subscribe_to_push_name_updates, Arc<crate::types::events::PushNameUpdate>, push_name_update),
         (subscribe_to_self_push_name_updated, Arc<crate::types::events::SelfPushNameUpdated>, self_push_name_updated),

@@ -1,7 +1,7 @@
 use log::info;
 use prost::Message;
 use std::sync::Arc;
-use whatsapp_proto::whatsapp as wa; // Added import
+use waproto::whatsapp as wa; // Added import
 use whatsapp_rust::store::persistence_manager::PersistenceManager; // Added for decode
 
 #[tokio::main]

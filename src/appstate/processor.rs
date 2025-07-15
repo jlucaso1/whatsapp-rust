@@ -1,5 +1,5 @@
 // Re-export types from core
-pub use whatsapp_core::appstate::{
+pub use wacore::appstate::{
     errors::{AppStateError, Result},
     hash::HashState,
     processor::{Mutation, PatchList, ProcessorUtils},
@@ -41,8 +41,8 @@ impl Processor {
 
     pub async fn decode_mutation(
         &self,
-        keys: &whatsapp_core::appstate::keys::ExpandedAppStateKeys,
-        mutation: &whatsapp_proto::whatsapp::SyncdMutation,
+        keys: &wacore::appstate::keys::ExpandedAppStateKeys,
+        mutation: &waproto::whatsapp::SyncdMutation,
         out: &mut Vec<Mutation>,
     ) -> Result<()> {
         ProcessorUtils::decode_mutation(keys, mutation, out)

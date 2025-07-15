@@ -6,10 +6,10 @@ use log::{debug, error, info, warn};
 use prost::Message;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 // Re-export core utilities
-pub use whatsapp_core::pair::{DeviceState, PairCryptoError, PairUtils};
+pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 /// Backward compatibility function for tests
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {

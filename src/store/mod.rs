@@ -1,7 +1,7 @@
 pub mod signal;
-use whatsapp_core::crypto::key_pair::{KeyPair, PreKey};
-use whatsapp_core::types::jid::Jid;
-use whatsapp_proto::whatsapp as wa;
+use wacore::crypto::key_pair::{KeyPair, PreKey};
+use wacore::types::jid::Jid;
+use waproto::whatsapp as wa;
 pub mod clientpayload;
 pub mod commands; // Device commands for the persistence manager
 pub mod error;
@@ -11,7 +11,7 @@ pub mod memory;
 pub mod persistence_manager; // Background persistence manager
 pub mod traits;
 
-// Re-export traits from both whatsapp-core and local extensions
+// Re-export traits from both wacore and local extensions
 pub use crate::store::traits::*;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -34,13 +34,13 @@ pub struct SerializableDevice {
 #[derive(Clone)]
 pub struct Device {
     /// Core device data
-    pub core: whatsapp_core::store::Device,
+    pub core: wacore::store::Device,
     /// Platform-specific backend for storage operations
     pub backend: Arc<dyn Backend>,
 }
 
 impl Deref for Device {
-    type Target = whatsapp_core::store::Device;
+    type Target = wacore::store::Device;
 
     fn deref(&self) -> &Self::Target {
         &self.core
@@ -56,7 +56,7 @@ impl DerefMut for Device {
 impl Device {
     /// Creates a new, unregistered device with fresh keys and abstracted stores.
     pub fn new(backend: Arc<dyn Backend>) -> Self {
-        let core = whatsapp_core::store::Device::new();
+        let core = wacore::store::Device::new();
         Self { core, backend }
     }
 

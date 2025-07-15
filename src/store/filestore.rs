@@ -4,10 +4,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use whatsapp_core::signal;
-use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use whatsapp_core::store::error::{Result, StoreError};
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use wacore::signal;
+use wacore::signal::state::sender_key_record::SenderKeyRecord;
+use wacore::store::error::{Result, StoreError};
+use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use super::SerializableDevice;
 

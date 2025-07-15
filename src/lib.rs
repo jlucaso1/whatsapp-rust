@@ -1,9 +1,9 @@
 // Re-export core modules for compatibility
-pub use whatsapp_core::{binary, crypto, proto_helpers, signal, store::traits};
+pub use wacore::{binary, crypto, proto_helpers, signal, store::traits};
 
 // Core types are re-exported, but events (with EventBus) remain here for platform-specific functionality
 pub mod types {
-    pub use whatsapp_core::types::*;
+    pub use wacore::types::*;
     pub mod events;
 }
 

@@ -78,7 +78,7 @@ cargo fmt
 
 ### External Dependencies
 - **Tokio**: All async operations, client uses `Arc<Client>` for shared state across tasks
-- **Protobuf**: Generated bindings in `whatsapp-proto/` crate for WhatsApp's wire protocol
+- **Protobuf**: Generated bindings in `waproto/` crate for WhatsApp's wire protocol
 - **Cryptography**: `x25519-dalek`, `ed25519-dalek` for Signal Protocol, `aes-gcm` for symmetric encryption
 
 ### Store Backend Abstraction

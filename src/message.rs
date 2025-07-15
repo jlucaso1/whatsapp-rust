@@ -11,7 +11,7 @@ use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
 use std::sync::Arc;
 
-use whatsapp_proto::whatsapp::{self as wa, SenderKeyDistributionMessage};
+use waproto::whatsapp::{self as wa, SenderKeyDistributionMessage};
 
 use crate::error::decryption::DecryptionError;
 

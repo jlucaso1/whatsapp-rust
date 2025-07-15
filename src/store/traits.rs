@@ -1,7 +1,7 @@
 // Local traits for whatsapp-rust that depend on platform-specific types
 use async_trait::async_trait;
 use std::sync::Arc;
-use whatsapp_core::store::error::Result;
+use wacore::store::error::Result;
 
 #[async_trait]
 pub trait AppStateStore: Send + Sync {
@@ -14,7 +14,7 @@ pub trait AppStateStore: Send + Sync {
 }
 
 // Re-export the core traits
-pub use whatsapp_core::store::traits::*;
+pub use wacore::store::traits::*;
 
 // Extended Backend that includes our platform-specific traits
 pub trait ExtendedBackend: Backend + AppStateStore {}

@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::time::timeout;
 
 // Re-export core types
-pub use whatsapp_core::request::{InfoQuery, InfoQueryType, RequestUtils};
+pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 
 /// Platform-specific IQ error that includes socket errors
 #[derive(Debug, Error)]
@@ -26,17 +26,17 @@ pub enum IqError {
     InternalChannelClosed,
 }
 
-impl From<whatsapp_core::request::IqError> for IqError {
-    fn from(err: whatsapp_core::request::IqError) -> Self {
+impl From<wacore::request::IqError> for IqError {
+    fn from(err: wacore::request::IqError) -> Self {
         match err {
-            whatsapp_core::request::IqError::Timeout => Self::Timeout,
-            whatsapp_core::request::IqError::NotConnected => Self::NotConnected,
-            whatsapp_core::request::IqError::Disconnected(node) => Self::Disconnected(node),
-            whatsapp_core::request::IqError::ServerError { code, text } => {
+            wacore::request::IqError::Timeout => Self::Timeout,
+            wacore::request::IqError::NotConnected => Self::NotConnected,
+            wacore::request::IqError::Disconnected(node) => Self::Disconnected(node),
+            wacore::request::IqError::ServerError { code, text } => {
                 Self::ServerError { code, text }
             }
-            whatsapp_core::request::IqError::InternalChannelClosed => Self::InternalChannelClosed,
-            whatsapp_core::request::IqError::Network(msg) => Self::Socket(SocketError::Crypto(msg)),
+            wacore::request::IqError::InternalChannelClosed => Self::InternalChannelClosed,
+            wacore::request::IqError::Network(msg) => Self::Socket(SocketError::Crypto(msg)),
         }
     }
 }

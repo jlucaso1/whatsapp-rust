@@ -1,2 +1,2 @@
-// Re-export error types from whatsapp-core for compatibility
-pub use whatsapp_core::store::error::{Result, StoreError};
+// Re-export error types from wacore for compatibility
+pub use wacore::store::error::{Result, StoreError};

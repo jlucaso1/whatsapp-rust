@@ -4,14 +4,14 @@
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
-use whatsapp_core::signal::sender_key_name::SenderKeyName;
-use whatsapp_core::signal::state::sender_key_record::SenderKeyRecord;
-use whatsapp_core::signal::store::{PreKeyStore, SenderKeyStore, SignedPreKeyStore};
-use whatsapp_core::store::error::Result;
+use wacore::signal::sender_key_name::SenderKeyName;
+use wacore::signal::state::sender_key_record::SenderKeyRecord;
+use wacore::signal::store::{PreKeyStore, SenderKeyStore, SignedPreKeyStore};
+use wacore::store::error::Result;
 
 // For signal store traits, we need to use the signal module's StoreError
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
-use whatsapp_proto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
+use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type IdentityMap = GenericMemoryStore<String, [u8; 32]>;
 type SessionMap = GenericMemoryStore<String, Vec<u8>>;

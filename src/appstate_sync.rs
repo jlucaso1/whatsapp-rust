@@ -1,5 +1,5 @@
 // Re-export appstate utilities from core
-pub use whatsapp_core::appstate::*;
+pub use wacore::appstate::*;
 
 // Import platform-specific types
 use crate::appstate::processor::Processor;
@@ -11,7 +11,7 @@ use processor::PatchList;
 use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
     let msg = sync::SyncUtils::build_app_state_key_request(keys);

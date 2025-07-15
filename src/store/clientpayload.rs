@@ -4,7 +4,7 @@ use crate::types::jid::Jid;
 use md5;
 use once_cell::sync::Lazy;
 use prost::Message;
-use whatsapp_proto::whatsapp as wa;
+use waproto::whatsapp as wa;
 
 // A static, lazily-initialized base payload, similar to the Go version.
 pub static BASE_CLIENT_PAYLOAD: Lazy<wa::ClientPayload> = Lazy::new(|| wa::ClientPayload {

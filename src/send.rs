@@ -5,9 +5,9 @@ use crate::signal::session::SessionBuilder;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
 use crate::types::jid::Jid;
-use whatsapp_core::client::MessageUtils;
-use whatsapp_proto::whatsapp as wa;
-use whatsapp_proto::whatsapp::message::DeviceSentMessage;
+use wacore::client::MessageUtils;
+use waproto::whatsapp as wa;
+use waproto::whatsapp::message::DeviceSentMessage;
 
 impl Client {
     /// Sends a text message to the given JID.
@@ -605,7 +605,7 @@ impl Client {
         // The skmsg is always at the top level of the message content.
         message_content_nodes.push(sk_msg_node);
 
-        let phash = whatsapp_core::client::MessageUtils::participant_list_hash(&all_devices);
+        let phash = wacore::client::MessageUtils::participant_list_hash(&all_devices);
         let stanza = Node {
             tag: "message".to_string(),
             attrs: [
