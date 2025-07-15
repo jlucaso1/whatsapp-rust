@@ -1,8 +1,11 @@
 use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
+use super::lthash::WA_PATCH_INTEGRITY;
 use crate::crypto::cbc;
 use crate::crypto::hmac_sha512;
+use base64::Engine as _;
+use base64::prelude::*;
 use prost::Message;
 use waproto::whatsapp as wa;
 
@@ -49,9 +52,6 @@ impl ProcessorUtils {
             let version = patch.version.as_ref().map_or(0, |v| v.version());
             current_state.version = version;
 
-            // TODO: Verify patch.snapshot_mac and patch.patch_mac
-            // For now, we will proceed directly to mutation decoding.
-
             let key_id = patch
                 .key_id
                 .as_ref()
@@ -68,11 +68,100 @@ impl ProcessorUtils {
             };
             let keys = keys::expand_app_state_keys(&key_data);
 
+            // Decode mutations to get their index_mac and value_mac before validating patch
+            let mut patch_mutations: Vec<Mutation> = Vec::new();
             for mutation in &patch.mutations {
-                if let Err(_e) = Self::decode_mutation(&keys, mutation, &mut new_mutations) {
+                if let Err(_e) = Self::decode_mutation(&keys, mutation, &mut patch_mutations) {
                     //log::warn!(target: "AppState", "Failed to decode one mutation, skipping: {e:?}");
                 }
             }
+
+            // Validate patch MAC if present
+            if let Some(patch_mac) = &patch.patch_mac {
+                // Calculate expected patch MAC from the mutations
+                let mut subtract_macs_data: Vec<Vec<u8>> = Vec::new();
+                let mut add_macs_data: Vec<Vec<u8>> = Vec::new();
+
+                for mutation in &patch_mutations {
+                    let index_mac_b64 = BASE64_STANDARD.encode(&mutation.index_mac);
+
+                    match mutation.operation {
+                        wa::syncd_mutation::SyncdOperation::Remove => {
+                            // For REMOVE operations, we need the old value MAC from index_value_map
+                            if let Some(old_value_mac) =
+                                current_state.index_value_map.get(&index_mac_b64)
+                            {
+                                subtract_macs_data.push(old_value_mac.clone());
+                            } else {
+                                return Err(AppStateError::MissingPreviousSetValue(index_mac_b64));
+                            }
+                        }
+                        wa::syncd_mutation::SyncdOperation::Set => {
+                            // For SET operations, we use the new value MAC
+                            add_macs_data.push(mutation.value_mac.clone());
+                        }
+                    }
+                }
+
+                // Convert to slice references
+                let subtract_macs: Vec<&[u8]> =
+                    subtract_macs_data.iter().map(|v| v.as_slice()).collect();
+                let add_macs: Vec<&[u8]> = add_macs_data.iter().map(|v| v.as_slice()).collect();
+
+                // Calculate expected patch MAC using LT-Hash
+                let mut expected_hash = current_state.hash;
+                WA_PATCH_INTEGRITY.subtract_then_add_in_place(
+                    &mut expected_hash,
+                    &subtract_macs,
+                    &add_macs,
+                );
+
+                // The patch MAC should match the final hash
+                if patch_mac.as_slice() != &expected_hash[..patch_mac.len()] {
+                    return Err(AppStateError::MismatchingPatchMAC);
+                }
+            }
+
+            // If patch MAC validation passed, update the hash state and index_value_map
+            let mut subtract_macs_data: Vec<Vec<u8>> = Vec::new();
+            let mut add_macs_data: Vec<Vec<u8>> = Vec::new();
+
+            for mutation in &patch_mutations {
+                let index_mac_b64 = BASE64_STANDARD.encode(&mutation.index_mac);
+
+                match mutation.operation {
+                    wa::syncd_mutation::SyncdOperation::Remove => {
+                        // Remove from index_value_map and collect for hash subtraction
+                        if let Some(old_value_mac) =
+                            current_state.index_value_map.remove(&index_mac_b64)
+                        {
+                            subtract_macs_data.push(old_value_mac);
+                        }
+                    }
+                    wa::syncd_mutation::SyncdOperation::Set => {
+                        // Add to index_value_map and collect for hash addition
+                        add_macs_data.push(mutation.value_mac.clone());
+                        current_state
+                            .index_value_map
+                            .insert(index_mac_b64, mutation.value_mac.clone());
+                    }
+                }
+            }
+
+            // Convert to slice references for hash update
+            let subtract_macs: Vec<&[u8]> =
+                subtract_macs_data.iter().map(|v| v.as_slice()).collect();
+            let add_macs: Vec<&[u8]> = add_macs_data.iter().map(|v| v.as_slice()).collect();
+
+            // Update the hash state
+            WA_PATCH_INTEGRITY.subtract_then_add_in_place(
+                &mut current_state.hash,
+                &subtract_macs,
+                &add_macs,
+            );
+
+            // Add mutations to the result
+            new_mutations.extend(patch_mutations);
         }
 
         if !missing_keys.is_empty() {
