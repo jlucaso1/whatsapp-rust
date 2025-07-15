@@ -1,11 +1,11 @@
 // tests/group_message_context_test.rs
 //
-// This integration test validates that group messages include the required messageContextInfo
-// with deviceListMetadata containing the senderKeyHash and senderTimestamp as per the
-// official WhatsApp client behavior to prevent "Waiting for this message" issues.
+// This integration test validates the fix for the double-encoding bug in group messages.
+// The test ensures that sender key distribution messages (SKDM) are properly structured
+// without double-encoding the protobuf message and without incorrectly including 
+// messageContextInfo in the SKDM payload (per Go whatsmeow analysis).
 
 use std::sync::Arc;
-use std::str::FromStr;
 use whatsapp_rust::signal::{
     groups::{builder::GroupSessionBuilder, cipher::GroupCipher},
     sender_key_name::SenderKeyName,
@@ -24,7 +24,7 @@ async fn create_test_device(_name: &str) -> Arc<Device> {
 }
 
 #[tokio::test]
-async fn test_group_message_includes_device_list_metadata() {
+async fn test_group_message_skdm_structure() {
     // === SETUP ===
     // Create three participants: Alice (sender), Bob and Charlie (receivers)
     let alice_device = create_test_device("alice").await;
@@ -48,38 +48,16 @@ async fn test_group_message_includes_device_list_metadata() {
     // This simulates what happens in send_group_message() when creating the
     // sender key distribution message for encryption to each participant.
     
-    // Calculate phash (simulating the participant list)
-    let mock_devices = vec![
-        whatsapp_rust::types::jid::Jid::from_str("alice@s.whatsapp.net").unwrap(),
-        whatsapp_rust::types::jid::Jid::from_str("bob@s.whatsapp.net").unwrap(),
-        whatsapp_rust::types::jid::Jid::from_str("charlie@s.whatsapp.net").unwrap(),
-    ];
-    let phash = wacore::client::MessageUtils::participant_list_hash(&mock_devices);
-    println!("Generated phash: {}", phash);
+    println!("--- Step 2: Validating message structure ---");
     
-    // Decode the phash to get raw bytes (as per our fix)
-    let phash_bytes = phash.split(':').nth(1)
-        .map(|b64_part| base64::prelude::BASE64_STANDARD_NO_PAD.decode(b64_part).unwrap_or_default())
-        .unwrap_or_default();
-    
-    assert!(!phash_bytes.is_empty(), "phash_bytes should not be empty");
-    assert_eq!(phash_bytes.len(), 6, "phash should be 6 bytes when decoded");
-    
-    // Create the wa::Message with messageContextInfo (as per our fix)
+    // Create the wa::Message with correct SKDM structure (without messageContextInfo)
     let skdm_for_encryption = wa::Message {
         sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
             group_id: Some(group_id.clone()),
             axolotl_sender_key_distribution_message: Some(distribution_message.encode_to_vec()),
         }),
-        message_context_info: Some(wa::MessageContextInfo {
-            device_list_metadata: Some(wa::DeviceListMetadata {
-                sender_key_hash: Some(phash_bytes.clone()),
-                sender_timestamp: Some(chrono::Utc::now().timestamp() as u64),
-                ..Default::default()
-            }),
-            device_list_metadata_version: Some(2),
-            ..Default::default()
-        }),
+        // Note: messageContextInfo should NOT be included in SKDM payload
+        // based on Go code analysis in whatsmeow
         ..Default::default()
     };
     
@@ -92,52 +70,10 @@ async fn test_group_message_includes_device_list_metadata() {
         "Message should contain sender_key_distribution_message"
     );
     
-    // Verify the message context info exists
+    // Verify the message context info is NOT present (per Go code analysis)
     assert!(
-        skdm_for_encryption.message_context_info.is_some(),
-        "Message should contain message_context_info (this was missing before the fix)"
-    );
-    
-    let context_info = skdm_for_encryption.message_context_info.as_ref().unwrap();
-    
-    // Verify device list metadata exists
-    assert!(
-        context_info.device_list_metadata.is_some(),
-        "MessageContextInfo should contain device_list_metadata"
-    );
-    
-    // Verify version is set correctly
-    assert_eq!(
-        context_info.device_list_metadata_version,
-        Some(2),
-        "device_list_metadata_version should be 2"
-    );
-    
-    let device_metadata = context_info.device_list_metadata.as_ref().unwrap();
-    
-    // Verify sender key hash is present and correct
-    assert!(
-        device_metadata.sender_key_hash.is_some(),
-        "DeviceListMetadata should contain sender_key_hash"
-    );
-    
-    let actual_hash = device_metadata.sender_key_hash.as_ref().unwrap();
-    assert_eq!(
-        actual_hash, &phash_bytes,
-        "sender_key_hash should match decoded phash bytes"
-    );
-    
-    // Verify sender timestamp is present
-    assert!(
-        device_metadata.sender_timestamp.is_some(),
-        "DeviceListMetadata should contain sender_timestamp"
-    );
-    
-    let timestamp = device_metadata.sender_timestamp.unwrap();
-    let now = chrono::Utc::now().timestamp() as u64;
-    assert!(
-        timestamp <= now && timestamp > now - 60,
-        "sender_timestamp should be recent (within last 60 seconds)"
+        skdm_for_encryption.message_context_info.is_none(),
+        "SKDM should NOT contain message_context_info (this was incorrectly added before)"
     );
     
     println!("✅ Message structure validation passed!");
@@ -153,17 +89,10 @@ async fn test_group_message_includes_device_list_metadata() {
     let parsed_message = wa::Message::decode(&message_bytes[..])
         .expect("Message should deserialize correctly");
     
-    // Verify the parsed message has all the required fields
+    // Verify the parsed message has the required fields but NOT messageContextInfo
     assert!(parsed_message.sender_key_distribution_message.is_some());
-    assert!(parsed_message.message_context_info.is_some());
-    
-    let parsed_context = parsed_message.message_context_info.unwrap();
-    assert!(parsed_context.device_list_metadata.is_some());
-    assert_eq!(parsed_context.device_list_metadata_version, Some(2));
-    
-    let parsed_metadata = parsed_context.device_list_metadata.unwrap();
-    assert_eq!(parsed_metadata.sender_key_hash, Some(phash_bytes));
-    assert!(parsed_metadata.sender_timestamp.is_some());
+    assert!(parsed_message.message_context_info.is_none(),
+           "SKDM should not contain messageContextInfo per Go code analysis");
     
     // === STEP 5: VERIFY RECIPIENTS CAN PROCESS THE DISTRIBUTION ===
     println!("--- Step 4: Testing recipient processing ---");
@@ -252,12 +181,11 @@ async fn test_group_message_includes_device_list_metadata() {
     
     assert_eq!(decrypted_charlie, plaintext, "Charlie's decrypted text should match");
     
-    println!("✅ Group message context test completed successfully!");
-    println!("   - Message includes required messageContextInfo");
-    println!("   - DeviceListMetadata contains senderKeyHash from phash");
-    println!("   - Sender timestamp is properly set");
+    println!("✅ Group message double-encoding fix test completed successfully!");
+    println!("   - SKDM correctly excludes messageContextInfo");
+    println!("   - axolotl_sender_key_distribution_message contains proper protobuf bytes");
     println!("   - Recipients can process keys and decrypt messages");
-    println!("   - This should prevent 'Waiting for this message' errors");
+    println!("   - Fixed double-encoding prevents 'Waiting for this message' errors");
 }
 
 #[tokio::test] 

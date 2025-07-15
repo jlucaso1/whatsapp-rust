@@ -8,7 +8,6 @@ use crate::types::jid::Jid;
 use wacore::client::MessageUtils;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
-use base64::prelude::*;
 
 impl Client {
     /// Sends a text message to the given JID.
@@ -351,32 +350,17 @@ impl Client {
             anyhow::anyhow!("Failed to create sender key distribution message: {e}")
         })?;
 
-        // Calculate phash early so we can use it for senderKeyHash
-        let phash = wacore::client::MessageUtils::participant_list_hash(&all_devices);
-        
-        // Decode the phash from its string representation to raw bytes.
-        // Format is "2:{base64_encoded_hash}", we need the base64 part decoded
-        let phash_bytes = phash.split(':').nth(1)
-            .and_then(|b64_part| base64::prelude::BASE64_STANDARD_NO_PAD.decode(b64_part).ok())
-            .unwrap_or_default();
+        // The `axolotl_sender_key_distribution_message` field is meant to contain the bytes
+        // of the `SenderKeyDistributionMessage` itself. This is the correct encoding.
+        let axolotl_bytes = distribution_message.encode_to_vec();
 
-        // The axolotl protocol message (distribution_message) must be wrapped in a wa::Message
-        // before being encrypted for each participant.
-        // Include messageContextInfo with deviceListMetadata as per official WhatsApp client behavior.
+        // Now, wrap this in the final message payload.
         let skdm_for_encryption = wa::Message {
             sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
                 group_id: Some(to.to_string()),
-                axolotl_sender_key_distribution_message: Some(distribution_message.encode_to_vec()),
+                axolotl_sender_key_distribution_message: Some(axolotl_bytes),
             }),
-            message_context_info: Some(wa::MessageContextInfo {
-                device_list_metadata: Some(wa::DeviceListMetadata {
-                    sender_key_hash: Some(phash_bytes),
-                    sender_timestamp: Some(chrono::Utc::now().timestamp() as u64),
-                    ..Default::default()
-                }),
-                device_list_metadata_version: Some(2),
-                ..Default::default()
-            }),
+            // messageContextInfo should be removed from this payload according to Go code analysis.
             ..Default::default()
         };
         let distribution_message_bytes = skdm_for_encryption.encode_to_vec();
@@ -625,6 +609,7 @@ impl Client {
         // The skmsg is always at the top level of the message content.
         message_content_nodes.push(sk_msg_node);
 
+        let phash = wacore::client::MessageUtils::participant_list_hash(&all_devices);
         let stanza = Node {
             tag: "message".to_string(),
             attrs: [

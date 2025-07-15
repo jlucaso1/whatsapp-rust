@@ -56,13 +56,14 @@ impl Client {
         if receipt.source.chat.is_group() {
             // For group messages, delete the sender key to force generation of a new one
             // This is the key fix to prevent infinite retry loops
+            // Use the public JID (not LID) to match the creation logic in send_group_message
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            let own_lid = device_snapshot
-                .lid
+            let own_jid = device_snapshot
+                .id
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("LID missing for group retry handling"))?;
+                .ok_or_else(|| anyhow::anyhow!("JID missing for group retry handling"))?;
 
-            let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
+            let sender_address = SignalAddress::new(own_jid.user.clone(), own_jid.device as u32);
             let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
                 receipt.source.chat.to_string(),
                 sender_address.to_string(),
