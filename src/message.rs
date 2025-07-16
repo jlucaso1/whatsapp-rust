@@ -112,6 +112,21 @@ impl Client {
                                 // Note: `load_session` returns a fresh record if one doesn't exist.
                                 lock.load_session(&signal_address).await.unwrap()
                             };
+
+                            // For PreKeySignalMessages, capture prekeys BEFORE decryption
+                            let (pre_decryption_prekey, pre_decryption_signed_prekey) = if let Ciphertext::PreKey(ref pkm) = ciphertext_enum {
+                                let lock = device_store.lock().await;
+                                let prekey = if let Some(id) = pkm.pre_key_id() {
+                                    lock.backend.load_prekey(id).await.ok().flatten()
+                                } else {
+                                    None
+                                };
+                                let signed_prekey = lock.backend.load_signed_prekey(pkm.signed_pre_key_id()).await.ok().flatten();
+                                drop(lock);
+                                (prekey, signed_prekey)
+                            } else {
+                                (None, None)
+                            };
                             // --- END KEY CHANGE ---
 
                             let device_store_wrapper =
@@ -143,6 +158,8 @@ impl Client {
                                             prekey_msg_ref,
                                             plaintext,
                                             pre_decryption_session, // Pass the cloned, pre-decryption state
+                                            pre_decryption_prekey,
+                                            pre_decryption_signed_prekey,
                                         )
                                         .await;
                                 }
@@ -488,9 +505,10 @@ impl Client {
         prekey_msg: Option<&wacore::signal::protocol::PreKeySignalMessage>,
         plaintext: &[u8],
         pre_decryption_session: wacore::signal::state::session_record::SessionRecord,
+        pre_decryption_prekey: Option<waproto::whatsapp::PreKeyRecordStructure>,
+        pre_decryption_signed_prekey: Option<waproto::whatsapp::SignedPreKeyRecordStructure>,
     ) -> Result<(), anyhow::Error> {
         use crate::capture::DirectMessageBundle;
-        use wacore::signal::store::{PreKeyStore, SignedPreKeyStore};
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
@@ -503,42 +521,14 @@ impl Client {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // --- KEY CHANGE: Load the pre-keys that were used for this session ---
-        let mut recipient_prekey = None;
-        let mut recipient_signed_prekey = None;
+        // Use prekeys captured before decryption
+        let recipient_prekey = pre_decryption_prekey.and_then(|pk| serde_json::to_vec(&pk).ok());
+        let recipient_signed_prekey = pre_decryption_signed_prekey.and_then(|spk| serde_json::to_vec(&spk).ok());
 
-        if let Some(pkm) = prekey_msg {
-            // The main decryption function consumed the pre-keys from the store.
-            // For the bundle, we need to load them again so they can be saved.
-            // This works because the store backend (FileStore/MemoryStore) still has them
-            // until the state is explicitly flushed/overwritten.
-            if let Some(id) = pkm.pre_key_id() {
-                if let Ok(Some(record)) = device_snapshot.load_prekey(id).await {
-                    recipient_prekey = serde_json::to_vec(&record).ok();
-                } else {
-                    log::warn!("Could not load pre_key {id} for capture.");
-                }
-            }
-
-            let signed_id = pkm.signed_pre_key_id();
-            if let Ok(Some(record)) = device_snapshot.load_signed_prekey(signed_id).await {
-                recipient_signed_prekey = serde_json::to_vec(&record).ok();
-            } else {
-                log::warn!("Could not load signed_pre_key {signed_id} for capture.");
-            }
-        }
-        // --- END KEY CHANGE ---
-
-        let expected_plaintext = if prekey_msg.is_some() {
-            // For PreKey messages, the plaintext is just a placeholder.
-            format!("PREKEY_MESSAGE_{}", info.id)
+        let expected_plaintext = if let Ok(s) = std::str::from_utf8(plaintext) {
+            s.to_string()
         } else {
-            // For regular messages, we can use a placeholder for binary data.
-            if std::str::from_utf8(plaintext).is_ok() {
-                String::from_utf8_lossy(plaintext).to_string()
-            } else {
-                format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len())
-            }
+            format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len())
         };
 
         let bundle = DirectMessageBundle {
