@@ -1,4 +1,5 @@
 use crate::binary::node::Node;
+use crate::capture::CaptureManager;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
@@ -93,6 +94,9 @@ pub struct Client {
 
     /// In-memory cache for fast duplicate message detection
     pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
+
+    /// Capture manager for E2E testing
+    pub(crate) capture_manager: Arc<CaptureManager>,
 }
 
 impl Client {
@@ -150,8 +154,24 @@ impl Client {
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
             processed_messages_cache,
+
+            capture_manager: Arc::new(CaptureManager::new()),
         }
     }
+
+    // Capture mode methods for E2E testing
+    pub async fn enable_capture_mode<P: AsRef<std::path::Path>>(&self, capture_path: P) {
+        self.capture_manager.set_capture_path(capture_path).await;
+    }
+
+    pub fn disable_capture_mode(&self) {
+        self.capture_manager.disable_capture();
+    }
+
+    pub fn is_capture_enabled(&self) -> bool {
+        self.capture_manager.is_enabled()
+    }
+
     // REMOVED: get_group_participants stub. Use query_group_info instead.
 
     pub async fn run(self: &Arc<Self>) {

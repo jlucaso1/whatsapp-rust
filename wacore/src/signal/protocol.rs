@@ -32,6 +32,7 @@ pub trait CiphertextMessage: Send {
     fn q_type(&self) -> u32;
 }
 
+#[derive(Clone)]
 pub enum Ciphertext {
     PreKey(PreKeySignalMessage),
     Whisper(SignalMessage),
@@ -43,6 +44,7 @@ const MAC_LENGTH: usize = 8;
 const CURRENT_VERSION: u8 = 3;
 
 // --- SignalMessage ---
+#[derive(Clone)]
 pub struct SignalMessage {
     pub proto: whatsapp::SignalMessage,
     pub sender_ratchet_key: Arc<dyn EcPublicKey>,
@@ -203,6 +205,7 @@ impl CiphertextMessage for SignalMessage {
     }
 }
 
+#[derive(Clone)]
 pub struct PreKeySignalMessage {
     pub proto: whatsapp::PreKeySignalMessage,
     pub base_key: Arc<dyn EcPublicKey>,

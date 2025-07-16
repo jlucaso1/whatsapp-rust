@@ -7,6 +7,7 @@ use crate::crypto::hmac_sha512;
 use crate::store::traits::AppStateKeyStore;
 use base64::Engine as _;
 use base64::prelude::*;
+use log::{info, warn};
 use prost::Message;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
@@ -45,8 +46,43 @@ impl Processor {
         let mut new_mutations: Vec<Mutation> = Vec::new();
         let mut missing_keys: Vec<Vec<u8>> = Vec::new();
 
+        // If a snapshot is provided, we MUST reset our state to it.
         if let Some(snapshot) = &list.snapshot {
+            info!(target: "AppStateProcessor", "Applying snapshot with version {}. Resetting local hash state.", snapshot.version.as_ref().map_or(0, |v| v.version()));
+
+            // Reset the version
             current_state.version = snapshot.version.as_ref().map_or(0, |v| v.version());
+
+            // Reset the hash
+            if let Some(snapshot_mac) = &snapshot.mac {
+                if snapshot_mac.len() == 128 {
+                    current_state.hash.copy_from_slice(snapshot_mac);
+                } else {
+                    warn!(
+                        "Snapshot MAC has incorrect length, expected 128, got {}. Ignoring.",
+                        snapshot_mac.len()
+                    );
+                    current_state.hash = [0; 128]; // Or handle as an error
+                }
+            } else {
+                warn!("Snapshot received without a MAC. Resetting hash to zero.");
+                current_state.hash = [0; 128];
+            }
+
+            // VERY IMPORTANT: Clear the existing index map. The snapshot is the new source of truth.
+            current_state.index_value_map.clear();
+
+            // Populate the index map from the snapshot records.
+            for record in &snapshot.records {
+                if let (Some(index), Some(value)) = (&record.index, &record.value) {
+                    if let (Some(index_blob), Some(value_blob)) = (&index.blob, &value.blob) {
+                        let index_mac_b64 = BASE64_STANDARD.encode(index_blob);
+                        current_state
+                            .index_value_map
+                            .insert(index_mac_b64, value_blob.clone());
+                    }
+                }
+            }
         }
 
         for patch in &list.patches {

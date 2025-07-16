@@ -2710,6 +2710,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "log",
  "md5",
  "once_cell",
  "prost",

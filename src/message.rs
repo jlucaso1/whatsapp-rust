@@ -5,6 +5,7 @@ use crate::proto_helpers::MessageExt;
 use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
+use crate::signal::store::{IdentityKeyStore, SenderKeyStore, SessionStore};
 use crate::signal::{address::SignalAddress, session::SessionCipher};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -100,15 +101,72 @@ impl Client {
                                 info.source.sender.user.clone(),
                                 info.source.sender.device as u32,
                             );
-                            // Use Arc<Mutex<Device>> as the store for SessionCipher
+
+                            use crate::signal::protocol::Ciphertext;
+
                             let device_store = self.persistence_manager.get_device_arc().await;
+
+                            // --- KEY CHANGE: Load and clone state BEFORE decryption ---
+                            let pre_decryption_session = {
+                                let lock = device_store.lock().await;
+                                // Note: `load_session` returns a fresh record if one doesn't exist.
+                                lock.load_session(&signal_address).await.unwrap()
+                            };
+
+                            // For PreKeySignalMessages, capture prekeys BEFORE decryption
+                            let (pre_decryption_prekey, pre_decryption_signed_prekey) = if let Ciphertext::PreKey(ref pkm) = ciphertext_enum {
+                                let lock = device_store.lock().await;
+                                let prekey = if let Some(id) = pkm.pre_key_id() {
+                                    lock.backend.load_prekey(id).await.ok().flatten()
+                                } else {
+                                    None
+                                };
+                                let signed_prekey = lock.backend.load_signed_prekey(pkm.signed_pre_key_id()).await.ok().flatten();
+                                drop(lock);
+                                (prekey, signed_prekey)
+                            } else {
+                                (None, None)
+                            };
+                            // --- END KEY CHANGE ---
+
                             let device_store_wrapper =
                                 crate::store::signal::DeviceStore::new(device_store);
-                            let cipher = SessionCipher::new(device_store_wrapper, signal_address);
-                            cipher
-                                .decrypt(ciphertext_enum)
+                            let cipher =
+                                SessionCipher::new(device_store_wrapper, signal_address.clone());
+
+                            // Perform decryption, which will mutate the state in the store.
+                            let decrypt_result = cipher
+                                .decrypt(ciphertext_enum.clone()) // Clone to use it for capture later.
                                 .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")));
+
+                            // --- KEY CHANGE: Call unified capture function AFTER successful decryption ---
+                            if let Ok(ref plaintext) = decrypt_result {
+                                if self.capture_manager.is_enabled() {
+                                    let prekey_msg_ref =
+                                        if let Ciphertext::PreKey(ref pkm) = ciphertext_enum {
+                                            Some(pkm)
+                                        } else {
+                                            None
+                                        };
+
+                                    // This single call now handles both pkmsg and msg correctly.
+                                    let _ = self
+                                        .capture_direct_message_bundle(
+                                            &info,
+                                            &ciphertext,
+                                            prekey_msg_ref,
+                                            plaintext,
+                                            pre_decryption_session, // Pass the cloned, pre-decryption state
+                                            pre_decryption_prekey,
+                                            pre_decryption_signed_prekey,
+                                        )
+                                        .await;
+                                }
+                            }
+                            // --- END KEY CHANGE ---
+
+                            decrypt_result
                         }
                         Err(e) => Err(DecryptionError::Crypto(e)),
                     }
@@ -118,6 +176,7 @@ impl Client {
                         log::warn!("Received skmsg in non-group chat, skipping.");
                         continue;
                     }
+
                     let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
                         .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
 
@@ -135,12 +194,45 @@ impl Client {
                             let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
                                 device_store_wrapper.clone(),
                             );
-                            let cipher =
-                                GroupCipher::new(sender_key_name, device_store_wrapper, builder);
-                            cipher
+                            let cipher = GroupCipher::new(
+                                sender_key_name.clone(),
+                                device_store_wrapper,
+                                builder,
+                            );
+                            // Load and clone the sender key record BEFORE decryption
+                            let pre_decryption_sender_key_record = {
+                                let lock = device_store_for_group.lock().await;
+                                lock.load_sender_key(&sender_key_name).await.ok()
+                            };
+
+                            let decrypt_result = cipher
                                 .decrypt(&sk_msg, data_to_verify)
                                 .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")));
+
+                            // Use the pre-decryption state for capture
+                            if let Ok(ref plaintext) = decrypt_result {
+                                if self.capture_manager.is_enabled() {
+                                    if let Some(pre_state) = pre_decryption_sender_key_record {
+                                        let _ = self
+                                            .capture_group_message_bundle(
+                                                &info,
+                                                enc_node,
+                                                &ciphertext,
+                                                &sk_msg,
+                                                plaintext,
+                                                pre_state,
+                                            )
+                                            .await;
+                                    } else {
+                                        log::warn!(
+                                            "Could not load sender key record for capture before decryption."
+                                        );
+                                    }
+                                }
+                            }
+
+                            decrypt_result
                         }
                         Err(e) => Err(DecryptionError::Crypto(e)),
                     }
@@ -403,5 +495,106 @@ impl Client {
                 log::error!("Failed to process sender key distribution message: {e:?}");
             }
         }
+    }
+
+    // Unified capture function for direct messages (pkmsg and msg)
+    async fn capture_direct_message_bundle(
+        &self,
+        info: &crate::types::message::MessageInfo,
+        ciphertext: &[u8],
+        prekey_msg: Option<&wacore::signal::protocol::PreKeySignalMessage>,
+        plaintext: &[u8],
+        pre_decryption_session: wacore::signal::state::session_record::SessionRecord,
+        pre_decryption_prekey: Option<waproto::whatsapp::PreKeyRecordStructure>,
+        pre_decryption_signed_prekey: Option<waproto::whatsapp::SignedPreKeyRecordStructure>,
+    ) -> Result<(), anyhow::Error> {
+        use crate::capture::DirectMessageBundle;
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        let sender_identity_key_bin = prekey_msg
+            .map(|pkm| pkm.identity_key.serialize())
+            .unwrap_or_default();
+
+        let recipient_identity_keys = device_snapshot
+            .get_identity_key_pair()
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Use prekeys captured before decryption
+        let recipient_prekey = pre_decryption_prekey.and_then(|pk| serde_json::to_vec(&pk).ok());
+        let recipient_signed_prekey = pre_decryption_signed_prekey.and_then(|spk| serde_json::to_vec(&spk).ok());
+
+        let expected_plaintext = if let Ok(s) = std::str::from_utf8(plaintext) {
+            s.to_string()
+        } else {
+            format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len())
+        };
+
+        let bundle = DirectMessageBundle {
+            message_bin: ciphertext.to_vec(),
+            sender_identity_key_bin,
+            recipient_session: pre_decryption_session,
+            recipient_identity_keys,
+            recipient_prekey,
+            recipient_signed_prekey,
+            expected_plaintext,
+        };
+
+        self.capture_manager
+            .capture_direct_message_bundle(&info.id, bundle)
+            .await
+    }
+
+    async fn capture_group_message_bundle(
+        &self,
+        info: &crate::types::message::MessageInfo,
+        _enc_node: &crate::binary::node::Node,
+        ciphertext: &[u8],
+        _sk_msg: &crate::signal::groups::message::SenderKeyMessage,
+        plaintext: &[u8],
+        pre_decryption_sender_key_record: wacore::signal::state::sender_key_record::SenderKeyRecord,
+    ) -> Result<(), anyhow::Error> {
+        use crate::capture::GroupMessageBundle;
+
+        let sender_identity_key_bin = {
+            log::warn!(
+                "Cannot extract sender identity key from SenderKeyMessage - no load_identity method available"
+            );
+            vec![]
+        };
+
+        let signal_address = crate::signal::address::SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        let session_record = match device_snapshot.load_session(&signal_address).await {
+            Ok(session) => session,
+            Err(e) => {
+                log::warn!("Failed to load session for group capture: {e}");
+                wacore::signal::state::session_record::SessionRecord::new()
+            }
+        };
+
+        let expected_plaintext = if let Ok(s) = std::str::from_utf8(plaintext) {
+            s.to_string()
+        } else {
+            format!("PROTOBUF_MESSAGE_BYTES_{}", plaintext.len())
+        };
+
+        let bundle = GroupMessageBundle {
+            message_bin: ciphertext.to_vec(),
+            sender_identity_key_bin,
+            recipient_session: session_record,
+            recipient_sender_key: pre_decryption_sender_key_record,
+            expected_plaintext,
+        };
+
+        self.capture_manager
+            .capture_group_message_bundle(&info.id, bundle)
+            .await
     }
 }

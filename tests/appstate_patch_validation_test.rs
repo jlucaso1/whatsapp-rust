@@ -221,7 +221,7 @@ async fn test_patch_mac_validation_fails_with_wrong_mac() {
     let processor = Processor::new(key_store);
     let result = processor.decode_patches(&patch_list, initial_state).await;
 
-    println!("Test result: {:?}", result);
+    println!("Test result: {result:?}");
 
     assert!(result.is_err(), "Should fail with wrong patch MAC");
     match result.unwrap_err() {
