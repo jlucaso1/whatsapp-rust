@@ -86,32 +86,8 @@ impl Client {
 
             let result = match enc_type.as_str() {
                 "pkmsg" | "msg" => {
-                    use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
-                    let ciphertext_enum = if enc_type == "pkmsg" {
-                        PreKeySignalMessage::deserialize(&ciphertext).map(Ciphertext::PreKey)
-                    } else {
-                        SignalMessage::deserialize(&ciphertext).map(Ciphertext::Whisper)
-                    }
-                    .map_err(|e| anyhow::anyhow!("Failed to deserialize Signal message: {:?}", e));
-
-                    match ciphertext_enum {
-                        Ok(ciphertext_enum) => {
-                            let signal_address = SignalAddress::new(
-                                info.source.sender.user.clone(),
-                                info.source.sender.device as u32,
-                            );
-                            // Use Arc<Mutex<Device>> as the store for SessionCipher
-                            let device_store = self.persistence_manager.get_device_arc().await;
-                            let device_store_wrapper =
-                                crate::store::signal::DeviceStore::new(device_store);
-                            let cipher = SessionCipher::new(device_store_wrapper, signal_address);
-                            cipher
-                                .decrypt(ciphertext_enum)
-                                .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
-                        }
-                        Err(e) => Err(DecryptionError::Crypto(e)),
-                    }
+                    self.decrypt_dm_ciphertext(&info, &enc_type, &ciphertext)
+                        .await
                 }
                 "skmsg" => {
                     if !info.source.is_group {
@@ -345,6 +321,47 @@ impl Client {
                 }
             }
         }
+    }
+}
+
+impl Client {
+    pub async fn decrypt_dm_ciphertext(
+        &self,
+        info: &MessageInfo,
+        enc_type: &str,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, DecryptionError> {
+        use crate::signal::protocol::{Ciphertext, PreKeySignalMessage, SignalMessage};
+
+        let signal_address = SignalAddress::new(
+            info.source.sender.user.clone(),
+            info.source.sender.device as u32,
+        );
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_store_wrapper = crate::store::signal::DeviceStore::new(device_store);
+
+        if enc_type == "pkmsg" {
+            let pkmsg = PreKeySignalMessage::deserialize(ciphertext).map_err(|e| {
+                DecryptionError::Crypto(anyhow::anyhow!("Failed to deserialize pkmsg: {e:?}"))
+            })?;
+
+            let cipher = SessionCipher::new(device_store_wrapper, signal_address);
+            return cipher
+                .decrypt(Ciphertext::PreKey(pkmsg))
+                .await
+                .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{:?}", e))));
+        }
+
+        // Standard "msg" handling
+        let whisper_msg = SignalMessage::deserialize(ciphertext).map_err(|e| {
+            DecryptionError::Crypto(anyhow::anyhow!("Failed to deserialize msg: {e:?}"))
+        })?;
+
+        let cipher = SessionCipher::new(device_store_wrapper, signal_address);
+        cipher
+            .decrypt(Ciphertext::Whisper(whisper_msg))
+            .await
+            .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{:?}", e))))
     }
 
     async fn handle_sender_key_distribution_message(

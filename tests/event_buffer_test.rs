@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio;
 use wacore::types::jid::Jid;
 use whatsapp_rust::client::{Client, RecentMessageKey};
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
@@ -85,7 +84,7 @@ async fn test_processed_message_cap() {
     for i in 0..num_messages {
         let message_key = RecentMessageKey {
             to: test_jid.clone(),
-            id: format!("msg_{:04}", i),
+            id: format!("msg_{i:04}"),
         };
         message_keys.push(message_key.clone());
         client.mark_message_as_processed(message_key).await;
