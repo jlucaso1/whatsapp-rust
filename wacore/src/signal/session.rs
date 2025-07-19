@@ -12,6 +12,7 @@ use crate::signal::state::record;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::state::session_state::SessionState;
 use hmac::{Hmac, Mac};
+use log;
 use sha2::Sha256;
 use std::sync::Arc;
 use waproto::whatsapp::PreKeyRecordStructure;
@@ -268,7 +269,7 @@ impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
         Ok(plaintext)
     }
 
-    async fn decrypt_whisper_message(
+    pub async fn decrypt_whisper_message(
         &self,
         session_record: &mut SessionRecord,
         message: &SignalMessage,
@@ -451,7 +452,12 @@ impl<S: SignalProtocolStore + Clone> SessionBuilder<S> {
         if let Some(id) = message.pre_key_id() {
             match self.store.load_prekey(id).await? {
                 Some(record) => our_one_time_prekey = Some(record),
-                None => return Err(BuilderError::NoOneTimePreKeyFound(id)),
+                None => {
+                    log::warn!(
+                        "One-time prekey {id} not found, proceeding without it (multi-device race condition)"
+                    );
+                    // Proceed with None, do not return error
+                }
             }
         }
 
