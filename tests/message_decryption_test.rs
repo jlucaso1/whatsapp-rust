@@ -498,8 +498,7 @@ async fn setup_test_client(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_decrypt_pkmsg() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let (client, stanza_node, _tempdir) =
-        setup_test_client("3A4DF86EEB33CB65EE3A_sanitized", false).await;
+    let (client, stanza_node, _tempdir) = setup_test_client("3A4DF86EEB33CB65EE3A", false).await;
 
     let mut message_rx = client.subscribe_to_messages();
 
@@ -523,8 +522,7 @@ async fn test_decrypt_pkmsg() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_decrypt_skmsg() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let (client, stanza_node, _tempdir) =
-        setup_test_client("3AE25114554577124F87_sanitized", true).await;
+    let (client, stanza_node, _tempdir) = setup_test_client("3AE25114554577124F87", true).await;
 
     let mut message_rx = client.subscribe_to_messages();
 
