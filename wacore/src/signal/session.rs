@@ -244,6 +244,39 @@ impl<S: SignalProtocolStore + Clone + 'static> SessionCipher<S> {
             .await
             .map_err(DecryptionError::Store)?;
 
+        // First, try the re-keying scenario: decrypt first with current session, then process prekey
+        // This handles the case where the sender used the existing session state for encryption
+        if !session_record.is_fresh() {
+            let decrypt_result = self
+                .decrypt_whisper_message(&mut session_record, &message.message)
+                .await;
+            
+            if let Ok(plaintext) = decrypt_result {
+                // Successful decryption with current session - now process prekey for future messages
+                let builder = SessionBuilder::new(self.store.clone(), self.remote_address.clone());
+                let used_prekey_id = builder
+                    .process_prekey_message(&mut session_record, message)
+                    .await
+                    .map_err(|e| DecryptionError::Store(Box::new(e)))?;
+
+                if let Some(id) = used_prekey_id {
+                    self.store
+                        .remove_prekey(id)
+                        .await
+                        .map_err(DecryptionError::Store)?;
+                }
+
+                self.store
+                    .store_session(&self.remote_address, &session_record)
+                    .await
+                    .map_err(DecryptionError::Store)?;
+
+                return Ok(plaintext);
+            }
+        }
+
+        // If re-keying approach failed or session is fresh, use initial session establishment approach:
+        // Process prekey first to establish/update session, then decrypt
         let builder = SessionBuilder::new(self.store.clone(), self.remote_address.clone());
         let used_prekey_id = builder
             .process_prekey_message(&mut session_record, message)
