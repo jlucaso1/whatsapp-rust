@@ -234,7 +234,7 @@ mod test_utils {
         key: JsonBuffer,
     }
 
-    pub(crate) fn convert_session(baileys_session_json: &str) -> SessionRecord {
+    pub(crate) fn convert_session(baileys_session_json: &str, local_identity_key: Option<IdentityKey>) -> SessionRecord {
         let container: BaileysSessionContainer =
             serde_json::from_str(baileys_session_json).unwrap();
         let baileys_session = container.sessions.values().next().unwrap();
@@ -248,6 +248,14 @@ mod test_utils {
             .expect("remote_identity_key should be 33 bytes with type prefix");
         let key = DjbEcPublicKey::new(key_bytes);
         session_state.set_remote_identity_key(IdentityKey::new(key));
+        
+        // Set local identity key if provided
+        if let Some(local_key) = local_identity_key {
+            println!("DEBUG: Setting local identity key in session state");
+            session_state.set_local_identity_key(local_key);
+        } else {
+            println!("DEBUG: No local identity key provided to convert_session");
+        }
         session_state.set_root_key(RootKey::new(
             baileys_session
                 .current_ratchet
@@ -456,7 +464,9 @@ async fn setup_test_client(
             .unwrap();
         let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
         let sender_addr = SignalAddress::new(sender_jid.user, sender_jid.device as u32);
-        let session_record = test_utils::convert_session(&json);
+        
+        println!("DEBUG: Testing if device store identity key is sufficient");
+        let session_record = test_utils::convert_session(&json, None);
         device_store_locked
             .store_session(&sender_addr, &session_record)
             .await
