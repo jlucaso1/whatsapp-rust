@@ -349,7 +349,7 @@ impl Client {
             return cipher
                 .decrypt(Ciphertext::PreKey(pkmsg))
                 .await
-                .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{:?}", e))));
+                .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{e:?}"))));
         }
 
         // Standard "msg" handling
@@ -361,7 +361,7 @@ impl Client {
         cipher
             .decrypt(Ciphertext::Whisper(whisper_msg))
             .await
-            .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{:?}", e))))
+            .map_err(|e| DecryptionError::Crypto(anyhow::Error::msg(format!("{e:?}"))))
     }
 
     async fn handle_sender_key_distribution_message(

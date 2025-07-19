@@ -28,8 +28,10 @@ mod test_utils {
     use wacore::signal::state::sender_key_record::SenderKeyRecord;
 
     mod base64_serde {
+        #[allow(unused_imports)]
         use base64::prelude::*;
-        use serde::{Deserializer, Serializer, de::Error};
+        #[allow(unused_imports)]
+        use serde::{Deserializer, de::Error};
     }
 
     #[derive(Debug)]
@@ -139,6 +141,7 @@ mod test_utils {
     #[derive(Deserialize, Debug)]
     pub(crate) struct Me {
         pub id: String,
+        #[allow(dead_code)]
         pub name: String,
     }
 
@@ -153,6 +156,7 @@ mod test_utils {
 
     #[derive(Deserialize, Debug)]
     #[serde(untagged)]
+    #[allow(private_interfaces)]
     enum JsonStanzaContent {
         Nodes(Vec<JsonStanza>),
         Buffer(JsonBuffer),
@@ -162,6 +166,7 @@ mod test_utils {
     pub(crate) struct JsonStanza {
         pub tag: String,
         pub attrs: HashMap<String, String>,
+        #[allow(private_interfaces)]
         pub content: Option<JsonStanzaContent>,
     }
 
@@ -203,6 +208,7 @@ mod test_utils {
     #[serde(rename_all = "camelCase")]
     struct BaileysRatchet {
         ephemeral_key_pair: BaileysChainKeyPair,
+        #[allow(dead_code)]
         last_remote_ephemeral_key: JsonBuffer,
         previous_counter: u32,
         root_key: JsonBuffer,
@@ -251,10 +257,10 @@ mod test_utils {
         
         // Set local identity key if provided
         if let Some(local_key) = local_identity_key {
-            println!("DEBUG: Setting local identity key in session state");
+            println!("DEBUG: Setting local identity key in session state (FIX APPLIED)");
             session_state.set_local_identity_key(local_key);
         } else {
-            println!("DEBUG: No local identity key provided to convert_session");
+            println!("DEBUG: No local identity key provided to convert_session (FIX NOT APPLIED)");
         }
         session_state.set_root_key(RootKey::new(
             baileys_session
@@ -465,8 +471,10 @@ async fn setup_test_client(
         let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
         let sender_addr = SignalAddress::new(sender_jid.user, sender_jid.device as u32);
         
-        println!("DEBUG: Testing if device store identity key is sufficient");
-        let session_record = test_utils::convert_session(&json, None);
+        // Create local identity key from creds and apply fix
+        let local_identity_key = IdentityKey::new(DjbEcPublicKey::new(creds.signed_identity_key.public));
+        println!("DEBUG: Applying fix - passing local identity key to convert_session");
+        let session_record = test_utils::convert_session(&json, Some(local_identity_key));
         device_store_locked
             .store_session(&sender_addr, &session_record)
             .await
