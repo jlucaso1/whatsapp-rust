@@ -105,7 +105,21 @@ impl TestHarness {
 
             debug!("Delivering message to client: {}", client_jid);
             // Process the message on the recipient client
-            let node_clone = message.node.clone();
+            let mut node_clone = message.node.clone();
+            
+            // Add sender information to the message for proper source parsing
+            // In real WhatsApp, this would be added by the server
+            let to_jid_str = message.node.attrs.get("to").unwrap_or(&"".to_string()).clone();
+            
+            if is_group_message {
+                // For group messages, 'from' should be the group JID and 'participant' should be the sender
+                node_clone.attrs.insert("from".to_string(), to_jid_str);
+                node_clone.attrs.insert("participant".to_string(), message.from.to_string());
+            } else {
+                // For DM messages, 'from' should be the sender
+                node_clone.attrs.insert("from".to_string(), message.from.to_string());
+            }
+            
             let client_clone = client.clone();
             tokio::spawn(async move {
                 client_clone.handle_encrypted_message(node_clone).await;
@@ -364,4 +378,72 @@ async fn test_send_receive_message() {
     assert_eq!(info.source.sender, client_a_jid);
 
     info!("✅ test_send_receive_message completed successfully!");
+}
+
+#[tokio::test]
+async fn debug_message_structure() {
+    let _ = env_logger::builder()
+        .is_test(true)
+        .filter_level(log::LevelFilter::Info)
+        .try_init();
+
+    // Set up a single client
+    let temp_dir = TempDir::new().unwrap();
+    let store_path = temp_dir.path().join("store");
+    let pm = Arc::new(
+        PersistenceManager::new(store_path)
+            .await
+            .expect("Failed to create PersistenceManager"),
+    );
+    let client = Arc::new(Client::new(pm.clone()).await);
+
+    let jid: Jid = "alice.1@lid".parse().unwrap();
+    pm.process_command(DeviceCommand::SetId(Some(jid.clone()))).await;
+    pm.process_command(DeviceCommand::SetLid(Some(jid.clone()))).await;
+    pm.process_command(DeviceCommand::SetPushName("alice".to_string())).await;
+
+    // Generate and store pre-keys for session establishment
+    let device_store = pm.get_device_arc().await;
+    let mut prekeys = keyhelper::generate_pre_keys(1, 1);
+    device_store
+        .lock()
+        .await
+        .store_prekey(1, prekeys.remove(0))
+        .await
+        .unwrap();
+
+    // Enable test mode with a receiver we can monitor
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    client.enable_test_mode(sender).await;
+
+    // Try to send a message and capture the actual node being sent
+    let target_jid: Jid = "bob.1@lid".parse().unwrap();
+    
+    info!("=== Attempting to send message ===");
+    
+    // Start a task to capture the message
+    let capture_task = tokio::spawn(async move {
+        if let Some(test_message) = receiver.recv().await {
+            info!("📨 Captured message node: {}", test_message.node);
+            info!("   From: {}", test_message.from);
+            info!("   To: {:?}", test_message.to);
+            
+            // Check for enc children
+            let enc_children = test_message.node.get_children_by_tag("enc");
+            info!("   Enc children count: {}", enc_children.len());
+            for (i, enc_child) in enc_children.iter().enumerate() {
+                info!("   Enc child {}: {:?}", i, enc_child.attrs);
+            }
+        }
+    });
+    
+    match client.send_text_message(target_jid, "Test message").await {
+        Ok(()) => info!("✅ Message sent successfully"),
+        Err(e) => info!("❌ Message failed: {}", e),
+    }
+    
+    // Wait for message capture
+    tokio::time::timeout(Duration::from_secs(2), capture_task).await.ok();
+    
+    info!("=== Test completed ===");
 }

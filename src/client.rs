@@ -1036,6 +1036,17 @@ impl Client {
         &self,
         jid: &crate::types::jid::Jid,
     ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        // In test mode, return mock group participants
+        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
+            // For test mode, assume the group has all three test clients as participants
+            let participants = vec![
+                "alice.1@lid".parse()?,
+                "bob.1@lid".parse()?,
+                "charlie.1@lid".parse()?,
+            ];
+            return Ok(participants);
+        }
+
         use crate::binary::node::{Node, NodeContent};
         let query_node = Node {
             tag: "query".to_string(),
