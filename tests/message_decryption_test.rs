@@ -27,10 +27,7 @@ mod test_utils {
 
     use wacore::signal::state::sender_key_record::SenderKeyRecord;
 
-    mod base64_serde {
-        use base64::prelude::*;
-        use serde::{Deserializer, Serializer, de::Error};
-    }
+    mod base64_serde {}
 
     #[derive(Debug)]
     pub(crate) struct JsonBuffer(pub Vec<u8>);
@@ -139,7 +136,6 @@ mod test_utils {
     #[derive(Deserialize, Debug)]
     pub(crate) struct Me {
         pub id: String,
-        pub name: String,
     }
 
     #[derive(Deserialize, Debug)]
@@ -162,7 +158,7 @@ mod test_utils {
     pub(crate) struct JsonStanza {
         pub tag: String,
         pub attrs: HashMap<String, String>,
-        pub content: Option<JsonStanzaContent>,
+        content: Option<JsonStanzaContent>,
     }
 
     impl JsonStanza {
@@ -203,7 +199,6 @@ mod test_utils {
     #[serde(rename_all = "camelCase")]
     struct BaileysRatchet {
         ephemeral_key_pair: BaileysChainKeyPair,
-        last_remote_ephemeral_key: JsonBuffer,
         previous_counter: u32,
         root_key: JsonBuffer,
     }
