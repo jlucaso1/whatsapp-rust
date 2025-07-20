@@ -78,7 +78,9 @@ impl TestHarness {
     }
 
     async fn route_message(message: TestMessage, clients: &[(Jid, Arc<Client>)]) {
-        use whatsapp_rust::binary::node::Node;
+        use log::debug;
+        
+        debug!("Routing message from {} to recipients: {}", message.from, message.node);
         
         // For group messages, route to all clients except sender
         // For direct messages, route only to the specific recipient
@@ -101,6 +103,7 @@ impl TestHarness {
                 }
             }
 
+            debug!("Delivering message to client: {}", client_jid);
             // Process the message on the recipient client
             let node_clone = message.node.clone();
             let client_clone = client.clone();

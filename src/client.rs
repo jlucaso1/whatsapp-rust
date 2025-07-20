@@ -1189,7 +1189,7 @@ impl Client {
     async fn send_node_test_mode(&self, node: Node) -> Result<(), ClientError> {
         use crate::test_network::TestMessage;
         
-        debug!(target: "Client/TestSend", "{node}");
+        debug!(target: "Client/TestSend", "Sending node in test mode: {}", node);
         
         let sender_guard = self.test_network_sender.lock().await;
         let sender = match sender_guard.as_ref() {
