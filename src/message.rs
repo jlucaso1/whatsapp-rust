@@ -108,11 +108,13 @@ impl Client {
 
         // PASS 1: Process session establishment messages (pkmsg/msg) first
         // This ensures SenderKeyDistributionMessages are processed before group content
+        log::debug!("Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)", session_enc_nodes.len());
         for enc_node in session_enc_nodes {
             self.clone().process_enc_node(enc_node, &info, &message_key).await;
         }
         
         // PASS 2: Process group content messages (skmsg) after session establishment
+        log::debug!("Starting PASS 2: Processing {} group content messages (skmsg)", group_content_enc_nodes.len());
         for enc_node in group_content_enc_nodes {
             self.clone().process_enc_node(enc_node, &info, &message_key).await;
         }

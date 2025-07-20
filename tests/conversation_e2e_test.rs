@@ -381,6 +381,68 @@ async fn test_send_receive_message() {
 }
 
 #[tokio::test]
+async fn test_two_pass_message_processing() {
+    let _ = env_logger::builder()
+        .is_test(true)
+        .filter_level(log::LevelFilter::Debug)
+        .try_init();
+
+    let harness = TestHarness::new().await;
+    let group_jid: Jid = "test_two_pass@g.us".parse().unwrap();
+    let mut rx_b = harness.client_b.subscribe_to_all_events();
+    let mut rx_c = harness.client_c.subscribe_to_all_events();
+
+    // Manually establish sessions from Alice to Bob and Charlie (like the DM test)
+    info!("Establishing Signal sessions between participants");
+    
+    let bundle_b = get_bundle_for_client(&harness.client_b).await;
+    let bundle_c = get_bundle_for_client(&harness.client_c).await;
+    
+    let client_a_jid = harness.client_a.get_jid().await.unwrap();
+    let client_b_jid = harness.client_b.get_jid().await.unwrap();
+    let client_c_jid = harness.client_c.get_jid().await.unwrap();
+    
+    let client_b_address = SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
+    let client_c_address = SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
+    
+    // Alice establishes sessions with Bob and Charlie
+    let device_a_store = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+    
+    let mut session_record_b = device_a_store.load_session(&client_b_address).await.unwrap();
+    let builder_b = SessionBuilder::new(device_a_store.clone(), client_b_address.clone());
+    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
+    device_a_store.store_session(&client_b_address, &session_record_b).await.unwrap();
+    
+    let mut session_record_c = device_a_store.load_session(&client_c_address).await.unwrap();
+    let builder_c = SessionBuilder::new(device_a_store.clone(), client_c_address.clone());
+    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
+    device_a_store.store_session(&client_c_address, &session_record_c).await.unwrap();
+    
+    info!("Sessions established. Now sending group message.");
+    
+    // Send a group message from Alice
+    let msg = "Hello group with proper sessions!";
+    harness
+        .client_a
+        .send_text_message(group_jid.clone(), msg)
+        .await
+        .unwrap();
+
+    info!("Group message sent. Waiting for recipients to receive and decrypt.");
+
+    // Bob and Charlie should receive and decrypt the message  
+    let (msg_b, info_b) = expect_message(&mut rx_b).await;
+    let (msg_c, info_c) = expect_message(&mut rx_c).await;
+    
+    assert_eq!(msg_b.conversation.unwrap(), msg);
+    assert_eq!(msg_c.conversation.unwrap(), msg);
+    assert_eq!(info_b.source.sender, client_a_jid);
+    assert_eq!(info_c.source.sender, client_a_jid);
+
+    info!("✅ Two-pass message processing test passed!");
+}
+
+#[tokio::test]
 async fn debug_message_structure() {
     let _ = env_logger::builder()
         .is_test(true)
