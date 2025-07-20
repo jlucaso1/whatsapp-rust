@@ -477,9 +477,13 @@ async fn setup_test_client(
         let sender_jid_str = stanza.attrs.get("participant").unwrap();
         let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
 
+        let sender_address = wacore::signal::address::SignalAddress::new(
+            sender_jid.user.clone(),
+            sender_jid.device as u32,
+        );
         let sender_key_name = wacore::signal::sender_key_name::SenderKeyName::new(
             group_jid.to_string(),
-            sender_jid.user,
+            sender_address.to_string(),
         );
         device_store_locked
             .store_sender_key(&sender_key_name, sender_key_record)

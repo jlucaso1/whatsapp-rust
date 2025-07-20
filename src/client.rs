@@ -1151,4 +1151,9 @@ impl Client {
 
         Ok(all_devices)
     }
+    /// Returns the current JID for this client (from device snapshot)
+    pub async fn get_jid(&self) -> Option<crate::types::jid::Jid> {
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        snapshot.id.clone()
+    }
 }

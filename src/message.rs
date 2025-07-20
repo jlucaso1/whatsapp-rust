@@ -99,9 +99,13 @@ impl Client {
 
                     match sk_msg_result {
                         Ok((sk_msg, data_to_verify)) => {
+                            let sender_address = SignalAddress::new(
+                                info.source.sender.user.clone(),
+                                info.source.sender.device as u32,
+                            );
                             let sender_key_name = SenderKeyName::new(
                                 info.source.chat.to_string(),
-                                info.source.sender.user.clone(),
+                                sender_address.to_string(),
                             );
                             let device_store_for_group =
                                 self.persistence_manager.get_device_arc().await;
@@ -403,7 +407,8 @@ impl Client {
             }
         };
 
-        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_jid.user.clone());
+        let sender_address = SignalAddress::new(sender_jid.user.clone(), sender_jid.device as u32);
+        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
 
         // Use Arc<Mutex<Device>> as the store for GroupSessionBuilder
         let device_store_for_builder = self.persistence_manager.get_device_arc().await;
