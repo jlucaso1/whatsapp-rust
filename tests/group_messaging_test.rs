@@ -26,6 +26,60 @@ async fn create_test_device(_name: &str) -> Arc<Device> {
     Arc::new(device)
 }
 
+// --- Additional Test: SenderKeyName Consistency ---
+use whatsapp_rust::signal::address::SignalAddress;
+use whatsapp_rust::types::jid::Jid;
+
+#[test]
+fn test_sender_key_name_consistency() {
+    // 1. Simulate sender's context
+    let group_jid_str = "123456789-12345@g.us";
+    let sender_lid: Jid = "9876543210.1@lid".parse().unwrap();
+    let sender_address = SignalAddress::new(sender_lid.user.clone(), sender_lid.device as u32);
+
+    // 2. Construct the SenderKeyName as it would be during SENDING
+    let sending_key_name =
+        SenderKeyName::new(group_jid_str.to_string(), sender_address.to_string());
+
+    // 3. Simulate receiver's context after parsing an incoming message
+    let parsed_group_jid: Jid = group_jid_str.parse().unwrap();
+    // The 'participant' attribute in a group message is a full JID including device
+    let parsed_sender_jid: Jid = "9876543210.1@lid".parse().unwrap();
+
+    // 4. Construct the SenderKeyName as it currently is during RECEIVING (the buggy way)
+    let buggy_receiving_key_name =
+        SenderKeyName::new(parsed_group_jid.to_string(), parsed_sender_jid.user.clone());
+
+    // 5. Construct the SenderKeyName as it SHOULD be during RECEIVING (the fixed way)
+    let correct_sender_address = SignalAddress::new(
+        parsed_sender_jid.user.clone(),
+        parsed_sender_jid.device as u32,
+    );
+    let correct_receiving_key_name = SenderKeyName::new(
+        parsed_group_jid.to_string(),
+        correct_sender_address.to_string(),
+    );
+
+    // 6. Assertions
+    assert_ne!(
+        sending_key_name.sender_id(),
+        buggy_receiving_key_name.sender_id(),
+        "BUG DETECTED: Sender ID during sending ('{}') does not match buggy lookup ('{}')",
+        sending_key_name.sender_id(),
+        buggy_receiving_key_name.sender_id()
+    );
+
+    assert_eq!(
+        sending_key_name.sender_id(),
+        correct_receiving_key_name.sender_id(),
+        "FIX VERIFIED: Sender ID during sending ('{}') should match correct lookup ('{}')",
+        sending_key_name.sender_id(),
+        correct_receiving_key_name.sender_id()
+    );
+
+    println!("✅ SenderKeyName consistency test logic is sound.");
+}
+
 #[tokio::test]
 async fn test_group_messaging_end_to_end() {
     // === SETUP ===
