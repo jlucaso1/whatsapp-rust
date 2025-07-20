@@ -6,6 +6,7 @@ use tokio::time::{Duration, timeout};
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 use whatsapp_rust::store::signal::DeviceStore;
+use whatsapp_rust::test_network::{TestNetworkBus, TestMessage};
 
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::types::events::Event;
@@ -28,6 +29,8 @@ struct TestHarness {
     _temp_dir_a: TempDir,
     _temp_dir_b: TempDir,
     _temp_dir_c: TempDir,
+    network_bus: TestNetworkBus,
+    _network_task: tokio::task::JoinHandle<()>,
 }
 
 impl TestHarness {
@@ -36,6 +39,32 @@ impl TestHarness {
         let (client_b, _temp_dir_b) = setup_test_client("bob.1@lid").await;
         let (client_c, _temp_dir_c) = setup_test_client("charlie.1@lid").await;
 
+        // Create test network bus
+        let network_bus = TestNetworkBus::new();
+        let network_sender = network_bus.get_sender();
+        let network_receiver = network_bus.get_receiver();
+
+        // Enable test mode for all clients
+        client_a.enable_test_mode(network_sender.clone()).await;
+        client_b.enable_test_mode(network_sender.clone()).await;
+        client_c.enable_test_mode(network_sender.clone()).await;
+
+        // Create a map of clients for routing
+        let clients = vec![
+            (client_a.get_jid().await.unwrap(), client_a.clone()),
+            (client_b.get_jid().await.unwrap(), client_b.clone()),
+            (client_c.get_jid().await.unwrap(), client_c.clone()),
+        ];
+
+        // Start network routing task
+        let network_task = tokio::spawn(async move {
+            let mut receiver = network_receiver.lock().await;
+            while let Some(test_message) = receiver.recv().await {
+                // Route message to appropriate recipients
+                Self::route_message(test_message, &clients).await;
+            }
+        });
+
         Self {
             client_a,
             client_b,
@@ -43,6 +72,41 @@ impl TestHarness {
             _temp_dir_a,
             _temp_dir_b,
             _temp_dir_c,
+            network_bus,
+            _network_task: network_task,
+        }
+    }
+
+    async fn route_message(message: TestMessage, clients: &[(Jid, Arc<Client>)]) {
+        use whatsapp_rust::binary::node::Node;
+        
+        // For group messages, route to all clients except sender
+        // For direct messages, route only to the specific recipient
+        let is_group_message = message.node.attrs.get("to")
+            .map(|to| to.contains("@g.us"))
+            .unwrap_or(false);
+
+        for (client_jid, client) in clients {
+            // Skip sender
+            if *client_jid == message.from {
+                continue;
+            }
+
+            // For direct messages, only send to the specific recipient
+            if !is_group_message {
+                if let Some(ref to_jid) = message.to {
+                    if *client_jid != *to_jid {
+                        continue;
+                    }
+                }
+            }
+
+            // Process the message on the recipient client
+            let node_clone = message.node.clone();
+            let client_clone = client.clone();
+            tokio::spawn(async move {
+                client_clone.handle_encrypted_message(node_clone).await;
+            });
         }
     }
 }

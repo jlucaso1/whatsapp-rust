@@ -8,10 +8,12 @@ use crate::types::jid::Jid;
 use wacore::client::MessageUtils;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
+use log::debug;
 
 impl Client {
     /// Sends a text message to the given JID.
     pub async fn send_text_message(&self, to: Jid, text: &str) -> Result<(), anyhow::Error> {
+        debug!("send_text_message: Sending '{}' to {}", text, to);
         let content = wa::Message {
             conversation: Some(text.to_string()),
             ..Default::default()
@@ -242,6 +244,7 @@ impl Client {
             content: Some(NodeContent::Nodes(message_content_nodes)),
         };
 
+        debug!("send_dm_message: About to call send_node with stanza");
         self.send_node(stanza).await.map_err(|e| e.into())
     }
 
