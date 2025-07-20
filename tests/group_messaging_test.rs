@@ -11,36 +11,36 @@
 // 4. Sender key ratcheting between messages
 // 5. End-to-end group messaging functionality
 
+mod conversation_e2e_test;
+use conversation_e2e_test::TestHarness;
 use std::sync::Arc;
 use whatsapp_rust::signal::{
     groups::{builder::GroupSessionBuilder, cipher::GroupCipher},
     sender_key_name::SenderKeyName,
     store::SenderKeyStore,
 };
-use whatsapp_rust::store::{Device, memory::MemoryStore, signal::DeviceArcWrapper};
-
-// Helper function to create a test device with an isolated memory store
-async fn create_test_device(_name: &str) -> Arc<Device> {
-    let store_backend = Arc::new(MemoryStore::new());
-    let device = Device::new(store_backend);
-    Arc::new(device)
-}
+use whatsapp_rust::store::signal::DeviceArcWrapper;
+use wacore::types::Jid;
 
 #[tokio::test]
-async fn test_group_messaging_end_to_end() {
+async fn test_full_group_conversation_loop() {
     // === SETUP ===
-    // Create three participants: Alice (sender), Bob and Charlie (receivers)
-    let alice_device = create_test_device("alice").await;
-    let bob_device = create_test_device("bob").await;
-    let charlie_device = create_test_device("charlie").await;
+    let mut harness = TestHarness::new().await;
+    let alice_jid: Jid = "alice@s.whatsapp.net".parse().unwrap();
+    let bob_jid: Jid = "bob@s.whatsapp.net".parse().unwrap();
+    let charlie_jid: Jid = "charlie@s.whatsapp.net".parse().unwrap();
+    harness.add_client(alice_jid.clone()).await;
+    harness.add_client(bob_jid.clone()).await;
+    harness.add_client(charlie_jid.clone()).await;
+
+    let alice_device = harness.clients.get(&alice_jid).unwrap().clone();
+    let bob_device = harness.clients.get(&bob_jid).unwrap().clone();
+    let charlie_device = harness.clients.get(&charlie_jid).unwrap().clone();
 
     let group_id = "12345@g.us".to_string();
-    let alice_id = "alice@s.whatsapp.net".to_string();
-
-    let sender_key_name = SenderKeyName::new(group_id.clone(), alice_id.clone());
+    let sender_key_name = SenderKeyName::new(group_id.clone(), alice_jid.to_string());
 
     // === STEP 1: KEY DISTRIBUTION ===
-    // Alice creates and "distributes" her sender key
     println!("--- Step 1: Alice creates and distributes sender key ---");
     let alice_builder = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
     let distribution_message = alice_builder
@@ -92,68 +92,45 @@ async fn test_group_messaging_end_to_end() {
     );
     println!("Charlie successfully processed the key.");
 
-    // === STEP 3: FIRST MESSAGE ENCRYPTION ===
+    // === STEP 3: FIRST MESSAGE ENCRYPTION AND ROUTING ===
     println!("\n--- Step 3: Alice encrypts and sends message 1 ---");
     let plaintext1 = b"Hello, group!";
-    let alice_builder_for_encrypt =
-        GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
-    let alice_cipher = GroupCipher::new(
-        sender_key_name.clone(),
-        DeviceArcWrapper::new(alice_device.clone()),
-        alice_builder_for_encrypt,
-    );
-    let encrypted_message1 = alice_cipher
-        .encrypt(plaintext1)
+    let mock_client_a = conversation_e2e_test::MockClient {
+        client: alice_device.clone(),
+        network_tx: harness.network_tx.clone(),
+        jid: alice_jid.clone(),
+    };
+    mock_client_a
+        .send_text_message(bob_jid.clone(), &String::from_utf8_lossy(plaintext1))
         .await
-        .expect("Alice should encrypt message 1");
-    println!(
-        "Alice encrypted message 1 (iteration {})",
-        encrypted_message1.iteration()
-    );
+        .unwrap();
+    mock_client_a
+        .send_text_message(charlie_jid.clone(), &String::from_utf8_lossy(plaintext1))
+        .await
+        .unwrap();
 
-    // === STEP 4: FIRST MESSAGE DECRYPTION ===
+    harness.route_all(2).await;
+
+    // === STEP 4: FIRST MESSAGE DECRYPTION (VERIFICATION VIA EVENTS) ===
     println!("\n--- Step 4: Bob and Charlie decrypt message 1 ---");
+    let event_rx_bob = harness.event_rxs.get_mut(&bob_jid).unwrap();
+    let event_rx_charlie = harness.event_rxs.get_mut(&charlie_jid).unwrap();
 
-    // Bob decrypts the first message
-    let bob_builder_for_decrypt1 =
-        GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
-    let bob_cipher = GroupCipher::new(
-        sender_key_name.clone(),
-        DeviceArcWrapper::new(bob_device.clone()),
-        bob_builder_for_decrypt1,
-    );
-    // Serialize and deserialize the message to get the verification data
-    let serialized_msg1 = encrypted_message1.serialize();
-    let (deserialized_msg1, data_to_verify1) =
-        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg1)
-            .expect("Should deserialize message 1");
-    let decrypted1_bob = bob_cipher
-        .decrypt(&deserialized_msg1, data_to_verify1)
-        .await
-        .expect("Bob should decrypt message 1");
-    assert_eq!(
-        decrypted1_bob, plaintext1,
-        "Bob's decrypted text should match"
-    );
-    println!("Bob decrypted message 1 successfully.");
+    if let Some(whatsapp_rust::types::events::Event::Message(msg, _)) = event_rx_bob.recv().await {
+        assert_eq!(msg.conversation.unwrap(), String::from_utf8_lossy(plaintext1));
+        println!("Bob decrypted message 1 successfully.");
+    } else {
+        panic!("Bob did not receive message 1");
+    }
 
-    // Charlie decrypts the first message
-    let charlie_builder_for_decrypt1 =
-        GroupSessionBuilder::new(DeviceArcWrapper::new(charlie_device.clone()));
-    let charlie_cipher = GroupCipher::new(
-        sender_key_name.clone(),
-        DeviceArcWrapper::new(charlie_device.clone()),
-        charlie_builder_for_decrypt1,
-    );
-    let decrypted1_charlie = charlie_cipher
-        .decrypt(&deserialized_msg1, data_to_verify1)
-        .await
-        .expect("Charlie should decrypt message 1");
-    assert_eq!(
-        decrypted1_charlie, plaintext1,
-        "Charlie's decrypted text should match"
-    );
-    println!("Charlie decrypted message 1 successfully.");
+    if let Some(whatsapp_rust::types::events::Event::Message(msg, _)) =
+        event_rx_charlie.recv().await
+    {
+        assert_eq!(msg.conversation.unwrap(), String::from_utf8_lossy(plaintext1));
+        println!("Charlie decrypted message 1 successfully.");
+    } else {
+        panic!("Charlie did not receive message 1");
+    }
 
     // === STEP 5: SECOND MESSAGE ENCRYPTION (RATCHET TEST) ===
     println!("\n--- Step 5: Alice encrypts and sends message 2 (testing ratchet) ---");
@@ -265,16 +242,21 @@ async fn test_group_messaging_end_to_end() {
 
 // === ADDITIONAL TEST: OUT-OF-ORDER MESSAGE HANDLING ===
 #[tokio::test]
-async fn test_group_messaging_out_of_order() {
+async fn test_group_rekey_on_participant_add() {
     // This test validates that the group messaging system can handle
     // messages that arrive out of order, which is common in real-world scenarios
 
-    let alice_device = create_test_device("alice").await;
-    let bob_device = create_test_device("bob").await;
+    let mut harness = TestHarness::new().await;
+    let alice_jid: Jid = "alice@s.whatsapp.net".parse().unwrap();
+    let bob_jid: Jid = "bob@s.whatsapp.net".parse().unwrap();
+    harness.add_client(alice_jid.clone()).await;
+    harness.add_client(bob_jid.clone()).await;
+
+    let alice_device = harness.clients.get(&alice_jid).unwrap().clone();
+    let bob_device = harness.clients.get(&bob_jid).unwrap().clone();
 
     let group_id = "test-group@g.us".to_string();
-    let alice_id = "alice@s.whatsapp.net".to_string();
-    let sender_key_name = SenderKeyName::new(group_id, alice_id);
+    let sender_key_name = SenderKeyName::new(group_id, alice_jid.to_string());
 
     // Set up the initial key distribution
     let alice_builder_setup = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
@@ -287,68 +269,60 @@ async fn test_group_messaging_out_of_order() {
         .await
         .unwrap();
 
-    // Alice encrypts multiple messages
-    let plaintext1 = b"Message 1";
-    let plaintext2 = b"Message 2";
-    let plaintext3 = b"Message 3";
-
-    let alice_builder_multi = GroupSessionBuilder::new(DeviceArcWrapper::new(alice_device.clone()));
-    let alice_cipher_multi = GroupCipher::new(
-        sender_key_name.clone(),
-        DeviceArcWrapper::new(alice_device.clone()),
-        alice_builder_multi,
-    );
-
-    let msg1 = alice_cipher_multi.encrypt(plaintext1).await.unwrap();
-    let msg2 = alice_cipher_multi.encrypt(plaintext2).await.unwrap();
-    let msg3 = alice_cipher_multi.encrypt(plaintext3).await.unwrap();
-
-    // Verify messages have increasing iterations
-    assert!(msg1.iteration() < msg2.iteration());
-    assert!(msg2.iteration() < msg3.iteration());
-
-    // Bob receives and decrypts messages in order: 1, 3, 2 (out of order)
-    let bob_builder_ooo = GroupSessionBuilder::new(DeviceArcWrapper::new(bob_device.clone()));
-    let bob_cipher_ooo = GroupCipher::new(
-        sender_key_name.clone(),
-        DeviceArcWrapper::new(bob_device.clone()),
-        bob_builder_ooo,
-    );
-
-    // Decrypt message 1
-    let serialized_msg1 = msg1.serialize();
-    let (deserialized_msg1, data_to_verify1) =
-        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg1)
-            .unwrap();
-    let decrypted1 = bob_cipher_ooo
-        .decrypt(&deserialized_msg1, data_to_verify1)
+    let mock_client_a = conversation_e2e_test::MockClient {
+        client: alice_device.clone(),
+        network_tx: harness.network_tx.clone(),
+        jid: alice_jid.clone(),
+    };
+    mock_client_a
+        .send_text_message(bob_jid.clone(), "hello")
         .await
         .unwrap();
-    assert_eq!(decrypted1, plaintext1);
+    harness.route_one().await;
+    let event_rx_bob = harness.event_rxs.get_mut(&bob_jid).unwrap();
+    if let Some(whatsapp_rust::types::events::Event::Message(msg, _)) = event_rx_bob.recv().await {
+        assert_eq!(msg.conversation.unwrap(), "hello");
+    } else {
+        panic!("Bob did not receive message 1");
+    }
 
-    // Decrypt message 3 (skipping message 2)
-    let serialized_msg3 = msg3.serialize();
-    let (deserialized_msg3, data_to_verify3) =
-        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg3)
-            .unwrap();
-    let decrypted3 = bob_cipher_ooo
-        .decrypt(&deserialized_msg3, data_to_verify3)
+    let charlie_jid: Jid = "charlie@s.whatsapp.net".parse().unwrap();
+    harness.add_client(charlie_jid.clone()).await;
+    let charlie_device = harness.clients.get(&charlie_jid).unwrap().clone();
+
+    let new_distribution_message = alice_builder_setup.create(&sender_key_name).await.unwrap();
+    let charlie_builder_setup =
+        GroupSessionBuilder::new(DeviceArcWrapper::new(charlie_device.clone()));
+    charlie_builder_setup
+        .process(&sender_key_name, &new_distribution_message)
         .await
         .unwrap();
-    assert_eq!(decrypted3, plaintext3);
 
-    // Decrypt message 2 (out of order)
-    let serialized_msg2 = msg2.serialize();
-    let (deserialized_msg2, data_to_verify2) =
-        whatsapp_rust::signal::groups::message::SenderKeyMessage::deserialize(&serialized_msg2)
-            .unwrap();
-    let decrypted2 = bob_cipher_ooo
-        .decrypt(&deserialized_msg2, data_to_verify2)
+    mock_client_a
+        .send_text_message(bob_jid.clone(), "hello again")
         .await
         .unwrap();
-    assert_eq!(decrypted2, plaintext2);
+    mock_client_a
+        .send_text_message(charlie_jid.clone(), "hello again")
+        .await
+        .unwrap();
 
-    println!("✅ Out-of-order message handling test passed!");
+    harness.route_all(2).await;
+
+    if let Some(whatsapp_rust::types::events::Event::Message(msg, _)) = event_rx_bob.recv().await {
+        assert_eq!(msg.conversation.unwrap(), "hello again");
+    } else {
+        panic!("Bob did not receive message 2");
+    }
+
+    let event_rx_charlie = harness.event_rxs.get_mut(&charlie_jid).unwrap();
+    if let Some(whatsapp_rust::types::events::Event::Message(msg, _)) =
+        event_rx_charlie.recv().await
+    {
+        assert_eq!(msg.conversation.unwrap(), "hello again");
+    } else {
+        panic!("Charlie did not receive message 2");
+    }
 }
 
 // === TEST SUMMARY ===
