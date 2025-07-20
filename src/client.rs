@@ -1039,12 +1039,23 @@ impl Client {
         // In test mode, return mock group participants
         if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
             // For test mode, assume the group has all three test clients as participants
-            let participants = vec![
+            let all_participants = vec![
                 "alice.1@lid".parse()?,
                 "bob.1@lid".parse()?,
                 "charlie.1@lid".parse()?,
             ];
-            return Ok(participants);
+            
+            // Filter out the current client from participants (don't encrypt for yourself)
+            let own_jid = self.get_jid().await;
+            if let Some(own_jid) = own_jid {
+                let filtered_participants: Vec<_> = all_participants
+                    .into_iter()
+                    .filter(|p| *p != own_jid)
+                    .collect();
+                return Ok(filtered_participants);
+            } else {
+                return Ok(all_participants);
+            }
         }
 
         use crate::binary::node::{Node, NodeContent};

@@ -128,6 +128,44 @@ impl TestHarness {
     }
 }
 
+/// Helper to establish Signal protocol sessions between all participants for group messaging
+async fn establish_all_signal_sessions(harness: &TestHarness) {
+    use log::info;
+    
+    info!("Establishing Signal protocol sessions between all participants...");
+    
+    // Get client info
+    let client_a_jid = harness.client_a.get_jid().await.unwrap();
+    let client_b_jid = harness.client_b.get_jid().await.unwrap();
+    let client_c_jid = harness.client_c.get_jid().await.unwrap();
+    
+    // Get prekey bundles
+    let bundle_a = get_bundle_for_client(&harness.client_a).await;
+    let bundle_b = get_bundle_for_client(&harness.client_b).await;
+    let bundle_c = get_bundle_for_client(&harness.client_c).await;
+    
+    // For group messaging, Alice needs sessions with Bob and Charlie to encrypt SKDMs
+    // Bob and Charlie need sessions with Alice to encrypt their own messages
+    // Each participant needs sessions with others to decrypt their messages
+    
+    // Alice establishes sessions with Bob and Charlie
+    let device_a_store = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+    
+    let client_b_address = SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
+    let mut session_record_b = device_a_store.load_session(&client_b_address).await.unwrap();
+    let builder_b = SessionBuilder::new(device_a_store.clone(), client_b_address.clone());
+    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
+    device_a_store.store_session(&client_b_address, &session_record_b).await.unwrap();
+    
+    let client_c_address = SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
+    let mut session_record_c = device_a_store.load_session(&client_c_address).await.unwrap();
+    let builder_c = SessionBuilder::new(device_a_store.clone(), client_c_address.clone());
+    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
+    device_a_store.store_session(&client_c_address, &session_record_c).await.unwrap();
+    
+    info!("Alice established sessions with Bob and Charlie");
+}
+
 /// Helper to set up a single client instance for tests.
 async fn setup_test_client(jid_str: &str) -> (Arc<Client>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
@@ -221,6 +259,9 @@ async fn test_full_group_conversation_loop() {
     let mut rx_b = harness.client_b.subscribe_to_all_events();
     let mut rx_c = harness.client_c.subscribe_to_all_events();
 
+    // Establish Signal protocol sessions between all participants first
+    establish_all_signal_sessions(&harness).await;
+
     info!("(1) Alice sends first message to Bob and Charlie");
     let msg1 = "Hello from Alice!";
     harness
@@ -295,6 +336,9 @@ async fn test_group_rekey_on_participant_add() {
     let group_jid: Jid = "rekey_test_group@g.us".parse().unwrap();
     let mut rx_b = harness.client_b.subscribe_to_all_events();
     let mut rx_c = harness.client_c.subscribe_to_all_events();
+
+    // Establish Signal protocol sessions between all participants first
+    establish_all_signal_sessions(&harness).await;
 
     info!("(1) Alice and Bob start a group conversation.");
     harness
@@ -392,31 +436,8 @@ async fn test_two_pass_message_processing() {
     let mut rx_b = harness.client_b.subscribe_to_all_events();
     let mut rx_c = harness.client_c.subscribe_to_all_events();
 
-    // Manually establish sessions from Alice to Bob and Charlie (like the DM test)
-    info!("Establishing Signal sessions between participants");
-    
-    let bundle_b = get_bundle_for_client(&harness.client_b).await;
-    let bundle_c = get_bundle_for_client(&harness.client_c).await;
-    
-    let client_a_jid = harness.client_a.get_jid().await.unwrap();
-    let client_b_jid = harness.client_b.get_jid().await.unwrap();
-    let client_c_jid = harness.client_c.get_jid().await.unwrap();
-    
-    let client_b_address = SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
-    let client_c_address = SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
-    
-    // Alice establishes sessions with Bob and Charlie
-    let device_a_store = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
-    
-    let mut session_record_b = device_a_store.load_session(&client_b_address).await.unwrap();
-    let builder_b = SessionBuilder::new(device_a_store.clone(), client_b_address.clone());
-    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
-    device_a_store.store_session(&client_b_address, &session_record_b).await.unwrap();
-    
-    let mut session_record_c = device_a_store.load_session(&client_c_address).await.unwrap();
-    let builder_c = SessionBuilder::new(device_a_store.clone(), client_c_address.clone());
-    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
-    device_a_store.store_session(&client_c_address, &session_record_c).await.unwrap();
+    // Establish Signal protocol sessions between all participants
+    establish_all_signal_sessions(&harness).await;
     
     info!("Sessions established. Now sending group message.");
     
@@ -430,7 +451,8 @@ async fn test_two_pass_message_processing() {
 
     info!("Group message sent. Waiting for recipients to receive and decrypt.");
 
-    // Bob and Charlie should receive and decrypt the message  
+    // Bob and Charlie should receive and decrypt the message
+    let client_a_jid = harness.client_a.get_jid().await.unwrap();
     let (msg_b, info_b) = expect_message(&mut rx_b).await;
     let (msg_c, info_c) = expect_message(&mut rx_c).await;
     
