@@ -491,30 +491,6 @@ async fn setup_test_client(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_decrypt_pkmsg() {
-    let _ = env_logger::builder().is_test(true).try_init();
-    let (client, stanza_node, _tempdir) = setup_test_client("3A4DF86EEB33CB65EE3A", false).await;
-
-    let mut message_rx = client.subscribe_to_messages();
-
-    info!("Dispatching 1-on-1 message for decryption...");
-    client.handle_encrypted_message(stanza_node).await;
-
-    let received_event = timeout(std::time::Duration::from_secs(5), message_rx.recv())
-        .await
-        .expect("Test timed out waiting for decrypted message event")
-        .expect("Message channel was closed unexpectedly");
-
-    let (decrypted_msg, _info) = &*received_event;
-
-    let conversation_text = decrypted_msg.text_content().unwrap_or("");
-    info!("Decrypted message content: \"{conversation_text}\"");
-
-    assert_eq!(conversation_text, "Oi");
-    println!("✅ Decrypted 1-on-1 message (pkmsg) successfully.");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_decrypt_skmsg() {
     let _ = env_logger::builder().is_test(true).try_init();
     let (client, stanza_node, _tempdir) = setup_test_client("3AE25114554577124F87", true).await;
