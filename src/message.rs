@@ -63,11 +63,11 @@ impl Client {
 
         // Collect all encryption nodes that need processing
         let mut all_enc_nodes = Vec::new();
-        
+
         // First, get direct enc children
         let direct_enc_nodes = node.get_children_by_tag("enc");
         all_enc_nodes.extend(direct_enc_nodes);
-        
+
         // Next, look for enc nodes under participants/to structure
         let participants = node.get_optional_child_by_tag(&["participants"]);
         if let Some(participants_node) = participants {
@@ -75,7 +75,7 @@ impl Client {
             for to_node in to_nodes {
                 let to_jid = to_node.attrs().string("jid");
                 let own_jid = self.get_jid().await;
-                
+
                 // Only process enc nodes for this device/jid
                 if let Some(our_jid) = own_jid {
                     if to_jid == our_jid.to_string() {
@@ -85,16 +85,16 @@ impl Client {
                 }
             }
         }
-        
+
         if all_enc_nodes.is_empty() {
             log::warn!("Received message without <enc> child: {}", node.tag);
             return;
         }
 
         // Separate enc nodes into two categories for two-pass processing
-        let mut session_enc_nodes = Vec::new();  // pkmsg and msg - for session establishment
-        let mut group_content_enc_nodes = Vec::new();  // skmsg - for group message content
-        
+        let mut session_enc_nodes = Vec::new(); // pkmsg and msg - for session establishment
+        let mut group_content_enc_nodes = Vec::new(); // skmsg - for group message content
+
         for enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
             match enc_type.as_str() {
@@ -108,15 +108,25 @@ impl Client {
 
         // PASS 1: Process session establishment messages (pkmsg/msg) first
         // This ensures SenderKeyDistributionMessages are processed before group content
-        log::debug!("Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)", session_enc_nodes.len());
+        log::debug!(
+            "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
+            session_enc_nodes.len()
+        );
         for enc_node in session_enc_nodes {
-            self.clone().process_enc_node(enc_node, &info, &message_key).await;
+            self.clone()
+                .process_enc_node(enc_node, &info, &message_key)
+                .await;
         }
-        
+
         // PASS 2: Process group content messages (skmsg) after session establishment
-        log::debug!("Starting PASS 2: Processing {} group content messages (skmsg)", group_content_enc_nodes.len());
+        log::debug!(
+            "Starting PASS 2: Processing {} group content messages (skmsg)",
+            group_content_enc_nodes.len()
+        );
         for enc_node in group_content_enc_nodes {
-            self.clone().process_enc_node(enc_node, &info, &message_key).await;
+            self.clone()
+                .process_enc_node(enc_node, &info, &message_key)
+                .await;
         }
     }
 
@@ -145,7 +155,7 @@ impl Client {
 
         let result = match enc_type.as_str() {
             "pkmsg" | "msg" => {
-                self.decrypt_dm_ciphertext(&info, &enc_type, &ciphertext)
+                self.decrypt_dm_ciphertext(info, &enc_type, &ciphertext)
                     .await
             }
             "skmsg" => {
@@ -168,9 +178,8 @@ impl Client {
                         );
                         let device_store_for_group =
                             self.persistence_manager.get_device_arc().await;
-                        let device_store_wrapper = crate::store::signal::DeviceStore::new(
-                            device_store_for_group.clone(),
-                        );
+                        let device_store_wrapper =
+                            crate::store::signal::DeviceStore::new(device_store_for_group.clone());
                         let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
                             device_store_wrapper.clone(),
                         );
@@ -191,25 +200,18 @@ impl Client {
         };
 
         match result {
-            Ok(padded_plaintext) => {
-                let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        log::error!("Failed to unpad message: {e}");
-                        // Mark as processed even if unpadding failed
-                        self.mark_message_as_processed(message_key.clone()).await;
-                        return;
-                    }
-                };
+            Ok(plaintext) => {
+                // The decryption functions in `cbc::decrypt` already handle the unpadding.
+                // Calling unpad again is incorrect and causes failures.
 
                 log::info!(
-                    "Successfully decrypted and unpadded message from {}: {} bytes (type: {})",
+                    "Successfully decrypted message from {}: {} bytes (type: {})",
                     info.source.sender,
                     plaintext.len(),
                     enc_type
                 );
 
-                match wa::Message::decode(plaintext) {
+                match wa::Message::decode(plaintext.as_slice()) {
                     Ok(original_msg) => {
                         let mut msg_ref: &wa::Message = &original_msg;
                         if let Some(dsm) = original_msg.device_sent_message.as_ref()
@@ -276,9 +278,7 @@ impl Client {
                         }
                     }
                     Err(e) => {
-                        log::warn!(
-                            "Failed to unmarshal decrypted plaintext into wa::Message: {e}"
-                        );
+                        log::warn!("Failed to unmarshal decrypted plaintext into wa::Message: {e}");
                     }
                 }
 

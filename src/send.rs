@@ -5,15 +5,14 @@ use crate::signal::session::SessionBuilder;
 use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
 use crate::types::jid::Jid;
-use wacore::client::MessageUtils;
+use log::{debug, info};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
-use log::{debug, info};
 
 impl Client {
     /// Sends a text message to the given JID.
     pub async fn send_text_message(&self, to: Jid, text: &str) -> Result<(), anyhow::Error> {
-        debug!("send_text_message: Sending '{}' to {}", text, to);
+        debug!("send_text_message: Sending '{text}' to {to}");
         let content = wa::Message {
             conversation: Some(text.to_string()),
             ..Default::default()
@@ -60,7 +59,7 @@ impl Client {
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
 
-        let padded_message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+        let message_plaintext = message.encode_to_vec();
         let dsm = wa::Message {
             device_sent_message: Some(Box::new(DeviceSentMessage {
                 destination_jid: Some(to.to_string()),
@@ -69,7 +68,7 @@ impl Client {
             })),
             ..Default::default()
         };
-        let padded_dsm_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
+        let dsm_plaintext = dsm.encode_to_vec();
 
         let participants = vec![to.clone(), own_jid.clone()];
         let all_devices = self.get_user_devices(&participants).await?;
@@ -95,9 +94,9 @@ impl Client {
             let is_own_device =
                 device_jid.user == own_jid.user && device_jid.device != own_jid.device;
             let plaintext_to_encrypt = if is_own_device {
-                &padded_dsm_plaintext
+                &dsm_plaintext
             } else {
-                &padded_message_plaintext
+                &message_plaintext
             };
 
             let signal_address =
@@ -247,7 +246,10 @@ impl Client {
             content: Some(NodeContent::Nodes(message_content_nodes)),
         };
 
-        info!("send_dm_message: About to call send_node with stanza. Test mode: {}", self.test_mode.load(std::sync::atomic::Ordering::Relaxed));
+        info!(
+            "send_dm_message: About to call send_node with stanza. Test mode: {}",
+            self.test_mode.load(std::sync::atomic::Ordering::Relaxed)
+        );
         self.send_node(stanza).await.map_err(|e| e.into())
     }
 
@@ -261,7 +263,7 @@ impl Client {
         use crate::binary::node::{Node, NodeContent};
         use prost::Message as ProtoMessage;
 
-        let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+        let plaintext = message.encode_to_vec();
 
         // Only encrypt for the one target device.
         let device_store = self.persistence_manager.get_device_arc().await;

@@ -6,7 +6,7 @@ use tokio::time::{Duration, timeout};
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 use whatsapp_rust::store::signal::DeviceStore;
-use whatsapp_rust::test_network::{TestNetworkBus, TestMessage};
+use whatsapp_rust::test_network::{TestMessage, TestNetworkBus};
 
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::types::events::Event;
@@ -79,12 +79,18 @@ impl TestHarness {
 
     async fn route_message(message: TestMessage, clients: &[(Jid, Arc<Client>)]) {
         use log::debug;
-        
-        debug!("Routing message from {} to recipients: {}", message.from, message.node);
-        
+
+        debug!(
+            "Routing message from {} to recipients: {}",
+            message.from, message.node
+        );
+
         // For group messages, route to all clients except sender
         // For direct messages, route only to the specific recipient
-        let is_group_message = message.node.attrs.get("to")
+        let is_group_message = message
+            .node
+            .attrs
+            .get("to")
             .map(|to| to.contains("@g.us"))
             .unwrap_or(false);
 
@@ -103,23 +109,32 @@ impl TestHarness {
                 }
             }
 
-            debug!("Delivering message to client: {}", client_jid);
+            debug!("Delivering message to client: {client_jid}");
             // Process the message on the recipient client
             let mut node_clone = message.node.clone();
-            
+
             // Add sender information to the message for proper source parsing
             // In real WhatsApp, this would be added by the server
-            let to_jid_str = message.node.attrs.get("to").unwrap_or(&"".to_string()).clone();
-            
+            let to_jid_str = message
+                .node
+                .attrs
+                .get("to")
+                .unwrap_or(&"".to_string())
+                .clone();
+
             if is_group_message {
                 // For group messages, 'from' should be the group JID and 'participant' should be the sender
                 node_clone.attrs.insert("from".to_string(), to_jid_str);
-                node_clone.attrs.insert("participant".to_string(), message.from.to_string());
+                node_clone
+                    .attrs
+                    .insert("participant".to_string(), message.from.to_string());
             } else {
                 // For DM messages, 'from' should be the sender
-                node_clone.attrs.insert("from".to_string(), message.from.to_string());
+                node_clone
+                    .attrs
+                    .insert("from".to_string(), message.from.to_string());
             }
-            
+
             let client_clone = client.clone();
             tokio::spawn(async move {
                 client_clone.handle_encrypted_message(node_clone).await;
@@ -131,34 +146,55 @@ impl TestHarness {
 /// Helper to establish Signal protocol sessions between all participants for group messaging  
 async fn establish_all_signal_sessions(harness: &TestHarness) {
     use log::info;
-    
+
     info!("Establishing Signal protocol sessions between all participants...");
-    
+
     // Use the same approach as the working DM test
     let bundle_b = get_bundle_for_client(&harness.client_b).await;
     let bundle_c = get_bundle_for_client(&harness.client_c).await;
-    
+
     let client_b_jid = harness.client_b.get_jid().await.unwrap();
     let client_c_jid = harness.client_c.get_jid().await.unwrap();
-    
-    let client_b_address = SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
-    let client_c_address = SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
-    
+
+    let client_b_address =
+        SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
+    let client_c_address =
+        SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
+
     // Alice establishes sessions with Bob and Charlie (exactly like the DM test)
-    let device_a_store_signal = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
-    
+    let device_a_store_signal =
+        DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+
     // Alice -> Bob session (same as DM test)
-    let mut session_record_b = device_a_store_signal.load_session(&client_b_address).await.unwrap();
+    let mut session_record_b = device_a_store_signal
+        .load_session(&client_b_address)
+        .await
+        .unwrap();
     let builder_b = SessionBuilder::new(device_a_store_signal.clone(), client_b_address.clone());
-    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
-    device_a_store_signal.store_session(&client_b_address, &session_record_b).await.unwrap();
-    
-    // Alice -> Charlie session (same pattern as DM test)  
-    let mut session_record_c = device_a_store_signal.load_session(&client_c_address).await.unwrap();
+    builder_b
+        .process_bundle(&mut session_record_b, &bundle_b)
+        .await
+        .unwrap();
+    device_a_store_signal
+        .store_session(&client_b_address, &session_record_b)
+        .await
+        .unwrap();
+
+    // Alice -> Charlie session (same pattern as DM test)
+    let mut session_record_c = device_a_store_signal
+        .load_session(&client_c_address)
+        .await
+        .unwrap();
     let builder_c = SessionBuilder::new(device_a_store_signal.clone(), client_c_address.clone());
-    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
-    device_a_store_signal.store_session(&client_c_address, &session_record_c).await.unwrap();
-    
+    builder_c
+        .process_bundle(&mut session_record_c, &bundle_c)
+        .await
+        .unwrap();
+    device_a_store_signal
+        .store_session(&client_c_address, &session_record_c)
+        .await
+        .unwrap();
+
     info!("Alice established sessions with Bob and Charlie using DM test pattern");
 }
 
@@ -238,7 +274,7 @@ async fn expect_message(
     if let Event::Message(msg, info) = event {
         (msg, info)
     } else {
-        panic!("Expected Event::Message, but got {:?}", event);
+        panic!("Expected Event::Message, but got {event:?}");
     }
 }
 
@@ -434,9 +470,9 @@ async fn test_two_pass_message_processing() {
 
     // Establish Signal protocol sessions between all participants
     establish_all_signal_sessions(&harness).await;
-    
+
     info!("Sessions established. Now sending group message.");
-    
+
     // Send a group message from Alice
     let msg = "Hello group with proper sessions!";
     harness
@@ -451,7 +487,7 @@ async fn test_two_pass_message_processing() {
     let client_a_jid = harness.client_a.get_jid().await.unwrap();
     let (msg_b, info_b) = expect_message(&mut rx_b).await;
     let (msg_c, info_c) = expect_message(&mut rx_c).await;
-    
+
     assert_eq!(msg_b.conversation.unwrap(), msg);
     assert_eq!(msg_c.conversation.unwrap(), msg);
     assert_eq!(info_b.source.sender, client_a_jid);
@@ -478,9 +514,12 @@ async fn debug_message_structure() {
     let client = Arc::new(Client::new(pm.clone()).await);
 
     let jid: Jid = "alice.1@lid".parse().unwrap();
-    pm.process_command(DeviceCommand::SetId(Some(jid.clone()))).await;
-    pm.process_command(DeviceCommand::SetLid(Some(jid.clone()))).await;
-    pm.process_command(DeviceCommand::SetPushName("alice".to_string())).await;
+    pm.process_command(DeviceCommand::SetId(Some(jid.clone())))
+        .await;
+    pm.process_command(DeviceCommand::SetLid(Some(jid.clone())))
+        .await;
+    pm.process_command(DeviceCommand::SetPushName("alice".to_string()))
+        .await;
 
     // Generate and store pre-keys for session establishment
     let device_store = pm.get_device_arc().await;
@@ -498,16 +537,16 @@ async fn debug_message_structure() {
 
     // Try to send a message and capture the actual node being sent
     let target_jid: Jid = "bob.1@lid".parse().unwrap();
-    
+
     info!("=== Attempting to send message ===");
-    
+
     // Start a task to capture the message
     let capture_task = tokio::spawn(async move {
         if let Some(test_message) = receiver.recv().await {
             info!("📨 Captured message node: {}", test_message.node);
             info!("   From: {}", test_message.from);
             info!("   To: {:?}", test_message.to);
-            
+
             // Check for enc children
             let enc_children = test_message.node.get_children_by_tag("enc");
             info!("   Enc children count: {}", enc_children.len());
@@ -516,14 +555,16 @@ async fn debug_message_structure() {
             }
         }
     });
-    
+
     match client.send_text_message(target_jid, "Test message").await {
         Ok(()) => info!("✅ Message sent successfully"),
-        Err(e) => info!("❌ Message failed: {}", e),
+        Err(e) => info!("❌ Message failed: {e}"),
     }
-    
+
     // Wait for message capture
-    tokio::time::timeout(Duration::from_secs(2), capture_task).await.ok();
-    
+    tokio::time::timeout(Duration::from_secs(2), capture_task)
+        .await
+        .ok();
+
     info!("=== Test completed ===");
 }

@@ -1,7 +1,7 @@
 use crate::binary::node::Node;
 use crate::types::jid::Jid;
-use tokio::sync::mpsc;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Message sent over the test network bus
 #[derive(Debug, Clone)]
