@@ -35,9 +35,9 @@ struct TestHarness {
 
 impl TestHarness {
     async fn new() -> Self {
-        let (client_a, _temp_dir_a) = setup_test_client("alice.1@lid").await;
-        let (client_b, _temp_dir_b) = setup_test_client("bob.1@lid").await;
-        let (client_c, _temp_dir_c) = setup_test_client("charlie.1@lid").await;
+        let (client_a, _temp_dir_a) = setup_test_client_with_prekey_id("alice.1@lid", 1).await;
+        let (client_b, _temp_dir_b) = setup_test_client_with_prekey_id("bob.1@lid", 2).await;
+        let (client_c, _temp_dir_c) = setup_test_client_with_prekey_id("charlie.1@lid", 3).await;
 
         // Create test network bus
         let network_bus = TestNetworkBus::new();
@@ -149,57 +149,134 @@ async fn establish_all_signal_sessions(harness: &TestHarness) {
 
     info!("Establishing Signal protocol sessions between all participants...");
 
-    // Use the same approach as the working DM test
+    // Get bundles for all participants
+    let bundle_a = get_bundle_for_client(&harness.client_a).await;
     let bundle_b = get_bundle_for_client(&harness.client_b).await;
     let bundle_c = get_bundle_for_client(&harness.client_c).await;
 
+    let client_a_jid = harness.client_a.get_jid().await.unwrap();
     let client_b_jid = harness.client_b.get_jid().await.unwrap();
     let client_c_jid = harness.client_c.get_jid().await.unwrap();
 
+    let client_a_address =
+        SignalAddress::new(client_a_jid.user.clone(), client_a_jid.device as u32);
     let client_b_address =
         SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
     let client_c_address =
         SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
 
-    // Alice establishes sessions with Bob and Charlie (exactly like the DM test)
+    // Get device stores for all participants
     let device_a_store_signal =
         DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+    let device_b_store_signal =
+        DeviceStore::new(harness.client_b.persistence_manager.get_device_arc().await);
+    let device_c_store_signal =
+        DeviceStore::new(harness.client_c.persistence_manager.get_device_arc().await);
 
-    // Alice -> Bob session (same as DM test)
-    let mut session_record_b = device_a_store_signal
+    // Establish all bidirectional sessions:
+    
+    // Alice -> Bob session
+    let mut session_record_ab = device_a_store_signal
         .load_session(&client_b_address)
         .await
         .unwrap();
-    let builder_b = SessionBuilder::new(device_a_store_signal.clone(), client_b_address.clone());
-    builder_b
-        .process_bundle(&mut session_record_b, &bundle_b)
+    let builder_ab = SessionBuilder::new(device_a_store_signal.clone(), client_b_address.clone());
+    builder_ab
+        .process_bundle(&mut session_record_ab, &bundle_b)
         .await
         .unwrap();
     device_a_store_signal
-        .store_session(&client_b_address, &session_record_b)
+        .store_session(&client_b_address, &session_record_ab)
         .await
         .unwrap();
 
-    // Alice -> Charlie session (same pattern as DM test)
-    let mut session_record_c = device_a_store_signal
+    // Alice -> Charlie session
+    let mut session_record_ac = device_a_store_signal
         .load_session(&client_c_address)
         .await
         .unwrap();
-    let builder_c = SessionBuilder::new(device_a_store_signal.clone(), client_c_address.clone());
-    builder_c
-        .process_bundle(&mut session_record_c, &bundle_c)
+    let builder_ac = SessionBuilder::new(device_a_store_signal.clone(), client_c_address.clone());
+    builder_ac
+        .process_bundle(&mut session_record_ac, &bundle_c)
         .await
         .unwrap();
     device_a_store_signal
-        .store_session(&client_c_address, &session_record_c)
+        .store_session(&client_c_address, &session_record_ac)
+        .await
+        .unwrap();
+
+    // Bob -> Alice session
+    let mut session_record_ba = device_b_store_signal
+        .load_session(&client_a_address)
+        .await
+        .unwrap();
+    let builder_ba = SessionBuilder::new(device_b_store_signal.clone(), client_a_address.clone());
+    builder_ba
+        .process_bundle(&mut session_record_ba, &bundle_a)
+        .await
+        .unwrap();
+    device_b_store_signal
+        .store_session(&client_a_address, &session_record_ba)
+        .await
+        .unwrap();
+
+    // Bob -> Charlie session
+    let mut session_record_bc = device_b_store_signal
+        .load_session(&client_c_address)
+        .await
+        .unwrap();
+    let builder_bc = SessionBuilder::new(device_b_store_signal.clone(), client_c_address.clone());
+    builder_bc
+        .process_bundle(&mut session_record_bc, &bundle_c)
+        .await
+        .unwrap();
+    device_b_store_signal
+        .store_session(&client_c_address, &session_record_bc)
+        .await
+        .unwrap();
+
+    // Charlie -> Alice session
+    let mut session_record_ca = device_c_store_signal
+        .load_session(&client_a_address)
+        .await
+        .unwrap();
+    let builder_ca = SessionBuilder::new(device_c_store_signal.clone(), client_a_address.clone());
+    builder_ca
+        .process_bundle(&mut session_record_ca, &bundle_a)
+        .await
+        .unwrap();
+    device_c_store_signal
+        .store_session(&client_a_address, &session_record_ca)
+        .await
+        .unwrap();
+
+    // Charlie -> Bob session
+    let mut session_record_cb = device_c_store_signal
+        .load_session(&client_b_address)
+        .await
+        .unwrap();
+    let builder_cb = SessionBuilder::new(device_c_store_signal.clone(), client_b_address.clone());
+    builder_cb
+        .process_bundle(&mut session_record_cb, &bundle_b)
+        .await
+        .unwrap();
+    device_c_store_signal
+        .store_session(&client_b_address, &session_record_cb)
         .await
         .unwrap();
 
     info!("Alice established sessions with Bob and Charlie using DM test pattern");
+    info!("Bob established sessions with Alice and Charlie");
+    info!("Charlie established sessions with Alice and Bob");
 }
 
 /// Helper to set up a single client instance for tests.
 async fn setup_test_client(jid_str: &str) -> (Arc<Client>, TempDir) {
+    setup_test_client_with_prekey_id(jid_str, 1).await
+}
+
+/// Helper to set up a single client instance for tests with custom prekey ID.
+async fn setup_test_client_with_prekey_id(jid_str: &str, prekey_id: u32) -> (Arc<Client>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let store_path = temp_dir.path().join("store");
     let pm = Arc::new(
@@ -217,13 +294,13 @@ async fn setup_test_client(jid_str: &str) -> (Arc<Client>, TempDir) {
     pm.process_command(DeviceCommand::SetPushName(jid.user.clone()))
         .await;
 
-    // Generate and store pre-keys for session establishment
+    // Generate and store pre-keys for session establishment using unique prekey ID
     let device_store = pm.get_device_arc().await;
-    let mut prekeys = keyhelper::generate_pre_keys(1, 1);
+    let mut prekeys = keyhelper::generate_pre_keys(prekey_id, 1);
     device_store
         .lock()
         .await
-        .store_prekey(1, prekeys.remove(0))
+        .store_prekey(prekey_id, prekeys.remove(0))
         .await
         .unwrap();
 
@@ -235,11 +312,17 @@ async fn get_bundle_for_client(client: &Arc<Client>) -> PreKeyBundle {
     let device_store = client.persistence_manager.get_device_arc().await;
     let device = device_store.lock().await;
 
-    let prekey = device
-        .load_prekey(1)
-        .await
-        .unwrap()
-        .expect("PreKey #1 should exist");
+    // Find the first available prekey (could be ID 1, 2, 3, etc.)
+    let prekey = if let Ok(Some(prekey)) = device.load_prekey(1).await {
+        prekey
+    } else if let Ok(Some(prekey)) = device.load_prekey(2).await {
+        prekey
+    } else if let Ok(Some(prekey)) = device.load_prekey(3).await {
+        prekey
+    } else {
+        panic!("No prekey found for client");
+    };
+
     let signed_prekey = device.signed_pre_key.clone();
     let identity_key_pair = device.get_identity_key_pair().await.unwrap();
     let client_jid = device.id.clone().unwrap();
