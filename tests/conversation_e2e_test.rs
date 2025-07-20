@@ -6,6 +6,7 @@ use tokio::time::{Duration, timeout};
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 use whatsapp_rust::store::signal::DeviceStore;
+use whatsapp_rust::test_network::{TestNetworkBus, TestMessage};
 
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::types::events::Event;
@@ -28,6 +29,8 @@ struct TestHarness {
     _temp_dir_a: TempDir,
     _temp_dir_b: TempDir,
     _temp_dir_c: TempDir,
+    network_bus: TestNetworkBus,
+    _network_task: tokio::task::JoinHandle<()>,
 }
 
 impl TestHarness {
@@ -36,6 +39,32 @@ impl TestHarness {
         let (client_b, _temp_dir_b) = setup_test_client("bob.1@lid").await;
         let (client_c, _temp_dir_c) = setup_test_client("charlie.1@lid").await;
 
+        // Create test network bus
+        let network_bus = TestNetworkBus::new();
+        let network_sender = network_bus.get_sender();
+        let network_receiver = network_bus.get_receiver();
+
+        // Enable test mode for all clients
+        client_a.enable_test_mode(network_sender.clone()).await;
+        client_b.enable_test_mode(network_sender.clone()).await;
+        client_c.enable_test_mode(network_sender.clone()).await;
+
+        // Create a map of clients for routing
+        let clients = vec![
+            (client_a.get_jid().await.unwrap(), client_a.clone()),
+            (client_b.get_jid().await.unwrap(), client_b.clone()),
+            (client_c.get_jid().await.unwrap(), client_c.clone()),
+        ];
+
+        // Start network routing task
+        let network_task = tokio::spawn(async move {
+            let mut receiver = network_receiver.lock().await;
+            while let Some(test_message) = receiver.recv().await {
+                // Route message to appropriate recipients
+                Self::route_message(test_message, &clients).await;
+            }
+        });
+
         Self {
             client_a,
             client_b,
@@ -43,6 +72,58 @@ impl TestHarness {
             _temp_dir_a,
             _temp_dir_b,
             _temp_dir_c,
+            network_bus,
+            _network_task: network_task,
+        }
+    }
+
+    async fn route_message(message: TestMessage, clients: &[(Jid, Arc<Client>)]) {
+        use log::debug;
+        
+        debug!("Routing message from {} to recipients: {}", message.from, message.node);
+        
+        // For group messages, route to all clients except sender
+        // For direct messages, route only to the specific recipient
+        let is_group_message = message.node.attrs.get("to")
+            .map(|to| to.contains("@g.us"))
+            .unwrap_or(false);
+
+        for (client_jid, client) in clients {
+            // Skip sender
+            if *client_jid == message.from {
+                continue;
+            }
+
+            // For direct messages, only send to the specific recipient
+            if !is_group_message {
+                if let Some(ref to_jid) = message.to {
+                    if *client_jid != *to_jid {
+                        continue;
+                    }
+                }
+            }
+
+            debug!("Delivering message to client: {}", client_jid);
+            // Process the message on the recipient client
+            let mut node_clone = message.node.clone();
+            
+            // Add sender information to the message for proper source parsing
+            // In real WhatsApp, this would be added by the server
+            let to_jid_str = message.node.attrs.get("to").unwrap_or(&"".to_string()).clone();
+            
+            if is_group_message {
+                // For group messages, 'from' should be the group JID and 'participant' should be the sender
+                node_clone.attrs.insert("from".to_string(), to_jid_str);
+                node_clone.attrs.insert("participant".to_string(), message.from.to_string());
+            } else {
+                // For DM messages, 'from' should be the sender
+                node_clone.attrs.insert("from".to_string(), message.from.to_string());
+            }
+            
+            let client_clone = client.clone();
+            tokio::spawn(async move {
+                client_clone.handle_encrypted_message(node_clone).await;
+            });
         }
     }
 }
@@ -297,4 +378,72 @@ async fn test_send_receive_message() {
     assert_eq!(info.source.sender, client_a_jid);
 
     info!("✅ test_send_receive_message completed successfully!");
+}
+
+#[tokio::test]
+async fn debug_message_structure() {
+    let _ = env_logger::builder()
+        .is_test(true)
+        .filter_level(log::LevelFilter::Info)
+        .try_init();
+
+    // Set up a single client
+    let temp_dir = TempDir::new().unwrap();
+    let store_path = temp_dir.path().join("store");
+    let pm = Arc::new(
+        PersistenceManager::new(store_path)
+            .await
+            .expect("Failed to create PersistenceManager"),
+    );
+    let client = Arc::new(Client::new(pm.clone()).await);
+
+    let jid: Jid = "alice.1@lid".parse().unwrap();
+    pm.process_command(DeviceCommand::SetId(Some(jid.clone()))).await;
+    pm.process_command(DeviceCommand::SetLid(Some(jid.clone()))).await;
+    pm.process_command(DeviceCommand::SetPushName("alice".to_string())).await;
+
+    // Generate and store pre-keys for session establishment
+    let device_store = pm.get_device_arc().await;
+    let mut prekeys = keyhelper::generate_pre_keys(1, 1);
+    device_store
+        .lock()
+        .await
+        .store_prekey(1, prekeys.remove(0))
+        .await
+        .unwrap();
+
+    // Enable test mode with a receiver we can monitor
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    client.enable_test_mode(sender).await;
+
+    // Try to send a message and capture the actual node being sent
+    let target_jid: Jid = "bob.1@lid".parse().unwrap();
+    
+    info!("=== Attempting to send message ===");
+    
+    // Start a task to capture the message
+    let capture_task = tokio::spawn(async move {
+        if let Some(test_message) = receiver.recv().await {
+            info!("📨 Captured message node: {}", test_message.node);
+            info!("   From: {}", test_message.from);
+            info!("   To: {:?}", test_message.to);
+            
+            // Check for enc children
+            let enc_children = test_message.node.get_children_by_tag("enc");
+            info!("   Enc children count: {}", enc_children.len());
+            for (i, enc_child) in enc_children.iter().enumerate() {
+                info!("   Enc child {}: {:?}", i, enc_child.attrs);
+            }
+        }
+    });
+    
+    match client.send_text_message(target_jid, "Test message").await {
+        Ok(()) => info!("✅ Message sent successfully"),
+        Err(e) => info!("❌ Message failed: {}", e),
+    }
+    
+    // Wait for message capture
+    tokio::time::timeout(Duration::from_secs(2), capture_task).await.ok();
+    
+    info!("=== Test completed ===");
 }

@@ -93,6 +93,10 @@ pub struct Client {
 
     /// In-memory cache for fast duplicate message detection
     pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
+    
+    /// Test mode fields
+    pub(crate) test_mode: Arc<AtomicBool>,
+    pub(crate) test_network_sender: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>>>>,
 }
 
 impl Client {
@@ -150,6 +154,10 @@ impl Client {
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
             processed_messages_cache,
+            
+            // Initialize test mode fields
+            test_mode: Arc::new(AtomicBool::new(false)),
+            test_network_sender: Arc::new(Mutex::new(None)),
         }
     }
     // REMOVED: get_group_participants stub. Use query_group_info instead.
@@ -912,6 +920,13 @@ impl Client {
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
+        // Check if we're in test mode first
+        if self.test_mode.load(Ordering::Relaxed) {
+            debug!(target: "Client/Send", "Using test mode for node: {}", node);
+            return self.send_node_test_mode(node).await;
+        }
+        
+        debug!(target: "Client/Send", "Using normal mode for node: {}", node);
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
             Some(socket) => socket,
@@ -1021,6 +1036,17 @@ impl Client {
         &self,
         jid: &crate::types::jid::Jid,
     ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        // In test mode, return mock group participants
+        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
+            // For test mode, assume the group has all three test clients as participants
+            let participants = vec![
+                "alice.1@lid".parse()?,
+                "bob.1@lid".parse()?,
+                "charlie.1@lid".parse()?,
+            ];
+            return Ok(participants);
+        }
+
         use crate::binary::node::{Node, NodeContent};
         let query_node = Node {
             tag: "query".to_string(),
@@ -1078,6 +1104,13 @@ impl Client {
         &self,
         jids: &[crate::types::jid::Jid],
     ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+        // In test mode, return mock devices without making IQ requests
+        if self.test_mode.load(Ordering::Relaxed) {
+            debug!("get_user_devices: Using test mode, returning mock devices for {:?}", jids);
+            return Ok(jids.to_vec()); // In test mode, assume each JID is its own device
+        }
+
+        debug!("get_user_devices: Using normal mode for {:?}", jids);
         use crate::binary::node::{Node, NodeContent};
         let mut user_nodes = Vec::new();
         for jid in jids {
@@ -1155,5 +1188,43 @@ impl Client {
     pub async fn get_jid(&self) -> Option<crate::types::jid::Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.id.clone()
+    }
+
+    /// Test mode methods
+    pub async fn enable_test_mode(&self, network_sender: tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>) {
+        info!("Enabling test mode for client");
+        self.test_mode.store(true, Ordering::Relaxed);
+        *self.test_network_sender.lock().await = Some(network_sender);
+    }
+
+    async fn send_node_test_mode(&self, node: Node) -> Result<(), ClientError> {
+        use crate::test_network::TestMessage;
+        
+        debug!(target: "Client/TestSend", "Sending node in test mode: {}", node);
+        
+        let sender_guard = self.test_network_sender.lock().await;
+        let sender = match sender_guard.as_ref() {
+            Some(s) => s,
+            None => return Err(ClientError::NotConnected), // No test network configured
+        };
+
+        // Extract target recipient from the node's "to" attribute if it exists
+        let to_jid = node.attrs.get("to")
+            .and_then(|to_str| to_str.parse().ok());
+        
+        // Get our own JID as the sender
+        let from_jid = match self.get_jid().await {
+            Some(jid) => jid,
+            None => return Err(ClientError::NotLoggedIn),
+        };
+
+        let test_message = TestMessage {
+            node,
+            from: from_jid,
+            to: to_jid,
+        };
+
+        sender.send(test_message).map_err(|_| ClientError::NotConnected)?;
+        Ok(())
     }
 }
