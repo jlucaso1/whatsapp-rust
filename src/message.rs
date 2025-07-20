@@ -62,12 +62,35 @@ impl Client {
         }
 
         let enc_nodes = node.get_children_by_tag("enc");
-        if enc_nodes.is_empty() {
+        let mut enc_nodes_to_process = enc_nodes;
+        
+        // If no direct enc children, look for enc nodes under participants/to structure
+        if enc_nodes_to_process.is_empty() {
+            let participants = node.get_optional_child_by_tag(&["participants"]);
+            if let Some(participants_node) = participants {
+                let to_nodes = participants_node.get_children_by_tag("to");
+                for to_node in to_nodes {
+                    let to_jid = to_node.attrs().string("jid");
+                    let own_jid = self.get_jid().await;
+                    
+                    // Only process enc nodes for this device/jid
+                    if let Some(our_jid) = own_jid {
+                        if to_jid == our_jid.to_string() {
+                            let enc_children = to_node.get_children_by_tag("enc");
+                            enc_nodes_to_process = enc_children;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if enc_nodes_to_process.is_empty() {
             log::warn!("Received message without <enc> child: {}", node.tag);
             return;
         }
 
-        for enc_node in enc_nodes {
+        for enc_node in enc_nodes_to_process {
             let ciphertext = match &enc_node.content {
                 Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
                 _ => {
