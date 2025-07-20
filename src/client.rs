@@ -1118,9 +1118,7 @@ impl Client {
     ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
         // In test mode, return mock devices without making IQ requests
         if self.test_mode.load(Ordering::Relaxed) {
-            debug!(
-                "get_user_devices: Using test mode, returning mock devices for {jids:?}"
-            );
+            debug!("get_user_devices: Using test mode, returning mock devices for {jids:?}");
             return Ok(jids.to_vec()); // In test mode, assume each JID is its own device
         }
 

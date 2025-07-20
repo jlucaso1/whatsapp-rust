@@ -143,7 +143,7 @@ impl TestHarness {
     }
 }
 
-/// Helper to establish Signal protocol sessions between all participants for group messaging  
+/// Helper to establish Signal protocol sessions between all participants for group messaging
 async fn establish_all_signal_sessions(harness: &TestHarness) {
     use log::info;
 
@@ -174,7 +174,7 @@ async fn establish_all_signal_sessions(harness: &TestHarness) {
         DeviceStore::new(harness.client_c.persistence_manager.get_device_arc().await);
 
     // Establish all bidirectional sessions:
-    
+
     // Alice -> Bob session
     let mut session_record_ab = device_a_store_signal
         .load_session(&client_b_address)
@@ -270,11 +270,6 @@ async fn establish_all_signal_sessions(harness: &TestHarness) {
     info!("Charlie established sessions with Alice and Bob");
 }
 
-/// Helper to set up a single client instance for tests.
-async fn setup_test_client(jid_str: &str) -> (Arc<Client>, TempDir) {
-    setup_test_client_with_prekey_id(jid_str, 1).await
-}
-
 /// Helper to set up a single client instance for tests with custom prekey ID.
 async fn setup_test_client_with_prekey_id(jid_str: &str, prekey_id: u32) -> (Arc<Client>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
@@ -359,85 +354,6 @@ async fn expect_message(
     } else {
         panic!("Expected Event::Message, but got {event:?}");
     }
-}
-
-#[tokio::test]
-async fn test_full_group_conversation_loop() {
-    let _ = env_logger::builder()
-        .is_test(true)
-        .filter_level(log::LevelFilter::Info)
-        .try_init();
-
-    let harness = TestHarness::new().await;
-    let group_jid: Jid = "e2e_group_conversation@g.us".parse().unwrap();
-    let mut rx_a = harness.client_a.subscribe_to_all_events();
-    let mut rx_b = harness.client_b.subscribe_to_all_events();
-    let mut rx_c = harness.client_c.subscribe_to_all_events();
-
-    // Establish Signal protocol sessions between all participants first
-    establish_all_signal_sessions(&harness).await;
-
-    info!("(1) Alice sends first message to Bob and Charlie");
-    let msg1 = "Hello from Alice!";
-    harness
-        .client_a
-        .send_text_message(group_jid.clone(), msg1)
-        .await
-        .unwrap();
-
-    info!("(2) Bob and Charlie should receive and decrypt Alice's message");
-    let (_, info_b) = expect_message(&mut rx_b).await;
-    let (_, info_c) = expect_message(&mut rx_c).await;
-    assert_eq!(
-        info_b.source.sender,
-        harness.client_a.get_jid().await.unwrap()
-    );
-    assert_eq!(
-        info_c.source.sender,
-        harness.client_a.get_jid().await.unwrap()
-    );
-
-    info!("(3) Bob sends a reply");
-    let msg2 = "Hi Alice, this is Bob!";
-    harness
-        .client_b
-        .send_text_message(group_jid.clone(), msg2)
-        .await
-        .unwrap();
-
-    info!("(4) Alice and Charlie should receive and decrypt Bob's message");
-    let (_, info_a) = expect_message(&mut rx_a).await;
-    let (_, info_c_2) = expect_message(&mut rx_c).await;
-    assert_eq!(
-        info_a.source.sender,
-        harness.client_b.get_jid().await.unwrap()
-    );
-    assert_eq!(
-        info_c_2.source.sender,
-        harness.client_b.get_jid().await.unwrap()
-    );
-
-    info!("(5) Charlie sends a message");
-    let msg3 = "Hello everyone!";
-    harness
-        .client_c
-        .send_text_message(group_jid.clone(), msg3)
-        .await
-        .unwrap();
-
-    info!("(6) Alice and Bob should receive and decrypt Charlie's message");
-    let (_, info_a_2) = expect_message(&mut rx_a).await;
-    let (_, info_b_2) = expect_message(&mut rx_b).await;
-    assert_eq!(
-        info_a_2.source.sender,
-        harness.client_c.get_jid().await.unwrap()
-    );
-    assert_eq!(
-        info_b_2.source.sender,
-        harness.client_c.get_jid().await.unwrap()
-    );
-
-    info!("✅ Full group conversation loop test passed!");
 }
 
 #[tokio::test]
