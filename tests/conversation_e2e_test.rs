@@ -128,42 +128,38 @@ impl TestHarness {
     }
 }
 
-/// Helper to establish Signal protocol sessions between all participants for group messaging
+/// Helper to establish Signal protocol sessions between all participants for group messaging  
 async fn establish_all_signal_sessions(harness: &TestHarness) {
     use log::info;
     
     info!("Establishing Signal protocol sessions between all participants...");
     
-    // Get client info
-    let client_a_jid = harness.client_a.get_jid().await.unwrap();
-    let client_b_jid = harness.client_b.get_jid().await.unwrap();
-    let client_c_jid = harness.client_c.get_jid().await.unwrap();
-    
-    // Get prekey bundles
-    let bundle_a = get_bundle_for_client(&harness.client_a).await;
+    // Use the same approach as the working DM test
     let bundle_b = get_bundle_for_client(&harness.client_b).await;
     let bundle_c = get_bundle_for_client(&harness.client_c).await;
     
-    // For group messaging, Alice needs sessions with Bob and Charlie to encrypt SKDMs
-    // Bob and Charlie need sessions with Alice to encrypt their own messages
-    // Each participant needs sessions with others to decrypt their messages
-    
-    // Alice establishes sessions with Bob and Charlie
-    let device_a_store = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+    let client_b_jid = harness.client_b.get_jid().await.unwrap();
+    let client_c_jid = harness.client_c.get_jid().await.unwrap();
     
     let client_b_address = SignalAddress::new(client_b_jid.user.clone(), client_b_jid.device as u32);
-    let mut session_record_b = device_a_store.load_session(&client_b_address).await.unwrap();
-    let builder_b = SessionBuilder::new(device_a_store.clone(), client_b_address.clone());
-    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
-    device_a_store.store_session(&client_b_address, &session_record_b).await.unwrap();
-    
     let client_c_address = SignalAddress::new(client_c_jid.user.clone(), client_c_jid.device as u32);
-    let mut session_record_c = device_a_store.load_session(&client_c_address).await.unwrap();
-    let builder_c = SessionBuilder::new(device_a_store.clone(), client_c_address.clone());
-    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
-    device_a_store.store_session(&client_c_address, &session_record_c).await.unwrap();
     
-    info!("Alice established sessions with Bob and Charlie");
+    // Alice establishes sessions with Bob and Charlie (exactly like the DM test)
+    let device_a_store_signal = DeviceStore::new(harness.client_a.persistence_manager.get_device_arc().await);
+    
+    // Alice -> Bob session (same as DM test)
+    let mut session_record_b = device_a_store_signal.load_session(&client_b_address).await.unwrap();
+    let builder_b = SessionBuilder::new(device_a_store_signal.clone(), client_b_address.clone());
+    builder_b.process_bundle(&mut session_record_b, &bundle_b).await.unwrap();
+    device_a_store_signal.store_session(&client_b_address, &session_record_b).await.unwrap();
+    
+    // Alice -> Charlie session (same pattern as DM test)  
+    let mut session_record_c = device_a_store_signal.load_session(&client_c_address).await.unwrap();
+    let builder_c = SessionBuilder::new(device_a_store_signal.clone(), client_c_address.clone());
+    builder_c.process_bundle(&mut session_record_c, &bundle_c).await.unwrap();
+    device_a_store_signal.store_session(&client_c_address, &session_record_c).await.unwrap();
+    
+    info!("Alice established sessions with Bob and Charlie using DM test pattern");
 }
 
 /// Helper to set up a single client instance for tests.
