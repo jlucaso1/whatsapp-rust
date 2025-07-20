@@ -61,204 +61,237 @@ impl Client {
             return;
         }
 
-        let enc_nodes = node.get_children_by_tag("enc");
-        let mut enc_nodes_to_process = enc_nodes;
+        // Collect all encryption nodes that need processing
+        let mut all_enc_nodes = Vec::new();
         
-        // If no direct enc children, look for enc nodes under participants/to structure
-        if enc_nodes_to_process.is_empty() {
-            let participants = node.get_optional_child_by_tag(&["participants"]);
-            if let Some(participants_node) = participants {
-                let to_nodes = participants_node.get_children_by_tag("to");
-                for to_node in to_nodes {
-                    let to_jid = to_node.attrs().string("jid");
-                    let own_jid = self.get_jid().await;
-                    
-                    // Only process enc nodes for this device/jid
-                    if let Some(our_jid) = own_jid {
-                        if to_jid == our_jid.to_string() {
-                            let enc_children = to_node.get_children_by_tag("enc");
-                            enc_nodes_to_process = enc_children;
-                            break;
-                        }
+        // First, get direct enc children
+        let direct_enc_nodes = node.get_children_by_tag("enc");
+        all_enc_nodes.extend(direct_enc_nodes);
+        
+        // Next, look for enc nodes under participants/to structure
+        let participants = node.get_optional_child_by_tag(&["participants"]);
+        if let Some(participants_node) = participants {
+            let to_nodes = participants_node.get_children_by_tag("to");
+            for to_node in to_nodes {
+                let to_jid = to_node.attrs().string("jid");
+                let own_jid = self.get_jid().await;
+                
+                // Only process enc nodes for this device/jid
+                if let Some(our_jid) = own_jid {
+                    if to_jid == our_jid.to_string() {
+                        let enc_children = to_node.get_children_by_tag("enc");
+                        all_enc_nodes.extend(enc_children);
                     }
                 }
             }
         }
         
-        if enc_nodes_to_process.is_empty() {
+        if all_enc_nodes.is_empty() {
             log::warn!("Received message without <enc> child: {}", node.tag);
             return;
         }
 
-        for enc_node in enc_nodes_to_process {
-            let ciphertext = match &enc_node.content {
-                Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
-                _ => {
-                    log::warn!("Enc node has no byte content");
-                    continue;
-                }
-            };
-
+        // Separate enc nodes into two categories for two-pass processing
+        let mut session_enc_nodes = Vec::new();  // pkmsg and msg - for session establishment
+        let mut group_content_enc_nodes = Vec::new();  // skmsg - for group message content
+        
+        for enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
-            let enc_version = enc_node
-                .attrs()
-                .optional_string("v")
-                .unwrap_or("2")
-                .parse::<u8>()
-                .unwrap_or(2);
-
-            let result = match enc_type.as_str() {
-                "pkmsg" | "msg" => {
-                    self.decrypt_dm_ciphertext(&info, &enc_type, &ciphertext)
-                        .await
-                }
-                "skmsg" => {
-                    if !info.source.is_group {
-                        log::warn!("Received skmsg in non-group chat, skipping.");
-                        continue;
-                    }
-                    let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
-                        .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
-
-                    match sk_msg_result {
-                        Ok((sk_msg, data_to_verify)) => {
-                            let sender_address = SignalAddress::new(
-                                info.source.sender.user.clone(),
-                                info.source.sender.device as u32,
-                            );
-                            let sender_key_name = SenderKeyName::new(
-                                info.source.chat.to_string(),
-                                sender_address.to_string(),
-                            );
-                            let device_store_for_group =
-                                self.persistence_manager.get_device_arc().await;
-                            let device_store_wrapper = crate::store::signal::DeviceStore::new(
-                                device_store_for_group.clone(),
-                            );
-                            let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
-                                device_store_wrapper.clone(),
-                            );
-                            let cipher =
-                                GroupCipher::new(sender_key_name, device_store_wrapper, builder);
-                            cipher
-                                .decrypt(&sk_msg, data_to_verify)
-                                .await
-                                .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
-                        }
-                        Err(e) => Err(DecryptionError::Crypto(e)),
-                    }
-                }
+            match enc_type.as_str() {
+                "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
+                "skmsg" => group_content_enc_nodes.push(enc_node),
                 _ => {
-                    log::warn!("Unsupported enc type: {enc_type}");
-                    continue;
+                    log::warn!("Unknown enc type: {enc_type}");
                 }
-            };
+            }
+        }
 
-            match result {
-                Ok(padded_plaintext) => {
-                    let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            log::error!("Failed to unpad message: {e}");
-                            // Mark as processed even if unpadding failed
-                            self.mark_message_as_processed(message_key.clone()).await;
-                            continue;
+        // PASS 1: Process session establishment messages (pkmsg/msg) first
+        // This ensures SenderKeyDistributionMessages are processed before group content
+        for enc_node in session_enc_nodes {
+            self.clone().process_enc_node(enc_node, &info, &message_key).await;
+        }
+        
+        // PASS 2: Process group content messages (skmsg) after session establishment
+        for enc_node in group_content_enc_nodes {
+            self.clone().process_enc_node(enc_node, &info, &message_key).await;
+        }
+    }
+
+    /// Process a single encrypted node (common logic for both passes)
+    async fn process_enc_node(
+        self: Arc<Self>,
+        enc_node: &crate::binary::node::Node,
+        info: &MessageInfo,
+        message_key: &RecentMessageKey,
+    ) {
+        let ciphertext = match &enc_node.content {
+            Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+            _ => {
+                log::warn!("Enc node has no byte content");
+                return;
+            }
+        };
+
+        let enc_type = enc_node.attrs().string("type");
+        let enc_version = enc_node
+            .attrs()
+            .optional_string("v")
+            .unwrap_or("2")
+            .parse::<u8>()
+            .unwrap_or(2);
+
+        let result = match enc_type.as_str() {
+            "pkmsg" | "msg" => {
+                self.decrypt_dm_ciphertext(&info, &enc_type, &ciphertext)
+                    .await
+            }
+            "skmsg" => {
+                if !info.source.is_group {
+                    log::warn!("Received skmsg in non-group chat, skipping.");
+                    return;
+                }
+                let sk_msg_result = SenderKeyMessage::deserialize(&ciphertext)
+                    .map_err(|e| anyhow::anyhow!("Failed to decode SenderKeyMessage: {:?}", e));
+
+                match sk_msg_result {
+                    Ok((sk_msg, data_to_verify)) => {
+                        let sender_address = SignalAddress::new(
+                            info.source.sender.user.clone(),
+                            info.source.sender.device as u32,
+                        );
+                        let sender_key_name = SenderKeyName::new(
+                            info.source.chat.to_string(),
+                            sender_address.to_string(),
+                        );
+                        let device_store_for_group =
+                            self.persistence_manager.get_device_arc().await;
+                        let device_store_wrapper = crate::store::signal::DeviceStore::new(
+                            device_store_for_group.clone(),
+                        );
+                        let builder = crate::signal::groups::builder::GroupSessionBuilder::new(
+                            device_store_wrapper.clone(),
+                        );
+                        let cipher =
+                            GroupCipher::new(sender_key_name, device_store_wrapper, builder);
+                        cipher
+                            .decrypt(&sk_msg, data_to_verify)
+                            .await
+                            .map_err(|e| DecryptionError::Crypto(anyhow::anyhow!("{e}")))
+                    }
+                    Err(e) => Err(DecryptionError::Crypto(e)),
+                }
+            }
+            _ => {
+                log::warn!("Unsupported enc type: {enc_type}");
+                return;
+            }
+        };
+
+        match result {
+            Ok(padded_plaintext) => {
+                let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("Failed to unpad message: {e}");
+                        // Mark as processed even if unpadding failed
+                        self.mark_message_as_processed(message_key.clone()).await;
+                        return;
+                    }
+                };
+
+                log::info!(
+                    "Successfully decrypted and unpadded message from {}: {} bytes (type: {})",
+                    info.source.sender,
+                    plaintext.len(),
+                    enc_type
+                );
+
+                match wa::Message::decode(plaintext) {
+                    Ok(original_msg) => {
+                        let mut msg_ref: &wa::Message = &original_msg;
+                        if let Some(dsm) = original_msg.device_sent_message.as_ref()
+                            && let Some(inner) = dsm.message.as_ref()
+                        {
+                            msg_ref = inner;
                         }
-                    };
 
-                    log::info!(
-                        "Successfully decrypted and unpadded message from {}: {} bytes (type: {})",
-                        info.source.sender,
-                        plaintext.len(),
-                        enc_type
-                    );
+                        let mut is_protocol_msg = false;
 
-                    match wa::Message::decode(plaintext) {
-                        Ok(original_msg) => {
-                            let mut msg_ref: &wa::Message = &original_msg;
-                            if let Some(dsm) = original_msg.device_sent_message.as_ref()
-                                && let Some(inner) = dsm.message.as_ref()
+                        if let Some(skdm) = &msg_ref.sender_key_distribution_message {
+                            self.handle_sender_key_distribution_message(
+                                &info.source.chat,
+                                &info.source.sender,
+                                skdm,
+                            )
+                            .await;
+                            is_protocol_msg = true;
+                        }
+
+                        if let Some(protocol_msg) = &msg_ref.protocol_message {
+                            if protocol_msg.r#type()
+                                == wa::message::protocol_message::Type::AppStateSyncKeyShare
                             {
-                                msg_ref = inner;
-                            }
-
-                            let mut is_protocol_msg = false;
-
-                            if let Some(skdm) = &msg_ref.sender_key_distribution_message {
-                                self.handle_sender_key_distribution_message(
-                                    &info.source.chat,
-                                    &info.source.sender,
-                                    skdm,
-                                )
-                                .await;
-                                is_protocol_msg = true;
-                            }
-
-                            if let Some(protocol_msg) = &msg_ref.protocol_message {
-                                if protocol_msg.r#type()
-                                    == wa::message::protocol_message::Type::AppStateSyncKeyShare
+                                if let Some(key_share) =
+                                    protocol_msg.app_state_sync_key_share.as_ref()
                                 {
-                                    if let Some(key_share) =
-                                        protocol_msg.app_state_sync_key_share.as_ref()
-                                    {
-                                        log::info!(
-                                            "Found AppStateSyncKeyShare with {} keys. Storing them now.",
-                                            key_share.keys.len()
-                                        );
-                                        let self_clone = self.clone();
-                                        let key_share_clone = key_share.clone();
-                                        tokio::spawn(async move {
-                                            self_clone
-                                                .handle_app_state_sync_key_share(&key_share_clone)
-                                                .await;
-                                            // Do not re-trigger syncs here. This was causing an infinite loop.
-                                            // The sync that requested the keys will be re-triggered by the
-                                            // server with a new 'dirty' or 'server_sync' notification.
-                                        });
-                                    }
-                                } else {
-                                    log::warn!(
-                                        "Received unhandled protocol message of type: {:?}",
-                                        protocol_msg.r#type()
+                                    log::info!(
+                                        "Found AppStateSyncKeyShare with {} keys. Storing them now.",
+                                        key_share.keys.len()
                                     );
+                                    let self_clone = self.clone();
+                                    let key_share_clone = key_share.clone();
+                                    tokio::spawn(async move {
+                                        self_clone
+                                            .handle_app_state_sync_key_share(&key_share_clone)
+                                            .await;
+                                        // Do not re-trigger syncs here. This was causing an infinite loop.
+                                        // The sync that requested the keys will be re-triggered by the
+                                        // server with a new 'dirty' or 'server_sync' notification.
+                                    });
                                 }
-                                is_protocol_msg = true;
-                            }
-
-                            if !is_protocol_msg {
-                                let base_msg = original_msg.get_base_message();
-                                log::debug!(
-                                    target: "Client/Recv",
-                                    "Decrypted message content: {base_msg:?}"
+                            } else {
+                                log::warn!(
+                                    "Received unhandled protocol message of type: {:?}",
+                                    protocol_msg.r#type()
                                 );
-                                let _ = self
-                                    .dispatch_event(Event::Message(
-                                        Box::new(original_msg),
-                                        info.clone(),
-                                    ))
-                                    .await;
                             }
+                            is_protocol_msg = true;
                         }
-                        Err(e) => {
-                            log::warn!(
-                                "Failed to unmarshal decrypted plaintext into wa::Message: {e}"
+
+                        if !is_protocol_msg {
+                            let base_msg = original_msg.get_base_message();
+                            log::debug!(
+                                target: "Client/Recv",
+                                "Decrypted message content: {base_msg:?}"
                             );
+                            let _ = self
+                                .dispatch_event(Event::Message(
+                                    Box::new(original_msg),
+                                    info.clone(),
+                                ))
+                                .await;
                         }
                     }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to unmarshal decrypted plaintext into wa::Message: {e}"
+                        );
+                    }
+                }
 
-                    // Mark message as processed after successful decryption and handling
-                    self.mark_message_as_processed(message_key.clone()).await;
-                }
-                Err(DecryptionError::Crypto(e)) => {
-                    log::error!(
-                        "Failed to decrypt message (type: {}) from {}: {:?}",
-                        enc_type,
-                        info.source.sender,
-                        e
-                    );
-                    // Mark as processed even if decryption failed to prevent repeated attempts
-                    self.mark_message_as_processed(message_key.clone()).await;
-                }
+                // Mark message as processed after successful decryption and handling
+                self.mark_message_as_processed(message_key.clone()).await;
+            }
+            Err(DecryptionError::Crypto(e)) => {
+                log::error!(
+                    "Failed to decrypt message (type: {}) from {}: {:?}",
+                    enc_type,
+                    info.source.sender,
+                    e
+                );
+                // Mark as processed even if decryption failed to prevent repeated attempts
+                self.mark_message_as_processed(message_key.clone()).await;
             }
         }
     }
