@@ -19,7 +19,9 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
                 let client_clone = client.clone();
                 let dirty_type_clone = dirty_type.clone();
                 tokio::spawn(async move {
-                    appstate_sync::app_state_sync(&client_clone, &dirty_type_clone, false).await;
+                    let is_full_sync = dirty_type_clone == "account_sync";
+                    appstate_sync::app_state_sync(&client_clone, &dirty_type_clone, is_full_sync)
+                        .await;
                 });
             }
             "edge_routing" => {

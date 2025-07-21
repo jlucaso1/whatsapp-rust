@@ -152,7 +152,16 @@ impl SessionStore for FileStore {
         let path = self
             .path_for("sessions")
             .join(Self::sanitize_filename(address));
-        fs::remove_file(path).await.map_err(StoreError::Io)
+        fs::remove_file(path)
+            .await
+            .or_else(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(StoreError::Io)
     }
 
     async fn has_session(&self, address: &str) -> Result<bool> {
