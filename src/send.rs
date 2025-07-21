@@ -6,6 +6,8 @@ use crate::signal::state::session_record::SessionRecord;
 use crate::signal::store::SessionStore;
 use crate::types::jid::Jid;
 use log::{debug, info};
+use wacore::client::MessageUtils;
+
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
@@ -59,7 +61,7 @@ impl Client {
         self.add_recent_message(to.clone(), request_id.clone(), message.clone())
             .await;
 
-        let message_plaintext = message.encode_to_vec();
+        let padded_message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
         let dsm = wa::Message {
             device_sent_message: Some(Box::new(DeviceSentMessage {
                 destination_jid: Some(to.to_string()),
@@ -68,7 +70,7 @@ impl Client {
             })),
             ..Default::default()
         };
-        let dsm_plaintext = dsm.encode_to_vec();
+        let padded_dsm_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
 
         let participants = vec![to.clone(), own_jid.clone()];
         let all_devices = self.get_user_devices(&participants).await?;
@@ -94,9 +96,9 @@ impl Client {
             let is_own_device =
                 device_jid.user == own_jid.user && device_jid.device != own_jid.device;
             let plaintext_to_encrypt = if is_own_device {
-                &dsm_plaintext
+                &padded_dsm_plaintext
             } else {
-                &message_plaintext
+                &padded_message_plaintext
             };
 
             let signal_address =
@@ -263,7 +265,7 @@ impl Client {
         use crate::binary::node::{Node, NodeContent};
         use prost::Message as ProtoMessage;
 
-        let plaintext = message.encode_to_vec();
+        let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
 
         // Only encrypt for the one target device.
         let device_store = self.persistence_manager.get_device_arc().await;
@@ -367,7 +369,8 @@ impl Client {
             }),
             ..Default::default()
         };
-        let distribution_message_bytes = skdm_for_encryption.encode_to_vec();
+        let distribution_message_bytes =
+            MessageUtils::pad_message_v2(skdm_for_encryption.encode_to_vec());
 
         // 3. Encrypt the actual message content with the shared group sender key.
         let group_cipher = GroupCipher::new(
@@ -375,7 +378,7 @@ impl Client {
             device_store_wrapper.clone(),
             group_builder,
         ); // Use device_store
-        let message_plaintext = message.encode_to_vec();
+        let message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
         let sk_msg_ciphertext = group_cipher
             .encrypt(&message_plaintext)
             .await
