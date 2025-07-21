@@ -4,6 +4,7 @@ use crate::signal::store::{SenderKeyStore, SessionStore};
 use crate::types::events::Receipt;
 use crate::types::jid::Jid;
 use log::info;
+use scopeguard;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
 
@@ -24,13 +25,6 @@ impl Client {
         map_guard.insert(key, msg);
     }
 
-    /// Retrieve a message from the recent message cache
-    pub(crate) async fn get_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
-        let key = RecentMessageKey { to, id };
-        let map_guard = self.recent_messages_map.lock().await;
-        map_guard.get(&key).cloned()
-    }
-
     /// Handle retry receipt: clear session and resend original message
     pub(crate) async fn handle_retry_receipt(
         self: &Arc<Self>,
@@ -43,12 +37,35 @@ impl Client {
 
         let message_id = retry_child.attrs().string("id");
 
-        let original_msg = self
-            .get_recent_message(receipt.source.chat.clone(), message_id.clone())
+        // Race-proof: Only allow one retry handler per message_id at a time
+        {
+            let mut pending = self.pending_retries.lock().await;
+            if pending.contains(&message_id) {
+                log::debug!("Ignoring retry for {message_id}: a retry is already in progress.");
+                return Ok(());
+            }
+            pending.insert(message_id.clone());
+        }
+        let _guard = scopeguard::guard((self.clone(), message_id.clone()), |(client, id)| {
+            tokio::spawn(async move {
+                client.pending_retries.lock().await.remove(&id);
+            });
+        });
+
+        // Try to take the message from the cache. If it's not there, it means we've already
+        // processed a retry for this message send, so we can safely ignore this one.
+        let original_msg = match self
+            .take_recent_message(receipt.source.chat.clone(), message_id.clone())
             .await
-            .ok_or_else(|| {
-                anyhow::anyhow!("Could not find message {} in cache for retry", message_id)
-            })?;
+        {
+            Some(msg) => msg,
+            None => {
+                log::debug!(
+                    "Ignoring retry for message {message_id}: already handled or not found in cache."
+                );
+                return Ok(()); // Gracefully exit
+            }
+        };
 
         let participant_jid = receipt.source.sender.clone();
 
