@@ -14,6 +14,7 @@ wacore = { path = "./wacore" }
 waproto = { path = "./waproto" }
 serde = { version = "1.0.188", features = ["derive"] }
 bincode = { version = "2.0.1", features = ["serde"] }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 
 # Time handling
 chrono = { version = "0.4", features = [
