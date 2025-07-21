@@ -87,6 +87,9 @@ pub struct Client {
     pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
     pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
 
+    /// Tracks message IDs currently being retried to prevent race conditions
+    pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
+
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -150,6 +153,7 @@ impl Client {
 
             recent_messages_map: Arc::new(Mutex::new(HashMap::with_capacity(256))),
             recent_messages_list: Arc::new(Mutex::new(VecDeque::with_capacity(256))),
+            pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
@@ -304,6 +308,23 @@ impl Client {
     pub async fn has_message_been_processed(&self, key: &RecentMessageKey) -> bool {
         let cache = self.processed_messages_cache.lock().await;
         cache.contains(key)
+    }
+
+    /// Retrieve and remove a message from the recent message cache (for single-use retry handling)
+    pub(crate) async fn take_recent_message(
+        &self,
+        to: crate::types::jid::Jid,
+        id: String,
+    ) -> Option<wa::Message> {
+        let key = RecentMessageKey { to, id };
+        let mut map_guard = self.recent_messages_map.lock().await;
+        if let Some(msg) = map_guard.remove(&key) {
+            let mut list_guard = self.recent_messages_list.lock().await;
+            list_guard.retain(|k| k != &key);
+            Some(msg)
+        } else {
+            None
+        }
     }
 
     /// Marks a message as processed and adds it to both the in-memory cache and persistent storage

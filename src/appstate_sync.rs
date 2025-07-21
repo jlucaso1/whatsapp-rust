@@ -37,7 +37,13 @@ pub async fn fetch_app_state_patches(
     version: u64,
     is_full_sync: bool,
 ) -> Result<crate::binary::node::Node, crate::request::IqError> {
-    let sync_node = sync::SyncUtils::build_fetch_patches_query(name, version, is_full_sync);
+    // For a full sync, omit the version attribute entirely by passing version=0 and is_full_sync=true.
+    // For incremental syncs, include the version.
+    let sync_node = if is_full_sync {
+        sync::SyncUtils::build_fetch_patches_query(name, 0, true)
+    } else {
+        sync::SyncUtils::build_fetch_patches_query(name, version, false)
+    };
 
     let iq = crate::request::InfoQuery {
         namespace: "w:sync:app:state",
@@ -146,7 +152,21 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                     }
                 }
 
-                let snapshot = None;
+                // Parse the snapshot from the server response, if present, and decode to SyncdSnapshot
+                let snapshot = collection_node
+                    .get_optional_child("snapshot")
+                    .and_then(|node| match &node.content {
+                        Some(crate::binary::node::NodeContent::Bytes(b)) => {
+                            match wa::SyncdSnapshot::decode(b.as_slice()) {
+                                Ok(decoded) => Some(decoded),
+                                Err(e) => {
+                                    log::error!("Failed to decode SyncdSnapshot: {e}");
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    });
 
                 let patch_list = PatchList {
                     name: name.to_string(),

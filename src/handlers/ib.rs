@@ -1,10 +1,9 @@
-use crate::appstate_sync;
 use crate::binary::node::Node;
 use crate::client::Client;
 use log::{info, warn};
 use std::sync::Arc;
 
-pub async fn handle_ib(client: Arc<Client>, node: &Node) {
+pub async fn handle_ib(_client: Arc<Client>, node: &Node) {
     for child in node.children().unwrap_or_default() {
         match child.tag.as_str() {
             "dirty" => {
@@ -13,16 +12,8 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
 
                 info!(
                     target: "Client",
-                    "Received dirty state notification for type: '{dirty_type}'. Triggering App State Sync."
+                    "Received dirty state notification for type: '{dirty_type}'. Awaiting server_sync notification."
                 );
-
-                let client_clone = client.clone();
-                let dirty_type_clone = dirty_type.clone();
-                tokio::spawn(async move {
-                    let is_full_sync = dirty_type_clone == "account_sync";
-                    appstate_sync::app_state_sync(&client_clone, &dirty_type_clone, is_full_sync)
-                        .await;
-                });
             }
             "edge_routing" => {
                 info!(target: "Client", "Received edge routing info, ignoring for now.");
