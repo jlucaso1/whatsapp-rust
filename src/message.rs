@@ -1,7 +1,8 @@
 use crate::binary::node::Node;
 use crate::client::Client;
+use crate::client::RecentMessageKey;
+use crate::error::decryption::DecryptionError;
 use crate::proto_helpers::MessageExt;
-
 use crate::signal::groups::cipher::GroupCipher;
 use crate::signal::groups::message::SenderKeyMessage;
 use crate::signal::sender_key_name::SenderKeyName;
@@ -10,11 +11,23 @@ use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use prost::Message as ProtoMessage;
 use std::sync::Arc;
-
 use waproto::whatsapp::{self as wa, SenderKeyDistributionMessage};
 
-use crate::client::RecentMessageKey;
-use crate::error::decryption::DecryptionError;
+fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
+    if version < 3 {
+        if plaintext.is_empty() {
+            return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
+        }
+        let pad_len = plaintext[plaintext.len() - 1] as usize;
+        if pad_len == 0 || pad_len > plaintext.len() {
+            return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
+        }
+        let (data, _padding) = plaintext.split_at(plaintext.len() - pad_len);
+        Ok(data)
+    } else {
+        Ok(plaintext)
+    }
+}
 
 impl Client {
     pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
@@ -171,9 +184,21 @@ impl Client {
         };
 
         match result {
-            Ok(plaintext) => {
-                // The decryption functions in `cbc::decrypt` already handle the unpadding.
-                // Calling unpad again is incorrect and causes failures.
+            Ok(padded_plaintext) => {
+                let enc_version = enc_node
+                    .attrs()
+                    .optional_string("v")
+                    .unwrap_or("2")
+                    .parse::<u8>()
+                    .unwrap_or(2);
+                let plaintext = match unpad_message_ref(&padded_plaintext, enc_version) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("Failed to unpad message: {e}");
+                        self.mark_message_as_processed(message_key.clone()).await;
+                        return;
+                    }
+                };
 
                 log::info!(
                     "Successfully decrypted message from {}: {} bytes (type: {})",
@@ -182,7 +207,14 @@ impl Client {
                     enc_type
                 );
 
-                match wa::Message::decode(plaintext.as_slice()) {
+                // Debug: print decrypted plaintext as hex and, if possible, as UTF-8
+                log::debug!("Decrypted plaintext (hex): {}", hex::encode(plaintext));
+                match std::str::from_utf8(plaintext) {
+                    Ok(s) => log::debug!("Decrypted plaintext (utf8): {s:?}"),
+                    Err(_) => log::debug!("Decrypted plaintext is not valid UTF-8"),
+                }
+
+                match wa::Message::decode(plaintext) {
                     Ok(original_msg) => {
                         let mut msg_ref: &wa::Message = &original_msg;
                         if let Some(dsm) = original_msg.device_sent_message.as_ref()
@@ -414,6 +446,13 @@ impl Client {
                 return;
             }
         };
+
+        // Debug: print axolotl_bytes length and first 16 bytes as hex
+        log::debug!(
+            "SKDM axolotl_bytes: len={}, first 16 bytes={:02x?}",
+            axolotl_bytes.len(),
+            &axolotl_bytes.iter().take(16).cloned().collect::<Vec<u8>>()
+        );
 
         // The key distribution message is a protobuf, but it might be wrapped with a version byte
         // like other signal messages. We try decoding it raw first, and if that fails,
