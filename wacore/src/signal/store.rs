@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use std::error::Error;
 
 // Using a generic error for now. In a real app, this would be a custom store error enum.
-type StoreError = Box<dyn Error + Send + Sync>;
+pub type StoreError = Box<dyn Error + Send + Sync>;
 
 // Corresponds to state/store/IdentityKeyStore.go
 #[async_trait]
