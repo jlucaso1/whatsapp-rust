@@ -29,5 +29,5 @@ pub mod prekeys;
 pub mod receipt;
 pub mod retry;
 
-// Test utilities  
+// Test utilities
 pub mod test_network;
