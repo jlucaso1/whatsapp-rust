@@ -60,8 +60,10 @@ impl IdentityKeyStore for JsStoreWrapper {
     async fn get_identity_key_pair(
         &self,
     ) -> Result<IdentityKeyPair, Box<dyn std::error::Error + Send + Sync>> {
-        // For now, just generate a new key pair. In production, this would load from JS store
-        Ok(keyhelper::generate_identity_key_pair())
+        // WARNING: This is a stub implementation for testing purposes only.
+        // In production, this method must load the identity key pair from a persistent store.
+        // Using this stub in production will result in security vulnerabilities.
+        panic!("Stub implementation: get_identity_key_pair must not be used in production.");
     }
 
     async fn get_local_registration_id(
