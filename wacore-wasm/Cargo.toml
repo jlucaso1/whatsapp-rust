@@ -13,7 +13,7 @@ wasm-opt = false
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3.3", features = ["wasm_js"] }
 wacore = { path = "../wacore" }
 waproto = { path = "../waproto" }
 serde = { version = "1.0", features = ["derive"] }
@@ -24,9 +24,7 @@ prost = "0.14"
 
 [dependencies.web-sys]
 version = "0.3"
-features = [
-  "console",
-]
+features = ["console"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

@@ -314,15 +314,13 @@ impl WasmSignalRepository {
 
             // Determine ciphertext type and decrypt
             let ciphertext_msg = match message_type {
-                2 => {
-                    Ciphertext::Whisper(SignalMessage::deserialize(&ciphertext_bytes).map_err(
-                        |e| JsValue::from_str(&format!("Invalid whisper message: {e}")),
-                    )?)
-                }
+                2 => Ciphertext::Whisper(
+                    SignalMessage::deserialize(&ciphertext_bytes)
+                        .map_err(|e| JsValue::from_str(&format!("Invalid whisper message: {e}")))?,
+                ),
                 3 => Ciphertext::PreKey(
-                    PreKeySignalMessage::deserialize(&ciphertext_bytes).map_err(|e| {
-                        JsValue::from_str(&format!("Invalid prekey message: {e}"))
-                    })?,
+                    PreKeySignalMessage::deserialize(&ciphertext_bytes)
+                        .map_err(|e| JsValue::from_str(&format!("Invalid prekey message: {e}")))?,
                 ),
                 _ => return Err(JsValue::from_str("Unknown message type")),
             };
@@ -405,9 +403,8 @@ impl WasmSignalRepository {
 
             // Parse sender key message
             let (sender_key_message, data_to_verify) =
-                SenderKeyMessage::deserialize(&ciphertext_bytes).map_err(|e| {
-                    JsValue::from_str(&format!("Invalid sender key message: {e}"))
-                })?;
+                SenderKeyMessage::deserialize(&ciphertext_bytes)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid sender key message: {e}")))?;
 
             // Decrypt the message
             let plaintext = group_cipher
