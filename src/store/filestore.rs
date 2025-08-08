@@ -52,7 +52,6 @@ impl FileStore {
     async fn write_bincode<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
         let data = bincode::serde::encode_to_vec(value, bincode::config::standard())
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        log::debug!("FileStore: Writing {} bytes to {:?}", data.len(), path);
         fs::write(path, data).await.map_err(StoreError::Io)
     }
 
@@ -61,11 +60,6 @@ impl FileStore {
     }
 
     pub async fn save_device_data(&self, device_data: &SerializableDevice) -> Result<()> {
-        log::info!(
-            "FileStore: Saving device data (PushName: '{}') to {:?}",
-            device_data.push_name,
-            self.device_path()
-        );
         self.write_bincode(&self.device_path(), device_data).await
     }
 
@@ -74,20 +68,11 @@ impl FileStore {
             "FileStore: Attempting to load device data from {:?}",
             self.device_path()
         );
-        let result = self
+        
+
+        self
             .read_bincode::<SerializableDevice>(&self.device_path())
-            .await; // Explicit type
-        if let Ok(Some(data)) = &result {
-            log::info!(
-                "FileStore: Loaded device data (PushName: '{}')",
-                data.push_name
-            );
-        } else if let Ok(None) = &result {
-            log::info!("FileStore: No device data found at path.");
-        } else if let Err(e) = &result {
-            log::error!("FileStore: Error loading device data: {e}");
-        }
-        result
+            .await
     }
 }
 
@@ -261,55 +246,36 @@ impl signal::store::SenderKeyStore for FileStore {
 impl signal::store::SignedPreKeyStore for FileStore {
     async fn load_signed_prekey(
         &self,
-        signed_prekey_id: u32,
+        _signed_prekey_id: u32,
     ) -> std::result::Result<Option<SignedPreKeyRecordStructure>, SignalStoreError> {
-        log::debug!(
-            "FileStore: load_signed_prekey({}) - returning None. Signed pre-keys should only be accessed via Device.",
-            signed_prekey_id
-        );
         Ok(None)
     }
 
     async fn load_signed_prekeys(
         &self,
     ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
-        log::debug!(
-            "FileStore: load_signed_prekeys() - returning empty list. Signed pre-keys should only be accessed via Device."
-        );
         Ok(Vec::new())
     }
 
     async fn store_signed_prekey(
         &self,
-        signed_prekey_id: u32,
+        _signed_prekey_id: u32,
         _record: SignedPreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
-        log::warn!(
-            "FileStore: store_signed_prekey({}) - no-op. Signed pre-keys are stored in device.bin only.",
-            signed_prekey_id
-        );
         Ok(())
     }
 
     async fn contains_signed_prekey(
         &self,
-        signed_prekey_id: u32,
+        _signed_prekey_id: u32,
     ) -> std::result::Result<bool, SignalStoreError> {
-        log::debug!(
-            "FileStore: contains_signed_prekey({}) - returning false. Signed pre-keys should only be accessed via Device.",
-            signed_prekey_id
-        );
         Ok(false)
     }
 
     async fn remove_signed_prekey(
         &self,
-        signed_prekey_id: u32,
+        _signed_prekey_id: u32,
     ) -> std::result::Result<(), SignalStoreError> {
-        log::warn!(
-            "FileStore: remove_signed_prekey({}) - no-op. Signed pre-keys are managed via device.bin only.",
-            signed_prekey_id
-        );
         Ok(())
     }
 }
