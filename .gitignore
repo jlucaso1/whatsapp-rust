@@ -3,3 +3,12 @@
 *.txt
 whatsapp_store
 .cargo
+
+# WASM build artifacts
+wacore-wasm/pkg/
+node_modules/
+
+# IDE files
+.vscode/
+*.swp
+*.swo
