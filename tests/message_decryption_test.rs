@@ -347,7 +347,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
     (client, stanza.into_node())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_decrypt_skmsg() {
     let _ = env_logger::builder().is_test(true).try_init();
     let (client, stanza_node) = setup_test_client("3AE25114554577124F87", true).await;

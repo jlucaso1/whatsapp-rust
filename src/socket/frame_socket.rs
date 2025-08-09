@@ -66,7 +66,7 @@ impl FrameSocket {
         let is_connected_clone = self.is_connected.clone();
         let on_disconnect_clone = self.on_disconnect.clone();
 
-        tokio::spawn(Self::read_pump(
+        tokio::task::spawn_local(Self::read_pump(
             stream,
             frames_tx_clone,
             is_connected_clone,

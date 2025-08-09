@@ -8,6 +8,7 @@ use crate::store::traits::AppStateKeyStore;
 use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
+use log;
 use prost::Message;
 use sha2::Sha256;
 use std::sync::Arc;
@@ -136,7 +137,10 @@ impl Processor {
                         {
                             subtract_macs_for_lthash.push(old_value_mac.clone());
                         } else {
-                            return Err(AppStateError::MissingPreviousSetValue(index_mac_b64));
+                            log::warn!(
+                                "Could not find previous value for REMOVE operation with index MAC {}. This may be a non-fatal inconsistency.",
+                                index_mac_b64
+                            );
                         }
                     }
                 }

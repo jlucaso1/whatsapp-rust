@@ -65,7 +65,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                         .await;
 
                     let client_clone = client.clone();
-                    tokio::spawn(async move {
+                    tokio::task::spawn_local(async move {
                         if let Err(e) = client_clone.send_presence(Presence::Available).await {
                             warn!("Failed to send presence after account_sync update: {e:?}");
                         } else {

@@ -95,7 +95,7 @@ impl PersistenceManager {
 
     pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
         if self.filestore.is_some() {
-            tokio::spawn(async move {
+            tokio::task::spawn_local(async move {
                 loop {
                     tokio::select! {
                         _ = self.save_notify.notified() => {
