@@ -9,11 +9,14 @@ use libsignal_protocol::SenderKeyDistributionMessage;
 use libsignal_protocol::group_decrypt;
 use libsignal_protocol::process_sender_key_distribution_message;
 use libsignal_protocol::{
-    PreKeySignalMessage, ProtocolAddress, SignalMessage, UsePQRatchet, message_decrypt,
+    PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
+    message_decrypt,
 };
+use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use wacore::signal::store::SessionStore as _;
 use wacore::types::jid::Jid;
 use waproto::whatsapp::{self as wa};
 
@@ -210,6 +213,45 @@ impl Client {
                 self.mark_message_as_processed(message_key.clone()).await;
                 Ok(())
             }
+            Err(DecryptionError::NoSenderKeyState) => {
+                warn!(
+                    "No sender key state for message from {}, sending retry receipt.",
+                    info.source.sender
+                );
+                let client_clone = self.clone();
+                let info_clone = info.clone();
+                tokio::spawn(async move {
+                    let signal_address = ProtocolAddress::new(
+                        info_clone.source.sender.user.clone(),
+                        (info_clone.source.sender.device as u32).into(),
+                    );
+
+                    let device_store = client_clone.persistence_manager.get_device_arc().await;
+                    if let Err(e) = device_store
+                        .lock()
+                        .await
+                        .delete_session(&signal_address)
+                        .await
+                    {
+                        warn!(
+                            "Failed to delete session for {} during retry: {}",
+                            &signal_address, e
+                        );
+                    } else {
+                        log::info!(
+                            "Deleted session for {} to force re-establishment on retry.",
+                            &signal_address
+                        );
+                    }
+
+                    if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
+                        log::error!("Failed to send retry receipt: {:?}", e);
+                    }
+                });
+
+                self.mark_message_as_processed(message_key.clone()).await;
+                Ok(())
+            }
             Err(DecryptionError::Crypto(e)) => {
                 log::error!(
                     "Failed to decrypt message (type: {}) from {}: {:?}",
@@ -373,12 +415,16 @@ impl Client {
         group_decrypt(ciphertext, &mut *device_guard, &group_sender_address)
             .await
             .map_err(|e| {
-                log::error!(
-                    "Group decryption failed for sender {}: {:?}",
-                    group_sender_address,
-                    e
-                );
-                DecryptionError::Crypto(anyhow::anyhow!(e))
+                if let SignalProtocolError::NoSenderKeyState = e {
+                    DecryptionError::NoSenderKeyState
+                } else {
+                    log::error!(
+                        "Group decryption failed for sender {}: {:?}",
+                        group_sender_address,
+                        e
+                    );
+                    DecryptionError::Crypto(anyhow::anyhow!(e))
+                }
             })
     }
 

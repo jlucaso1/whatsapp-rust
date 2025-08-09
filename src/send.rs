@@ -4,31 +4,29 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::jid::Jid;
 use libsignal_protocol::{
-    CiphertextMessage, ProtocolAddress, SessionStore as _, UsePQRatchet, message_encrypt,
-    process_prekey_bundle,
+    CiphertextMessage, ProtocolAddress, SessionStore as _, UsePQRatchet,
+    create_sender_key_distribution_message, group_encrypt, message_encrypt, process_prekey_bundle,
 };
 use log::{debug, info};
+use prost::Message as ProtoMessage;
 use rand::TryRngCore as _;
 use wacore::client::MessageUtils;
 
+use wacore::signal::sender_key_name::SenderKeyName;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
 impl Client {
-    /// Sends a text message to the given JID.
     pub async fn send_text_message(&self, to: Jid, text: &str) -> Result<(), anyhow::Error> {
         debug!("send_text_message: Sending '{text}' to {to}");
         let content = wa::Message {
             conversation: Some(text.to_string()),
             ..Default::default()
         };
-        // Generate a new ID for a new message and call the internal implementation.
         let request_id = self.generate_message_id().await;
         self.send_message_impl(to, content, request_id, false).await
     }
 
-    /// Encrypts and sends a protobuf message to the given JID.
-    /// Multi-device compatible: builds <participants> node and syncs to own devices.
     pub async fn send_message_impl(
         &self,
         to: Jid,
@@ -45,7 +43,6 @@ impl Client {
         }
     }
 
-    // Moved from send_message: direct message logic
     async fn send_dm_message(
         &self,
         to: Jid,
@@ -71,6 +68,7 @@ impl Client {
                 message: Some(Box::new(message.clone())),
                 phash: Some("".to_string()),
             })),
+            message_context_info: message.message_context_info.clone(),
             ..Default::default()
         };
         let padded_dsm_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
@@ -97,7 +95,6 @@ impl Client {
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
-            // 1. Check if a usable session already exists.
             let session_record = store_adapter
                 .session_store
                 .load_session(&signal_address)
@@ -113,7 +110,6 @@ impl Client {
                     &signal_address
                 );
 
-                // 2. Fetch the pre-key bundle from the server.
                 let prekey_bundles = self
                     .fetch_pre_keys(std::slice::from_ref(&device_jid))
                     .await?;
@@ -121,8 +117,6 @@ impl Client {
                     anyhow::anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
                 })?;
 
-                // 3. Process the bundle to create and store the session.
-                // This is the key function from libsignal-protocol.
                 process_prekey_bundle(
                     &signal_address,
                     &mut store_adapter.session_store,
@@ -130,7 +124,7 @@ impl Client {
                     bundle,
                     SystemTime::now(),
                     &mut rand::rngs::OsRng.unwrap_err(),
-                    UsePQRatchet::Yes, // Or No, depending on your desired support for post-quantum crypto
+                    UsePQRatchet::Yes,
                 )
                 .await
                 .map_err(|e| {
@@ -164,7 +158,6 @@ impl Client {
                     ("pkmsg", msg.serialized().to_vec())
                 }
                 CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-                // This handles the exhaustiveness error
                 _ => return Err(anyhow::anyhow!("Unexpected encryption message type")),
             };
 
@@ -175,7 +168,7 @@ impl Client {
                     ("type".to_string(), enc_type.to_string()),
                 ]
                 .into(),
-                content: Some(NodeContent::Bytes(serialized_bytes)), // Use the serialized bytes
+                content: Some(NodeContent::Bytes(serialized_bytes)),
             };
 
             participant_nodes.push(Node {
@@ -201,7 +194,6 @@ impl Client {
                     content: Some(NodeContent::Bytes(device_identity_bytes)),
                 });
             } else if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-                // In test mode, skip device identity requirement
                 debug!("Skipping device identity check in test mode");
             } else {
                 return Err(anyhow::anyhow!(
@@ -229,7 +221,6 @@ impl Client {
         self.send_node(stanza).await.map_err(|e| e.into())
     }
 
-    // Peer message logic (for protocol messages like AppStateSyncKeyRequest)
     async fn send_peer_message(
         &self,
         to: Jid,
@@ -241,14 +232,10 @@ impl Client {
 
         let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
 
-        // Only encrypt for the one target device.
         let device_store_arc = self.persistence_manager.get_device_arc().await;
         let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
-        let signal_address = ProtocolAddress::new(
-            to.user.clone(),
-            (to.device as u32).into(), // <-- FIX: Cast to u32
-        );
+        let signal_address = ProtocolAddress::new(to.user.clone(), (to.device as u32).into());
 
         let encrypted_message = message_encrypt(
             &plaintext,
@@ -263,7 +250,6 @@ impl Client {
 
         let (_enc_type, serialized_bytes) = match encrypted_message {
             CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-            // Peer messages should typically not be pkmsgs, but we handle it just in case.
             CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec()),
             _ => return Err(anyhow::anyhow!("Unexpected peer encryption message type")),
         };
@@ -278,7 +264,6 @@ impl Client {
             content: Some(NodeContent::Bytes(serialized_bytes)),
         };
 
-        // Note the `category="peer"` attribute, which is important.
         let stanza = Node {
             tag: "message".to_string(),
             attrs: [
@@ -294,13 +279,232 @@ impl Client {
         self.send_node(stanza).await.map_err(|e| e.into())
     }
 
-    // Group message logic
     async fn send_group_message(
         &self,
-        _to: Jid,
-        _message: wa::Message,
-        _request_id: String,
+        to: Jid,
+        message: wa::Message,
+        request_id: String,
     ) -> Result<(), anyhow::Error> {
-        Err(anyhow::anyhow!("TODO"))
+        use crate::binary::node::{Node, NodeContent};
+
+        self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+            .await;
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        let mut group_info = self.query_group_info(&to).await?;
+
+        let (own_sending_jid, addressing_mode_str) = match group_info.addressing_mode {
+            crate::types::message::AddressingMode::Lid => (
+                device_snapshot.lid.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Cannot send group message: LID is not set but required by group"
+                    )
+                })?,
+                "lid",
+            ),
+            crate::types::message::AddressingMode::Pn => (
+                device_snapshot
+                    .id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Cannot send group message: JID is not set"))?,
+                "pn",
+            ),
+        };
+
+        let own_base_jid = own_sending_jid.to_non_ad();
+        if !group_info
+            .participants
+            .iter()
+            .any(|p| p.user == own_base_jid.user)
+        {
+            group_info.participants.push(own_base_jid);
+        }
+
+        let all_devices = self.get_user_devices(&group_info.participants).await?;
+        let device_store_arc = self.persistence_manager.get_device_arc().await;
+
+        let (skdm_bytes, sender_key_name) = self
+            .create_sender_key_distribution_message_for_group(&to, &own_sending_jid)
+            .await?;
+
+        let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+
+        let skmsg_ciphertext = {
+            let mut device_guard = device_store_arc.lock().await;
+            let group_sender_address =
+                ProtocolAddress::new(sender_key_name.group_id().to_string(), 0.into());
+            let sender_key_message = group_encrypt(
+                &mut *device_guard,
+                &group_sender_address,
+                &padded_plaintext,
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await?;
+
+            sender_key_message.serialized().to_vec()
+        };
+
+        let mut participant_nodes = Vec::new();
+        let mut includes_prekey_message = false;
+
+        let phash = MessageUtils::participant_list_hash(&all_devices);
+
+        let recipient_devices: Vec<_> = all_devices
+            .iter()
+            .filter(|&d| d != &own_sending_jid)
+            .cloned()
+            .collect();
+
+        for device_jid in recipient_devices {
+            let plaintext_to_encrypt = &skdm_bytes;
+
+            let signal_address =
+                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
+            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+
+            let session_record = store_adapter
+                .session_store
+                .load_session(&signal_address)
+                .await?;
+
+            let session_exists = match &session_record {
+                Some(record) => record.has_usable_sender_chain(SystemTime::now())?,
+                None => false,
+            };
+
+            if !session_exists {
+                info!(
+                    "No session for group member {}, establishing new one.",
+                    &signal_address
+                );
+                let prekey_bundles = self
+                    .fetch_pre_keys(std::slice::from_ref(&device_jid))
+                    .await?;
+                let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
+                    anyhow::anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
+                })?;
+                process_prekey_bundle(
+                    &signal_address,
+                    &mut store_adapter.session_store,
+                    &mut store_adapter.identity_store,
+                    bundle,
+                    SystemTime::now(),
+                    &mut rand::rngs::OsRng.unwrap_err(),
+                    UsePQRatchet::Yes,
+                )
+                .await?;
+            }
+
+            let encrypted_payload = message_encrypt(
+                plaintext_to_encrypt,
+                &signal_address,
+                &mut store_adapter.session_store,
+                &mut store_adapter.identity_store,
+                SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await?;
+
+            let (enc_type, serialized_bytes) = match encrypted_payload {
+                CiphertextMessage::PreKeySignalMessage(msg) => {
+                    includes_prekey_message = true;
+                    ("pkmsg", msg.serialized().to_vec())
+                }
+                CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+                _ => continue,
+            };
+
+            let enc_node = Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), enc_type.to_string()),
+                ]
+                .into(),
+                content: Some(NodeContent::Bytes(serialized_bytes)),
+            };
+            participant_nodes.push(Node {
+                tag: "to".to_string(),
+                attrs: [("jid".to_string(), device_jid.to_string())].into(),
+                content: Some(NodeContent::Nodes(vec![enc_node])),
+            });
+        }
+
+        let mut message_content_nodes = vec![
+            Node {
+                tag: "participants".to_string(),
+                attrs: Default::default(),
+                content: Some(NodeContent::Nodes(participant_nodes)),
+            },
+            Node {
+                tag: "enc".to_string(),
+                attrs: [
+                    ("v".to_string(), "2".to_string()),
+                    ("type".to_string(), "skmsg".to_string()),
+                ]
+                .into(),
+                content: Some(NodeContent::Bytes(skmsg_ciphertext)),
+            },
+        ];
+
+        if includes_prekey_message && let Some(account) = &device_snapshot.core.account {
+            message_content_nodes.push(Node {
+                tag: "device-identity".to_string(),
+                attrs: Default::default(),
+                content: Some(NodeContent::Bytes(account.encode_to_vec())),
+            });
+        }
+
+        let stanza = Node {
+            tag: "message".to_string(),
+            attrs: [
+                ("to".to_string(), to.to_string()),
+                ("id".to_string(), request_id),
+                ("type".to_string(), "text".to_string()),
+                ("participant".to_string(), own_sending_jid.to_string()),
+                (
+                    "addressing_mode".to_string(),
+                    addressing_mode_str.to_string(),
+                ),
+                ("phash".to_string(), phash),
+            ]
+            .into(),
+            content: Some(NodeContent::Nodes(message_content_nodes)),
+        };
+
+        self.send_node(stanza).await.map_err(|e| e.into())
+    }
+
+    pub async fn create_sender_key_distribution_message_for_group(
+        &self,
+        group_jid: &Jid,
+        own_lid: &Jid,
+    ) -> Result<(Vec<u8>, SenderKeyName), anyhow::Error> {
+        let device_store_arc = self.persistence_manager.get_device_arc().await;
+        let mut device_guard = device_store_arc.lock().await;
+
+        let sender_address =
+            ProtocolAddress::new(own_lid.user.clone(), u32::from(own_lid.device).into());
+
+        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+
+        let skdm = create_sender_key_distribution_message(
+            &ProtocolAddress::new(sender_key_name.group_id().to_string(), 0.into()),
+            &mut *device_guard,
+            &mut rand::rngs::OsRng.unwrap_err(),
+        )
+        .await?;
+
+        let skdm_wrapper = wa::Message {
+            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
+                group_id: Some(group_jid.to_string()),
+                axolotl_sender_key_distribution_message: Some(skdm.serialized().to_vec()),
+            }),
+            ..Default::default()
+        };
+
+        let padded_skdm = MessageUtils::pad_message_v2(skdm_wrapper.encode_to_vec());
+        Ok((padded_skdm, sender_key_name))
     }
 }

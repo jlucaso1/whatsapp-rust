@@ -1,7 +1,6 @@
 use crate::runtime::ProcessResult;
 use crate::store::Device;
 use base64::Engine as _;
-use base64::prelude::*;
 use sha2::{Digest, Sha256};
 
 /// Core client containing only platform-independent protocol logic
@@ -98,12 +97,10 @@ impl MessageUtils {
         }
     }
 
-    /// Creates a participant list hash (pure function)
     pub fn participant_list_hash(devices: &[crate::types::jid::Jid]) -> String {
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
         jids.sort();
 
-        // Concatenate all JIDs into a single string before hashing
         let concatenated_jids = jids.join("");
 
         let mut hasher = Sha256::new();
@@ -113,10 +110,10 @@ impl MessageUtils {
         // Truncate the hash to the first 6 bytes
         let truncated_hash = &full_hash[..6];
 
-        // Encode using base64 without padding
+        // Encode using base64 URL safe without padding, prefixed with "2:"
         format!(
             "2:{hash}",
-            hash = BASE64_STANDARD_NO_PAD.encode(truncated_hash)
+            hash = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(truncated_hash)
         )
     }
 }
