@@ -18,6 +18,7 @@ use rand::TryRngCore;
 use std::sync::Arc;
 use wacore::signal::store::SessionStore as _;
 use wacore::types::jid::Jid;
+use wacore::types::jid::JidExt;
 use waproto::whatsapp::{self as wa};
 
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {

@@ -13,6 +13,7 @@ use rand::TryRngCore as _;
 use wacore::client::MessageUtils;
 
 use wacore::signal::sender_key_name::SenderKeyName;
+use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 

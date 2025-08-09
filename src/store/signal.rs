@@ -15,6 +15,171 @@ use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
+macro_rules! impl_store_wrapper {
+    ($wrapper_ty:ty, $lock_method:ident) => {
+        #[async_trait]
+        impl IdentityKeyStore for $wrapper_ty {
+            async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
+                self.0.$lock_method().await.get_identity_key_pair().await
+            }
+
+            async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .get_local_registration_id()
+                    .await
+            }
+
+            async fn save_identity(
+                &self,
+                address: &ProtocolAddress,
+                identity_key: &IdentityKey,
+            ) -> Result<(), StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .save_identity(address, identity_key)
+                    .await
+            }
+
+            async fn is_trusted_identity(
+                &self,
+                _address: &ProtocolAddress,
+                _identity_key: &IdentityKey,
+            ) -> Result<bool, StoreError> {
+                Ok(true)
+            }
+        }
+
+        #[async_trait]
+        impl PreKeyStore for $wrapper_ty {
+            async fn load_prekey(
+                &self,
+                prekey_id: u32,
+            ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
+                self.0.$lock_method().await.load_prekey(prekey_id).await
+            }
+
+            async fn store_prekey(
+                &self,
+                prekey_id: u32,
+                record: PreKeyRecordStructure,
+            ) -> Result<(), StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .store_prekey(prekey_id, record)
+                    .await
+            }
+
+            async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
+                self.0.$lock_method().await.contains_prekey(prekey_id).await
+            }
+
+            async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
+                self.0.$lock_method().await.remove_prekey(prekey_id).await
+            }
+        }
+
+        #[async_trait]
+        impl SignedPreKeyStore for $wrapper_ty {
+            async fn load_signed_prekey(
+                &self,
+                signed_prekey_id: u32,
+            ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .load_signed_prekey(signed_prekey_id)
+                    .await
+            }
+
+            async fn load_signed_prekeys(
+                &self,
+            ) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
+                self.0.$lock_method().await.load_signed_prekeys().await
+            }
+
+            async fn store_signed_prekey(
+                &self,
+                signed_prekey_id: u32,
+                record: SignedPreKeyRecordStructure,
+            ) -> Result<(), StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .store_signed_prekey(signed_prekey_id, record)
+                    .await
+            }
+
+            async fn contains_signed_prekey(
+                &self,
+                signed_prekey_id: u32,
+            ) -> Result<bool, StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .contains_signed_prekey(signed_prekey_id)
+                    .await
+            }
+
+            async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .remove_signed_prekey(signed_prekey_id)
+                    .await
+            }
+        }
+
+        #[async_trait]
+        impl SessionStore for $wrapper_ty {
+            async fn load_session(
+                &self,
+                address: &ProtocolAddress,
+            ) -> Result<SessionRecord, StoreError> {
+                self.0.$lock_method().await.load_session(address).await
+            }
+
+            async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .get_sub_device_sessions(name)
+                    .await
+            }
+
+            async fn store_session(
+                &self,
+                address: &ProtocolAddress,
+                record: &SessionRecord,
+            ) -> Result<(), StoreError> {
+                self.0
+                    .$lock_method()
+                    .await
+                    .store_session(address, record)
+                    .await
+            }
+
+            async fn contains_session(
+                &self,
+                address: &ProtocolAddress,
+            ) -> Result<bool, StoreError> {
+                self.0.$lock_method().await.contains_session(address).await
+            }
+
+            async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
+                self.0.$lock_method().await.delete_session(address).await
+            }
+
+            async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
+                self.0.$lock_method().await.delete_all_sessions(name).await
+            }
+        }
+    };
+}
+
 #[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
@@ -230,139 +395,7 @@ impl Clone for DeviceRwLockWrapper {
     }
 }
 
-#[async_trait]
-impl IdentityKeyStore for DeviceRwLockWrapper {
-    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        self.0.read().await.get_identity_key_pair().await
-    }
-
-    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
-        self.0.read().await.get_local_registration_id().await
-    }
-
-    async fn save_identity(
-        &self,
-        address: &ProtocolAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<(), StoreError> {
-        self.0
-            .read()
-            .await
-            .save_identity(address, identity_key)
-            .await
-    }
-
-    async fn is_trusted_identity(
-        &self,
-        _address: &ProtocolAddress,
-        _identity_key: &IdentityKey,
-    ) -> Result<bool, StoreError> {
-        Ok(true)
-    }
-}
-
-#[async_trait]
-impl PreKeyStore for DeviceRwLockWrapper {
-    async fn load_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-        self.0.read().await.load_prekey(prekey_id).await
-    }
-
-    async fn store_prekey(
-        &self,
-        prekey_id: u32,
-        record: PreKeyRecordStructure,
-    ) -> Result<(), StoreError> {
-        self.0.read().await.store_prekey(prekey_id, record).await
-    }
-
-    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
-        self.0.read().await.contains_prekey(prekey_id).await
-    }
-
-    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
-        self.0.read().await.remove_prekey(prekey_id).await
-    }
-}
-
-#[async_trait]
-impl SignedPreKeyStore for DeviceRwLockWrapper {
-    async fn load_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        self.0
-            .read()
-            .await
-            .load_signed_prekey(signed_prekey_id)
-            .await
-    }
-
-    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-        self.0.read().await.load_signed_prekeys().await
-    }
-
-    async fn store_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-        record: SignedPreKeyRecordStructure,
-    ) -> Result<(), StoreError> {
-        self.0
-            .read()
-            .await
-            .store_signed_prekey(signed_prekey_id, record)
-            .await
-    }
-
-    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        self.0
-            .read()
-            .await
-            .contains_signed_prekey(signed_prekey_id)
-            .await
-    }
-
-    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
-        self.0
-            .read()
-            .await
-            .remove_signed_prekey(signed_prekey_id)
-            .await
-    }
-}
-
-#[async_trait]
-impl SessionStore for DeviceRwLockWrapper {
-    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
-        self.0.read().await.load_session(address).await
-    }
-
-    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
-        self.0.read().await.get_sub_device_sessions(name).await
-    }
-
-    async fn store_session(
-        &self,
-        address: &ProtocolAddress,
-        record: &SessionRecord,
-    ) -> Result<(), StoreError> {
-        self.0.read().await.store_session(address, record).await
-    }
-
-    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError> {
-        self.0.read().await.contains_session(address).await
-    }
-
-    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
-        self.0.read().await.delete_session(address).await
-    }
-
-    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
-        self.0.read().await.delete_all_sessions(name).await
-    }
-}
+impl_store_wrapper!(DeviceRwLockWrapper, read);
 
 pub struct DeviceStore(pub Arc<Mutex<Device>>);
 
@@ -378,139 +411,7 @@ impl Clone for DeviceStore {
     }
 }
 
-#[async_trait]
-impl IdentityKeyStore for DeviceStore {
-    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        self.0.lock().await.get_identity_key_pair().await
-    }
-
-    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
-        self.0.lock().await.get_local_registration_id().await
-    }
-
-    async fn save_identity(
-        &self,
-        address: &ProtocolAddress,
-        identity_key: &IdentityKey,
-    ) -> Result<(), StoreError> {
-        self.0
-            .lock()
-            .await
-            .save_identity(address, identity_key)
-            .await
-    }
-
-    async fn is_trusted_identity(
-        &self,
-        _address: &ProtocolAddress,
-        _identity_key: &IdentityKey,
-    ) -> Result<bool, StoreError> {
-        Ok(true)
-    }
-}
-
-#[async_trait]
-impl PreKeyStore for DeviceStore {
-    async fn load_prekey(
-        &self,
-        prekey_id: u32,
-    ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-        self.0.lock().await.load_prekey(prekey_id).await
-    }
-
-    async fn store_prekey(
-        &self,
-        prekey_id: u32,
-        record: PreKeyRecordStructure,
-    ) -> Result<(), StoreError> {
-        self.0.lock().await.store_prekey(prekey_id, record).await
-    }
-
-    async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
-        self.0.lock().await.contains_prekey(prekey_id).await
-    }
-
-    async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
-        self.0.lock().await.remove_prekey(prekey_id).await
-    }
-}
-
-#[async_trait]
-impl SignedPreKeyStore for DeviceStore {
-    async fn load_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-    ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        self.0
-            .lock()
-            .await
-            .load_signed_prekey(signed_prekey_id)
-            .await
-    }
-
-    async fn load_signed_prekeys(&self) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-        self.0.lock().await.load_signed_prekeys().await
-    }
-
-    async fn store_signed_prekey(
-        &self,
-        signed_prekey_id: u32,
-        record: SignedPreKeyRecordStructure,
-    ) -> Result<(), StoreError> {
-        self.0
-            .lock()
-            .await
-            .store_signed_prekey(signed_prekey_id, record)
-            .await
-    }
-
-    async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        self.0
-            .lock()
-            .await
-            .contains_signed_prekey(signed_prekey_id)
-            .await
-    }
-
-    async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
-        self.0
-            .lock()
-            .await
-            .remove_signed_prekey(signed_prekey_id)
-            .await
-    }
-}
-
-#[async_trait]
-impl SessionStore for DeviceStore {
-    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
-        self.0.lock().await.load_session(address).await
-    }
-
-    async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
-        self.0.lock().await.get_sub_device_sessions(name).await
-    }
-
-    async fn store_session(
-        &self,
-        address: &ProtocolAddress,
-        record: &SessionRecord,
-    ) -> Result<(), StoreError> {
-        self.0.lock().await.store_session(address, record).await
-    }
-
-    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError> {
-        self.0.lock().await.contains_session(address).await
-    }
-
-    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
-        self.0.lock().await.delete_session(address).await
-    }
-
-    async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
-        self.0.lock().await.delete_all_sessions(name).await
-    }
-}
+impl_store_wrapper!(DeviceStore, lock);
 
 #[async_trait(?Send)]
 impl SenderKeyStore for Device {
@@ -519,7 +420,6 @@ impl SenderKeyStore for Device {
         sender: &ProtocolAddress,
         record: &SenderKeyRecord,
     ) -> SignalResult<()> {
-        // NOTE: The return type now matches the trait
         let unique_key = sender.name().to_string();
         let serialized_record = record.serialize()?;
         self.backend
@@ -532,7 +432,6 @@ impl SenderKeyStore for Device {
         &mut self,
         sender: &ProtocolAddress,
     ) -> SignalResult<Option<SenderKeyRecord>> {
-        // NOTE: The return type now matches the trait
         let unique_key = sender.name().to_string();
         match self
             .backend
@@ -541,8 +440,6 @@ impl SenderKeyStore for Device {
             .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
         {
             Some(data) => {
-                // FIX: Use the public `serialize()` method to check for emptiness.
-                // An empty/fresh record serializes to an empty Vec.
                 let record = SenderKeyRecord::deserialize(&data)?;
                 if record.serialize()?.is_empty() {
                     Ok(None)

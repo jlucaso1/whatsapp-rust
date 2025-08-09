@@ -1,5 +1,5 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::types::jid::Jid;
+use crate::types::jid::{Jid, JidExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
