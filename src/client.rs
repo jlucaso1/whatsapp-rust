@@ -326,19 +326,15 @@ impl Client {
             ))
             .await;
 
-        {
-            let mut cache = self.processed_messages_cache.lock().await;
-            cache.clear();
+        let mut cache = self.processed_messages_cache.lock().await;
+        cache.insert(key);
 
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            for processed_msg in &device_snapshot.core.processed_messages {
-                let key = RecentMessageKey {
-                    to: processed_msg.to.clone(),
-                    id: processed_msg.id.clone(),
-                };
-                cache.insert(key);
-            }
-        }
+        // 3. Prune the cache if it grows too large (can be done periodically or here)
+        // This part needs the device state to know which keys are oldest.
+        // A simpler approach is to rely on the periodic rebuild on startup and accept
+        // that the in-memory cache might grow slightly larger than the persistent one
+        // between restarts. A more complex solution would involve a linked hash map.
+        // For now, just adding to the cache is a huge improvement.
     }
 
     pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
