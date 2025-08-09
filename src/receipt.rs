@@ -3,6 +3,7 @@ use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
 use log::info;
 use std::sync::Arc;
+use tokio::task;
 
 impl Client {
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: &crate::binary::node::Node) {
@@ -42,7 +43,7 @@ impl Client {
         if receipt_type == ReceiptType::Retry {
             let client_clone = Arc::clone(self);
             let node_clone = node.clone();
-            tokio::spawn(async move {
+            task::spawn_local(async move {
                 if let Err(e) = client_clone
                     .handle_retry_receipt(&receipt, &node_clone)
                     .await

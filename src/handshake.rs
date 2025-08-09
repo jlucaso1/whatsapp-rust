@@ -44,13 +44,13 @@ pub async fn do_handshake(
     let client_hello = HandshakeUtils::build_client_hello(&ephemeral_kp.public_key);
 
     // [HANDSHAKE_DEBUG] Log ClientHello.ephemeral
-    if let Some(ch) = &client_hello.client_hello {
-        if let Some(eph) = &ch.ephemeral {
-            debug!(
-                "[HANDSHAKE_DEBUG] ClientHello.ephemeral: {}",
-                hex::encode(eph)
-            );
-        }
+    if let Some(ch) = &client_hello.client_hello
+        && let Some(eph) = &ch.ephemeral
+    {
+        debug!(
+            "[HANDSHAKE_DEBUG] ClientHello.ephemeral: {}",
+            hex::encode(eph)
+        );
     }
 
     let mut buf = Vec::new();

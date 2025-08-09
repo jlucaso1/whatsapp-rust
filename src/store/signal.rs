@@ -1,19 +1,15 @@
-// Temporary stub implementations for Device signal store traits
-// TODO: Implement proper signal store methods matching wacore trait signatures
-
 use crate::store::Device;
 use async_trait::async_trait;
+use libsignal_protocol::ProtocolAddress;
+use libsignal_protocol::SenderKeyRecord;
+use libsignal_protocol::SessionRecord;
 use std::sync::Arc;
-use wacore::signal::address::SignalAddress;
 use wacore::signal::ecc::keys::EcPublicKey;
 use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
 use wacore::signal::sender_key_name::SenderKeyName;
-use wacore::signal::state::sender_key_record::SenderKeyRecord;
-use wacore::signal::state::session_record::SessionRecord;
 use wacore::signal::store::*;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-// Use the StoreError from wacore signal module
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 // --- IdentityKeyStore ---
@@ -42,7 +38,7 @@ impl IdentityKeyStore for Device {
 
     async fn save_identity(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
@@ -58,7 +54,7 @@ impl IdentityKeyStore for Device {
 
     async fn is_trusted_identity(
         &self,
-        _address: &SignalAddress,
+        _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
         // For now, we trust all identities. A real implementation would compare against a stored key.
@@ -159,16 +155,14 @@ impl SignedPreKeyStore for Device {
 // --- SessionStore ---
 #[async_trait]
 impl SessionStore for Device {
-    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         let address_str = address.to_string();
         match self.backend.get_session(&address_str).await {
             Ok(Some(session_data)) => {
                 // Deserialize the session data into a SessionRecord using bincode
-                bincode::serde::decode_from_slice(&session_data, bincode::config::standard())
-                    .map(|(record, _)| record)
-                    .map_err(|e| Box::new(e) as StoreError)
+                SessionRecord::deserialize(&session_data).map_err(|e| Box::new(e) as StoreError)
             }
-            Ok(None) => Ok(SessionRecord::new()),
+            Ok(None) => Ok(SessionRecord::new_fresh()),
             Err(e) => Err(Box::new(e) as StoreError),
         }
     }
@@ -182,13 +176,12 @@ impl SessionStore for Device {
 
     async fn store_session(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
         // Serialize the session record using bincode
-        let session_data = bincode::serde::encode_to_vec(record, bincode::config::standard())
-            .map_err(|e| Box::new(e) as StoreError)?;
+        let session_data = record.serialize().map_err(|e| Box::new(e) as StoreError)?;
 
         self.backend
             .put_session(&address_str, &session_data)
@@ -196,7 +189,7 @@ impl SessionStore for Device {
             .map_err(|e| Box::new(e) as StoreError)
     }
 
-    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError> {
         let address_str = address.to_string();
         self.backend
             .has_session(&address_str)
@@ -204,7 +197,7 @@ impl SessionStore for Device {
             .map_err(|e| Box::new(e) as StoreError)
     }
 
-    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
         let address_str = address.to_string();
         self.backend
             .delete_session(&address_str)
@@ -226,7 +219,7 @@ impl SenderKeyStore for Device {
     async fn store_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
+        record: &SenderKeyRecord,
     ) -> Result<(), StoreError> {
         self.backend.store_sender_key(sender_key_name, record).await
     }
@@ -267,7 +260,7 @@ impl SenderKeyStore for DeviceArcWrapper {
     async fn store_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
+        record: &SenderKeyRecord,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.0.store_sender_key(sender_key_name, record).await
     }
@@ -316,7 +309,7 @@ impl IdentityKeyStore for DeviceRwLockWrapper {
 
     async fn save_identity(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         self.0
@@ -328,7 +321,7 @@ impl IdentityKeyStore for DeviceRwLockWrapper {
 
     async fn is_trusted_identity(
         &self,
-        _address: &SignalAddress,
+        _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
         // For now, we trust all identities. A real implementation would compare against a stored key.
@@ -410,7 +403,7 @@ impl SignedPreKeyStore for DeviceRwLockWrapper {
 
 #[async_trait]
 impl SessionStore for DeviceRwLockWrapper {
-    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         self.0.read().await.load_session(address).await
     }
 
@@ -420,17 +413,17 @@ impl SessionStore for DeviceRwLockWrapper {
 
     async fn store_session(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), StoreError> {
         self.0.read().await.store_session(address, record).await
     }
 
-    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError> {
         self.0.read().await.contains_session(address).await
     }
 
-    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
         self.0.read().await.delete_session(address).await
     }
 
@@ -466,7 +459,7 @@ impl IdentityKeyStore for DeviceStore {
 
     async fn save_identity(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         self.0
@@ -478,7 +471,7 @@ impl IdentityKeyStore for DeviceStore {
 
     async fn is_trusted_identity(
         &self,
-        _address: &SignalAddress,
+        _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
         // For now, we trust all identities. A real implementation would compare against a stored key.
@@ -560,7 +553,7 @@ impl SignedPreKeyStore for DeviceStore {
 
 #[async_trait]
 impl SessionStore for DeviceStore {
-    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError> {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         self.0.lock().await.load_session(address).await
     }
 
@@ -570,17 +563,17 @@ impl SessionStore for DeviceStore {
 
     async fn store_session(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), StoreError> {
         self.0.lock().await.store_session(address, record).await
     }
 
-    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError> {
+    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError> {
         self.0.lock().await.contains_session(address).await
     }
 
-    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError> {
+    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
         self.0.lock().await.delete_session(address).await
     }
 
@@ -594,7 +587,7 @@ impl SenderKeyStore for DeviceStore {
     async fn store_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
+        record: &SenderKeyRecord,
     ) -> Result<(), StoreError> {
         self.0
             .lock()

@@ -60,10 +60,10 @@ impl SyncUtils {
         let mut patches = Vec::new();
         if let Some(patches_node) = collection_node.get_optional_child("patches") {
             for patch_child in patches_node.children().unwrap_or_default() {
-                if let Some(NodeContent::Bytes(b)) = &patch_child.content {
-                    if let Ok(patch) = wa::SyncdPatch::decode(b.as_slice()) {
-                        patches.push(patch);
-                    }
+                if let Some(NodeContent::Bytes(b)) = &patch_child.content
+                    && let Ok(patch) = wa::SyncdPatch::decode(b.as_slice())
+                {
+                    patches.push(patch);
                 }
             }
         }

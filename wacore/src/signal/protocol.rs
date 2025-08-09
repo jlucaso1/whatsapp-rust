@@ -304,23 +304,3 @@ impl CiphertextMessage for PreKeySignalMessage {
         PREKEY_TYPE
     }
 }
-
-impl From<crate::signal::root_key::RootKeyError> for ProtocolError {
-    fn from(e: crate::signal::root_key::RootKeyError) -> Self {
-        ProtocolError::Proto(prost::DecodeError::new(std::borrow::Cow::Owned(format!(
-            "{e:?}"
-        ))))
-    }
-}
-impl From<super::ratchet::RatchetError> for ProtocolError {
-    fn from(e: super::ratchet::RatchetError) -> Self {
-        match e {
-            super::ratchet::RatchetError::OldCounter { current, received } => {
-                Self::OldCounter(current, received)
-            }
-            super::ratchet::RatchetError::TooFarInFuture => {
-                Self::Proto(prost::DecodeError::new("message too far in future"))
-            }
-        }
-    }
-}

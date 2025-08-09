@@ -8,16 +8,6 @@ pub enum HkdfError {
     InvalidLength,
 }
 
-/// Expands a key using HKDF-SHA256.
-///
-/// # Arguments
-///
-/// * `key`: The input keying material.
-/// * `salt`: An optional salt.
-/// * `info`: Optional context and application specific information.
-/// * `length`: The desired length of the output key.
-///
-/// Returns a `Result` containing the output key material (`Vec<u8>`) or an error.
 pub fn sha256(
     key: &[u8],
     salt: Option<&[u8]>,

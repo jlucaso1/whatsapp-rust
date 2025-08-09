@@ -5,6 +5,7 @@ use crate::types::events::Event;
 use crate::types::presence::Presence;
 use log::{info, warn};
 use std::sync::Arc;
+use tokio::task;
 
 pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
     let notification_type = node.attrs.get("type").cloned().unwrap_or_default();
@@ -28,7 +29,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                 );
 
                 let client_clone = client.clone();
-                tokio::spawn(async move {
+                task::spawn_local(async move {
                     appstate_sync::app_state_sync(&client_clone, &name, false).await;
                 });
             }

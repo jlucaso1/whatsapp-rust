@@ -131,10 +131,10 @@ impl RequestUtils {
         attrs.insert("type".into(), query.query_type.as_str().into());
         attrs.insert("to".into(), query.to.to_string());
 
-        if let Some(target) = &query.target {
-            if !target.is_empty() {
-                attrs.insert("target".into(), target.to_string());
-            }
+        if let Some(target) = &query.target
+            && !target.is_empty()
+        {
+            attrs.insert("target".into(), target.to_string());
         }
 
         Node {

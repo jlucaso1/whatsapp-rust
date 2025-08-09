@@ -28,12 +28,11 @@ impl Client {
     pub async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
         {
             let guard = self.media_conn.lock().await;
-            if !force {
-                if let Some(conn) = &*guard {
-                    if !conn.is_expired() {
-                        return Ok(conn.clone());
-                    }
-                }
+            if !force
+                && let Some(conn) = &*guard
+                && !conn.is_expired()
+            {
+                return Ok(conn.clone());
             }
         }
 

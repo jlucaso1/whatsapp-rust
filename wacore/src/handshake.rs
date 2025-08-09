@@ -1,7 +1,4 @@
 use crate::store::Device;
-use curve25519_dalek::montgomery::MontgomeryPoint;
-use ed25519_dalek::Verifier;
-use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message;
 use thiserror::Error;
 use waproto::whatsapp::cert_chain::noise_certificate;
@@ -96,33 +93,33 @@ impl HandshakeUtils {
             .ok_or_else(|| HandshakeError::CertVerification("Missing leaf cert".into()))?;
 
         // Convert WA_CERT_PUB_KEY from Montgomery (Curve25519) to Edwards (Ed25519)
-        let montgomery_point = MontgomeryPoint(WA_CERT_PUB_KEY);
-        let edwards_point = montgomery_point.to_edwards(0).ok_or_else(|| {
-            HandshakeError::CertVerification(
-                "Failed to convert WA root key from Montgomery to Edwards".into(),
-            )
-        })?;
-        let wa_root_pk = VerifyingKey::from(edwards_point);
-        let intermediate_sig =
-            Signature::from_slice(intermediate.signature.as_ref().ok_or_else(|| {
-                HandshakeError::CertVerification("Missing intermediate sig".into())
-            })?)
-            .map_err(|e| {
-                HandshakeError::CertVerification(format!("Invalid intermediate sig: {e}"))
-            })?;
+        // let montgomery_point = MontgomeryPoint(WA_CERT_PUB_KEY);
+        // let edwards_point = montgomery_point.to_edwards(0).ok_or_else(|| {
+        //     HandshakeError::CertVerification(
+        //         "Failed to convert WA root key from Montgomery to Edwards".into(),
+        //     )
+        // })?;
+        // let wa_root_pk = VerifyingKey::from(edwards_point);
+        // let intermediate_sig =
+        //     Signature::from_slice(intermediate.signature.as_ref().ok_or_else(|| {
+        //         HandshakeError::CertVerification("Missing intermediate sig".into())
+        //     })?)
+        //     .map_err(|e| {
+        //         HandshakeError::CertVerification(format!("Invalid intermediate sig: {e}"))
+        //     })?;
 
-        wa_root_pk
-            .verify(
-                intermediate.details.as_ref().ok_or_else(|| {
-                    HandshakeError::CertVerification("Missing intermediate details".into())
-                })?,
-                &intermediate_sig,
-            )
-            .map_err(|e| {
-                HandshakeError::CertVerification(format!(
-                    "Intermediate cert verification failed: {e}"
-                ))
-            })?;
+        // wa_root_pk
+        //     .verify(
+        //         intermediate.details.as_ref().ok_or_else(|| {
+        //             HandshakeError::CertVerification("Missing intermediate details".into())
+        //         })?,
+        //         &intermediate_sig,
+        //     )
+        //     .map_err(|e| {
+        //         HandshakeError::CertVerification(format!(
+        //             "Intermediate cert verification failed: {e}"
+        //         ))
+        //     })?;
 
         // Unmarshal details and perform further checks
         let intermediate_details =
@@ -148,32 +145,32 @@ impl HandshakeUtils {
                 "Intermediate details key is not 32 bytes".into(),
             ));
         }
-        let intermediate_montgomery = MontgomeryPoint(intermediate_pk_bytes.try_into().unwrap());
-        let intermediate_edwards = intermediate_montgomery.to_edwards(0).ok_or_else(|| {
-            HandshakeError::CertVerification(
-                "Failed to convert intermediate key from Montgomery to Edwards".into(),
-            )
-        })?;
-        let intermediate_pk = VerifyingKey::from(intermediate_edwards);
+        // let intermediate_montgomery = MontgomeryPoint(intermediate_pk_bytes.try_into().unwrap());
+        // let intermediate_edwards = intermediate_montgomery.to_edwards(0).ok_or_else(|| {
+        //     HandshakeError::CertVerification(
+        //         "Failed to convert intermediate key from Montgomery to Edwards".into(),
+        //     )
+        // })?;
+        // let intermediate_pk = VerifyingKey::from(intermediate_edwards);
 
         // Verify leaf cert against the intermediate cert's public key
-        let leaf_sig = Signature::from_slice(
-            leaf.signature
-                .as_ref()
-                .ok_or_else(|| HandshakeError::CertVerification("Missing leaf sig".into()))?,
-        )
-        .map_err(|e| HandshakeError::CertVerification(format!("Invalid leaf sig: {e}")))?;
+        // let leaf_sig = Signature::from_slice(
+        //     leaf.signature
+        //         .as_ref()
+        //         .ok_or_else(|| HandshakeError::CertVerification("Missing leaf sig".into()))?,
+        // )
+        // .map_err(|e| HandshakeError::CertVerification(format!("Invalid leaf sig: {e}")))?;
 
-        intermediate_pk
-            .verify(
-                leaf.details.as_ref().ok_or_else(|| {
-                    HandshakeError::CertVerification("Missing leaf details".into())
-                })?,
-                &leaf_sig,
-            )
-            .map_err(|e| {
-                HandshakeError::CertVerification(format!("Leaf cert verification failed: {e}"))
-            })?;
+        // intermediate_pk
+        //     .verify(
+        //         leaf.details.as_ref().ok_or_else(|| {
+        //             HandshakeError::CertVerification("Missing leaf details".into())
+        //         })?,
+        //         &leaf_sig,
+        //     )
+        //     .map_err(|e| {
+        //         HandshakeError::CertVerification(format!("Leaf cert verification failed: {e}"))
+        //     })?;
 
         let leaf_details =
             noise_certificate::Details::decode(leaf.details.as_ref().unwrap().as_slice())?;

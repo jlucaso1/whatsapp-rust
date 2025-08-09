@@ -110,44 +110,41 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                     for patch_child in patches_node.children().unwrap_or_default() {
                         if let Some(crate::binary::node::NodeContent::Bytes(b)) =
                             &patch_child.content
+                            && let Ok(mut patch) = wa::SyncdPatch::decode(b.as_slice())
                         {
-                            if let Ok(mut patch) = wa::SyncdPatch::decode(b.as_slice()) {
-                                // --- External blob integration ---
-                                if let Some(external_ref) = patch.external_mutations.take() {
-                                    info!(
-                                        "Found patch with external mutations. Attempting download..."
-                                    );
-                                    match client.download(&external_ref).await {
-                                        Ok(decrypted_blob) => {
-                                            match wa::SyncdMutations::decode(
-                                                decrypted_blob.as_slice(),
-                                            ) {
-                                                Ok(downloaded_mutations) => {
-                                                    info!(
-                                                        "Successfully downloaded and parsed {} external mutations.",
-                                                        downloaded_mutations.mutations.len()
-                                                    );
-                                                    patch.mutations =
-                                                        downloaded_mutations.mutations;
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to parse downloaded mutations blob: {e}. Skipping patch."
-                                                    );
-                                                    continue; // Skip this patch
-                                                }
+                            // --- External blob integration ---
+                            if let Some(external_ref) = patch.external_mutations.take() {
+                                info!(
+                                    "Found patch with external mutations. Attempting download..."
+                                );
+                                match client.download(&external_ref).await {
+                                    Ok(decrypted_blob) => {
+                                        match wa::SyncdMutations::decode(decrypted_blob.as_slice())
+                                        {
+                                            Ok(downloaded_mutations) => {
+                                                info!(
+                                                    "Successfully downloaded and parsed {} external mutations.",
+                                                    downloaded_mutations.mutations.len()
+                                                );
+                                                patch.mutations = downloaded_mutations.mutations;
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to parse downloaded mutations blob: {e}. Skipping patch."
+                                                );
+                                                continue; // Skip this patch
                                             }
                                         }
-                                        Err(e) => {
-                                            error!(
-                                                "Failed to download external mutations: {e}. Skipping patch."
-                                            );
-                                            continue; // Skip this patch
-                                        }
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to download external mutations: {e}. Skipping patch."
+                                        );
+                                        continue; // Skip this patch
                                     }
                                 }
-                                patches.push(patch);
                             }
+                            patches.push(patch);
                         }
                     }
                 }
@@ -217,62 +214,59 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                     }
                                 } else if let Some(push_name_setting) =
                                     mutation.action.push_name_setting.as_ref()
+                                    && let Some(name) = &push_name_setting.name
                                 {
-                                    if let Some(name) = &push_name_setting.name {
-                                        // Just track the latest push name from this batch
-                                        latest_push_name = Some(name.clone());
-                                    }
+                                    // Just track the latest push name from this batch
+                                    latest_push_name = Some(name.clone());
                                 }
                             }
                         }
 
                         // Only update and fire event if we found a push name change in this batch
-                        if let Some(final_name) = latest_push_name {
-                            if final_name != batch_start_name {
-                                info!(
-                                    target: "Client/AppState",
-                                    "Received push name '{final_name}' via app state sync, updating store."
-                                );
-                                // Use command to update push name
-                                client
-                                    .persistence_manager
-                                    .process_command(
-                                        crate::store::commands::DeviceCommand::SetPushName(
-                                            final_name.clone(),
-                                        ),
-                                    )
-                                    .await;
+                        if let Some(final_name) = latest_push_name
+                            && final_name != batch_start_name
+                        {
+                            info!(
+                                target: "Client/AppState",
+                                "Received push name '{final_name}' via app state sync, updating store."
+                            );
+                            // Use command to update push name
+                            client
+                                .persistence_manager
+                                .process_command(
+                                    crate::store::commands::DeviceCommand::SetPushName(
+                                        final_name.clone(),
+                                    ),
+                                )
+                                .await;
 
-                                let event = Event::SelfPushNameUpdated(
-                                    crate::types::events::SelfPushNameUpdated {
-                                        from_server: true,
-                                        old_name: batch_start_name.clone(),
-                                        new_name: final_name.clone(),
-                                    },
-                                );
-                                let _ = client.dispatch_event(event).await;
+                            let event = Event::SelfPushNameUpdated(
+                                crate::types::events::SelfPushNameUpdated {
+                                    from_server: true,
+                                    old_name: batch_start_name.clone(),
+                                    new_name: final_name.clone(),
+                                },
+                            );
+                            let _ = client.dispatch_event(event).await;
 
-                                // If the push name was previously empty, we are now ready to announce presence.
-                                // This resolves the race condition on initial pairing.
-                                if batch_start_name.is_empty() {
-                                    let client_clone = client.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = client_clone
-                                            .send_presence(
-                                                crate::types::presence::Presence::Available,
-                                            )
-                                            .await
-                                        {
-                                            warn!(
-                                                "Failed to send presence after app_state_sync update: {e:?}"
-                                            );
-                                        } else {
-                                            info!(
-                                                "✅ Successfully sent presence after receiving push_name via app_state_sync"
-                                            );
-                                        }
-                                    });
-                                }
+                            // If the push name was previously empty, we are now ready to announce presence.
+                            // This resolves the race condition on initial pairing.
+                            if batch_start_name.is_empty() {
+                                let client_clone = client.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = client_clone
+                                        .send_presence(crate::types::presence::Presence::Available)
+                                        .await
+                                    {
+                                        warn!(
+                                            "Failed to send presence after app_state_sync update: {e:?}"
+                                        );
+                                    } else {
+                                        info!(
+                                            "✅ Successfully sent presence after receiving push_name via app_state_sync"
+                                        );
+                                    }
+                                });
                             }
                         }
                     }

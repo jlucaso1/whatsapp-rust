@@ -1,12 +1,10 @@
 use crate::signal::sender_key_name::SenderKeyName;
-use crate::signal::state::sender_key_record::SenderKeyRecord;
+use libsignal_protocol::{ProtocolAddress, SenderKeyRecord};
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-// src/signal/store.rs
-use super::address::SignalAddress;
 use super::identity::{IdentityKey, IdentityKeyPair};
-use super::state::session_record::SessionRecord;
 use async_trait::async_trait;
+use libsignal_protocol::SessionRecord;
 use std::error::Error;
 
 // Using a generic error for now. In a real app, this would be a custom store error enum.
@@ -19,12 +17,12 @@ pub trait IdentityKeyStore: Send + Sync {
     async fn get_local_registration_id(&self) -> Result<u32, StoreError>;
     async fn save_identity(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError>;
     async fn is_trusted_identity(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         identity_key: &IdentityKey,
     ) -> Result<bool, StoreError>;
 }
@@ -65,15 +63,15 @@ pub trait SignedPreKeyStore: Send + Sync {
 // Corresponds to state/store/SessionStore.go
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    async fn load_session(&self, address: &SignalAddress) -> Result<SessionRecord, StoreError>;
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError>;
     async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError>;
     async fn store_session(
         &self,
-        address: &SignalAddress,
+        address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), StoreError>;
-    async fn contains_session(&self, address: &SignalAddress) -> Result<bool, StoreError>;
-    async fn delete_session(&self, address: &SignalAddress) -> Result<(), StoreError>;
+    async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError>;
+    async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError>;
     async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError>;
 }
 
@@ -82,7 +80,7 @@ pub trait SenderKeyStore: Send + Sync {
     async fn store_sender_key(
         &self,
         sender_key_name: &SenderKeyName,
-        record: SenderKeyRecord,
+        record: &SenderKeyRecord,
     ) -> Result<(), StoreError>;
     async fn load_sender_key(
         &self,

@@ -8,6 +8,7 @@ pub mod filestore;
 pub mod generic;
 pub mod memory;
 pub mod persistence_manager; // Background persistence manager
+pub mod signal_adapter;
 pub mod traits;
 
 // Re-export traits from both wacore and local extensions
