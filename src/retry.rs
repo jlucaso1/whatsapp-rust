@@ -10,6 +10,7 @@ use scopeguard;
 use std::sync::Arc;
 use wacore::client::MessageUtils;
 use wacore::signal::store::SessionStore;
+use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
 
 impl Client {

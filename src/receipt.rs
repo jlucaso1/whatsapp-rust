@@ -4,6 +4,7 @@ use crate::types::presence::ReceiptType;
 use log::info;
 use std::sync::Arc;
 use tokio::task;
+use wacore::types::jid::JidExt;
 
 impl Client {
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: &crate::binary::node::Node) {
