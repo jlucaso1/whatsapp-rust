@@ -179,12 +179,15 @@ impl SignedPreKeyStore for MemoryStore {
 
 #[async_trait]
 impl SenderKeyStoreHelper for MemoryStore {
-    async fn put_sender_key(&self, _address: &str, _record: &[u8]) -> Result<()> {
+    async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
+        self.sender_keys
+            .put(address.to_string(), record.to_vec())
+            .await;
         Ok(())
     }
 
-    async fn get_sender_key(&self, _address: &str) -> Result<Option<Vec<u8>>> {
-        Ok(None)
+    async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.sender_keys.get(&address.to_string()).await)
     }
 
     async fn delete_sender_key(&self, address: &str) -> Result<()> {
