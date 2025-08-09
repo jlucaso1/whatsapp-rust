@@ -220,7 +220,7 @@ impl Client {
                 );
                 let client_clone = self.clone();
                 let info_clone = info.clone();
-                tokio::spawn(async move {
+                tokio::task::spawn_local(async move {
                     let signal_address = ProtocolAddress::new(
                         info_clone.source.sender.user.clone(),
                         (info_clone.source.sender.device as u32).into(),

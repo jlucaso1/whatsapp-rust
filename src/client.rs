@@ -96,6 +96,8 @@ pub struct Client {
 
     pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
 
+    pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
+
     pub(crate) test_mode: Arc<AtomicBool>,
     pub(crate) test_network_sender:
         Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>>>>,
@@ -151,6 +153,8 @@ impl Client {
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
             processed_messages_cache,
+
+            needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
             test_mode: Arc::new(AtomicBool::new(false)),
             test_network_sender: Arc::new(Mutex::new(None)),
@@ -228,7 +232,7 @@ impl Client {
         *self.noise_socket.lock().await = Some(noise_socket);
 
         let client_clone = self.clone();
-        tokio::spawn(client_clone.keepalive_loop());
+        task::spawn_local(async move { client_clone.keepalive_loop().await });
 
         Ok(())
     }
@@ -515,9 +519,22 @@ impl Client {
         }
 
         let client_clone = self.clone();
-        tokio::spawn(async move {
+        task::spawn_local(async move {
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect passive IQ: {e:?}");
+            }
+
+            if client_clone
+                .needs_initial_full_sync
+                .swap(false, Ordering::Relaxed)
+            {
+                info!("Performing initial full app state sync after pairing.");
+                for name in wacore::appstate::keys::ALL_PATCH_NAMES {
+                    let client_for_sync = client_clone.clone();
+                    task::spawn_local(async move {
+                        crate::appstate_sync::app_state_sync(&client_for_sync, name, true).await;
+                    });
+                }
             }
 
             if let Err(e) = client_clone.send_presence(Presence::Available).await {
@@ -815,7 +832,7 @@ impl Client {
                     {
                         let tx = tx.clone();
                         let mut recv = self.$method_name();
-                        tokio::spawn(async move {
+                        task::spawn_local(async move {
                             while let Ok(data) = recv.recv().await {
                                 let event = Event::$event_variant((*data).clone());
                                 if tx.send(event).is_err() {
@@ -860,7 +877,7 @@ impl Client {
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_messages();
-            tokio::spawn(async move {
+            task::spawn_local(async move {
                 while let Ok(data) = recv.recv().await {
                     let (msg, info) = &*data;
                     let event = Event::Message(msg.clone(), info.clone());
@@ -874,7 +891,7 @@ impl Client {
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_group_info_updates();
-            tokio::spawn(async move {
+            task::spawn_local(async move {
                 while let Ok(data) = recv.recv().await {
                     let (jid, update) = &*data;
                     let event = Event::GroupInfoUpdate {
@@ -994,14 +1011,11 @@ impl Client {
         &self,
         jid: &crate::types::jid::Jid,
     ) -> Result<GroupInfo, anyhow::Error> {
-        // Check cache first
         if let Some(cached) = self.group_cache.get(jid) {
             return Ok(cached.value().clone());
         }
 
-        // In test mode, return mock group participants
         if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            // ... (your existing test mode logic can stay here, just make it return a GroupInfo struct)
             let info = GroupInfo {
                 participants: vec!["559984726662@s.whatsapp.net".parse()?],
                 addressing_mode: crate::types::message::AddressingMode::Pn,

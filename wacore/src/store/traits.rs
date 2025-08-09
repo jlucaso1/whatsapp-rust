@@ -1,5 +1,5 @@
-use crate::signal;
 use crate::store::error::Result;
+use crate::{appstate::hash::HashState, signal};
 use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
@@ -40,10 +40,17 @@ pub trait AppStateKeyStore: Send + Sync {
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
 }
 
+#[async_trait]
+pub trait AppStateStore: Send + Sync {
+    async fn get_app_state_version(&self, name: &str) -> Result<HashState>;
+    async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()>;
+}
+
 pub trait Backend:
     IdentityStore
     + SessionStore
     + AppStateKeyStore
+    + AppStateStore
     + signal::store::PreKeyStore
     + signal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
@@ -56,6 +63,7 @@ impl<T> Backend for T where
     T: IdentityStore
         + SessionStore
         + AppStateKeyStore
+        + AppStateStore
         + signal::store::PreKeyStore
         + signal::store::SignedPreKeyStore
         + SenderKeyStoreHelper

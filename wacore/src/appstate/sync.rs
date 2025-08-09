@@ -5,8 +5,6 @@ use waproto::whatsapp as wa;
 pub struct SyncUtils;
 
 impl SyncUtils {
-    /// Build the app state key request message
-    /// Platform-independent core logic
     pub fn build_app_state_key_request(keys: Vec<Vec<u8>>) -> wa::Message {
         use waproto::whatsapp::message::protocol_message;
 
@@ -25,8 +23,6 @@ impl SyncUtils {
         }
     }
 
-    /// Build the fetch app state patches query node
-    /// Platform-independent core logic
     pub fn build_fetch_patches_query(name: &str, version: u64, is_full_sync: bool) -> Node {
         let mut attrs = Attrs::new();
         attrs.insert("name".to_string(), name.to_string());
@@ -48,8 +44,6 @@ impl SyncUtils {
         }
     }
 
-    /// Parse app state sync response and extract patches
-    /// Platform-independent core logic
     pub fn parse_sync_response(resp_node: &Node) -> Option<(bool, Vec<wa::SyncdPatch>)> {
         let sync_node = resp_node.get_optional_child("sync")?;
         let collection_node = sync_node.get_optional_child("collection")?;

@@ -32,12 +32,10 @@ async fn test_decode_mutation_success() {
     let key_store = Arc::new(DummyKeyStore);
     let _processor = Processor::new(key_store);
 
-    // Generate some fake keys
     let key_data = b"some-secret-app-state-key-data-!";
     let expanded_keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"my_key_id";
 
-    // 2. Create a fake mutation to encrypt
     let index_json = r#"["message","12345@c.us","ABCDEFG"]"#;
     let sync_action_value = wa::SyncActionValue {
         push_name_setting: Some(wa::sync_action_value::PushNameSetting {
@@ -52,9 +50,8 @@ async fn test_decode_mutation_success() {
         version: Some(1),
     };
 
-    // 3. Encrypt it like the server would
     let plaintext = sync_action_data.encode_to_vec();
-    let iv = [1; 16]; // Fixed IV for testability
+    let iv = [1; 16];
     let ciphertext = cbc::encrypt(&expanded_keys.value_encryption, &iv, &plaintext).unwrap();
 
     let mut content = Vec::new();
@@ -71,12 +68,11 @@ async fn test_decode_mutation_success() {
     let mut value_blob = content.clone();
     value_blob.extend_from_slice(&value_mac);
 
-    // 4. Construct the SyncdMutation
     let mutation_proto = wa::SyncdMutation {
         operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
         record: Some(wa::SyncdRecord {
             index: Some(wa::SyncdIndex {
-                blob: Some(vec![0; 32]), // Fake index mac
+                blob: Some(vec![0; 32]),
             }),
             value: Some(wa::SyncdValue {
                 blob: Some(value_blob),
@@ -87,12 +83,10 @@ async fn test_decode_mutation_success() {
         }),
     };
 
-    // 5. Run the test
     let mut output_mutations = Vec::<Mutation>::new();
     let result =
         ProcessorUtils::decode_mutation(&expanded_keys, &mutation_proto, &mut output_mutations);
 
-    // 6. Assert
     assert!(result.is_ok(), "Decoding failed: {:?}", result.err());
     assert_eq!(output_mutations.len(), 1);
 
@@ -118,14 +112,13 @@ async fn test_decode_mutation_bad_mac_fails() {
     content.extend_from_slice(&iv);
     content.extend_from_slice(&ciphertext);
 
-    // Use an INCORRECT MAC
     let mut value_mac = hmac_sha512::generate_content_mac(
         wa::syncd_mutation::SyncdOperation::Set,
         &content,
         key_id_bytes,
         &expanded_keys.value_mac,
     );
-    value_mac[0] ^= 0xFF; // Flip a bit to make it invalid
+    value_mac[0] ^= 0xFF;
 
     let mut value_blob = content.clone();
     value_blob.extend_from_slice(&value_mac);
