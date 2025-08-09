@@ -3,7 +3,7 @@ members = [".", "wacore", "waproto"]
 
 [workspace.dependencies]
 waproto = { path = "./waproto" }
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.74.1" }
+libsignal-protocol = { git = "https://github.com/jlucaso1/libsignal", branch = "working"}
 rand = "0.9"
 rand_core = "0.9"
 

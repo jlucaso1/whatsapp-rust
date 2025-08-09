@@ -2,21 +2,22 @@ use crate::store::Device;
 use async_trait::async_trait;
 use libsignal_protocol::ProtocolAddress;
 use libsignal_protocol::SenderKeyRecord;
+use libsignal_protocol::SenderKeyStore;
 use libsignal_protocol::SessionRecord;
+use libsignal_protocol::SignalProtocolError;
+use libsignal_protocol::error::Result as SignalResult;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use wacore::signal::ecc::keys::EcPublicKey;
 use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
-use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::signal::store::*;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
-// --- IdentityKeyStore ---
 #[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        // Convert from our KeyPair to signal protocol IdentityKeyPair
         let private_key = self.identity_key.private_key;
         let public_key = self.identity_key.public_key;
 
@@ -42,7 +43,6 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
-        // Use the raw public key bytes (32 bytes) instead of serialized format (33 bytes with type prefix)
         let key_bytes = identity_key.public_key().public_key();
 
         self.backend
@@ -57,12 +57,10 @@ impl IdentityKeyStore for Device {
         _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
-        // For now, we trust all identities. A real implementation would compare against a stored key.
         Ok(true)
     }
 }
 
-// --- PreKeyStore ---
 #[async_trait]
 impl PreKeyStore for Device {
     async fn load_prekey(
@@ -89,14 +87,12 @@ impl PreKeyStore for Device {
     }
 }
 
-// --- SignedPreKeyStore ---
 #[async_trait]
 impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        // Only check if the requested ID matches the one we hold directly.
         if signed_prekey_id == self.signed_pre_key.key_id {
             use wacore::signal::ecc::key_pair::EcKeyPair;
             use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
@@ -115,7 +111,6 @@ impl SignedPreKeyStore for Device {
             );
             return Ok(Some(record));
         }
-        // If the ID doesn't match, we don't have it.
         Ok(None)
     }
 
@@ -139,7 +134,6 @@ impl SignedPreKeyStore for Device {
     }
 
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        // Only return true for the device's own signed pre-key
         Ok(signed_prekey_id == self.signed_pre_key.key_id)
     }
 
@@ -152,14 +146,12 @@ impl SignedPreKeyStore for Device {
     }
 }
 
-// --- SessionStore ---
 #[async_trait]
 impl SessionStore for Device {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         let address_str = address.to_string();
         match self.backend.get_session(&address_str).await {
             Ok(Some(session_data)) => {
-                // Deserialize the session data into a SessionRecord using bincode
                 SessionRecord::deserialize(&session_data).map_err(|e| Box::new(e) as StoreError)
             }
             Ok(None) => Ok(SessionRecord::new_fresh()),
@@ -168,8 +160,6 @@ impl SessionStore for Device {
     }
 
     async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
-        // TODO: Implement proper sub device session listing by querying backend
-        // For now, this requires extending the Backend trait to support this query
         let _ = name;
         Ok(Vec::new())
     }
@@ -180,7 +170,6 @@ impl SessionStore for Device {
         record: &SessionRecord,
     ) -> Result<(), StoreError> {
         let address_str = address.to_string();
-        // Serialize the session record using bincode
         let session_data = record.serialize().map_err(|e| Box::new(e) as StoreError)?;
 
         self.backend
@@ -206,41 +195,11 @@ impl SessionStore for Device {
     }
 
     async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
-        // TODO: Implement proper all sessions deletion by extending Backend trait
-        // For now, this is a simplified implementation
         let _ = name;
         Ok(())
     }
 }
 
-// --- SenderKeyStore ---
-#[async_trait]
-impl SenderKeyStore for Device {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-        record: &SenderKeyRecord,
-    ) -> Result<(), StoreError> {
-        self.backend.store_sender_key(sender_key_name, record).await
-    }
-
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, StoreError> {
-        self.backend.load_sender_key(sender_key_name).await
-    }
-
-    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
-        self.backend.delete_sender_key(sender_key_name).await
-    }
-}
-
-use tokio::sync::Mutex;
-
-// Additional wrappers for different Arc types used in tests
-
-// Wrapper for Arc<Device> used in group messaging tests
 pub struct DeviceArcWrapper(pub Arc<Device>);
 
 impl DeviceArcWrapper {
@@ -255,32 +214,6 @@ impl Clone for DeviceArcWrapper {
     }
 }
 
-#[async_trait]
-impl SenderKeyStore for DeviceArcWrapper {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-        record: &SenderKeyRecord,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.0.store_sender_key(sender_key_name, record).await
-    }
-
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, Box<dyn std::error::Error + Send + Sync>> {
-        self.0.load_sender_key(sender_key_name).await
-    }
-
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.0.delete_sender_key(sender_key_name).await
-    }
-}
-
-// Wrapper for Arc<RwLock<Device>> used in some tests
 use tokio::sync::RwLock;
 
 pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);
@@ -324,7 +257,6 @@ impl IdentityKeyStore for DeviceRwLockWrapper {
         _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
-        // For now, we trust all identities. A real implementation would compare against a stored key.
         Ok(true)
     }
 }
@@ -432,7 +364,6 @@ impl SessionStore for DeviceRwLockWrapper {
     }
 }
 
-// Wrapper type to work around orphan rules
 pub struct DeviceStore(pub Arc<Mutex<Device>>);
 
 impl DeviceStore {
@@ -474,7 +405,6 @@ impl IdentityKeyStore for DeviceStore {
         _address: &ProtocolAddress,
         _identity_key: &IdentityKey,
     ) -> Result<bool, StoreError> {
-        // For now, we trust all identities. A real implementation would compare against a stored key.
         Ok(true)
     }
 }
@@ -582,28 +512,45 @@ impl SessionStore for DeviceStore {
     }
 }
 
-#[async_trait]
-impl SenderKeyStore for DeviceStore {
+#[async_trait(?Send)]
+impl SenderKeyStore for Device {
     async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
+        &mut self,
+        sender: &ProtocolAddress,
         record: &SenderKeyRecord,
-    ) -> Result<(), StoreError> {
-        self.0
-            .lock()
+    ) -> SignalResult<()> {
+        // NOTE: The return type now matches the trait
+        let unique_key = sender.name().to_string();
+        let serialized_record = record.serialize()?;
+        self.backend
+            .put_sender_key(&unique_key, &serialized_record)
             .await
-            .store_sender_key(sender_key_name, record)
-            .await
+            .map_err(|e| SignalProtocolError::InvalidState("store_sender_key", e.to_string()))
     }
 
     async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> Result<SenderKeyRecord, StoreError> {
-        self.0.lock().await.load_sender_key(sender_key_name).await
-    }
-
-    async fn delete_sender_key(&self, sender_key_name: &SenderKeyName) -> Result<(), StoreError> {
-        self.0.lock().await.delete_sender_key(sender_key_name).await
+        &mut self,
+        sender: &ProtocolAddress,
+    ) -> SignalResult<Option<SenderKeyRecord>> {
+        // NOTE: The return type now matches the trait
+        let unique_key = sender.name().to_string();
+        match self
+            .backend
+            .get_sender_key(&unique_key)
+            .await
+            .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
+        {
+            Some(data) => {
+                // FIX: Use the public `serialize()` method to check for emptiness.
+                // An empty/fresh record serializes to an empty Vec.
+                let record = SenderKeyRecord::deserialize(&data)?;
+                if record.serialize()?.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(record))
+                }
+            }
+            None => Ok(None),
+        }
     }
 }

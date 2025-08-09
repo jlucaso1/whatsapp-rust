@@ -1,6 +1,5 @@
 use crate::store::traits::*;
 use async_trait::async_trait;
-use libsignal_protocol::SenderKeyRecord;
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
@@ -231,68 +230,6 @@ impl signal::store::PreKeyStore for FileStore {
 }
 
 #[async_trait]
-impl signal::store::SenderKeyStore for FileStore {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-        record: &SenderKeyRecord,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-
-        let data = record.serialize()?;
-        fs::write(path, data).await?;
-        Ok(())
-    }
-
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-    ) -> std::result::Result<SenderKeyRecord, SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-
-        match fs::read(path).await {
-            Ok(data) => {
-                SenderKeyRecord::deserialize(&data).map_err(|e| Box::new(e) as SignalStoreError)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                SenderKeyRecord::deserialize(&[]).map_err(|e| Box::new(e) as SignalStoreError)
-            }
-            Err(e) => Err(Box::new(e)),
-        }
-    }
-
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-        fs::remove_file(path).await.or_else(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })?;
-        Ok(())
-    }
-}
-
-#[async_trait]
 impl SenderKeyStoreHelper for FileStore {
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
         let path = self
@@ -310,6 +247,22 @@ impl SenderKeyStoreHelper for FileStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(StoreError::Io(e)),
         }
+    }
+
+    async fn delete_sender_key(&self, address: &str) -> Result<()> {
+        let path = self
+            .path_for("sender_keys")
+            .join(Self::sanitize_filename(address));
+        fs::remove_file(path)
+            .await
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(StoreError::Io)
     }
 }
 
