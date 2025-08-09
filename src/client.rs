@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::task;
 use tokio::time::{Duration, sleep};
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
@@ -79,7 +80,6 @@ pub struct Client {
     /// Manages per-chat locks to allow for concurrent message processing
     /// from different chats while serializing messages within the same chat.
     pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
-
     pub(crate) lid_pn_map: Arc<Mutex<HashMap<crate::types::jid::Jid, crate::types::jid::Jid>>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -143,8 +143,6 @@ impl Client {
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             event_bus: Arc::new(EventBus::new()),
-
-            // Initialize the per-chat locks map
             chat_locks: Arc::new(DashMap::new()),
 
             lid_pn_map: Arc::new(Mutex::new(HashMap::new())),
@@ -436,25 +434,27 @@ impl Client {
             "message" => {
                 let client_clone = self.clone();
                 let node_clone = node.clone();
-                tokio::spawn(async move {
-                    // First, parse the message info to get the source chat JID
+
+                task::spawn_local(async move {
                     let info = match client_clone.parse_message_info(&node_clone).await {
                         Ok(info) => info,
                         Err(e) => {
-                            log::warn!("Could not parse message info to acquire lock: {e:?}");
+                            log::warn!(
+                                "Could not parse message info to acquire lock; dropping message. Error: {e:?}"
+                            );
                             return;
                         }
                     };
                     let chat_jid = info.source.chat;
 
-                    // Acquire a lock for this specific chat.
-                    // entry().or_default() gets the existing mutex or creates a new one atomically.
                     let mutex_arc = client_clone
                         .chat_locks
                         .entry(chat_jid)
                         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
                         .clone();
+
                     let _lock_guard = mutex_arc.lock().await;
+
                     client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
@@ -672,29 +672,29 @@ impl Client {
     }
 
     async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
-        if let Some("get") = node.attrs().optional_string("type") {
-            if let Some(_ping_node) = node.get_optional_child("ping") {
-                info!(target: "Client", "Received ping, sending pong.");
-                let mut parser = node.attrs();
-                let from_jid = parser.jid("from");
-                let id = parser.string("id");
-                let pong = Node {
-                    tag: "iq".into(),
-                    attrs: [
-                        ("to".into(), from_jid.to_string()),
-                        ("id".into(), id),
-                        ("type".into(), "result".into()),
-                    ]
-                    .iter()
-                    .cloned()
-                    .collect(),
-                    content: None,
-                };
-                if let Err(e) = self.send_node(pong).await {
-                    warn!("Failed to send pong: {e:?}");
-                }
-                return true;
+        if let Some("get") = node.attrs().optional_string("type")
+            && let Some(_ping_node) = node.get_optional_child("ping")
+        {
+            info!(target: "Client", "Received ping, sending pong.");
+            let mut parser = node.attrs();
+            let from_jid = parser.jid("from");
+            let id = parser.string("id");
+            let pong = Node {
+                tag: "iq".into(),
+                attrs: [
+                    ("to".into(), from_jid.to_string()),
+                    ("id".into(), id),
+                    ("type".into(), "result".into()),
+                ]
+                .iter()
+                .cloned()
+                .collect(),
+                content: None,
+            };
+            if let Err(e) = self.send_node(pong).await {
+                warn!("Failed to send pong: {e:?}");
             }
+            return true;
         }
 
         if pair::handle_iq(self, node).await {

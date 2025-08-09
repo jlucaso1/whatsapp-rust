@@ -1,7 +1,6 @@
 use aes_gcm::aead::{Aead, Payload};
 use whatsapp_rust::crypto::{gcm, hkdf};
 use whatsapp_rust::socket::consts;
-use x25519_dalek::{StaticSecret, x25519};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)
@@ -30,9 +29,14 @@ fn test_server_static_key_decryption_with_go_values() {
     // --- Step 2: Replicate the cryptographic sequence ---
 
     // A. Calculate the shared secret using the low-level x25519 function for direct compatibility.
-    let secret = StaticSecret::from(<[u8; 32]>::try_from(client_eph_priv).unwrap());
-    let rust_shared_secret = x25519(
-        secret.to_bytes(),
+    // let secret = StaticSecret::from(<[u8; 32]>::try_from(client_eph_priv).unwrap());
+    // let rust_shared_secret = x25519(
+    //     secret.to_bytes(),
+    //     <[u8; 32]>::try_from(server_eph_pub).unwrap(),
+    // );
+
+    let rust_shared_secret = wacore::signal::ecc::curve::calculate_shared_secret(
+        <[u8; 32]>::try_from(client_eph_priv).unwrap(),
         <[u8; 32]>::try_from(server_eph_pub).unwrap(),
     );
 

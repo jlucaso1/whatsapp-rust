@@ -169,11 +169,11 @@ pub(crate) async fn get_qr_channel_logic(
                 }
             }
 
-            if let Some(event) = non_terminal_event {
-                if tx_clone.send(event).await.is_err() {
-                    warn!("QR channel receiver was dropped before event was sent.");
-                    break;
-                }
+            if let Some(event) = non_terminal_event
+                && tx_clone.send(event).await.is_err()
+            {
+                warn!("QR channel receiver was dropped before event was sent.");
+                break;
             }
 
             if let Some(final_event) = terminal_event {

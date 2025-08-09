@@ -34,21 +34,3 @@ pub fn encrypt(
         .encrypt(nonce, payload)
         .map_err(|_| GcmError::CipherError)
 }
-
-/// Decrypts ciphertext using AES-256-GCM.
-pub fn decrypt(
-    secret_key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-    additional_data: &[u8],
-) -> Result<Vec<u8>> {
-    let cipher = prepare(secret_key)?;
-    let nonce = aes_gcm::Nonce::from_slice(iv);
-    let payload = Payload {
-        msg: ciphertext,
-        aad: additional_data,
-    };
-    cipher
-        .decrypt(nonce, payload)
-        .map_err(|_| GcmError::CipherError)
-}

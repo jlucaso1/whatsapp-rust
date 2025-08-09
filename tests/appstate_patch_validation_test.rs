@@ -1,5 +1,3 @@
-mod message_decryption_test;
-
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::prelude::*;

@@ -16,7 +16,16 @@ pub trait IdentityStore: Send + Sync {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
     async fn delete_identity(&self, address: &str) -> Result<()>;
     async fn is_trusted_identity(&self, address: &str, key: &[u8; 32]) -> Result<bool>;
+    // Helper method for libsignal integration
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
     // TODO: Add other methods like delete_all_identities
+}
+
+// Helper trait for libsignal integration
+#[async_trait]
+pub trait SenderKeyStoreHelper: Send + Sync {
+    async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()>;
+    async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>>;
 }
 
 #[async_trait]
@@ -53,6 +62,7 @@ pub trait Backend:
     + signal::store::PreKeyStore
     + signal::store::SignedPreKeyStore
     + signal::store::SenderKeyStore
+    + SenderKeyStoreHelper
     + Send
     + Sync
 {
@@ -66,6 +76,7 @@ impl<T> Backend for T where
         + signal::store::PreKeyStore
         + signal::store::SignedPreKeyStore
         + signal::store::SenderKeyStore
+        + SenderKeyStoreHelper
         + Send
         + Sync
 {

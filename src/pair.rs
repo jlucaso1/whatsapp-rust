@@ -32,10 +32,10 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
             let handled = match child.tag.as_str() {
                 "pair-device" => {
                     // 1. Acknowledge the request immediately using core logic
-                    if let Some(ack_node) = PairUtils::build_ack_node(node) {
-                        if let Err(e) = client.send_node(ack_node).await {
-                            warn!("Failed to send acknowledgement: {e:?}");
-                        }
+                    if let Some(ack_node) = PairUtils::build_ack_node(node)
+                        && let Err(e) = client.send_node(ack_node).await
+                    {
+                        warn!("Failed to send acknowledgement: {e:?}");
                     }
 
                     // 2. Extract QR code refs and generate full QR data strings (async)

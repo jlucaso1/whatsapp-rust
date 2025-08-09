@@ -4,7 +4,6 @@ use crate::socket::noise_socket::{NoiseSocket, generate_iv};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, Payload};
 use sha2::{Digest, Sha256};
-use x25519_dalek::{StaticSecret, x25519};
 
 pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -102,8 +101,8 @@ impl NoiseHandshake {
     }
 
     pub fn mix_shared_secret(&mut self, priv_key: &[u8; 32], pub_key: &[u8; 32]) -> Result<()> {
-        let secret = StaticSecret::from(*priv_key);
-        let shared_secret = x25519(secret.to_bytes(), *pub_key);
+        let shared_secret =
+            wacore::signal::ecc::curve::calculate_shared_secret(*priv_key, *pub_key);
         self.mix_into_key(&shared_secret)
     }
 

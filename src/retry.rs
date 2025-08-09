@@ -1,8 +1,8 @@
 use crate::client::{Client, RecentMessageKey};
-use crate::signal::address::SignalAddress;
 use crate::signal::store::{SenderKeyStore, SessionStore};
 use crate::types::events::Receipt;
 use crate::types::jid::Jid;
+use libsignal_protocol::ProtocolAddress;
 use log::info;
 use scopeguard;
 use std::sync::Arc;
@@ -16,10 +16,10 @@ impl Client {
         let mut map_guard = self.recent_messages_map.lock().await;
         let mut list_guard = self.recent_messages_list.lock().await;
 
-        if list_guard.len() >= RECENT_MESSAGES_SIZE {
-            if let Some(old_key) = list_guard.pop_front() {
-                map_guard.remove(&old_key);
-            }
+        if list_guard.len() >= RECENT_MESSAGES_SIZE
+            && let Some(old_key) = list_guard.pop_front()
+        {
+            map_guard.remove(&old_key);
         }
         list_guard.push_back(key.clone());
         map_guard.insert(key, msg);
@@ -79,7 +79,8 @@ impl Client {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("LID missing for group retry handling"))?;
 
-            let sender_address = SignalAddress::new(own_lid.user.clone(), own_lid.device as u32);
+            let sender_address =
+                ProtocolAddress::new(own_lid.user.clone(), u32::from(own_lid.device).into());
             let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
                 receipt.source.chat.to_string(),
                 sender_address.to_string(),
@@ -107,9 +108,9 @@ impl Client {
             }
 
             // Also delete the pairwise session with the participant who sent the retry
-            let signal_address = crate::signal::address::SignalAddress::new(
+            let signal_address = ProtocolAddress::new(
                 participant_jid.user.clone(),
-                participant_jid.device as u32,
+                u32::from(participant_jid.device).into(),
             );
 
             if let Err(e) = device_store
@@ -126,9 +127,9 @@ impl Client {
             }
         } else {
             // For direct messages, only delete the pairwise session
-            let signal_address = crate::signal::address::SignalAddress::new(
+            let signal_address = ProtocolAddress::new(
                 participant_jid.user.clone(),
-                participant_jid.device as u32,
+                u32::from(participant_jid.device).into(),
             );
 
             let device_store = self.persistence_manager.get_device_arc().await;

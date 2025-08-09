@@ -1,5 +1,3 @@
-// Corresponds to libsignal-protocol-go/util/keyhelper.go
-
 use crate::signal::ecc;
 use crate::signal::ecc::key_pair::EcKeyPair;
 use crate::signal::ecc::keys::EcPublicKey;
