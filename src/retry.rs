@@ -1,5 +1,5 @@
 use crate::client::{Client, RecentMessageKey};
-use crate::signal::store::{SenderKeyStore, SessionStore};
+use crate::signal::store::SessionStore;
 use crate::types::events::Receipt;
 use crate::types::jid::Jid;
 use libsignal_protocol::ProtocolAddress;
@@ -87,12 +87,11 @@ impl Client {
             );
 
             let device_store = self.persistence_manager.get_device_arc().await;
+            let device_guard = device_store.lock().await;
 
-            // Delete the sender key record to force creation of a new one
-            if let Err(e) = device_store
-                .lock()
-                .await
-                .delete_sender_key(&sender_key_name)
+            if let Err(e) = device_guard
+                .backend
+                .delete_sender_key(sender_key_name.group_id()) // Now uses the libsignal trait method
                 .await
             {
                 log::warn!(

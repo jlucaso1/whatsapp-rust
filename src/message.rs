@@ -2,10 +2,12 @@ use crate::binary::node::Node;
 use crate::client::Client;
 use crate::client::RecentMessageKey;
 use crate::error::decryption::DecryptionError;
-use crate::proto_helpers::MessageExt;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
+use libsignal_protocol::SenderKeyDistributionMessage;
+use libsignal_protocol::group_decrypt;
+use libsignal_protocol::process_sender_key_distribution_message;
 use libsignal_protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, UsePQRatchet, message_decrypt,
 };
@@ -16,19 +18,23 @@ use wacore::types::jid::Jid;
 use waproto::whatsapp::{self as wa};
 
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
-    if version < 3 {
-        if plaintext.is_empty() {
-            return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
-        }
-        let pad_len = plaintext[plaintext.len() - 1] as usize;
-        if pad_len == 0 || pad_len > plaintext.len() {
-            return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
-        }
-        let (data, _padding) = plaintext.split_at(plaintext.len() - pad_len);
-        Ok(data)
-    } else {
-        Ok(plaintext)
+    if version == 3 {
+        return Ok(plaintext);
     }
+    if plaintext.is_empty() {
+        return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
+    }
+    let pad_len = plaintext[plaintext.len() - 1] as usize;
+    if pad_len == 0 || pad_len > plaintext.len() {
+        return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
+    }
+    let (data, padding) = plaintext.split_at(plaintext.len() - pad_len);
+    for &byte in padding {
+        if byte != pad_len as u8 {
+            return Err(anyhow::anyhow!("invalid padding bytes"));
+        }
+    }
+    Ok(data)
 }
 
 impl Client {
@@ -131,19 +137,14 @@ impl Client {
         };
 
         let enc_type = enc_node.attrs().string("type");
+        let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
         let result = match enc_type.as_str() {
             "pkmsg" | "msg" => {
                 self.decrypt_dm_ciphertext(info, &enc_type, &ciphertext)
                     .await
             }
-            "skmsg" => {
-                log::warn!("Group message decryption (skmsg) is not yet refactored.");
-
-                return Err(DecryptionError::Crypto(anyhow::anyhow!(
-                    "Group message decryption (skmsg) is not yet refactored."
-                )));
-            }
+            "skmsg" => self.decrypt_group_ciphertext(info, &ciphertext).await,
             _ => {
                 log::warn!("Unsupported enc type: {enc_type}");
                 return Err(DecryptionError::Crypto(anyhow::anyhow!(
@@ -154,7 +155,7 @@ impl Client {
 
         match result {
             Ok(padded_plaintext) => {
-                let plaintext = unpad_message_ref(&padded_plaintext, 2)?.to_vec();
+                let plaintext = unpad_message_ref(&padded_plaintext, padding_version)?.to_vec();
 
                 log::info!(
                     "Successfully decrypted message from {}: {} bytes (type: {})",
@@ -163,18 +164,21 @@ impl Client {
                     enc_type
                 );
 
-                match wa::Message::decode(plaintext.as_slice()) {
-                    Ok(original_msg) => {
-                        let mut msg_ref: &wa::Message = &original_msg;
-                        if let Some(dsm) = original_msg.device_sent_message.as_ref()
-                            && let Some(inner) = dsm.message.as_ref()
-                        {
-                            msg_ref = inner;
+                if enc_type == "skmsg" {
+                    match wa::Message::decode(plaintext.as_slice()) {
+                        Ok(group_msg) => {
+                            let _ = self
+                                .dispatch_event(Event::Message(Box::new(group_msg), info.clone()))
+                                .await;
                         }
-
-                        if let Some(skdm) = &msg_ref.sender_key_distribution_message {
-                            if let Some(axolotl_bytes) =
-                                &skdm.axolotl_sender_key_distribution_message
+                        Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
+                    }
+                } else {
+                    match wa::Message::decode(plaintext.as_slice()) {
+                        Ok(original_msg) => {
+                            if let Some(skdm) = &original_msg.sender_key_distribution_message
+                                && let Some(axolotl_bytes) =
+                                    &skdm.axolotl_sender_key_distribution_message
                             {
                                 self.handle_sender_key_distribution_message(
                                     &info.source.chat,
@@ -183,8 +187,13 @@ impl Client {
                                 )
                                 .await;
                             }
-                        } else {
-                            let _base_msg = original_msg.get_base_message();
+
+                            if let Some(protocol_msg) = &original_msg.protocol_message
+                                && let Some(keys) = &protocol_msg.app_state_sync_key_share
+                            {
+                                self.handle_app_state_sync_key_share(keys).await;
+                            }
+
                             let _ = self
                                 .dispatch_event(Event::Message(
                                     Box::new(original_msg),
@@ -192,8 +201,10 @@ impl Client {
                                 ))
                                 .await;
                         }
+                        Err(e) => {
+                            log::warn!("Failed to unmarshal decrypted pkmsg/msg plaintext: {e}")
+                        }
                     }
-                    Err(e) => log::warn!("Failed to unmarshal decrypted plaintext: {e}"),
                 }
 
                 self.mark_message_as_processed(message_key.clone()).await;
@@ -342,12 +353,79 @@ impl Client {
         })
     }
 
+    async fn decrypt_group_ciphertext(
+        &self,
+        info: &MessageInfo,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, DecryptionError> {
+        let sender_address = ProtocolAddress::new(
+            info.source.sender.user.clone(),
+            (info.source.sender.device as u32).into(),
+        );
+        let group_sender_address = ProtocolAddress::new(
+            format!("{}\n{}", info.source.chat, sender_address),
+            0.into(),
+        );
+
+        let device_arc = self.persistence_manager.get_device_arc().await;
+        let mut device_guard = device_arc.lock().await;
+
+        group_decrypt(ciphertext, &mut *device_guard, &group_sender_address)
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "Group decryption failed for sender {}: {:?}",
+                    group_sender_address,
+                    e
+                );
+                DecryptionError::Crypto(anyhow::anyhow!(e))
+            })
+    }
+
     async fn handle_sender_key_distribution_message(
         self: &Arc<Self>,
-        _group_jid: &Jid,
-        _sender_jid: &Jid,
-        _axolotl_bytes: &[u8],
+        group_jid: &Jid,
+        sender_jid: &Jid,
+        axolotl_bytes: &[u8],
     ) {
-        unimplemented!("handle_sender_key_distribution_message not yet refactored");
+        let skdm = match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
+            Ok(msg) => msg,
+            Err(e) => {
+                log::error!(
+                    "Failed to parse SenderKeyDistributionMessage from {}: {:?}",
+                    sender_jid,
+                    e
+                );
+                return;
+            }
+        };
+
+        let device_arc = self.persistence_manager.get_device_arc().await;
+        let mut device_guard = device_arc.lock().await;
+
+        let sender_address =
+            ProtocolAddress::new(sender_jid.user.clone(), (sender_jid.device as u32).into());
+        let group_sender_address =
+            ProtocolAddress::new(format!("{}\n{}", group_jid, sender_address), 0.into());
+
+        if let Err(e) = process_sender_key_distribution_message(
+            &group_sender_address,
+            &skdm,
+            &mut *device_guard,
+        )
+        .await
+        {
+            log::error!(
+                "Failed to process SenderKeyDistributionMessage from {}: {:?}",
+                sender_jid,
+                e
+            );
+        } else {
+            log::info!(
+                "Successfully processed sender key distribution for group {} from {}",
+                group_jid,
+                sender_jid
+            );
+        }
     }
 }

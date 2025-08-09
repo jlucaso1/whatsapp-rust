@@ -83,12 +83,12 @@ impl PreKeyUtils {
             IdentityKey::new(PublicKey::from_djb_public_key_bytes(&identity_key_array)?);
 
         let mut pre_key_tuple = None;
-        if let Some(pre_key_node) = keys_node.get_optional_child("key") {
-            if let Some((id, key_bytes)) = Self::node_to_pre_key(pre_key_node)? {
-                let pre_key_id: PreKeyId = id.into();
-                let pre_key_public = PublicKey::from_djb_public_key_bytes(&key_bytes)?;
-                pre_key_tuple = Some((pre_key_id, pre_key_public));
-            }
+        if let Some(pre_key_node) = keys_node.get_optional_child("key")
+            && let Some((id, key_bytes)) = Self::node_to_pre_key(pre_key_node)?
+        {
+            let pre_key_id: PreKeyId = id.into();
+            let pre_key_public = PublicKey::from_djb_public_key_bytes(&key_bytes)?;
+            pre_key_tuple = Some((pre_key_id, pre_key_public));
         }
 
         let signed_pre_key_node = keys_node

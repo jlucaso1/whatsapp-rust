@@ -1,13 +1,10 @@
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
-use libsignal_protocol::SenderKeyRecord;
 use wacore::appstate::hash::HashState;
-use wacore::signal::sender_key_name::SenderKeyName;
-use wacore::signal::store::{PreKeyStore, SenderKeyStore, SignedPreKeyStore};
+use wacore::signal::store::{PreKeyStore, SignedPreKeyStore};
 use wacore::store::error::Result;
 
-// For signal store traits, we need to use the signal module's StoreError
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
@@ -36,7 +33,6 @@ impl MemoryStore {
     }
 }
 
-// Basic implementations for local traits only
 #[async_trait]
 impl IdentityStore for MemoryStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
@@ -53,13 +49,11 @@ impl IdentityStore for MemoryStore {
         if let Some(stored_key) = self.identities.get(&address.to_string()).await {
             Ok(stored_key == *key)
         } else {
-            Ok(true) // Trust new identities
+            Ok(true)
         }
     }
 
     async fn load_identity(&self, _address: &str) -> Result<Option<Vec<u8>>> {
-        // For now, we'll return None since we don't have the proper identity storage format
-        // This would need to be implemented properly to work with libsignal
         Ok(None)
     }
 }
@@ -102,8 +96,6 @@ impl AppStateStore for MemoryStore {
         Ok(())
     }
 }
-
-// Missing trait implementations for MemoryStore to work as Backend
 
 #[async_trait]
 impl AppStateKeyStore for MemoryStore {
@@ -186,63 +178,17 @@ impl SignedPreKeyStore for MemoryStore {
 }
 
 #[async_trait]
-impl SenderKeyStore for MemoryStore {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-        record: &SenderKeyRecord,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let key = format!(
-            "{}:{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        );
-        let data = record.serialize()?;
-        self.sender_keys.put(key, data).await;
-        Ok(())
-    }
-
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> std::result::Result<SenderKeyRecord, SignalStoreError> {
-        let key = format!(
-            "{}:{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        );
-        match self.sender_keys.get(&key).await {
-            Some(data) => SenderKeyRecord::deserialize(&data),
-            None => SenderKeyRecord::deserialize(&[]),
-        }
-        .map_err(|e| Box::new(e) as SignalStoreError)
-    }
-
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &SenderKeyName,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let key = format!(
-            "{}:{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        );
-        self.sender_keys.delete(&key).await;
-        Ok(())
-    }
-}
-
-#[async_trait]
 impl SenderKeyStoreHelper for MemoryStore {
     async fn put_sender_key(&self, _address: &str, _record: &[u8]) -> Result<()> {
-        // For now, we'll store sender keys in the same map as other sender keys
-        // This would need to be properly implemented to work with libsignal
         Ok(())
     }
 
     async fn get_sender_key(&self, _address: &str) -> Result<Option<Vec<u8>>> {
-        // For now, we'll return None since we don't have the proper sender key storage format
-        // This would need to be implemented properly to work with libsignal
         Ok(None)
+    }
+
+    async fn delete_sender_key(&self, address: &str) -> Result<()> {
+        self.sender_keys.delete(&address.to_string()).await;
+        Ok(())
     }
 }
