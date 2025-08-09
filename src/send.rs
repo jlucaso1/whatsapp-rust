@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::jid::Jid;
+use futures_util::future;
 use libsignal_protocol::{
     CiphertextMessage, ProtocolAddress, SessionStore as _, UsePQRatchet,
     create_sender_key_distribution_message, group_encrypt, message_encrypt, process_prekey_bundle,
@@ -82,6 +83,91 @@ impl Client {
 
         let device_store_arc = self.persistence_manager.get_device_arc().await;
 
+        let mut devices_needing_sessions = Vec::new();
+        for device_jid in &all_devices {
+            let signal_address =
+                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
+
+            let store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+            let session_record = store_adapter
+                .session_store
+                .load_session(&signal_address)
+                .await?;
+            let session_exists = match session_record {
+                Some(record) => record.has_usable_sender_chain(SystemTime::now())?,
+                None => false,
+            };
+
+            if !session_exists {
+                devices_needing_sessions.push(device_jid.clone());
+            }
+        }
+
+        if !devices_needing_sessions.is_empty() {
+            info!(
+                "Establishing sessions for {} devices in parallel",
+                devices_needing_sessions.len()
+            );
+
+            let prekey_bundles = self.fetch_pre_keys(&devices_needing_sessions).await?;
+
+            let session_establishment_tasks: Vec<_> = devices_needing_sessions
+                .into_iter()
+                .map(|device_jid| {
+                    let device_store_arc = device_store_arc.clone();
+                    let prekey_bundles = &prekey_bundles;
+                    async move {
+                        let signal_address = ProtocolAddress::new(
+                            device_jid.user.clone(),
+                            (device_jid.device as u32).into(),
+                        );
+
+                        let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Failed to fetch pre-key bundle for {}",
+                                &signal_address
+                            )
+                        })?;
+
+                        let mut store_adapter =
+                            SignalProtocolStoreAdapter::new(device_store_arc.clone());
+
+                        process_prekey_bundle(
+                            &signal_address,
+                            &mut store_adapter.session_store,
+                            &mut store_adapter.identity_store,
+                            bundle,
+                            SystemTime::now(),
+                            &mut rand::rngs::OsRng.unwrap_err(),
+                            UsePQRatchet::Yes,
+                        )
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to process prekey bundle for {}: {}",
+                                &signal_address,
+                                e
+                            )
+                        })?;
+
+                        info!(
+                            "Successfully established new session for {}.",
+                            &signal_address
+                        );
+                        Ok::<(), anyhow::Error>(())
+                    }
+                })
+                .collect();
+
+            let results = future::join_all(session_establishment_tasks).await;
+
+            for (i, result) in results.into_iter().enumerate() {
+                if let Err(e) = result {
+                    debug!("Failed to establish session for device {}: {}", i, e);
+                }
+            }
+        }
+
         for device_jid in all_devices {
             let is_own_device =
                 device_jid.user == own_jid.user && device_jid.device != own_jid.device;
@@ -95,52 +181,6 @@ impl Client {
                 ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
-
-            let session_record = store_adapter
-                .session_store
-                .load_session(&signal_address)
-                .await?;
-            let session_exists = match session_record {
-                Some(record) => record.has_usable_sender_chain(SystemTime::now())?,
-                None => false,
-            };
-
-            if !session_exists {
-                info!(
-                    "No session found for {}, establishing new one.",
-                    &signal_address
-                );
-
-                let prekey_bundles = self
-                    .fetch_pre_keys(std::slice::from_ref(&device_jid))
-                    .await?;
-                let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
-                })?;
-
-                process_prekey_bundle(
-                    &signal_address,
-                    &mut store_adapter.session_store,
-                    &mut store_adapter.identity_store,
-                    bundle,
-                    SystemTime::now(),
-                    &mut rand::rngs::OsRng.unwrap_err(),
-                    UsePQRatchet::Yes,
-                )
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to process prekey bundle for {}: {}",
-                        &signal_address,
-                        e
-                    )
-                })?;
-
-                info!(
-                    "Successfully established new session for {}.",
-                    &signal_address
-                );
-            }
 
             let encrypted_message = message_encrypt(
                 plaintext_to_encrypt,
@@ -357,12 +397,11 @@ impl Client {
             .cloned()
             .collect();
 
-        for device_jid in recipient_devices {
-            let plaintext_to_encrypt = &skdm_bytes;
-
+        let mut devices_needing_sessions = Vec::new();
+        for device_jid in &recipient_devices {
             let signal_address =
                 ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+            let store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
             let session_record = store_adapter
                 .session_store
@@ -375,27 +414,84 @@ impl Client {
             };
 
             if !session_exists {
-                info!(
-                    "No session for group member {}, establishing new one.",
-                    &signal_address
-                );
-                let prekey_bundles = self
-                    .fetch_pre_keys(std::slice::from_ref(&device_jid))
-                    .await?;
-                let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
-                })?;
-                process_prekey_bundle(
-                    &signal_address,
-                    &mut store_adapter.session_store,
-                    &mut store_adapter.identity_store,
-                    bundle,
-                    SystemTime::now(),
-                    &mut rand::rngs::OsRng.unwrap_err(),
-                    UsePQRatchet::Yes,
-                )
-                .await?;
+                devices_needing_sessions.push(device_jid.clone());
             }
+        }
+
+        if !devices_needing_sessions.is_empty() {
+            info!(
+                "Establishing sessions for {} group member devices in parallel",
+                devices_needing_sessions.len()
+            );
+
+            let prekey_bundles = self.fetch_pre_keys(&devices_needing_sessions).await?;
+
+            let session_establishment_tasks: Vec<_> = devices_needing_sessions
+                .into_iter()
+                .map(|device_jid| {
+                    let device_store_arc = device_store_arc.clone();
+                    let prekey_bundles = &prekey_bundles;
+                    async move {
+                        let signal_address = ProtocolAddress::new(
+                            device_jid.user.clone(),
+                            (device_jid.device as u32).into(),
+                        );
+
+                        let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Failed to fetch pre-key bundle for {}",
+                                &signal_address
+                            )
+                        })?;
+
+                        let mut store_adapter =
+                            SignalProtocolStoreAdapter::new(device_store_arc.clone());
+
+                        process_prekey_bundle(
+                            &signal_address,
+                            &mut store_adapter.session_store,
+                            &mut store_adapter.identity_store,
+                            bundle,
+                            SystemTime::now(),
+                            &mut rand::rngs::OsRng.unwrap_err(),
+                            UsePQRatchet::Yes,
+                        )
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to process prekey bundle for {}: {}",
+                                &signal_address,
+                                e
+                            )
+                        })?;
+
+                        info!(
+                            "Successfully established new session for group member {}.",
+                            &signal_address
+                        );
+                        Ok::<(), anyhow::Error>(())
+                    }
+                })
+                .collect();
+
+            let results = future::join_all(session_establishment_tasks).await;
+
+            for (i, result) in results.into_iter().enumerate() {
+                if let Err(e) = result {
+                    debug!(
+                        "Failed to establish session for group member device {}: {}",
+                        i, e
+                    );
+                }
+            }
+        }
+
+        for device_jid in recipient_devices {
+            let plaintext_to_encrypt = &skdm_bytes;
+
+            let signal_address =
+                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
+            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
             let encrypted_payload = message_encrypt(
                 plaintext_to_encrypt,
