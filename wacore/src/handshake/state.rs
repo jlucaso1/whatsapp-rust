@@ -1,11 +1,13 @@
 use super::noise::{self, NoiseHandshake};
 use crate::{
     binary::consts::NOISE_START_PATTERN,
-    crypto::key_pair::KeyPair,
     handshake::utils::{HandshakeError, HandshakeUtils},
 };
 use aes_gcm::Aes256Gcm;
+use libsignal_protocol::KeyPair;
 use prost::Message;
+use rand::TryRngCore;
+use rand_core::OsRng;
 
 pub type Result<T> = std::result::Result<T, HandshakeError>;
 
@@ -18,24 +20,25 @@ pub struct HandshakeState {
 
 impl HandshakeState {
     pub fn new(device: &crate::store::Device) -> Result<Self> {
-        let ephemeral_kp = KeyPair::new();
+        let ephemeral_kp = KeyPair::generate(&mut OsRng.unwrap_err());
         let wa_header = &crate::binary::consts::WA_CONN_HEADER;
 
         let mut noise = noise::NoiseHandshake::new(NOISE_START_PATTERN, wa_header)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-        noise.authenticate(&ephemeral_kp.public_key);
+        noise.authenticate(ephemeral_kp.public_key.public_key_bytes());
 
         Ok(Self {
             noise,
             ephemeral_kp,
-            static_kp: device.noise_key.clone(),
+            static_kp: device.noise_key,
             payload: HandshakeUtils::prepare_client_payload(device),
         })
     }
 
     pub fn build_client_hello(&self) -> Result<Vec<u8>> {
-        let client_hello = HandshakeUtils::build_client_hello(&self.ephemeral_kp.public_key);
+        let client_hello =
+            HandshakeUtils::build_client_hello(self.ephemeral_kp.public_key.public_key_bytes());
         let mut buf = Vec::new();
         client_hello.encode(&mut buf)?;
         Ok(buf)
@@ -56,7 +59,10 @@ impl HandshakeState {
 
         self.noise.authenticate(&server_ephemeral);
         self.noise
-            .mix_shared_secret(&self.ephemeral_kp.private_key, &server_ephemeral)
+            .mix_shared_secret(
+                &self.ephemeral_kp.private_key.serialize(),
+                &server_ephemeral,
+            )
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let static_decrypted = self
@@ -69,7 +75,10 @@ impl HandshakeState {
             .map_err(|_| HandshakeError::InvalidKeyLength)?;
 
         self.noise
-            .mix_shared_secret(&self.ephemeral_kp.private_key, &static_decrypted_arr)
+            .mix_shared_secret(
+                &self.ephemeral_kp.private_key.serialize(),
+                &static_decrypted_arr,
+            )
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let cert_decrypted = self
@@ -83,11 +92,11 @@ impl HandshakeState {
 
         let encrypted_pubkey = self
             .noise
-            .encrypt(&self.static_kp.public_key)
+            .encrypt(self.static_kp.public_key.public_key_bytes())
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         self.noise
-            .mix_shared_secret(&self.static_kp.private_key, &server_ephemeral)
+            .mix_shared_secret(&self.static_kp.private_key.serialize(), &server_ephemeral)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let encrypted_payload = self

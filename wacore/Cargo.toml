@@ -22,8 +22,6 @@ prost = { version = "0.14.1", default-features = false }
 bytes = { version = "1.5", default-features = false }
 
 # Cryptography
-x25519-dalek = { version = "2.0.0", features = ["static_secrets"] }
-ed25519-dalek = { version = "2.1.0" }
 rand = { version = "0.9" }
 rand_core = "0.9"
 aes-gcm = { version = "0.10.2", features = [

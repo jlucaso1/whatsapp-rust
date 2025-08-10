@@ -6,7 +6,9 @@ use tokio::time::timeout;
 use wacore::binary::node::{Node, NodeContent};
 use wacore::proto_helpers::MessageExt;
 
-use libsignal_protocol::{ProtocolAddress, SenderKeyRecord, SenderKeyStore, SessionRecord};
+use libsignal_protocol::{
+    KeyPair, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
+};
 
 use wacore::signal::store::{PreKeyStore, SessionStore};
 
@@ -262,18 +264,21 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
     let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
 
     pm.modify_device(|device| {
-        device.identity_key = wacore::crypto::key_pair::KeyPair {
-            public_key: creds.signed_identity_key.public,
-            private_key: creds.signed_identity_key.private,
-        };
-        device.signed_pre_key = wacore::crypto::key_pair::PreKey {
-            key_pair: wacore::crypto::key_pair::KeyPair {
-                public_key: creds.signed_pre_key.key_pair.public,
-                private_key: creds.signed_pre_key.key_pair.private,
-            },
-            key_id: creds.signed_pre_key.key_id,
-            signature: Some(creds.signed_pre_key.signature.0.try_into().unwrap()),
-        };
+        let identity_public_key =
+            PublicKey::from_djb_public_key_bytes(&creds.signed_identity_key.public).unwrap();
+        let identity_private_key =
+            PrivateKey::deserialize(&creds.signed_identity_key.private).unwrap();
+        device.identity_key = KeyPair::new(identity_public_key, identity_private_key);
+
+        let signed_pre_key_public =
+            PublicKey::from_djb_public_key_bytes(&creds.signed_pre_key.key_pair.public).unwrap();
+        let signed_pre_key_private =
+            PrivateKey::deserialize(&creds.signed_pre_key.key_pair.private).unwrap();
+        device.signed_pre_key = KeyPair::new(signed_pre_key_public, signed_pre_key_private);
+
+        device.signed_pre_key_id = creds.signed_pre_key.key_id;
+        device.signed_pre_key_signature = creds.signed_pre_key.signature.0.try_into().unwrap();
+
         device.registration_id = creds.registration_id;
     })
     .await;

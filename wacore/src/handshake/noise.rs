@@ -1,7 +1,6 @@
 use crate::crypto::{gcm, hkdf};
 use crate::handshake::state::Result;
 use crate::handshake::utils::{HandshakeError, generate_iv};
-use crate::signal::ecc::curve::calculate_shared_secret;
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, Payload};
 use libsignal_protocol::{PrivateKey, PublicKey};
@@ -97,17 +96,14 @@ impl NoiseHandshake {
         Ok(())
     }
 
-    pub fn mix_shared_secret(
-        &mut self,
-        priv_key_bytes: &[u8; 32],
-        pub_key_bytes: &[u8; 32],
-    ) -> Result<()> {
+    pub fn mix_shared_secret(&mut self, priv_key_bytes: &[u8], pub_key_bytes: &[u8]) -> Result<()> {
         let our_private_key = PrivateKey::deserialize(priv_key_bytes)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
         let their_public_key = PublicKey::from_djb_public_key_bytes(pub_key_bytes)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-        let shared_secret = calculate_shared_secret(&our_private_key, &their_public_key)
+        let shared_secret = our_private_key
+            .calculate_agreement(&their_public_key)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         self.mix_into_key(&shared_secret)

@@ -47,7 +47,7 @@ pub struct HandshakeUtils;
 
 impl HandshakeUtils {
     /// Creates a ClientHello message with the given ephemeral key
-    pub fn build_client_hello(ephemeral_key: &[u8; 32]) -> HandshakeMessage {
+    pub fn build_client_hello(ephemeral_key: &[u8]) -> HandshakeMessage {
         HandshakeMessage {
             client_hello: Some(wa::handshake_message::ClientHello {
                 ephemeral: Some(ephemeral_key.to_vec()),

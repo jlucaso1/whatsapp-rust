@@ -190,7 +190,7 @@ macro_rules! impl_store_wrapper {
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
         let private_key_bytes = self.identity_key.private_key;
-        let private_key = PrivateKey::deserialize(&private_key_bytes)?;
+        let private_key = PrivateKey::deserialize(&private_key_bytes.serialize())?;
         let ikp = IdentityKeyPair::try_from(private_key)?;
         Ok(ikp)
     }
@@ -297,22 +297,21 @@ impl SignedPreKeyStore for Device {
         &self,
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
-        if signed_prekey_id == self.signed_pre_key.key_id {
+        if signed_prekey_id == self.signed_pre_key_id {
             use libsignal_protocol::{KeyPair, PrivateKey, PublicKey};
 
-            let public_key =
-                PublicKey::from_djb_public_key_bytes(&self.signed_pre_key.key_pair.public_key)
-                    .map_err(|e| Box::new(e) as StoreError)?;
-            let private_key = PrivateKey::deserialize(&self.signed_pre_key.key_pair.private_key)
+            let public_key = PublicKey::from_djb_public_key_bytes(
+                self.signed_pre_key.public_key.public_key_bytes(),
+            )
+            .map_err(|e| Box::new(e) as StoreError)?;
+            let private_key = PrivateKey::deserialize(&self.signed_pre_key.private_key.serialize())
                 .map_err(|e| Box::new(e) as StoreError)?;
             let key_pair = KeyPair::new(public_key, private_key);
 
             let record = wacore::signal::state::record::new_signed_pre_key_record(
-                self.signed_pre_key.key_id,
+                self.signed_pre_key_id,
                 &key_pair,
-                self.signed_pre_key
-                    .signature
-                    .ok_or("Signature missing from device's signed pre-key")?,
+                self.signed_pre_key_signature,
                 chrono::Utc::now(),
             );
             return Ok(Some(record));
@@ -340,7 +339,7 @@ impl SignedPreKeyStore for Device {
     }
 
     async fn contains_signed_prekey(&self, signed_prekey_id: u32) -> Result<bool, StoreError> {
-        Ok(signed_prekey_id == self.signed_pre_key.key_id)
+        Ok(signed_prekey_id == self.signed_pre_key_id)
     }
 
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {

@@ -2,8 +2,11 @@ use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::Jid;
+use libsignal_protocol::KeyPair;
 use log::{debug, error, info, warn};
 use prost::Message;
+use rand::TryRngCore;
+use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use waproto::whatsapp as wa;
@@ -12,8 +15,8 @@ pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let device_state = DeviceState {
-        identity_key: store.identity_key.clone(),
-        noise_key: store.noise_key.clone(),
+        identity_key: store.identity_key,
+        noise_key: store.noise_key,
         adv_secret_key: store.adv_secret_key,
     };
     PairUtils::make_qr_data(&device_state, ref_str)
@@ -43,8 +46,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                                 client.persistence_manager.get_device_snapshot().await;
 
                             let device_state = DeviceState {
-                                identity_key: device_snapshot.identity_key.clone(),
-                                noise_key: device_snapshot.noise_key.clone(),
+                                identity_key: device_snapshot.identity_key,
+                                noise_key: device_snapshot.noise_key,
                                 adv_secret_key: device_snapshot.adv_secret_key,
                             };
 
@@ -124,8 +127,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key.clone(),
-        noise_key: device_snapshot.noise_key.clone(),
+        identity_key: device_snapshot.identity_key,
+        noise_key: device_snapshot.noise_key,
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -247,12 +250,12 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = crate::crypto::key_pair::KeyPair::new();
+    let master_ephemeral = KeyPair::generate(&mut OsRng::unwrap_err(OsRng));
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key.clone(),
-        noise_key: device_snapshot.noise_key.clone(),
+        identity_key: device_snapshot.identity_key,
+        noise_key: device_snapshot.noise_key,
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -261,7 +264,7 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
         &pairing_ref,
         &dut_noise_pub,
         &dut_identity_pub,
-        &master_ephemeral,
+        master_ephemeral,
     )?;
 
     let master_jid = device_snapshot.id.clone().unwrap();

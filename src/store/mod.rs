@@ -1,5 +1,6 @@
 pub mod signal;
-use wacore::crypto::key_pair::{KeyPair, PreKey};
+use libsignal_protocol::KeyPair;
+use wacore::store::device::key_pair_serde;
 use wacore::types::jid::Jid;
 use waproto::whatsapp as wa;
 pub mod commands; // Device commands for the persistence manager
@@ -10,6 +11,7 @@ pub mod memory;
 pub mod persistence_manager; // Background persistence manager
 pub mod signal_adapter;
 pub mod traits;
+use serde_big_array::BigArray;
 
 // Re-export traits from both wacore and local extensions
 pub use crate::store::traits::*;
@@ -23,9 +25,16 @@ pub struct SerializableDevice {
     pub id: Option<Jid>,
     pub lid: Option<Jid>,
     pub registration_id: u32,
+    #[serde(with = "key_pair_serde")]
     pub noise_key: KeyPair,
+    #[serde(with = "key_pair_serde")]
     pub identity_key: KeyPair,
-    pub signed_pre_key: PreKey,
+    #[serde(with = "key_pair_serde")]
+    pub signed_pre_key: KeyPair,
+    pub signed_pre_key_id: u32,
+    // FIX: Add the serde_big_array attribute
+    #[serde(with = "BigArray")]
+    pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
@@ -68,9 +77,11 @@ impl Device {
             id: self.core.id.clone(),
             lid: self.core.lid.clone(),
             registration_id: self.core.registration_id,
-            noise_key: self.core.noise_key.clone(),
-            identity_key: self.core.identity_key.clone(),
-            signed_pre_key: self.core.signed_pre_key.clone(),
+            noise_key: self.core.noise_key,
+            identity_key: self.core.identity_key,
+            signed_pre_key: self.core.signed_pre_key,
+            signed_pre_key_id: self.core.signed_pre_key_id,
+            signed_pre_key_signature: self.core.signed_pre_key_signature,
             adv_secret_key: self.core.adv_secret_key,
             account: self.core.account.clone(),
             push_name: self.core.push_name.clone(),

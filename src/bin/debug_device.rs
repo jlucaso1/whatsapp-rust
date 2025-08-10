@@ -106,8 +106,8 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
                 "push_name": device_snapshot.push_name,
                 "has_account": device_snapshot.account.is_some(),
                 "registration_id": device_snapshot.registration_id,
-                "identity_key_public": hex::encode(device_snapshot.identity_key.public_key),
-                "signed_prekey_id": device_snapshot.signed_pre_key.key_id,
+                "identity_key_public": hex::encode(device_snapshot.identity_key.public_key.public_key_bytes()),
+                "signed_prekey_id": device_snapshot.signed_pre_key_id,
                 "adv_secret_key": hex::encode(device_snapshot.adv_secret_key),
                 "ready_for_presence": device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
             }
@@ -116,7 +116,9 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
         return Ok(());
     }
 
-    if device_snapshot.id.is_none() && device_snapshot.noise_key.public_key == [0; 32] {
+    if device_snapshot.id.is_none()
+        && device_snapshot.noise_key.public_key.public_key_bytes() == [0; 32]
+    {
         info!("❌ No significant device data found (no JID or default noise key).");
         info!("   The device may need to be paired first using the main application.");
         return Ok(());
@@ -132,12 +134,9 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
     info!("  Registration ID: {}", device_snapshot.registration_id);
     info!(
         "  Identity Key (Public): {}",
-        hex::encode(device_snapshot.identity_key.public_key)
+        hex::encode(device_snapshot.identity_key.public_key.public_key_bytes())
     );
-    info!(
-        "  Signed PreKey ID: {}",
-        device_snapshot.signed_pre_key.key_id
-    );
+    info!("  Signed PreKey ID: {}", device_snapshot.signed_pre_key_id);
     info!(
         "  ADV Secret Key: {}",
         hex::encode(device_snapshot.adv_secret_key)

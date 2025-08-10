@@ -215,18 +215,22 @@ impl Client {
 
         let registration_id_bytes = device_snapshot.registration_id.to_be_bytes().to_vec();
 
-        let identity_key_bytes = device_snapshot.identity_key.public_key.to_vec();
+        let identity_key_bytes = device_snapshot
+            .identity_key
+            .public_key
+            .public_key_bytes()
+            .to_vec();
 
         let prekey_id_bytes = new_prekey_id.to_be_bytes()[1..].to_vec();
         let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
 
         let skey_id_bytes = 1u32.to_be_bytes()[1..].to_vec();
-        let skey_value_bytes = device_snapshot.signed_pre_key.key_pair.public_key.to_vec();
-        let skey_sig_bytes = device_snapshot
+        let skey_value_bytes = device_snapshot
             .signed_pre_key
-            .signature
-            .ok_or_else(|| anyhow::anyhow!("Missing signed prekey signature"))?
+            .public_key
+            .public_key_bytes()
             .to_vec();
+        let skey_sig_bytes = device_snapshot.signed_pre_key_signature.to_vec();
 
         let device_identity_bytes = device_snapshot
             .account
