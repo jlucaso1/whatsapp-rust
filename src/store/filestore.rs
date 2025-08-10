@@ -204,7 +204,7 @@ impl SessionStore for FileStore {
 
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl signal::store::PreKeyStore for FileStore {
     async fn load_prekey(
         &self,
@@ -274,7 +274,7 @@ impl SenderKeyStoreHelper for FileStore {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl signal::store::SignedPreKeyStore for FileStore {
     async fn load_signed_prekey(
         &self,

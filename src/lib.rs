@@ -31,3 +31,5 @@ pub mod presence;
 pub mod usync;
 
 pub mod test_network;
+
+pub mod bot;

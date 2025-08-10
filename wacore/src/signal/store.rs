@@ -5,7 +5,7 @@ use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn Error + Send + Sync>;
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait PreKeyStore: Send + Sync {
     async fn load_prekey(
         &self,
@@ -20,7 +20,7 @@ pub trait PreKeyStore: Send + Sync {
     async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError>;
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait SignedPreKeyStore: Send + Sync {
     async fn load_signed_prekey(
         &self,
@@ -36,7 +36,7 @@ pub trait SignedPreKeyStore: Send + Sync {
     async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError>;
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait SessionStore: Send + Sync {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError>;
     async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError>;
