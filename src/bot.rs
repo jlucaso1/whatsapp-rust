@@ -72,6 +72,10 @@ impl BotBuilder {
                 .expect("Failed to initialize PersistenceManager"),
         );
 
+        persistence_manager
+            .clone()
+            .run_background_saver(std::time::Duration::from_secs(30));
+
         info!("Creating client...");
         let client = Arc::new(Client::new(persistence_manager.clone()).await);
 
