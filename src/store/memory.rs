@@ -1,6 +1,7 @@
 use crate::store::generic::GenericMemoryStore;
 use crate::store::traits::*;
 use async_trait::async_trait;
+use libsignal_protocol::Direction;
 use wacore::appstate::hash::HashState;
 use wacore::signal::store::{PreKeyStore, SignedPreKeyStore};
 use wacore::store::error::Result;
@@ -45,12 +46,13 @@ impl IdentityStore for MemoryStore {
         Ok(())
     }
 
-    async fn is_trusted_identity(&self, address: &str, key: &[u8; 32]) -> Result<bool> {
-        if let Some(stored_key) = self.identities.get(&address.to_string()).await {
-            Ok(stored_key == *key)
-        } else {
-            Ok(true)
-        }
+    async fn is_trusted_identity(
+        &self,
+        _address: &str,
+        _key: &[u8; 32],
+        _direction: Direction,
+    ) -> Result<bool> {
+        Ok(true)
     }
 
     async fn load_identity(&self, _address: &str) -> Result<Option<Vec<u8>>> {

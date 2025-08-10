@@ -1,5 +1,9 @@
 use aes_gcm::aead::{Aead, Payload};
-use wacore::{binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER}, crypto::{gcm, hkdf::sha256}, handshake::{noise::sha256_slice, utils::generate_iv, NoiseHandshake}};
+use wacore::{
+    binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER},
+    crypto::{gcm, hkdf::sha256},
+    handshake::{NoiseHandshake, noise::sha256_slice, utils::generate_iv},
+};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)
@@ -144,11 +148,7 @@ fn test_full_handshake_flow_with_go_data() {
         hex_to_bytes::<32>("4a82b448599eb44f85bacedaff0a81820999a87be156b08989c2857b8651d4d2");
 
     println!("Step 1: Prologue");
-    let mut nh = NoiseHandshake::new(
-        NOISE_START_PATTERN,
-        wa_header,
-    )
-    .unwrap();
+    let mut nh = NoiseHandshake::new(NOISE_START_PATTERN, wa_header).unwrap();
     assert_eq!(*nh.hash(), hash_after_prologue, "Mismatch after prologue");
 
     println!("Step 2: Auth Client Ephemeral");

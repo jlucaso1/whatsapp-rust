@@ -1,43 +1,37 @@
 use crate::store::Device;
 use async_trait::async_trait;
-use libsignal_protocol::ProtocolAddress;
-use libsignal_protocol::SenderKeyRecord;
-use libsignal_protocol::SenderKeyStore;
-use libsignal_protocol::SessionRecord;
-use libsignal_protocol::SignalProtocolError;
 use libsignal_protocol::error::Result as SignalResult;
+use libsignal_protocol::{
+    Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PrivateKey,
+    ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
+    SignalProtocolError,
+};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use wacore::signal::ecc::keys::EcPublicKey;
-use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
 use wacore::signal::store::*;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 macro_rules! impl_store_wrapper {
-    ($wrapper_ty:ty, $lock_method:ident) => {
-        #[async_trait]
+    ($wrapper_ty:ty, $read_lock:ident, $write_lock:ident) => {
+        #[async_trait(?Send)]
         impl IdentityKeyStore for $wrapper_ty {
-            async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-                self.0.$lock_method().await.get_identity_key_pair().await
+            async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
+                self.0.$read_lock().await.get_identity_key_pair().await
             }
 
-            async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
-                self.0
-                    .$lock_method()
-                    .await
-                    .get_local_registration_id()
-                    .await
+            async fn get_local_registration_id(&self) -> SignalResult<u32> {
+                self.0.$read_lock().await.get_local_registration_id().await
             }
 
             async fn save_identity(
-                &self,
+                &mut self,
                 address: &ProtocolAddress,
                 identity_key: &IdentityKey,
-            ) -> Result<(), StoreError> {
+            ) -> SignalResult<IdentityChange> {
                 self.0
-                    .$lock_method()
+                    .$write_lock()
                     .await
                     .save_identity(address, identity_key)
                     .await
@@ -45,10 +39,22 @@ macro_rules! impl_store_wrapper {
 
             async fn is_trusted_identity(
                 &self,
-                _address: &ProtocolAddress,
-                _identity_key: &IdentityKey,
-            ) -> Result<bool, StoreError> {
-                Ok(true)
+                address: &ProtocolAddress,
+                identity_key: &IdentityKey,
+                direction: Direction,
+            ) -> SignalResult<bool> {
+                self.0
+                    .$read_lock()
+                    .await
+                    .is_trusted_identity(address, identity_key, direction)
+                    .await
+            }
+
+            async fn get_identity(
+                &self,
+                address: &ProtocolAddress,
+            ) -> SignalResult<Option<IdentityKey>> {
+                self.0.$read_lock().await.get_identity(address).await
             }
         }
 
@@ -58,7 +64,7 @@ macro_rules! impl_store_wrapper {
                 &self,
                 prekey_id: u32,
             ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-                self.0.$lock_method().await.load_prekey(prekey_id).await
+                self.0.$read_lock().await.load_prekey(prekey_id).await
             }
 
             async fn store_prekey(
@@ -67,18 +73,18 @@ macro_rules! impl_store_wrapper {
                 record: PreKeyRecordStructure,
             ) -> Result<(), StoreError> {
                 self.0
-                    .$lock_method()
+                    .$write_lock()
                     .await
                     .store_prekey(prekey_id, record)
                     .await
             }
 
             async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
-                self.0.$lock_method().await.contains_prekey(prekey_id).await
+                self.0.$read_lock().await.contains_prekey(prekey_id).await
             }
 
             async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
-                self.0.$lock_method().await.remove_prekey(prekey_id).await
+                self.0.$write_lock().await.remove_prekey(prekey_id).await
             }
         }
 
@@ -89,7 +95,7 @@ macro_rules! impl_store_wrapper {
                 signed_prekey_id: u32,
             ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
                 self.0
-                    .$lock_method()
+                    .$read_lock()
                     .await
                     .load_signed_prekey(signed_prekey_id)
                     .await
@@ -98,7 +104,7 @@ macro_rules! impl_store_wrapper {
             async fn load_signed_prekeys(
                 &self,
             ) -> Result<Vec<SignedPreKeyRecordStructure>, StoreError> {
-                self.0.$lock_method().await.load_signed_prekeys().await
+                self.0.$read_lock().await.load_signed_prekeys().await
             }
 
             async fn store_signed_prekey(
@@ -107,7 +113,7 @@ macro_rules! impl_store_wrapper {
                 record: SignedPreKeyRecordStructure,
             ) -> Result<(), StoreError> {
                 self.0
-                    .$lock_method()
+                    .$write_lock()
                     .await
                     .store_signed_prekey(signed_prekey_id, record)
                     .await
@@ -118,7 +124,7 @@ macro_rules! impl_store_wrapper {
                 signed_prekey_id: u32,
             ) -> Result<bool, StoreError> {
                 self.0
-                    .$lock_method()
+                    .$read_lock()
                     .await
                     .contains_signed_prekey(signed_prekey_id)
                     .await
@@ -126,7 +132,7 @@ macro_rules! impl_store_wrapper {
 
             async fn remove_signed_prekey(&self, signed_prekey_id: u32) -> Result<(), StoreError> {
                 self.0
-                    .$lock_method()
+                    .$write_lock()
                     .await
                     .remove_signed_prekey(signed_prekey_id)
                     .await
@@ -139,12 +145,12 @@ macro_rules! impl_store_wrapper {
                 &self,
                 address: &ProtocolAddress,
             ) -> Result<SessionRecord, StoreError> {
-                self.0.$lock_method().await.load_session(address).await
+                self.0.$read_lock().await.load_session(address).await
             }
 
             async fn get_sub_device_sessions(&self, name: &str) -> Result<Vec<u32>, StoreError> {
                 self.0
-                    .$lock_method()
+                    .$read_lock()
                     .await
                     .get_sub_device_sessions(name)
                     .await
@@ -156,7 +162,7 @@ macro_rules! impl_store_wrapper {
                 record: &SessionRecord,
             ) -> Result<(), StoreError> {
                 self.0
-                    .$lock_method()
+                    .$write_lock()
                     .await
                     .store_session(address, record)
                     .await
@@ -166,63 +172,99 @@ macro_rules! impl_store_wrapper {
                 &self,
                 address: &ProtocolAddress,
             ) -> Result<bool, StoreError> {
-                self.0.$lock_method().await.contains_session(address).await
+                self.0.$read_lock().await.contains_session(address).await
             }
 
             async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError> {
-                self.0.$lock_method().await.delete_session(address).await
+                self.0.$write_lock().await.delete_session(address).await
             }
 
             async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError> {
-                self.0.$lock_method().await.delete_all_sessions(name).await
+                self.0.$write_lock().await.delete_all_sessions(name).await
             }
         }
     };
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl IdentityKeyStore for Device {
-    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, StoreError> {
-        let private_key = self.identity_key.private_key;
-        let public_key = self.identity_key.public_key;
-
-        use wacore::signal::ecc::key_pair::EcKeyPair;
-        use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
-        use wacore::signal::identity::{IdentityKey, IdentityKeyPair};
-
-        let djb_public_key = DjbEcPublicKey::new(public_key);
-        let djb_private_key = DjbEcPrivateKey::new(private_key);
-        let identity_key = IdentityKey::new(djb_public_key.clone());
-        let key_pair = EcKeyPair::new(djb_public_key, djb_private_key);
-
-        Ok(IdentityKeyPair::new(identity_key, key_pair))
+    async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
+        let private_key_bytes = self.identity_key.private_key;
+        let private_key = PrivateKey::deserialize(&private_key_bytes)?;
+        let ikp = IdentityKeyPair::try_from(private_key)?;
+        Ok(ikp)
     }
 
-    async fn get_local_registration_id(&self) -> Result<u32, StoreError> {
+    async fn get_local_registration_id(&self) -> SignalResult<u32> {
         Ok(self.registration_id)
     }
 
     async fn save_identity(
-        &self,
+        &mut self,
         address: &ProtocolAddress,
         identity_key: &IdentityKey,
-    ) -> Result<(), StoreError> {
+    ) -> SignalResult<IdentityChange> {
         let address_str = address.to_string();
-        let key_bytes = identity_key.public_key().public_key();
+        let key_bytes = identity_key.public_key().public_key_bytes();
+        let existing_identity_opt = self.get_identity(address).await?;
 
         self.backend
-            .put_identity(&address_str, key_bytes)
+            .put_identity(
+                &address_str,
+                key_bytes.try_into().map_err(|_| {
+                    SignalProtocolError::InvalidArgument("Invalid key length".into())
+                })?,
+            )
             .await
-            .map_err(|e| Box::new(e) as StoreError)?;
-        Ok(())
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("backend put_identity", e.to_string())
+            })?;
+
+        match existing_identity_opt {
+            None => Ok(IdentityChange::NewOrUnchanged),
+            Some(existing) if &existing == identity_key => Ok(IdentityChange::NewOrUnchanged),
+            Some(_) => Ok(IdentityChange::ReplacedExisting),
+        }
     }
 
     async fn is_trusted_identity(
         &self,
-        _address: &ProtocolAddress,
-        _identity_key: &IdentityKey,
-    ) -> Result<bool, StoreError> {
-        Ok(true)
+        address: &ProtocolAddress,
+        identity_key: &IdentityKey,
+        direction: Direction,
+    ) -> SignalResult<bool> {
+        let key_bytes = identity_key.public_key().public_key_bytes();
+        let key_array: [u8; 32] = key_bytes
+            .try_into()
+            .map_err(|_| SignalProtocolError::InvalidArgument("Invalid key length".into()))?;
+
+        self.backend
+            .is_trusted_identity(&address.to_string(), &key_array, direction)
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState(
+                    "backend is_trusted_identity",
+                    e.to_string(),
+                )
+            })
+    }
+
+    async fn get_identity(&self, address: &ProtocolAddress) -> SignalResult<Option<IdentityKey>> {
+        let identity_bytes = self
+            .backend
+            .load_identity(&address.to_string())
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("backend get_identity", e.to_string())
+            })?;
+
+        match identity_bytes {
+            Some(bytes) if !bytes.is_empty() => {
+                let public_key = PublicKey::from_djb_public_key_bytes(&bytes)?;
+                Ok(Some(IdentityKey::new(public_key)))
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -395,7 +437,7 @@ impl Clone for DeviceRwLockWrapper {
     }
 }
 
-impl_store_wrapper!(DeviceRwLockWrapper, read);
+impl_store_wrapper!(DeviceRwLockWrapper, read, write);
 
 pub struct DeviceStore(pub Arc<Mutex<Device>>);
 
@@ -411,7 +453,7 @@ impl Clone for DeviceStore {
     }
 }
 
-impl_store_wrapper!(DeviceStore, lock);
+impl_store_wrapper!(DeviceStore, lock, lock);
 
 #[async_trait(?Send)]
 impl SenderKeyStore for Device {
@@ -425,7 +467,9 @@ impl SenderKeyStore for Device {
         self.backend
             .put_sender_key(&unique_key, &serialized_record)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("store_sender_key", e.to_string()))
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("store_sender_key", e.to_string())
+            })
     }
 
     async fn load_sender_key(
@@ -437,8 +481,9 @@ impl SenderKeyStore for Device {
             .backend
             .get_sender_key(&unique_key)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
-        {
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("load_sender_key", e.to_string())
+            })? {
             Some(data) => {
                 let record = SenderKeyRecord::deserialize(&data)?;
                 if record.serialize()?.is_empty() {

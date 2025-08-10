@@ -196,7 +196,6 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                     if mutation.index.len() > 1 {
                                         let jid_str = &mutation.index[1];
                                         if let Ok(jid) = Jid::from_str(jid_str) {
-                                            let _ = backend.put_identity(jid_str, [0u8; 32]).await;
                                             let event = Event::ContactUpdate(ContactUpdate {
                                                 jid,
                                                 timestamp: chrono::Utc::now(),
