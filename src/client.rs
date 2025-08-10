@@ -1,15 +1,15 @@
+mod context_impl;
+
 use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
 
-use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager}; // Added PersistenceManager and DeviceCommand, removed self // Import required traits
+use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
 use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event, EventBus};
 use crate::types::presence::Presence;
-
-// New modules for refactored logic
 
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -20,12 +20,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::task;
 use tokio::time::{Duration, sleep};
+use wacore::types::jid::Jid;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use waproto::whatsapp as wa;
 
-// Macro to generate typed event subscription methods
 macro_rules! generate_subscription_methods {
     ($(($method_name:ident, $return_type:ty, $bus_field:ident)),* $(,)?) => {
         $(
@@ -34,6 +35,12 @@ macro_rules! generate_subscription_methods {
             }
         )*
     };
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupInfo {
+    pub participants: Vec<Jid>,
+    pub addressing_mode: crate::types::message::AddressingMode,
 }
 
 #[derive(Debug, Error)]
@@ -55,13 +62,12 @@ pub struct RecentMessageKey {
 }
 
 pub struct Client {
-    /// Core protocol client (platform-independent)
     pub core: wacore::client::CoreClient,
 
     pub persistence_manager: Arc<PersistenceManager>,
     pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 
-    pub(crate) is_logged_in: Arc<AtomicBool>,
+    pub is_logged_in: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
@@ -76,28 +82,24 @@ pub struct Client {
     pub(crate) id_counter: Arc<AtomicU64>,
     pub(crate) event_bus: Arc<EventBus>,
 
-    /// Manages per-chat locks to allow for concurrent message processing
-    /// from different chats while serializing messages within the same chat.
     pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
-
-    pub(crate) lid_pn_map: Arc<Mutex<HashMap<crate::types::jid::Jid, crate::types::jid::Jid>>>,
+    pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
     pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
     pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
 
-    /// Tracks message IDs currently being retried to prevent race conditions
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 
-    /// In-memory cache for fast duplicate message detection
     pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
 
-    /// Test mode fields
+    pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
+
     pub(crate) test_mode: Arc<AtomicBool>,
     pub(crate) test_network_sender:
         Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>>>>,
@@ -108,15 +110,12 @@ impl Client {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
 
-        // Get initial device state and create core client
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
 
-        // Initialize processed messages cache from device state
         let processed_messages_cache = {
             let mut cache = HashSet::new();
             for processed_msg in &device_snapshot.core.processed_messages {
-                // Convert from wacore::ProcessedMessageKey to client::RecentMessageKey
                 let key = RecentMessageKey {
                     to: processed_msg.to.clone(),
                     id: processed_msg.id.clone(),
@@ -143,11 +142,8 @@ impl Client {
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             event_bus: Arc::new(EventBus::new()),
-
-            // Initialize the per-chat locks map
             chat_locks: Arc::new(DashMap::new()),
-
-            lid_pn_map: Arc::new(Mutex::new(HashMap::new())),
+            group_cache: Arc::new(DashMap::new()),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
@@ -160,12 +156,12 @@ impl Client {
             last_successful_connect: Arc::new(Mutex::new(None)),
             processed_messages_cache,
 
-            // Initialize test mode fields
+            needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
+
             test_mode: Arc::new(AtomicBool::new(false)),
             test_network_sender: Arc::new(Mutex::new(None)),
         }
     }
-    // REMOVED: get_group_participants stub. Use query_group_info instead.
 
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
@@ -229,21 +225,16 @@ impl Client {
         let (mut frame_socket, mut frames_rx) = FrameSocket::new();
         frame_socket.connect().await?;
 
-        // Use persistence_manager to get a device snapshot for handshake
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let noise_socket =
             handshake::do_handshake(&device_snapshot, &mut frame_socket, &mut frames_rx).await?;
-        // It's assumed do_handshake might modify the device_snapshot (e.g. JID, account details after pairing)
-        // If so, these changes need to be committed back via PersistenceManager commands.
-        // For QR pairing, this is handled by QrCodeEvent::Success which should trigger commands.
-        // For login, the <success> handler will update the device via commands.
 
         *self.frame_socket.lock().await = Some(frame_socket);
         *self.frames_rx.lock().await = Some(frames_rx);
         *self.noise_socket.lock().await = Some(noise_socket);
 
         let client_clone = self.clone();
-        tokio::spawn(client_clone.keepalive_loop());
+        task::spawn_local(async move { client_clone.keepalive_loop().await });
 
         Ok(())
     }
@@ -304,13 +295,11 @@ impl Client {
         }
     }
 
-    /// Checks if a message has already been processed (for deduplication)
     pub async fn has_message_been_processed(&self, key: &RecentMessageKey) -> bool {
         let cache = self.processed_messages_cache.lock().await;
         cache.contains(key)
     }
 
-    /// Retrieve and remove a message from the recent message cache (for single-use retry handling)
     pub(crate) async fn take_recent_message(
         &self,
         to: crate::types::jid::Jid,
@@ -327,9 +316,7 @@ impl Client {
         }
     }
 
-    /// Marks a message as processed and adds it to both the in-memory cache and persistent storage
     pub async fn mark_message_as_processed(&self, key: RecentMessageKey) {
-        // Convert to wacore type and send to persistence manager first
         let wacore_key = wacore::store::device::ProcessedMessageKey {
             to: key.to.clone(),
             id: key.id.clone(),
@@ -340,26 +327,8 @@ impl Client {
                 wacore_key,
             ))
             .await;
-
-        // Rebuild in-memory cache from the updated persistent storage
-        // This ensures the cache respects the cap and maintains consistency
-        {
-            let mut cache = self.processed_messages_cache.lock().await;
-            cache.clear();
-
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            for processed_msg in &device_snapshot.core.processed_messages {
-                let key = RecentMessageKey {
-                    to: processed_msg.to.clone(),
-                    id: processed_msg.id.clone(),
-                };
-                cache.insert(key);
-            }
-        }
     }
 
-    /// Processes an encrypted frame from the WebSocket.
-    /// This is the entry point for all incoming frames after the handshake.
     pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
@@ -388,7 +357,6 @@ impl Client {
 
         match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
-                // Convert to owned only when needed for processing
                 let node = node_ref.to_owned();
                 self.process_node(node).await;
             }
@@ -436,25 +404,27 @@ impl Client {
             "message" => {
                 let client_clone = self.clone();
                 let node_clone = node.clone();
-                tokio::spawn(async move {
-                    // First, parse the message info to get the source chat JID
+
+                task::spawn_local(async move {
                     let info = match client_clone.parse_message_info(&node_clone).await {
                         Ok(info) => info,
                         Err(e) => {
-                            log::warn!("Could not parse message info to acquire lock: {e:?}");
+                            log::warn!(
+                                "Could not parse message info to acquire lock; dropping message. Error: {e:?}"
+                            );
                             return;
                         }
                     };
                     let chat_jid = info.source.chat;
 
-                    // Acquire a lock for this specific chat.
-                    // entry().or_default() gets the existing mutex or creates a new one atomically.
                     let mutex_arc = client_clone
                         .chat_locks
                         .entry(chat_jid)
                         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
                         .clone();
+
                     let _lock_guard = mutex_arc.lock().await;
+
                     client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
@@ -498,11 +468,8 @@ impl Client {
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
-        // --- MODIFICATION START ---
-        // Check for `lid` and update the store. This is crucial for group messaging.
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<crate::types::jid::Jid>() {
-                // Use command to update LID
                 let current_device = self.persistence_manager.get_device_snapshot().await;
                 if current_device.lid.as_ref() != Some(&lid) {
                     info!(target: "Client", "Updating LID from server to '{lid}'");
@@ -516,9 +483,7 @@ impl Client {
         } else {
             warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
         }
-        // --- MODIFICATION END ---
 
-        // Check for `pushname` and update the store if it's different.
         if let Some(push_name_attr) = node.attrs.get("pushname") {
             let new_name = push_name_attr.clone();
             let current_device = self.persistence_manager.get_device_snapshot().await;
@@ -541,25 +506,25 @@ impl Client {
             }
         }
 
-        // Update account info if present in success node
-        // This part needs to be adapted if `account` is part of the success node attributes or children
-        // For example, if it's an attribute:
-        // if let Some(account_str) = node.attrs.get("account") { ... parse and update ... }
-        // Or if it's a child node:
-        // if let Some(account_node) = node.get_optional_child("account") { ... parse and update ... }
-        // Assuming AdvSignedDeviceIdentity might come from here or another handshake part
-        // For now, this is a placeholder. If login provides AdvSignedDeviceIdentity,
-        // it should be processed and a DeviceCommand::SetAccount should be sent.
-        // e.g. self.persistence_manager.process_command(DeviceCommand::SetAccount(Some(parsed_account_identity))).await;
-
         let client_clone = self.clone();
-        tokio::spawn(async move {
-            // This task runs after successful authentication.
+        task::spawn_local(async move {
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect passive IQ: {e:?}");
             }
 
-            // Now, attempt to send presence. This might fail if push_name is still empty, which is OK.
+            if client_clone
+                .needs_initial_full_sync
+                .swap(false, Ordering::Relaxed)
+            {
+                info!("Performing initial full app state sync after pairing.");
+                for name in wacore::appstate::keys::ALL_PATCH_NAMES {
+                    let client_for_sync = client_clone.clone();
+                    task::spawn_local(async move {
+                        crate::appstate_sync::app_state_sync(&client_for_sync, name, true).await;
+                    });
+                }
+            }
+
             if let Err(e) = client_clone.send_presence(Presence::Available).await {
                 warn!(
                     "Could not send initial presence: {e:?}. This is expected if push_name is not yet known."
@@ -672,29 +637,29 @@ impl Client {
     }
 
     async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
-        if let Some("get") = node.attrs().optional_string("type") {
-            if let Some(_ping_node) = node.get_optional_child("ping") {
-                info!(target: "Client", "Received ping, sending pong.");
-                let mut parser = node.attrs();
-                let from_jid = parser.jid("from");
-                let id = parser.string("id");
-                let pong = Node {
-                    tag: "iq".into(),
-                    attrs: [
-                        ("to".into(), from_jid.to_string()),
-                        ("id".into(), id),
-                        ("type".into(), "result".into()),
-                    ]
-                    .iter()
-                    .cloned()
-                    .collect(),
-                    content: None,
-                };
-                if let Err(e) = self.send_node(pong).await {
-                    warn!("Failed to send pong: {e:?}");
-                }
-                return true;
+        if let Some("get") = node.attrs().optional_string("type")
+            && let Some(_ping_node) = node.get_optional_child("ping")
+        {
+            info!(target: "Client", "Received ping, sending pong.");
+            let mut parser = node.attrs();
+            let from_jid = parser.jid("from");
+            let id = parser.string("id");
+            let pong = Node {
+                tag: "iq".into(),
+                attrs: [
+                    ("to".into(), from_jid.to_string()),
+                    ("id".into(), id),
+                    ("type".into(), "result".into()),
+                ]
+                .iter()
+                .cloned()
+                .collect(),
+                content: None,
+            };
+            if let Err(e) = self.send_node(pong).await {
+                warn!("Failed to send pong: {e:?}");
             }
+            return true;
         }
 
         if pair::handle_iq(self, node).await {
@@ -721,8 +686,6 @@ impl Client {
     }
 
     pub async fn dispatch_event(&self, event: Event) {
-        // Send events to their respective typed channels
-        // Ignore send errors as they indicate no subscribers, which is expected
         match event {
             Event::Connected(data) => {
                 let _ = self.event_bus.connected.send(Arc::new(data));
@@ -817,7 +780,6 @@ impl Client {
         }
     }
 
-    // Generate all subscription methods using the macro
     generate_subscription_methods! {
         (subscribe_to_connected, Arc<crate::types::events::Connected>, connected),
         (subscribe_to_disconnected, Arc<crate::types::events::Disconnected>, disconnected),
@@ -849,19 +811,16 @@ impl Client {
         (subscribe_to_stream_error, Arc<crate::types::events::StreamError>, stream_error),
     }
 
-    /// Helper method for tests to subscribe to all events
-    /// This recreates the old behavior where all events are sent to a single channel
     pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Helper macro for standard single-value events
         macro_rules! forward_simple_events {
             ($(($method_name:ident, $event_variant:ident)),* $(,)?) => {
                 $(
                     {
                         let tx = tx.clone();
                         let mut recv = self.$method_name();
-                        tokio::spawn(async move {
+                        task::spawn_local(async move {
                             while let Ok(data) = recv.recv().await {
                                 let event = Event::$event_variant((*data).clone());
                                 if tx.send(event).is_err() {
@@ -874,7 +833,6 @@ impl Client {
             };
         }
 
-        // Forward simple events using macro
         forward_simple_events! {
             (subscribe_to_connected, Connected),
             (subscribe_to_disconnected, Disconnected),
@@ -904,12 +862,10 @@ impl Client {
             (subscribe_to_stream_error, StreamError),
         }
 
-        // Handle special cases manually for now
-        // Messages (tuple data)
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_messages();
-            tokio::spawn(async move {
+            task::spawn_local(async move {
                 while let Ok(data) = recv.recv().await {
                     let (msg, info) = &*data;
                     let event = Event::Message(msg.clone(), info.clone());
@@ -920,11 +876,10 @@ impl Client {
             });
         }
 
-        // Group info updates (special struct format)
         {
             let tx = tx.clone();
             let mut recv = self.subscribe_to_group_info_updates();
-            tokio::spawn(async move {
+            task::spawn_local(async move {
                 while let Ok(data) = recv.recv().await {
                     let (jid, update) = &*data;
                     let event = Event::GroupInfoUpdate {
@@ -942,7 +897,6 @@ impl Client {
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
-        // Check if we're in test mode first
         if self.test_mode.load(Ordering::Relaxed) {
             debug!(target: "Client/Send", "Using test mode for node: {node}");
             return self.send_node_test_mode(node).await;
@@ -990,7 +944,6 @@ impl Client {
             .into(),
             content: None,
         };
-        // drop(device_snapshot) // Not needed as it's a clone
         info!(
             "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
@@ -999,10 +952,6 @@ impl Client {
         self.send_node(node).await.map_err(|e| e.into())
     }
 
-    /// Sets the push name (display name) for this client.
-    /// This name will be sent in presence announcements and shown to other users.
-    /// This will trigger a `SelfPushNameUpdated` event. The PersistenceManager
-    /// will handle saving the state.
     pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
@@ -1014,7 +963,7 @@ impl Client {
 
             self.dispatch_event(Event::SelfPushNameUpdated(
                 crate::types::events::SelfPushNameUpdated {
-                    from_server: false, // This was a manual call
+                    from_server: false,
                     old_name,
                     new_name: name,
                 },
@@ -1024,20 +973,16 @@ impl Client {
         Ok(())
     }
 
-    /// Gets the current push name (display name) for this client.
     pub async fn get_push_name(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         device_snapshot.push_name.clone()
     }
 
-    /// Checks if the device has all required information for presence announcements.
-    /// Returns true if the device has a JID and push name set.
     pub async fn is_ready_for_presence(&self) -> bool {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
     }
 
-    /// Gets diagnostic information about the device state for debugging.
     pub async fn get_device_debug_info(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         format!(
@@ -1050,34 +995,21 @@ impl Client {
         )
     }
 
-    // save_device_state is removed as PersistenceManager handles saving.
-    // If a manual save is needed, it should be a method on PersistenceManager.
-
-    /// Query group info to get all participant JIDs.
     pub async fn query_group_info(
         &self,
         jid: &crate::types::jid::Jid,
-    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
-        // In test mode, return mock group participants
-        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            // For test mode, assume the group has all three test clients as participants
-            let all_participants = vec![
-                "alice.1@lid".parse()?,
-                "bob.1@lid".parse()?,
-                "charlie.1@lid".parse()?,
-            ];
+    ) -> Result<GroupInfo, anyhow::Error> {
+        if let Some(cached) = self.group_cache.get(jid) {
+            return Ok(cached.value().clone());
+        }
 
-            // Filter out the current client from participants (don't encrypt for yourself)
-            let own_jid = self.get_jid().await;
-            if let Some(own_jid) = own_jid {
-                let filtered_participants: Vec<_> = all_participants
-                    .into_iter()
-                    .filter(|p| *p != own_jid)
-                    .collect();
-                return Ok(filtered_participants);
-            } else {
-                return Ok(all_participants);
-            }
+        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
+            let info = GroupInfo {
+                participants: vec!["559984726662@s.whatsapp.net".parse()?],
+                addressing_mode: crate::types::message::AddressingMode::Pn,
+            };
+            self.group_cache.insert(jid.clone(), info.clone());
+            return Ok(info);
         }
 
         use crate::binary::node::{Node, NodeContent};
@@ -1103,44 +1035,35 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
 
         let mut participants = Vec::new();
-        // Lock the map to update it
-        let mut lid_pn_map = self.lid_pn_map.lock().await;
+        let addressing_mode_str = group_node
+            .attrs()
+            .optional_string("addressing_mode")
+            .unwrap_or("pn");
+        let addressing_mode = match addressing_mode_str {
+            "lid" => crate::types::message::AddressingMode::Lid,
+            _ => crate::types::message::AddressingMode::Pn,
+        };
 
         for participant_node in group_node.get_children_by_tag("participant") {
-            let mut attrs = participant_node.attrs();
-            let participant_jid = attrs.jid("jid");
-
-            // --- MODIFICATION START ---
-            if let Some(lid_jid_str) = attrs.optional_string("lid")
-                && !lid_jid_str.is_empty()
-                && let Ok(lid_jid) = lid_jid_str.parse::<crate::types::jid::Jid>()
-            {
-                log::debug!("Found LID-PN mapping: {participant_jid} <-> {lid_jid}");
-                // Store both ways for easy lookup
-                lid_pn_map.insert(participant_jid.clone(), lid_jid.clone());
-                lid_pn_map.insert(lid_jid, participant_jid.clone());
-            }
-            // --- MODIFICATION END ---
-
-            if !attrs.ok() {
-                log::warn!("Failed to parse participant attrs: {:?}", attrs.errors);
-                continue;
-            }
-            participants.push(participant_jid);
+            participants.push(participant_node.attrs().jid("jid"));
         }
 
-        Ok(participants)
+        let info = GroupInfo {
+            participants,
+            addressing_mode,
+        };
+        self.group_cache.insert(jid.clone(), info.clone());
+
+        Ok(info)
     }
 
-    /// Fetch all devices for the given JIDs using usync IQ.
     pub async fn get_user_devices(
         &self,
         jids: &[crate::types::jid::Jid],
     ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
-        // In test mode, return mock devices without making IQ requests
         if self.test_mode.load(Ordering::Relaxed) {
             debug!("get_user_devices: Using test mode, returning mock devices for {jids:?}");
-            return Ok(jids.to_vec()); // In test mode, assume each JID is its own device
+            return Ok(jids.to_vec());
         }
 
         debug!("get_user_devices: Using normal mode for {jids:?}");
@@ -1217,13 +1140,11 @@ impl Client {
 
         Ok(all_devices)
     }
-    /// Returns the current JID for this client (from device snapshot)
     pub async fn get_jid(&self) -> Option<crate::types::jid::Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.id.clone()
     }
 
-    /// Test mode methods
     pub async fn enable_test_mode(
         &self,
         network_sender: tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>,
@@ -1241,13 +1162,11 @@ impl Client {
         let sender_guard = self.test_network_sender.lock().await;
         let sender = match sender_guard.as_ref() {
             Some(s) => s,
-            None => return Err(ClientError::NotConnected), // No test network configured
+            None => return Err(ClientError::NotConnected),
         };
 
-        // Extract target recipient from the node's "to" attribute if it exists
         let to_jid = node.attrs.get("to").and_then(|to_str| to_str.parse().ok());
 
-        // Get our own JID as the sender
         let from_jid = match self.get_jid().await {
             Some(jid) => jid,
             None => return Err(ClientError::NotLoggedIn),

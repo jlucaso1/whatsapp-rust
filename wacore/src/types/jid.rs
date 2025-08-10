@@ -3,7 +3,6 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
-// Constants
 pub const DEFAULT_USER_SERVER: &str = "s.whatsapp.net";
 pub const SERVER_JID: &str = "s.whatsapp.net";
 pub const GROUP_SERVER: &str = "g.us";
@@ -17,7 +16,6 @@ pub const INTEROP_SERVER: &str = "interop";
 pub const BOT_SERVER: &str = "bot";
 pub const STATUS_BROADCAST_USER: &str = "status";
 
-// Type Aliases
 pub type MessageId = String;
 pub type MessageServerId = i32;
 
@@ -29,7 +27,47 @@ pub enum JidError {
     Parse(#[from] std::num::ParseIntError),
 }
 
-// Owned version for public API
+pub trait JidExt {
+    fn user(&self) -> &str;
+    fn server(&self) -> &str;
+    fn device(&self) -> u16;
+    fn integrator(&self) -> u16;
+
+    fn is_ad(&self) -> bool {
+        self.device() > 0
+            && (self.server() == DEFAULT_USER_SERVER
+                || self.server() == HIDDEN_USER_SERVER
+                || self.server() == HOSTED_SERVER)
+    }
+
+    fn is_interop(&self) -> bool {
+        self.server() == INTEROP_SERVER && self.integrator() > 0
+    }
+
+    fn is_messenger(&self) -> bool {
+        self.server() == MESSENGER_SERVER && self.device() > 0
+    }
+
+    fn is_group(&self) -> bool {
+        self.server() == GROUP_SERVER
+    }
+
+    fn is_broadcast_list(&self) -> bool {
+        self.server() == BROADCAST_SERVER && self.user() != STATUS_BROADCAST_USER
+    }
+
+    fn is_bot(&self) -> bool {
+        (self.server() == DEFAULT_USER_SERVER
+            && self.device() == 0
+            && (self.user().starts_with("1313555") || self.user().starts_with("131655500")))
+            || self.server() == BOT_SERVER
+    }
+
+    fn is_empty(&self) -> bool {
+        self.server().is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Jid {
@@ -40,7 +78,6 @@ pub struct Jid {
     pub integrator: u16,
 }
 
-// Zero-copy version for internal parsing
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JidRef<'a> {
     pub user: Cow<'a, str>,
@@ -48,6 +85,21 @@ pub struct JidRef<'a> {
     pub agent: u8,
     pub device: u16,
     pub integrator: u16,
+}
+
+impl JidExt for Jid {
+    fn user(&self) -> &str {
+        &self.user
+    }
+    fn server(&self) -> &str {
+        &self.server
+    }
+    fn device(&self) -> u16 {
+        self.device
+    }
+    fn integrator(&self) -> u16 {
+        self.integrator
+    }
 }
 
 impl Jid {
@@ -68,40 +120,6 @@ impl Jid {
         }
     }
 
-    pub fn is_ad(&self) -> bool {
-        self.device > 0
-            && (self.server == DEFAULT_USER_SERVER
-                || self.server == HIDDEN_USER_SERVER
-                || self.server == HOSTED_SERVER)
-    }
-
-    pub fn is_interop(&self) -> bool {
-        self.server == INTEROP_SERVER && self.integrator > 0
-    }
-
-    pub fn is_messenger(&self) -> bool {
-        self.server == MESSENGER_SERVER && self.device > 0
-    }
-
-    pub fn is_group(&self) -> bool {
-        self.server == GROUP_SERVER
-    }
-
-    pub fn is_broadcast_list(&self) -> bool {
-        self.server == BROADCAST_SERVER && self.user != STATUS_BROADCAST_USER
-    }
-
-    pub fn is_bot(&self) -> bool {
-        (self.server == DEFAULT_USER_SERVER
-            && self.device == 0
-            && (self.user.starts_with("1313555") || self.user.starts_with("131655500")))
-            || self.server == BOT_SERVER
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.server.is_empty()
-    }
-
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
             self.server.clone()
@@ -111,6 +129,21 @@ impl Jid {
                 self.user, self.agent, self.device, self.server
             )
         }
+    }
+}
+
+impl<'a> JidExt for JidRef<'a> {
+    fn user(&self) -> &str {
+        &self.user
+    }
+    fn server(&self) -> &str {
+        &self.server
+    }
+    fn device(&self) -> u16 {
+        self.device
+    }
+    fn integrator(&self) -> u16 {
+        self.integrator
     }
 }
 
@@ -133,40 +166,6 @@ impl<'a> JidRef<'a> {
             device: self.device,
             integrator: self.integrator,
         }
-    }
-
-    pub fn is_ad(&self) -> bool {
-        self.device > 0
-            && (self.server == DEFAULT_USER_SERVER
-                || self.server == HIDDEN_USER_SERVER
-                || self.server == HOSTED_SERVER)
-    }
-
-    pub fn is_interop(&self) -> bool {
-        self.server == INTEROP_SERVER && self.integrator > 0
-    }
-
-    pub fn is_messenger(&self) -> bool {
-        self.server == MESSENGER_SERVER && self.device > 0
-    }
-
-    pub fn is_group(&self) -> bool {
-        self.server == GROUP_SERVER
-    }
-
-    pub fn is_broadcast_list(&self) -> bool {
-        self.server == BROADCAST_SERVER && self.user != STATUS_BROADCAST_USER
-    }
-
-    pub fn is_bot(&self) -> bool {
-        (self.server == DEFAULT_USER_SERVER
-            && self.device == 0
-            && (self.user.starts_with("1313555") || self.user.starts_with("131655500")))
-            || self.server == BOT_SERVER
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.server.is_empty()
     }
 }
 

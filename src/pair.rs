@@ -2,26 +2,26 @@ use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::Jid;
+use libsignal_protocol::KeyPair;
 use log::{debug, error, info, warn};
 use prost::Message;
+use rand::TryRngCore;
+use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use waproto::whatsapp as wa;
 
-// Re-export core utilities
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
-/// Backward compatibility function for tests
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let device_state = DeviceState {
-        identity_key: store.identity_key.clone(),
-        noise_key: store.noise_key.clone(),
+        identity_key: store.identity_key,
+        noise_key: store.noise_key,
         adv_secret_key: store.adv_secret_key,
     };
     PairUtils::make_qr_data(&device_state, ref_str)
 }
 
-/// Handles incoming IQ stanzas related to the pairing process.
 pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     if node.attrs.get("from").cloned().unwrap_or_default() != "s.whatsapp.net" {
         return false;
@@ -31,14 +31,12 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
         for child in children {
             let handled = match child.tag.as_str() {
                 "pair-device" => {
-                    // 1. Acknowledge the request immediately using core logic
-                    if let Some(ack_node) = PairUtils::build_ack_node(node) {
-                        if let Err(e) = client.send_node(ack_node).await {
-                            warn!("Failed to send acknowledgement: {e:?}");
-                        }
+                    if let Some(ack_node) = PairUtils::build_ack_node(node)
+                        && let Err(e) = client.send_node(ack_node).await
+                    {
+                        warn!("Failed to send acknowledgement: {e:?}");
                     }
 
-                    // 2. Extract QR code refs and generate full QR data strings (async)
                     let mut codes = Vec::new();
                     for grandchild in child.get_children_by_tag("ref") {
                         if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
@@ -47,10 +45,9 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                             let device_snapshot =
                                 client.persistence_manager.get_device_snapshot().await;
 
-                            // Convert to core DeviceState
                             let device_state = DeviceState {
-                                identity_key: device_snapshot.identity_key.clone(),
-                                noise_key: device_snapshot.noise_key.clone(),
+                                identity_key: device_snapshot.identity_key,
+                                noise_key: device_snapshot.noise_key,
                                 adv_secret_key: device_snapshot.adv_secret_key,
                             };
 
@@ -77,7 +74,6 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     false
 }
 
-/// Handles the <pair-success> stanza, finalizing the pairing process.
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
@@ -87,7 +83,6 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         }
     };
 
-    // Extract all data from the success node.
     let device_identity_bytes = match success_node
         .get_optional_child_by_tag(&["device-identity"])
         .and_then(|n| n.content.as_ref())
@@ -122,7 +117,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
         if let Err(e) = parser.finish() {
             warn!(target: "Client/Pair", "Error parsing device node attributes: {e:?}");
-            (Jid::default(), Jid::default()) // Return defaults on parsing error
+            (Jid::default(), Jid::default())
         } else {
             (parsed_jid, parsed_lid)
         }
@@ -130,11 +125,10 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         (Jid::default(), Jid::default())
     };
 
-    // Perform the crypto operations using core logic
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key.clone(),
-        noise_key: device_snapshot.noise_key.clone(),
+        identity_key: device_snapshot.identity_key,
+        noise_key: device_snapshot.noise_key,
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -165,7 +159,6 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 }
             };
 
-            // Update the store via PersistenceManager commands
             client
                 .persistence_manager
                 .process_command(crate::store::commands::DeviceCommand::SetId(Some(
@@ -185,7 +178,6 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 )))
                 .await;
 
-            // Only set push_name if we actually got one.
             if !business_name.is_empty() {
                 info!("✅ Setting push_name during pairing: '{}'", &business_name);
                 client
@@ -200,7 +192,6 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 );
             }
 
-            // Build response using core logic
             let response_node = PairUtils::build_pair_success_response(
                 &req_id,
                 self_signed_identity_bytes,
@@ -212,7 +203,13 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 return;
             }
 
-            // Tell the client that the upcoming disconnect is expected and part of the flow.
+            // --- START: FIX ---
+            // Set the flag to trigger a full sync on the next successful connection.
+            client
+                .needs_initial_full_sync
+                .store(true, Ordering::Relaxed);
+            // --- END: FIX ---
+
             client.expected_disconnect.store(true, Ordering::Relaxed);
 
             info!("Successfully paired {jid}");
@@ -248,38 +245,28 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
     }
 }
 
-/// Simulates a phone scanning a QR code and pairing with a new device.
-/// This is the logic that the "master" client will use in tests.
-pub async fn pair_with_qr_code(
-    client: &Arc<Client>, // The "master" client
-    qr_code: &str,
-) -> Result<(), anyhow::Error> {
+pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<(), anyhow::Error> {
     info!(target: "Client/PairTest", "Master client attempting to pair with QR code.");
 
-    // Parse QR code using core logic
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    // The master client (phone) generates its own ephemeral key
-    let master_ephemeral = crate::crypto::key_pair::KeyPair::new();
+    let master_ephemeral = KeyPair::generate(&mut OsRng::unwrap_err(OsRng));
 
-    // Get device state
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key.clone(),
-        noise_key: device_snapshot.noise_key.clone(),
+        identity_key: device_snapshot.identity_key,
+        noise_key: device_snapshot.noise_key,
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
-    // Prepare pairing message using core logic
     let encrypted = PairUtils::prepare_master_pairing_message(
         &device_state,
         &pairing_ref,
         &dut_noise_pub,
         &dut_identity_pub,
-        &master_ephemeral,
+        master_ephemeral,
     )?;
 
-    // Send the final pairing IQ stanza to the server
     let master_jid = device_snapshot.id.clone().unwrap();
     let req_id = client.generate_request_id();
 

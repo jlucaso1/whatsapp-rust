@@ -1,15 +1,15 @@
 use super::error::StoreError;
-use crate::store::Device; // Removed SerializableDevice
+use crate::store::Device;
 use crate::store::filestore::FileStore;
 use crate::store::traits::Backend;
-use log::{error, info}; // Removed warn
+use log::{error, info};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
-use tokio::time::{Duration, sleep}; // Assuming StoreError is pub in store/error.rs
+use tokio::time::{Duration, sleep};
 
 pub struct PersistenceManager {
     device: Arc<Mutex<Device>>,
-    filestore: Arc<FileStore>,
+    filestore: Option<Arc<FileStore>>,
     dirty: Arc<Mutex<bool>>,
     save_notify: Arc<Notify>,
 }
@@ -36,7 +36,19 @@ impl PersistenceManager {
 
         Ok(Self {
             device: Arc::new(Mutex::new(device)),
-            filestore,
+            filestore: Some(filestore),
+            dirty: Arc::new(Mutex::new(false)),
+            save_notify: Arc::new(Notify::new()),
+        })
+    }
+
+    pub async fn new_in_memory() -> Result<Self, StoreError> {
+        info!("PersistenceManager: Initializing in-memory store.");
+        let memory_store = Arc::new(crate::store::memory::MemoryStore::new());
+        let device = Device::new(memory_store as Arc<dyn Backend>);
+        Ok(Self {
+            device: Arc::new(Mutex::new(device)),
+            filestore: None,
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
         })
@@ -46,73 +58,62 @@ impl PersistenceManager {
         self.device.clone()
     }
 
-    // Provides locked access to the device for reading.
-    // The returned guard allows multiple reads simultaneously if needed,
-    // but for simplicity, we'll keep it as a direct owned Device clone for now
-    // if the full device state is small enough and cloning is not too expensive.
-    // For more complex scenarios, returning a guard or specific fields would be better.
     pub async fn get_device_snapshot(&self) -> Device {
-        self.device.lock().await.clone() // Clone the current state
+        self.device.lock().await.clone()
     }
 
-    // Modifies the device using a closure.
-    // The closure receives a mutable reference to the Device.
     pub async fn modify_device<F, R>(&self, modifier: F) -> R
     where
         F: FnOnce(&mut Device) -> R,
     {
         let mut device_guard = self.device.lock().await;
         let result = modifier(&mut device_guard);
-        let mut dirty_guard = self.dirty.lock().await;
-        *dirty_guard = true;
-        self.save_notify.notify_one(); // Notify the saver task that there's something to save
+        if self.filestore.is_some() {
+            let mut dirty_guard = self.dirty.lock().await;
+            *dirty_guard = true;
+            self.save_notify.notify_one();
+        }
         result
     }
 
-    // Saves the device state to disk if it's dirty.
     async fn save_to_disk(&self) -> Result<(), StoreError> {
-        let mut dirty_guard = self.dirty.lock().await;
-        if *dirty_guard {
-            info!("Device state is dirty, saving to disk.");
-            let device_guard = self.device.lock().await;
-            let serializable_device = device_guard.to_serializable();
-            drop(device_guard); // Release lock on device before I/O
+        if let Some(filestore) = &self.filestore {
+            let mut dirty_guard = self.dirty.lock().await;
+            if *dirty_guard {
+                info!("Device state is dirty, saving to disk.");
+                let device_guard = self.device.lock().await;
+                let serializable_device = device_guard.to_serializable();
+                drop(device_guard);
 
-            self.filestore
-                .save_device_data(&serializable_device)
-                .await?;
-            *dirty_guard = false;
-            info!("Device state saved successfully.");
+                filestore.save_device_data(&serializable_device).await?;
+                *dirty_guard = false;
+                info!("Device state saved successfully.");
+            }
         }
         Ok(())
     }
 
-    // Runs a background task that periodically saves the device state.
     pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-        tokio::spawn(async move {
-            loop {
-                // Wait for either a notification or the interval to pass
-                tokio::select! {
-                    _ = self.save_notify.notified() => {
-                        info!("Save notification received.");
+        if self.filestore.is_some() {
+            tokio::task::spawn_local(async move {
+                loop {
+                    tokio::select! {
+                        _ = self.save_notify.notified() => {
+                            info!("Save notification received.");
+                        }
+                        _ = sleep(interval) => {}
                     }
-                    _ = sleep(interval) => {
-                        // Interval elapsed, proceed to check dirty flag
-                    }
-                }
 
-                // Attempt to save, but don't let save errors crash the loop
-                if let Err(e) = self.save_to_disk().await {
-                    error!("Error saving device state in background: {e}");
+                    if let Err(e) = self.save_to_disk().await {
+                        error!("Error saving device state in background: {e}");
+                    }
                 }
-            }
-        });
-        info!("Background saver task started with interval {interval:?}");
+            });
+            info!("Background saver task started with interval {interval:?}");
+        } else {
+            info!("PersistenceManager is in-memory; background saver is disabled.");
+        }
     }
-
-    // Graceful shutdown for the saver (optional, depending on requirements)
-    // This might involve signaling the background task to stop and waiting for it.
-    // For simplicity, we'll omit this unless specifically requested.
 }
 
 use super::commands::{DeviceCommand, apply_command_to_device};
@@ -126,24 +127,28 @@ impl PersistenceManager {
         .await;
     }
 
-    // Method to force save, useful for testing.
     pub async fn save_now(&self) -> Result<(), StoreError> {
-        info!("PersistenceManager: Forcing save_now.");
-        let device_guard = self.device.lock().await;
-        let serializable_device = device_guard.to_serializable();
-        drop(device_guard);
+        if let Some(filestore) = &self.filestore {
+            info!("PersistenceManager: Forcing save_now.");
+            let device_guard = self.device.lock().await;
+            let serializable_device = device_guard.to_serializable();
+            drop(device_guard);
 
-        match self.filestore.save_device_data(&serializable_device).await {
-            Ok(_) => {
-                let mut dirty_guard = self.dirty.lock().await;
-                *dirty_guard = false; // Reset dirty flag after forced save
-                info!("PersistenceManager: Forced save_now successful.");
-                Ok(())
+            match filestore.save_device_data(&serializable_device).await {
+                Ok(_) => {
+                    let mut dirty_guard = self.dirty.lock().await;
+                    *dirty_guard = false;
+                    info!("PersistenceManager: Forced save_now successful.");
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("PersistenceManager: Forced save_now failed: {e}");
+                    Err(e)
+                }
             }
-            Err(e) => {
-                error!("PersistenceManager: Forced save_now failed: {e}");
-                Err(e)
-            }
+        } else {
+            info!("PersistenceManager: save_now called on in-memory store, no action taken.");
+            Ok(())
         }
     }
 }

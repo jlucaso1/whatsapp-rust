@@ -86,15 +86,15 @@ impl MessageExt for wa::Message {
 
     fn text_content(&self) -> Option<&str> {
         let base = self.get_base_message();
-        if let Some(text) = &base.conversation {
-            if !text.is_empty() {
-                return Some(text);
-            }
+        if let Some(text) = &base.conversation
+            && !text.is_empty()
+        {
+            return Some(text);
         }
-        if let Some(ext_text) = &base.extended_text_message {
-            if let Some(text) = &ext_text.text {
-                return Some(text);
-            }
+        if let Some(ext_text) = &base.extended_text_message
+            && let Some(text) = &ext_text.text
+        {
+            return Some(text);
         }
         None
     }

@@ -1,4 +1,4 @@
-use crate::types::jid::{Jid, MessageId, MessageServerId};
+use crate::types::jid::{Jid, JidExt, MessageId, MessageServerId};
 use chrono::{DateTime, Utc};
 use waproto::whatsapp as wa;
 

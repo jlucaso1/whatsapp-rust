@@ -1,4 +1,3 @@
-// src/socket/frame_socket.rs
 use crate::socket::consts::{FRAME_LENGTH_SIZE, FRAME_MAX_SIZE, URL};
 use crate::socket::error::{Result, SocketError};
 use bytes::{Buf, BytesMut};
@@ -14,6 +13,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
+use wacore::binary::consts::WA_CONN_HEADER;
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WsStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
@@ -36,7 +36,7 @@ impl FrameSocket {
             frames_tx: tx,
             on_disconnect: Arc::new(Mutex::new(None)),
             is_connected: Arc::new(Mutex::new(false)),
-            header: Arc::new(Mutex::new(Some(super::consts::WA_CONN_HEADER.to_vec()))),
+            header: Arc::new(Mutex::new(Some(WA_CONN_HEADER.to_vec()))),
         };
         (socket, rx)
     }
@@ -55,7 +55,6 @@ impl FrameSocket {
         }
 
         info!("Dialing {URL}");
-        // Let tokio-tungstenite handle the handshake headers
         let (ws_stream, _response) = connect_async(URL).await?;
 
         let (sink, stream) = ws_stream.split();
@@ -66,7 +65,7 @@ impl FrameSocket {
         let is_connected_clone = self.is_connected.clone();
         let on_disconnect_clone = self.on_disconnect.clone();
 
-        tokio::spawn(Self::read_pump(
+        tokio::task::spawn_local(Self::read_pump(
             stream,
             frames_tx_clone,
             is_connected_clone,
@@ -155,7 +154,7 @@ impl FrameSocket {
 
         *is_connected.lock().await = false;
         if let Some(cb) = on_disconnect.lock().await.as_ref() {
-            (cb)(true); // remote disconnect
+            (cb)(true);
         }
     }
 
@@ -163,11 +162,9 @@ impl FrameSocket {
         let mut is_connected = self.is_connected.lock().await;
         if *is_connected {
             *is_connected = false;
-            // The read_pump will naturally exit when the connection is closed.
-            // Dropping the sink will initiate the close handshake.
             *self.ws_sink.lock().await = None;
             if let Some(cb) = self.on_disconnect.lock().await.as_ref() {
-                (cb)(false); // local disconnect
+                (cb)(false);
             }
         }
     }
