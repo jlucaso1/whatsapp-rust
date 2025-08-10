@@ -21,10 +21,6 @@ impl SendContextResolver for Client {
     }
 
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
-        let client_group_info = self.query_group_info(jid).await?;
-        Ok(GroupInfo {
-            participants: client_group_info.participants,
-            addressing_mode: client_group_info.addressing_mode,
-        })
+        self.query_group_info(jid).await
     }
 }
