@@ -10,15 +10,20 @@ pub fn generate_content_mac(
 ) -> [u8; 32] {
     let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC can take key of any size");
 
-    // 1. Hash the operation byte. `Set` is 0, so this becomes 1. `Remove` is 1, so this becomes 2.
-    mac.update(&[(operation as i32 + 1) as u8]);
+    // 1. Hash the operation byte, which is its enum value + 1.
+    let operation_byte = (operation as i32 + 1) as u8;
+    mac.update(&[operation_byte]);
+
     // 2. Hash the key ID itself.
     mac.update(key_id);
+
     // 3. Hash the main encrypted payload.
     mac.update(data);
-    // 4. Hash the length of (key ID + operation byte). The operation is always 1 byte.
-    let key_data_length = (key_id.len() + 1) as u64;
-    mac.update(&key_data_length.to_be_bytes());
+
+    // 4. Hash the 8-byte, big-endian length of (keyID + operation_byte).
+    let total_len = (key_id.len() + 1) as u64;
+    mac.update(&total_len.to_be_bytes());
+
     let final_mac: [u8; 32] = mac.finalize().into_bytes()[..32].try_into().unwrap();
 
     final_mac

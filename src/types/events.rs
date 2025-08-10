@@ -68,6 +68,7 @@ define_event_bus! {
     (pin_update, Arc<PinUpdate>),
     (mute_update, Arc<MuteUpdate>),
     (archive_update, Arc<ArchiveUpdate>),
+    (history_sync, Arc<HistorySync>),
 
     // Error and stream events
     (stream_replaced, Arc<StreamReplaced>),

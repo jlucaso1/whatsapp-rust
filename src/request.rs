@@ -76,14 +76,15 @@ impl Client {
         let request_utils = self.get_request_utils();
         let node = request_utils.build_iq_node(&query, Some(req_id.clone()));
 
-        let noise_socket_arc = { self.noise_socket.lock().await.clone() };
-        let noise_socket = match noise_socket_arc {
-            Some(s) => s,
-            None => return Err(IqError::NotConnected),
-        };
-        if let Err(e) = noise_socket.send_node(&node).await {
+        if let Err(e) = self.send_node(node).await {
             self.response_waiters.lock().await.remove(&req_id);
-            return Err(IqError::Socket(e));
+            // Convert the client error back to an IQ error
+            return match e {
+                crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
+                crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
+                // Other client errors can be mapped to a generic network error
+                _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
+            };
         }
 
         match timeout(query.timeout.unwrap_or(default_timeout), rx).await {

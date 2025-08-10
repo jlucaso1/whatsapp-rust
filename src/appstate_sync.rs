@@ -11,7 +11,7 @@ use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
 use wacore::appstate::processor::Processor;
-use waproto::whatsapp as wa;
+use waproto::whatsapp::{self as wa, ExternalBlobReference};
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
     let msg = sync::SyncUtils::build_app_state_key_request(keys);
@@ -104,6 +104,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                 has_more = attrs.optional_bool("has_more_patches");
 
                 let mut patches = Vec::new();
+
                 if let Some(patches_node) = collection_node.get_optional_child("patches") {
                     for patch_child in patches_node.children().unwrap_or_default() {
                         if let Some(crate::binary::node::NodeContent::Bytes(b)) =
@@ -146,20 +147,54 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                     }
                 }
 
-                let snapshot = collection_node
-                    .get_optional_child("snapshot")
-                    .and_then(|node| match &node.content {
-                        Some(crate::binary::node::NodeContent::Bytes(b)) => {
-                            match wa::SyncdSnapshot::decode(b.as_slice()) {
-                                Ok(decoded) => Some(decoded),
-                                Err(e) => {
-                                    log::error!("Failed to decode SyncdSnapshot: {e}");
-                                    None
+                let mut snapshot: Option<wa::SyncdSnapshot> = None;
+                if let Some(snapshot_node) = collection_node.get_optional_child("snapshot")
+                    && let Some(crate::binary::node::NodeContent::Bytes(b)) = &snapshot_node.content
+                {
+                    // First, try to decode as a downloadable reference.
+                    if let Ok(blob_ref) = ExternalBlobReference::decode(b.as_slice()) {
+                        info!(target: "Client/AppState", "Snapshot for '{}' is an external blob, starting download...", name);
+                        match client.download(&blob_ref).await {
+                            Ok(decrypted_blob) => {
+                                match wa::SyncdSnapshot::decode(decrypted_blob.as_slice()) {
+                                    Ok(decoded) => {
+                                        info!(target: "Client/AppState", "Successfully downloaded and parsed snapshot for '{}'.", name);
+                                        snapshot = Some(decoded);
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to parse downloaded SyncdSnapshot blob: {e}. Aborting sync for this collection."
+                                        );
+                                        has_more = false; // Stop syncing this collection
+                                        continue;
+                                    }
                                 }
                             }
+                            Err(e) => {
+                                error!(
+                                    "Failed to download snapshot blob: {e}. Aborting sync for this collection."
+                                );
+                                has_more = false; // Stop syncing this collection
+                                continue;
+                            }
                         }
-                        _ => None,
-                    });
+                    } else {
+                        // If it's not a reference, try to decode it as a direct snapshot.
+                        match wa::SyncdSnapshot::decode(b.as_slice()) {
+                            Ok(decoded) => {
+                                info!(target: "Client/AppState", "Successfully parsed inline snapshot for '{}'.", name);
+                                snapshot = Some(decoded);
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to decode inline SyncdSnapshot: {e}. The data might be a blob reference for an older, unsupported format."
+                                );
+                                has_more = false; // Stop syncing this collection
+                                continue;
+                            }
+                        }
+                    }
+                }
 
                 let patch_list = PatchList {
                     name: name.to_string(),

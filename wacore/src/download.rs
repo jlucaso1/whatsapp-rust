@@ -6,6 +6,7 @@ use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use waproto::whatsapp::ExternalBlobReference;
+use waproto::whatsapp::message::HistorySyncNotification;
 
 /// The app_info string is used in HKDF to derive the decryption keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,33 @@ impl Downloadable for ExternalBlobReference {
 
     fn app_info(&self) -> MediaType {
         MediaType::AppState // This is specifically for app state blobs
+    }
+}
+
+#[async_trait]
+impl Downloadable for HistorySyncNotification {
+    fn direct_path(&self) -> Option<&str> {
+        self.direct_path.as_deref()
+    }
+
+    fn media_key(&self) -> Option<&[u8]> {
+        self.media_key.as_deref()
+    }
+
+    fn file_enc_sha256(&self) -> Option<&[u8]> {
+        self.file_enc_sha256.as_deref()
+    }
+
+    fn file_sha256(&self) -> Option<&[u8]> {
+        self.file_sha256.as_deref()
+    }
+
+    fn file_length(&self) -> Option<u64> {
+        self.file_length
+    }
+
+    fn app_info(&self) -> MediaType {
+        MediaType::History
     }
 }
 
