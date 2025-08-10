@@ -2,9 +2,11 @@ use log::info;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use wacore::binary::node::{Node, NodeContent};
 use wacore::proto_helpers::MessageExt;
+use wacore::types::events::{Event, EventHandler};
 
 use libsignal_protocol::{
     KeyPair, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
@@ -17,6 +19,7 @@ use prost::Message;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
+use whatsapp_rust::types::message::MessageInfo;
 
 mod test_utils {
     use super::*;
@@ -225,6 +228,25 @@ mod test_utils {
     }
 }
 
+struct TestEventHandler {
+    tx: mpsc::Sender<(Box<waproto::whatsapp::Message>, MessageInfo)>,
+}
+
+impl EventHandler for TestEventHandler {
+    fn handle_event(&self, event: &Event) {
+        if let Event::Message(msg, info) = event {
+            let tx = self.tx.clone();
+            let msg_clone = msg.clone();
+            let info_clone = info.clone();
+            tokio::spawn(async move {
+                if tx.send((msg_clone, info_clone)).await.is_err() {
+                    log::error!("Failed to send message to test");
+                }
+            });
+        }
+    }
+}
+
 async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, Node) {
     let dir = Path::new("tests")
         .join("captured_prekeys")
@@ -340,7 +362,11 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
 
         let sender_address =
             ProtocolAddress::new(sender_jid.user.clone(), (sender_jid.device as u32).into());
-        let group_sender_name = format!("{}\n{}", group_jid_str, sender_address);
+        let group_sender_name = format!(
+            "{}
+{}",
+            group_jid_str, sender_address
+        );
         let group_sender_address = ProtocolAddress::new(group_sender_name, 0.into());
 
         device_store_locked
@@ -357,20 +383,22 @@ async fn test_decrypt_skmsg() {
     let _ = env_logger::builder().is_test(true).try_init();
     let (client, stanza_node) = setup_test_client("3AE25114554577124F87", true).await;
 
-    let mut message_rx = client.subscribe_to_messages();
+    let (tx, mut rx) = mpsc::channel(1);
+    let handler = Arc::new(TestEventHandler { tx });
+    client.core.event_bus.add_handler(handler);
 
     info!("Dispatching group message for decryption...");
     client.handle_encrypted_message(stanza_node).await;
 
-    let received_event = timeout(std::time::Duration::from_secs(5), message_rx.recv())
+    let received_event = timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
         .expect("Test timed out waiting for decrypted message event")
         .expect("Message channel was closed unexpectedly");
 
-    let (decrypted_msg, _info) = &*received_event;
+    let (decrypted_msg, _info) = received_event;
 
     let conversation_text = decrypted_msg.text_content().unwrap_or("");
-    info!("Decrypted group message content: \"{conversation_text}\"");
+    info!("Decrypted group message content: {conversation_text}");
 
     assert_eq!(conversation_text, "Oi");
     println!("✅ Decrypted group message (skmsg) successfully.");

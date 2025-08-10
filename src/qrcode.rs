@@ -1,12 +1,15 @@
 use crate::client::Client;
 use crate::types::events::PairError;
 use log::{debug, warn};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
 use tokio::task;
+use wacore::types::events::{Event, EventHandler};
 
 #[derive(Debug, Clone)]
 pub enum QrCodeEvent {
@@ -26,6 +29,92 @@ pub enum QrError {
     AlreadyConnected,
     #[error("client is already logged in (store contains a JID)")]
     AlreadyLoggedIn,
+}
+
+struct QrCodeEventHandler {
+    output: mpsc::Sender<QrCodeEvent>,
+    stop_emitter_tx: watch::Sender<()>,
+    closed: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone)]
+enum QrAction {
+    EmitCodes(Vec<String>),
+    ProcessNonTerminal(QrCodeEvent),
+    ProcessTerminal(QrCodeEvent),
+}
+
+impl EventHandler for QrCodeEventHandler {
+    fn handle_event(&self, event: &Event) {
+        let action = match event {
+            Event::Qr(qr_data) => Some(QrAction::EmitCodes(qr_data.codes.clone())),
+            Event::QrScannedWithoutMultidevice(_) => Some(QrAction::ProcessNonTerminal(
+                QrCodeEvent::ScannedWithoutMultidevice,
+            )),
+            Event::PairSuccess(_) => Some(QrAction::ProcessTerminal(QrCodeEvent::Success)),
+            Event::PairError(err) => {
+                Some(QrAction::ProcessTerminal(QrCodeEvent::Error(err.clone())))
+            }
+            Event::ClientOutdated(_) => {
+                Some(QrAction::ProcessTerminal(QrCodeEvent::ClientOutdated))
+            }
+            Event::Disconnected(_) => Some(QrAction::ProcessTerminal(QrCodeEvent::Timeout)),
+            Event::LoggedOut(_) => Some(QrAction::ProcessTerminal(QrCodeEvent::LoggedOut)),
+            _ => None,
+        };
+
+        if let Some(owned_action) = action {
+            let tx = self.output.clone();
+            let stop_emitter_tx = self.stop_emitter_tx.clone();
+            let closed = self.closed.clone();
+
+            tokio::task::spawn_local(async move {
+                match owned_action {
+                    QrAction::EmitCodes(codes) => {
+                        debug!("Handler received QR event, starting emitter task");
+                        let (emitter_tx, mut emitter_rx) = mpsc::channel(8);
+
+                        task::spawn_local(emit_codes(
+                            emitter_tx,
+                            stop_emitter_tx.subscribe(),
+                            codes,
+                        ));
+
+                        let fwd_tx = tx.clone();
+                        task::spawn_local(async move {
+                            while let Some(evt) = emitter_rx.recv().await {
+                                if fwd_tx.send(evt).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                    QrAction::ProcessNonTerminal(event) => {
+                        if tx.send(event).await.is_err() {
+                            warn!(
+                                "QR channel receiver was dropped before non-terminal event was sent."
+                            );
+                        }
+                    }
+                    QrAction::ProcessTerminal(final_event) => {
+                        let _ = stop_emitter_tx.send(());
+
+                        if closed
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                        {
+                            debug!("Closing QR channel with status: {:?}", final_event);
+                            if tx.send(final_event).await.is_err() {
+                                warn!(
+                                    "QR channel receiver was dropped before final event was sent."
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
 }
 
 async fn emit_codes(
@@ -84,87 +173,15 @@ pub(crate) async fn get_qr_channel_logic(
     }
 
     let (tx, rx) = mpsc::channel(8);
-    let (stop_emitter_tx, stop_emitter_rx) = watch::channel(());
-    let closed = Arc::new(AtomicBool::new(false));
+    let (stop_emitter_tx, _) = watch::channel(());
 
-    let mut qr_rx = client.subscribe_to_qr();
-    let mut qr_scanned_rx = client.subscribe_to_qr_scanned_without_multidevice();
-    let mut pair_success_rx = client.subscribe_to_pair_success();
-    let mut pair_error_rx = client.subscribe_to_pair_error();
-    let mut client_outdated_rx = client.subscribe_to_client_outdated();
-    let mut disconnected_rx = client.subscribe_to_disconnected();
-    let mut connected_rx = client.subscribe_to_connected();
-    let mut logged_out_rx = client.subscribe_to_logged_out();
-
-    let tx_clone = tx.clone();
-    let closed_clone = closed.clone();
-    let stop_emitter_tx_clone = stop_emitter_tx.clone();
-
-    task::spawn_local(async move {
-        loop {
-            if closed_clone.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let mut terminal_event = None;
-            let mut non_terminal_event = None;
-
-            tokio::select! {
-                Ok(qr_data) = qr_rx.recv() => {
-                    debug!("Received QR event, starting emitter task");
-                    task::spawn_local(emit_codes(
-                        tx_clone.clone(),
-                        stop_emitter_rx.clone(),
-                        qr_data.codes.clone(),
-                    ));
-                }
-                Ok(_) = qr_scanned_rx.recv() => {
-                    non_terminal_event = Some(QrCodeEvent::ScannedWithoutMultidevice);
-                }
-                Ok(_) = pair_success_rx.recv() => {
-                    terminal_event = Some(QrCodeEvent::Success);
-                }
-                Ok(err) = pair_error_rx.recv() => {
-                    terminal_event = Some(QrCodeEvent::Error((*err).clone()));
-                }
-                Ok(_) = client_outdated_rx.recv() => {
-                    terminal_event = Some(QrCodeEvent::ClientOutdated);
-                }
-                Ok(_) = disconnected_rx.recv() => {
-                    terminal_event = Some(QrCodeEvent::Timeout);
-                }
-                Ok(_) = connected_rx.recv() => {}
-                Ok(_) = logged_out_rx.recv() => {
-                    terminal_event = Some(QrCodeEvent::LoggedOut);
-                }
-                else => {
-                    break;
-                }
-            }
-
-            if let Some(event) = non_terminal_event
-                && tx_clone.send(event).await.is_err()
-            {
-                warn!("QR channel receiver was dropped before event was sent.");
-                break;
-            }
-
-            if let Some(final_event) = terminal_event {
-                let _ = stop_emitter_tx_clone.send(());
-
-                if closed_clone
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    debug!("Closing QR channel with status: {final_event:?}");
-                    if tx_clone.send(final_event).await.is_err() {
-                        warn!("QR channel receiver was dropped before final event.");
-                    }
-                    break;
-                }
-            }
-        }
+    let handler = Arc::new(QrCodeEventHandler {
+        output: tx,
+        stop_emitter_tx,
+        closed: Arc::new(AtomicBool::new(false)),
     });
+
+    client.core.event_bus.add_handler(handler);
 
     Ok(rx)
 }

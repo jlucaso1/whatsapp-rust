@@ -56,7 +56,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     }
 
                     debug!(target: "Client/Pair", "Dispatching QR event with {} codes", codes.len());
-                    client.dispatch_event(Event::Qr(Qr { codes })).await;
+                    client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {
@@ -144,17 +144,13 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                     error!(
                         "FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}"
                     );
-                    client
-                        .dispatch_event(Event::PairError(PairError {
-                            id: jid.clone(),
-                            lid: lid.clone(),
-                            business_name: business_name.clone(),
-                            platform: platform.clone(),
-                            error: format!(
-                                "internal error: failed to decode identity for event: {e}"
-                            ),
-                        }))
-                        .await;
+                    client.core.event_bus.dispatch(&Event::PairError(PairError {
+                        id: jid.clone(),
+                        lid: lid.clone(),
+                        business_name: business_name.clone(),
+                        platform: platform.clone(),
+                        error: format!("internal error: failed to decode identity for event: {e}"),
+                    }));
                     return;
                 }
             };
@@ -221,8 +217,9 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 platform,
             };
             client
-                .dispatch_event(Event::PairSuccess(success_event))
-                .await;
+                .core
+                .event_bus
+                .dispatch(&Event::PairSuccess(success_event));
         }
         Err(e) => {
             error!("Pairing crypto failed: {e}");
@@ -239,8 +236,9 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 error: e.to_string(),
             };
             client
-                .dispatch_event(Event::PairError(pair_error_event))
-                .await;
+                .core
+                .event_bus
+                .dispatch(&Event::PairError(pair_error_event));
         }
     }
 }

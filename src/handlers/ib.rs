@@ -34,14 +34,15 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
                 );
 
                 client
-                    .dispatch_event(Event::OfflineSyncPreview(OfflineSyncPreview {
+                    .core
+                    .event_bus
+                    .dispatch(&Event::OfflineSyncPreview(OfflineSyncPreview {
                         total,
                         app_data_changes,
                         messages,
                         notifications,
                         receipts,
-                    }))
-                    .await;
+                    }));
             }
             "offline" => {
                 let mut attrs = child.attrs();
@@ -49,8 +50,9 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
 
                 info!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
                 client
-                    .dispatch_event(Event::OfflineSyncCompleted(OfflineSyncCompleted { count }))
-                    .await;
+                    .core
+                    .event_bus
+                    .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
             }
             _ => {
                 warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);

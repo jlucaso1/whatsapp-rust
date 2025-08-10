@@ -6,7 +6,33 @@ use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
 use std::fmt;
+use std::sync::{Arc, RwLock};
 use waproto::whatsapp::{self as wa, HistorySync};
+
+pub trait EventHandler: Send + Sync {
+    fn handle_event(&self, event: &Event);
+}
+
+#[derive(Default, Clone)]
+pub struct CoreEventBus {
+    handlers: Arc<RwLock<Vec<Arc<dyn EventHandler>>>>,
+}
+
+impl CoreEventBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_handler(&self, handler: Arc<dyn EventHandler>) {
+        self.handlers.write().unwrap().push(handler);
+    }
+
+    pub fn dispatch(&self, event: &Event) {
+        for handler in self.handlers.read().unwrap().iter() {
+            handler.handle_event(event);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SelfPushNameUpdated {
