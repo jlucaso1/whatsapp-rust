@@ -6,7 +6,7 @@ use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
 use std::fmt;
-use waproto::whatsapp as wa;
+use waproto::whatsapp::{self as wa, HistorySync};
 
 #[derive(Debug, Clone)]
 pub struct SelfPushNameUpdated {
@@ -50,6 +50,8 @@ pub enum Event {
     ArchiveUpdate(ArchiveUpdate),
 
     HistorySync(HistorySync),
+    OfflineSyncPreview(OfflineSyncPreview),
+    OfflineSyncCompleted(OfflineSyncCompleted),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -265,8 +267,17 @@ pub struct StreamError {
 pub struct Disconnected;
 
 #[derive(Debug, Clone)]
-pub struct HistorySync {
-    pub data: Box<wa::HistorySync>,
+pub struct OfflineSyncPreview {
+    pub total: i32,
+    pub app_data_changes: i32,
+    pub messages: i32,
+    pub notifications: i32,
+    pub receipts: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct OfflineSyncCompleted {
+    pub count: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

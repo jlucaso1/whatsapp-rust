@@ -4,7 +4,7 @@ use crate::types::message::MessageInfo;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 pub use wacore::types::events::*;
-use waproto::whatsapp as wa;
+use waproto::whatsapp::{self as wa, HistorySync};
 
 // The size of the broadcast channel buffer.
 const CHANNEL_CAPACITY: usize = 100;
@@ -69,6 +69,9 @@ define_event_bus! {
     (mute_update, Arc<MuteUpdate>),
     (archive_update, Arc<ArchiveUpdate>),
     (history_sync, Arc<HistorySync>),
+
+    (offline_sync_preview, Arc<OfflineSyncPreview>),
+    (offline_sync_completed, Arc<OfflineSyncCompleted>),
 
     // Error and stream events
     (stream_replaced, Arc<StreamReplaced>),
