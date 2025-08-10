@@ -1,9 +1,8 @@
 use std::str::FromStr;
-use wacore::types::jid::Jid;
+use wacore::types::jid::{Jid, JidExt};
 
 #[test]
 fn test_jid_parsing_and_serialization() {
-    // Standard User JID
     let jid_str = "1234567890@s.whatsapp.net";
     let jid = Jid::from_str(jid_str).unwrap();
     assert_eq!(jid.user, "1234567890");
@@ -14,7 +13,6 @@ fn test_jid_parsing_and_serialization() {
     assert!(!jid.is_ad());
     assert!(!jid.is_group());
 
-    // AD User JID
     let ad_jid_str = "1234567890:12@s.whatsapp.net";
     let ad_jid = Jid::from_str(ad_jid_str).unwrap();
     assert_eq!(ad_jid.user, "1234567890");
@@ -23,7 +21,6 @@ fn test_jid_parsing_and_serialization() {
     assert!(ad_jid.is_ad());
     assert_eq!(ad_jid.to_string(), ad_jid_str);
 
-    // Group JID
     let group_jid_str = "123-456@g.us";
     let group_jid = Jid::from_str(group_jid_str).unwrap();
     assert_eq!(group_jid.user, "123-456");
@@ -31,7 +28,6 @@ fn test_jid_parsing_and_serialization() {
     assert!(group_jid.is_group());
     assert_eq!(group_jid.to_string(), group_jid_str);
 
-    // Server-only JID
     let server_jid_str = "s.whatsapp.net";
     let server_jid = Jid::from_str(server_jid_str).unwrap();
     assert!(server_jid.user.is_empty());
@@ -41,10 +37,8 @@ fn test_jid_parsing_and_serialization() {
 
 #[test]
 fn test_invalid_jid_parsing() {
-    // This will parse as a server JID, which is correct.
     assert!(Jid::from_str("invalidjid").is_ok());
 
-    // This will also parse as a valid JID (server = "server:device").
     assert!(Jid::from_str("user@server:device").is_ok());
 }
 

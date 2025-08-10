@@ -1,6 +1,5 @@
 use aes_gcm::aead::{Aead, Payload};
-use whatsapp_rust::crypto::{gcm, hkdf};
-use whatsapp_rust::socket::consts;
+use wacore::{binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER}, crypto::{gcm, hkdf::sha256}, handshake::{noise::sha256_slice, utils::generate_iv, NoiseHandshake}};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)
@@ -31,7 +30,7 @@ fn test_server_static_key_decryption_with_go_values() {
     );
 
     let (rust_salt_after_mix, rust_key_for_decrypt) = {
-        let okm = hkdf::sha256(&rust_shared_secret, Some(&salt_before_mix), &[], 64).unwrap();
+        let okm = sha256(&rust_shared_secret, Some(&salt_before_mix), &[], 64).unwrap();
 
         let mut salt = [0u8; 32];
         let mut key = [0u8; 32];
@@ -49,7 +48,7 @@ fn test_server_static_key_decryption_with_go_values() {
 
     let cipher = gcm::prepare(&rust_key_for_decrypt).expect("Failed to prepare GCM cipher");
 
-    let iv = whatsapp_rust::socket::noise_socket::generate_iv(0);
+    let iv = generate_iv(0);
     let payload = Payload {
         msg: &ciphertext,
         aad: &aad_for_decrypt,
@@ -71,7 +70,6 @@ fn test_server_static_key_decryption_with_go_values() {
 fn test_live_decryption_with_go_values() {
     use aes_gcm::aead::{Aead, Payload};
     use hex;
-    use whatsapp_rust::crypto::gcm;
 
     let go_derived_key_hex = "0e34efece6dc4516c05c53bb7e0c2128bc66c053da4e0b18afb0afe8e648c05d";
     let go_aad_hex = "78b3c79d1c15cf84ec402678ac0478106a6f201a77e4d2364de1e096d65c7bfe";
@@ -86,7 +84,7 @@ fn test_live_decryption_with_go_values() {
 
     let cipher = gcm::prepare(&go_derived_key).expect("Failed to prepare GCM cipher");
 
-    let iv = whatsapp_rust::socket::noise_socket::generate_iv(0);
+    let iv = generate_iv(0);
 
     let payload = Payload {
         msg: &ciphertext,
@@ -112,7 +110,7 @@ fn test_full_handshake_flow_with_go_data() {
         hex_to_bytes::<32>("b8de0b5ebad3e7879fa659c0d27baa6c3e3f32a10f7c4cb2613cb4182fe83047");
     let client_eph_pub =
         hex_to_bytes::<32>("8537e1daadfb8e9ff8491896f5733008bad4967c2ba97670f69cf3053762ea4d");
-    let wa_header = &consts::WA_CONN_HEADER;
+    let wa_header = &WA_CONN_HEADER;
 
     let hash_after_prologue =
         hex_to_bytes::<32>("ffff0c9267310966f1311170c04b38c79504285bf5edf763e5c946492a50a755");
@@ -146,8 +144,8 @@ fn test_full_handshake_flow_with_go_data() {
         hex_to_bytes::<32>("4a82b448599eb44f85bacedaff0a81820999a87be156b08989c2857b8651d4d2");
 
     println!("Step 1: Prologue");
-    let mut nh = whatsapp_rust::socket::noise_handshake::NoiseHandshake::new(
-        consts::NOISE_START_PATTERN,
+    let mut nh = NoiseHandshake::new(
+        NOISE_START_PATTERN,
         wa_header,
     )
     .unwrap();
@@ -236,7 +234,7 @@ fn test_initial_pattern_hash() {
     let expected_hash =
         hex::decode("5df72b67b965add1168f0a6c756df21c204f7e64fc682be6a3ab4b682c8db64b").unwrap();
 
-    let actual_hash = whatsapp_rust::socket::noise_handshake::sha256_slice(pattern.as_bytes());
+    let actual_hash = sha256_slice(pattern.as_bytes());
 
     assert_eq!(actual_hash.as_slice(), expected_hash.as_slice());
 }
