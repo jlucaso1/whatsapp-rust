@@ -111,7 +111,7 @@ impl AppStateKeyStore for MemoryStore {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl PreKeyStore for MemoryStore {
     async fn load_prekey(
         &self,
@@ -139,7 +139,7 @@ impl PreKeyStore for MemoryStore {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl SignedPreKeyStore for MemoryStore {
     async fn load_signed_prekey(
         &self,

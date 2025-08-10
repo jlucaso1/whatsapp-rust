@@ -58,7 +58,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[async_trait(?Send)]
         impl PreKeyStore for $wrapper_ty {
             async fn load_prekey(
                 &self,
@@ -88,7 +88,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[async_trait(?Send)]
         impl SignedPreKeyStore for $wrapper_ty {
             async fn load_signed_prekey(
                 &self,
@@ -139,7 +139,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[async_trait(?Send)]
         impl SessionStore for $wrapper_ty {
             async fn load_session(
                 &self,
@@ -265,7 +265,7 @@ impl IdentityKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
@@ -291,7 +291,7 @@ impl PreKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
@@ -351,7 +351,7 @@ impl SignedPreKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl SessionStore for Device {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         let address_str = address.to_string();
