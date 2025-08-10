@@ -9,6 +9,7 @@ pub mod prekeys;
 pub mod proto_helpers;
 pub mod request;
 pub mod runtime;
+pub mod send;
 pub mod signal;
 pub mod store;
 pub mod types;

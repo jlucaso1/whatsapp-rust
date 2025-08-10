@@ -152,8 +152,12 @@ impl Client {
                     anyhow::anyhow!("Cannot create SKDM for retry: No local sending JID available")
                 })?;
 
-            let (skdm_bytes_padded, _sender_key_name) = self
-                .create_sender_key_distribution_message_for_group(
+            let device_store_arc = self.persistence_manager.get_device_arc().await;
+            let mut device_guard = device_store_arc.lock().await;
+
+            let (skdm_bytes_padded, _sender_key_name) =
+                wacore::send::create_sender_key_distribution_message_for_group(
+                    &mut *device_guard,
                     &receipt.source.chat,
                     &own_sending_jid,
                 )
