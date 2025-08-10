@@ -8,9 +8,7 @@ use crate::qrcode;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
 use crate::handlers;
-use crate::types::events::{
-    ConnectFailureReason, Event, EventBus, HistorySync, SelfPushNameUpdated,
-};
+use crate::types::events::{ConnectFailureReason, Event, EventBus, SelfPushNameUpdated};
 use crate::types::presence::Presence;
 
 use dashmap::DashMap;
@@ -19,6 +17,7 @@ use log::{debug, error, info, warn};
 use prost::Message;
 use rand::RngCore;
 use scopeguard;
+use waproto::whatsapp::HistorySync;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::sync::Arc;
@@ -775,6 +774,12 @@ impl Client {
             Event::HistorySync(data) => {
                 let _ = self.event_bus.history_sync.send(Arc::new(data));
             }
+            Event::OfflineSyncPreview(data) => {
+                let _ = self.event_bus.offline_sync_preview.send(Arc::new(data));
+            }
+            Event::OfflineSyncCompleted(data) => {
+                let _ = self.event_bus.offline_sync_completed.send(Arc::new(data));
+            }
             Event::StreamReplaced(data) => {
                 let _ = self.event_bus.stream_replaced.send(Arc::new(data));
             }
@@ -815,6 +820,9 @@ impl Client {
         (subscribe_to_pin_updates, Arc<crate::types::events::PinUpdate>, pin_update),
         (subscribe_to_mute_updates, Arc<crate::types::events::MuteUpdate>, mute_update),
         (subscribe_to_archive_updates, Arc<crate::types::events::ArchiveUpdate>, archive_update),
+        (subscribe_to_history_sync, Arc<HistorySync>, history_sync),
+        (subscribe_to_offline_sync_preview, Arc<crate::types::events::OfflineSyncPreview>, offline_sync_preview),
+        (subscribe_to_offline_sync_completed, Arc<crate::types::events::OfflineSyncCompleted>, offline_sync_completed),
         (subscribe_to_stream_replaced, Arc<crate::types::events::StreamReplaced>, stream_replaced),
         (subscribe_to_temporary_ban, Arc<crate::types::events::TemporaryBan>, temporary_ban),
         (subscribe_to_connect_failure, Arc<crate::types::events::ConnectFailure>, connect_failure),
@@ -866,6 +874,9 @@ impl Client {
             (subscribe_to_pin_updates, PinUpdate),
             (subscribe_to_mute_updates, MuteUpdate),
             (subscribe_to_archive_updates, ArchiveUpdate),
+            (subscribe_to_history_sync, HistorySync),
+            (subscribe_to_offline_sync_preview, OfflineSyncPreview),
+            (subscribe_to_offline_sync_completed, OfflineSyncCompleted),
             (subscribe_to_stream_replaced, StreamReplaced),
             (subscribe_to_temporary_ban, TemporaryBan),
             (subscribe_to_connect_failure, ConnectFailure),
@@ -1271,10 +1282,7 @@ impl Client {
                         }
 
                         // Dispatch the raw event for consumers who might want it
-                        self.dispatch_event(Event::HistorySync(HistorySync {
-                            data: Box::new(history_data),
-                        }))
-                        .await;
+                        self.dispatch_event(Event::HistorySync(history_data)).await;
                     }
                     Err(e) => {
                         log::error!("Failed to parse HistorySync protobuf: {:?}", e);
