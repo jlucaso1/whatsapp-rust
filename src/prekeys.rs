@@ -1,50 +1,59 @@
 use crate::binary::node::NodeContent;
 use crate::client::Client;
-use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::types::jid::{Jid, SERVER_JID};
+use libsignal_protocol::PreKeyBundle;
 use log;
 
-// Re-export core utilities
 pub use wacore::prekeys::PreKeyUtils;
 
 impl Client {
-    /// Fetches pre-key bundles for a list of JIDs.
     pub async fn fetch_pre_keys(
         &self,
         jids: &[Jid],
     ) -> Result<std::collections::HashMap<Jid, PreKeyBundle>, anyhow::Error> {
-        // In test mode, return mock prekey bundles
         if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            use crate::signal::state::prekey_bundle::PreKeyBundle;
-            use wacore::signal::ecc::keys::DjbEcPublicKey;
-            use wacore::signal::identity::IdentityKey;
+            use libsignal_protocol::{
+                DeviceId, IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId,
+            };
 
             let mut bundles = std::collections::HashMap::new();
             for jid in jids {
-                // For simplicity in tests, create a dummy bundle that should pass basic validation
-                // Use the device's actual identity key if available
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
-                let identity_public_key =
-                    DjbEcPublicKey::new(device_snapshot.core.identity_key.public_key);
-                let identity_key = IdentityKey::new(identity_public_key.clone());
-                let signed_pre_key_public =
-                    DjbEcPublicKey::new(device_snapshot.core.signed_pre_key.key_pair.public_key);
+                let identity_public_key = PublicKey::from_djb_public_key_bytes(
+                    device_snapshot
+                        .core
+                        .identity_key
+                        .public_key
+                        .public_key_bytes(),
+                )?;
+                let identity_key = IdentityKey::new(identity_public_key);
 
-                let bundle = PreKeyBundle {
-                    registration_id: device_snapshot.core.registration_id,
-                    device_id: jid.device as u32,
-                    pre_key_id: Some(1),
-                    pre_key_public: Some(identity_public_key), // Use identity key for simplicity
-                    signed_pre_key_id: device_snapshot.core.signed_pre_key.key_id,
-                    signed_pre_key_public,
-                    signed_pre_key_signature: device_snapshot
+                let signed_pre_key_public = PublicKey::from_djb_public_key_bytes(
+                    device_snapshot
                         .core
                         .signed_pre_key
-                        .signature
-                        .unwrap_or([0u8; 64]),
+                        .public_key
+                        .public_key_bytes(),
+                )?;
+                let signed_pre_key_id: SignedPreKeyId =
+                    device_snapshot.core.signed_pre_key_id.into();
+                let signed_pre_key_signature =
+                    device_snapshot.core.signed_pre_key_signature.to_vec();
+
+                let pre_key_id: PreKeyId = 1u32.into();
+                let pre_key_public = identity_public_key;
+                let pre_key_tuple = Some((pre_key_id, pre_key_public));
+
+                let bundle = PreKeyBundle::new(
+                    device_snapshot.core.registration_id,
+                    DeviceId::from(jid.device as u32),
+                    pre_key_tuple,
+                    signed_pre_key_id,
+                    signed_pre_key_public,
+                    signed_pre_key_signature,
                     identity_key,
-                };
+                )?;
                 bundles.insert(jid.clone(), bundle);
             }
             return Ok(bundles);
@@ -66,7 +75,6 @@ impl Client {
 
         let bundles = PreKeyUtils::parse_prekeys_response(&resp_node)?;
 
-        // Add logging for any failed bundles (driver responsibility)
         for jid in bundles.keys() {
             log::debug!("Successfully parsed pre-key bundle for {jid}");
         }

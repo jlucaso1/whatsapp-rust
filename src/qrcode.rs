@@ -6,35 +6,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
+use tokio::task;
 
-/// Represents an event sent over the QR channel for UI consumption.
 #[derive(Debug, Clone)]
 pub enum QrCodeEvent {
-    /// A new QR code string has been generated.
-    Code {
-        /// The raw string data for the QR code. This should be rendered as a QR code image.
-        code: String,
-        /// The recommended time to display this code before it expires.
-        timeout: Duration,
-    },
-    /// The pairing was successful. This is a terminal event; the channel will close after this.
+    Code { code: String, timeout: Duration },
     Success,
-    /// The pairing process timed out (e.g., server disconnected). This is a terminal event.
     Timeout,
-    /// An unexpected event occurred, suggesting the client is already paired or in a bad state. This is a terminal event.
     UnexpectedState,
-    /// The client version is outdated and was rejected by the server. This is a terminal event.
     ClientOutdated,
-    /// The QR code was scanned by a phone that does not have the multi-device beta enabled.
-    /// The same QR code can be re-scanned after the user enables it.
     ScannedWithoutMultidevice,
-    /// An error occurred during pairing. This is a terminal event.
     Error(PairError),
-    /// The client was logged out from another device during pairing. This is a terminal event.
     LoggedOut,
 }
 
-/// Errors that can occur when requesting the QR channel.
 #[derive(Debug, Error)]
 pub enum QrError {
     #[error("client is already connected")]
@@ -42,14 +27,13 @@ pub enum QrError {
     #[error("client is already logged in (store contains a JID)")]
     AlreadyLoggedIn,
 }
-/// Asynchronously emits QR codes from a list to the output channel.
+
 async fn emit_codes(
     output: mpsc::Sender<QrCodeEvent>,
     mut stop_rx: watch::Receiver<()>,
     codes: Vec<String>,
 ) {
     let mut codes_iter = codes.into_iter();
-    // WhatsApp Web shows the first code for 60s and subsequent ones for 20s.
     let mut is_first = true;
 
     loop {
@@ -62,7 +46,6 @@ async fn emit_codes(
             }
         };
 
-        // FIX: Implement the 60s/20s timeout logic.
         let timeout = if is_first {
             is_first = false;
             Duration::from_secs(60)
@@ -79,9 +62,7 @@ async fn emit_codes(
         }
 
         tokio::select! {
-            _ = tokio::time::sleep(timeout) => {
-                // Time's up, continue to the next code
-            }
+            _ = tokio::time::sleep(timeout) => {}
             _ = stop_rx.changed() => {
                 debug!("Got signal to stop QR emitter");
                 return;
@@ -90,16 +71,13 @@ async fn emit_codes(
     }
 }
 
-/// The internal logic for `client.get_qr_channel`.
-///
-/// This function sets up the state and the master event handler that drives the QR flow.
 pub(crate) async fn get_qr_channel_logic(
     client: &Client,
 ) -> Result<mpsc::Receiver<QrCodeEvent>, QrError> {
     if client.is_connected() {
         return Err(QrError::AlreadyConnected);
     }
-    // Use persistence_manager to check login status
+
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     if device_snapshot.id.is_some() {
         return Err(QrError::AlreadyLoggedIn);
@@ -109,7 +87,6 @@ pub(crate) async fn get_qr_channel_logic(
     let (stop_emitter_tx, stop_emitter_rx) = watch::channel(());
     let closed = Arc::new(AtomicBool::new(false));
 
-    // Subscribe to all the events we need
     let mut qr_rx = client.subscribe_to_qr();
     let mut qr_scanned_rx = client.subscribe_to_qr_scanned_without_multidevice();
     let mut pair_success_rx = client.subscribe_to_pair_success();
@@ -119,12 +96,11 @@ pub(crate) async fn get_qr_channel_logic(
     let mut connected_rx = client.subscribe_to_connected();
     let mut logged_out_rx = client.subscribe_to_logged_out();
 
-    // Spawn a task to handle all the event subscriptions
     let tx_clone = tx.clone();
     let closed_clone = closed.clone();
     let stop_emitter_tx_clone = stop_emitter_tx.clone();
 
-    tokio::spawn(async move {
+    task::spawn_local(async move {
         loop {
             if closed_clone.load(Ordering::Relaxed) {
                 break;
@@ -136,7 +112,7 @@ pub(crate) async fn get_qr_channel_logic(
             tokio::select! {
                 Ok(qr_data) = qr_rx.recv() => {
                     debug!("Received QR event, starting emitter task");
-                    tokio::spawn(emit_codes(
+                    task::spawn_local(emit_codes(
                         tx_clone.clone(),
                         stop_emitter_rx.clone(),
                         qr_data.codes.clone(),
@@ -157,23 +133,20 @@ pub(crate) async fn get_qr_channel_logic(
                 Ok(_) = disconnected_rx.recv() => {
                     terminal_event = Some(QrCodeEvent::Timeout);
                 }
-                Ok(_) = connected_rx.recv() => {
-                    // Do nothing, benign event during pairing flow.
-                }
+                Ok(_) = connected_rx.recv() => {}
                 Ok(_) = logged_out_rx.recv() => {
                     terminal_event = Some(QrCodeEvent::LoggedOut);
                 }
                 else => {
-                    // All channels closed, break the loop
                     break;
                 }
             }
 
-            if let Some(event) = non_terminal_event {
-                if tx_clone.send(event).await.is_err() {
-                    warn!("QR channel receiver was dropped before event was sent.");
-                    break;
-                }
+            if let Some(event) = non_terminal_event
+                && tx_clone.send(event).await.is_err()
+            {
+                warn!("QR channel receiver was dropped before event was sent.");
+                break;
             }
 
             if let Some(final_event) = terminal_event {

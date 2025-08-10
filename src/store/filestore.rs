@@ -1,12 +1,13 @@
 use crate::store::traits::*;
 use async_trait::async_trait;
+use libsignal_protocol::Direction;
+use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use wacore::appstate::hash::HashState;
 use wacore::signal;
-use wacore::signal::state::sender_key_record::SenderKeyRecord;
 use wacore::store::error::{Result, StoreError};
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
@@ -55,6 +56,22 @@ impl FileStore {
         fs::write(path, data).await.map_err(StoreError::Io)
     }
 
+    async fn read_prost<T: Message + Default>(&self, path: &Path) -> Result<Option<T>> {
+        use std::io;
+        match fs::read(path).await {
+            Ok(data) => T::decode(data.as_slice())
+                .map(Some)
+                .map_err(|e| StoreError::Serialization(e.to_string())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(StoreError::Io(e)),
+        }
+    }
+
+    async fn write_prost<T: Message>(&self, path: &Path, value: &T) -> Result<()> {
+        let data = value.encode_to_vec();
+        fs::write(path, data).await.map_err(StoreError::Io)
+    }
+
     fn device_path(&self) -> PathBuf {
         self.base_path.join("device.bin")
     }
@@ -68,11 +85,21 @@ impl FileStore {
             "FileStore: Attempting to load device data from {:?}",
             self.device_path()
         );
-        
 
-        self
-            .read_bincode::<SerializableDevice>(&self.device_path())
+        self.read_bincode::<SerializableDevice>(&self.device_path())
             .await
+    }
+
+    // Helper methods for libsignal integration
+    pub async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        let path = self
+            .path_for("identities")
+            .join(Self::sanitize_filename(address));
+        match fs::read(path).await {
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(StoreError::Io(e)),
+        }
     }
 }
 
@@ -101,13 +128,31 @@ impl IdentityStore for FileStore {
             .map_err(StoreError::from)
     }
 
-    async fn is_trusted_identity(&self, address: &str, key: &[u8; 32]) -> Result<bool> {
+    async fn is_trusted_identity(
+        &self,
+        _address: &str,
+        _key: &[u8; 32],
+        _direction: Direction,
+    ) -> Result<bool> {
+        // let path = self
+        //     .path_for("identities")
+        //     .join(Self::sanitize_filename(address));
+        // match fs::read(path).await {
+        //     Ok(data) => Ok(data == key),
+        //     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        //     Err(e) => Err(StoreError::Io(e)),
+        // }
+
+        Ok(true)
+    }
+
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
         let path = self
             .path_for("identities")
             .join(Self::sanitize_filename(address));
         match fs::read(path).await {
-            Ok(data) => Ok(data == key),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(StoreError::Io(e)),
         }
     }
@@ -166,7 +211,7 @@ impl signal::store::PreKeyStore for FileStore {
         prekey_id: u32,
     ) -> std::result::Result<Option<PreKeyRecordStructure>, SignalStoreError> {
         let path = self.path_for("prekeys").join(prekey_id.to_string());
-        Ok(self.read_bincode(&path).await?)
+        Ok(self.read_prost(&path).await?)
     }
 
     async fn store_prekey(
@@ -175,7 +220,7 @@ impl signal::store::PreKeyStore for FileStore {
         record: PreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
         let path = self.path_for("prekeys").join(prekey_id.to_string());
-        Ok(self.write_bincode(&path, &record).await?)
+        Ok(self.write_prost(&path, &record).await?)
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> std::result::Result<bool, SignalStoreError> {
@@ -193,52 +238,39 @@ impl signal::store::PreKeyStore for FileStore {
 }
 
 #[async_trait]
-impl signal::store::SenderKeyStore for FileStore {
-    async fn store_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-        record: SenderKeyRecord,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-        Ok(self.write_bincode(&path, &record).await?)
+impl SenderKeyStoreHelper for FileStore {
+    async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
+        let path = self
+            .path_for("sender_keys")
+            .join(Self::sanitize_filename(address));
+        fs::write(path, record).await.map_err(StoreError::Io)
     }
 
-    async fn load_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-    ) -> std::result::Result<SenderKeyRecord, SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-        Ok(self.read_bincode(&path).await?.unwrap_or_default())
+    async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        let path = self
+            .path_for("sender_keys")
+            .join(Self::sanitize_filename(address));
+        match fs::read(path).await {
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(StoreError::Io(e)),
+        }
     }
 
-    async fn delete_sender_key(
-        &self,
-        sender_key_name: &signal::sender_key_name::SenderKeyName,
-    ) -> std::result::Result<(), SignalStoreError> {
-        let filename = Self::sanitize_filename(&format!(
-            "{}_{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ));
-        let path = self.path_for("sender_keys").join(filename);
-        fs::remove_file(path).await.or_else(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })?;
-        Ok(())
+    async fn delete_sender_key(&self, address: &str) -> Result<()> {
+        let path = self
+            .path_for("sender_keys")
+            .join(Self::sanitize_filename(address));
+        fs::remove_file(path)
+            .await
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(StoreError::Io)
     }
 }
 

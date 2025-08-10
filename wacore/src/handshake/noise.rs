@@ -1,10 +1,10 @@
 use crate::crypto::{gcm, hkdf};
-use crate::socket::error::{Result, SocketError};
-use crate::socket::noise_socket::{NoiseSocket, generate_iv};
+use crate::handshake::state::Result;
+use crate::handshake::utils::{HandshakeError, generate_iv};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, Payload};
+use libsignal_protocol::{PrivateKey, PublicKey};
 use sha2::{Digest, Sha256};
-use x25519_dalek::{StaticSecret, x25519};
 
 pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -13,10 +13,10 @@ pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
 }
 
 pub struct NoiseHandshake {
-    hash: [u8; 32],
-    salt: [u8; 32],
-    key: Aes256Gcm,
-    counter: u32,
+    pub hash: [u8; 32],
+    pub salt: [u8; 32],
+    pub key: Aes256Gcm,
+    pub counter: u32,
 }
 
 impl NoiseHandshake {
@@ -28,23 +28,19 @@ impl NoiseHandshake {
     }
 
     pub fn new(pattern: &str, header: &[u8]) -> Result<Self> {
-        // This logic now matches the Go implementation one-to-one.
         let h: [u8; 32] = if pattern.len() == 32 {
-            // If the pattern is exactly 32 bytes, use it directly as the hash.
-            pattern.as_bytes().try_into().unwrap() // Should not fail as we've checked the length
+            pattern.as_bytes().try_into().unwrap()
         } else {
-            // Otherwise, compute its SHA-256 hash.
             sha256_slice(pattern.as_bytes())
         };
 
         let mut new_self = Self {
             hash: h,
-            salt: h, // The initial salt is the same as the initial hash
-            key: gcm::prepare(&h).map_err(|e| SocketError::Crypto(e.to_string()))?,
+            salt: h,
+            key: gcm::prepare(&h).map_err(|e| HandshakeError::Crypto(e.to_string()))?,
             counter: 0,
         };
 
-        // Authenticate the WA header, which updates the hash state.
         new_self.authenticate(header);
         Ok(new_self)
     }
@@ -71,13 +67,12 @@ impl NoiseHandshake {
         let ciphertext = self
             .key
             .encrypt(iv.as_ref().into(), payload)
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
         self.authenticate(&ciphertext);
         Ok(ciphertext)
     }
 
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        // Capture the current handshake hash as AAD before decryption
         let aad = self.hash;
         let iv = generate_iv(self.post_increment_counter());
         let payload = Payload {
@@ -87,8 +82,8 @@ impl NoiseHandshake {
         let plaintext = self
             .key
             .decrypt(iv.as_ref().into(), payload)
-            .map_err(|e| SocketError::Crypto(format!("Noise decrypt failed: {e}")))?;
-        // Only after successful decryption, update the handshake hash
+            .map_err(|e| HandshakeError::Crypto(format!("Noise decrypt failed: {e}")))?;
+
         self.authenticate(ciphertext);
         Ok(plaintext)
     }
@@ -97,13 +92,20 @@ impl NoiseHandshake {
         self.counter = 0;
         let (write, read) = self.extract_and_expand(Some(data))?;
         self.salt = write;
-        self.key = gcm::prepare(&read).map_err(|e| SocketError::Crypto(e.to_string()))?;
+        self.key = gcm::prepare(&read).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
         Ok(())
     }
 
-    pub fn mix_shared_secret(&mut self, priv_key: &[u8; 32], pub_key: &[u8; 32]) -> Result<()> {
-        let secret = StaticSecret::from(*priv_key);
-        let shared_secret = x25519(secret.to_bytes(), *pub_key);
+    pub fn mix_shared_secret(&mut self, priv_key_bytes: &[u8], pub_key_bytes: &[u8]) -> Result<()> {
+        let our_private_key = PrivateKey::deserialize(priv_key_bytes)
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        let their_public_key = PublicKey::from_djb_public_key_bytes(pub_key_bytes)
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+
+        let shared_secret = our_private_key
+            .calculate_agreement(&their_public_key)
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+
         self.mix_into_key(&shared_secret)
     }
 
@@ -112,7 +114,7 @@ impl NoiseHandshake {
         let ikm = data;
 
         let okm = hkdf::sha256(ikm.unwrap_or(&[]), Some(&salt), &[], 64)
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let mut write = [0u8; 32];
         let mut read = [0u8; 32];
@@ -123,15 +125,13 @@ impl NoiseHandshake {
         Ok((write, read))
     }
 
-    pub fn finish(
-        self,
-        frame_socket: std::sync::Arc<tokio::sync::Mutex<crate::socket::FrameSocket>>,
-    ) -> Result<NoiseSocket> {
+    pub fn finish(self) -> Result<(Aes256Gcm, Aes256Gcm)> {
         let (write_bytes, read_bytes) = self.extract_and_expand(None)?;
         let write_key =
-            gcm::prepare(&write_bytes).map_err(|e| SocketError::Crypto(e.to_string()))?;
-        let read_key = gcm::prepare(&read_bytes).map_err(|e| SocketError::Crypto(e.to_string()))?;
+            gcm::prepare(&write_bytes).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        let read_key =
+            gcm::prepare(&read_bytes).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-        Ok(NoiseSocket::new(frame_socket, write_key, read_key))
+        Ok((write_key, read_key))
     }
 }

@@ -1,13 +1,11 @@
 use crate::binary::node::{Node, NodeContent};
-use crate::signal::state::prekey_bundle::PreKeyBundle;
 use crate::types::jid::Jid;
+use libsignal_protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use std::collections::HashMap;
 
-/// Core prekey utilities that are platform-independent
 pub struct PreKeyUtils;
 
 impl PreKeyUtils {
-    /// Builds the IQ node for fetching pre-key bundles
     pub fn build_fetch_prekeys_request(jids: &[Jid]) -> Node {
         let mut user_nodes = Vec::with_capacity(jids.len());
         for jid in jids {
@@ -25,7 +23,6 @@ impl PreKeyUtils {
         }
     }
 
-    /// Parses the IQ response and extracts pre-key bundles
     pub fn parse_prekeys_response(
         resp_node: &Node,
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {
@@ -43,7 +40,6 @@ impl PreKeyUtils {
             let bundle = match Self::node_to_pre_key_bundle(&jid, user_node) {
                 Ok(b) => b,
                 Err(_e) => {
-                    // Log warning would be done by the driver
                     continue;
                 }
             };
@@ -77,46 +73,48 @@ impl PreKeyUtils {
         let keys_node = node.get_optional_child("keys").unwrap_or(node);
 
         let identity_key_bytes = extract_bytes(keys_node.get_optional_child("identity"))?;
-        if identity_key_bytes.len() != 32 {
-            return Err(anyhow::anyhow!(
-                "Invalid identity key length: got {}, expected 32",
-                identity_key_bytes.len()
-            ));
-        }
-        let identity_key = crate::signal::identity::IdentityKey::new(
-            crate::signal::ecc::keys::DjbEcPublicKey::new(identity_key_bytes.try_into().unwrap()),
-        );
 
-        let mut pre_key_id = None;
-        let mut pre_key_public = None;
-        if let Some(pre_key_node) = keys_node.get_optional_child("key") {
-            if let Some((id, key)) = Self::node_to_pre_key(pre_key_node)? {
-                pre_key_id = Some(id);
-                pre_key_public = Some(key);
-            }
+        let identity_key_array: [u8; 32] =
+            identity_key_bytes.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!("Invalid identity key length: got {}, expected 32", v.len())
+            })?;
+
+        let identity_key =
+            IdentityKey::new(PublicKey::from_djb_public_key_bytes(&identity_key_array)?);
+
+        let mut pre_key_tuple = None;
+        if let Some(pre_key_node) = keys_node.get_optional_child("key")
+            && let Some((id, key_bytes)) = Self::node_to_pre_key(pre_key_node)?
+        {
+            let pre_key_id: PreKeyId = id.into();
+            let pre_key_public = PublicKey::from_djb_public_key_bytes(&key_bytes)?;
+            pre_key_tuple = Some((pre_key_id, pre_key_public));
         }
 
         let signed_pre_key_node = keys_node
             .get_optional_child("skey")
             .ok_or(anyhow::anyhow!("Missing signed prekey"))?;
-        let (signed_pre_key_id, signed_pre_key_public, signed_pre_key_signature) =
+        let (signed_pre_key_id_u32, signed_pre_key_public_bytes, signed_pre_key_signature) =
             Self::node_to_signed_pre_key(signed_pre_key_node)?;
 
-        Ok(PreKeyBundle {
+        let signed_pre_key_id: SignedPreKeyId = signed_pre_key_id_u32.into();
+        let signed_pre_key_public =
+            PublicKey::from_djb_public_key_bytes(&signed_pre_key_public_bytes)?;
+
+        let bundle = PreKeyBundle::new(
             registration_id,
-            device_id: jid.device as u32,
-            pre_key_id,
-            pre_key_public,
+            (jid.device as u32).into(),
+            pre_key_tuple,
             signed_pre_key_id,
             signed_pre_key_public,
-            signed_pre_key_signature,
+            signed_pre_key_signature.to_vec(),
             identity_key,
-        })
+        )?;
+
+        Ok(bundle)
     }
 
-    fn node_to_pre_key(
-        node: &Node,
-    ) -> Result<Option<(u32, crate::signal::ecc::keys::DjbEcPublicKey)>, anyhow::Error> {
+    fn node_to_pre_key(node: &Node) -> Result<Option<(u32, [u8; 32])>, anyhow::Error> {
         let id_node_content = node
             .get_optional_child("id")
             .and_then(|n| n.content.as_ref());
@@ -124,10 +122,8 @@ impl PreKeyUtils {
         let id = match id_node_content {
             Some(NodeContent::Bytes(b)) if !b.is_empty() => {
                 if b.len() == 3 {
-                    // Handle 3-byte big-endian integer ID
                     Ok(u32::from_be_bytes([0, b[0], b[1], b[2]]))
                 } else if let Ok(s) = std::str::from_utf8(b) {
-                    // Handle hex string ID
                     let trimmed_s = s.trim();
                     if trimmed_s.is_empty() {
                         Err(anyhow::anyhow!("ID content is only whitespace"))
@@ -138,16 +134,12 @@ impl PreKeyUtils {
                     Err(anyhow::anyhow!("ID is not valid UTF-8 hex or 3-byte int"))
                 }
             }
-            // ID is empty or missing, this is invalid for a one-time pre-key
             _ => Err(anyhow::anyhow!("Missing or empty pre-key ID content")),
         };
 
         let id = match id {
             Ok(val) => val,
-            Err(_e) => {
-                // Driver would log this warning
-                return Ok(None);
-            } // Gracefully ignore invalid one-time pre-keys
+            Err(_e) => return Ok(None),
         };
 
         let value_bytes = node
@@ -164,20 +156,14 @@ impl PreKeyUtils {
         if value_bytes.len() != 32 {
             return Err(anyhow::anyhow!("Invalid pre-key value length"));
         }
-        let public_key =
-            crate::signal::ecc::keys::DjbEcPublicKey::new(value_bytes.try_into().unwrap());
 
-        Ok(Some((id, public_key)))
+        Ok(Some((id, value_bytes.try_into().unwrap())))
     }
 
-    fn node_to_signed_pre_key(
-        node: &Node,
-    ) -> Result<(u32, crate::signal::ecc::keys::DjbEcPublicKey, [u8; 64]), anyhow::Error> {
-        // HACK: In some cases, the signed prekey ID is missing. The Go implementation seems to default to 1 in this scenario.
-        // This is a bit of a magic number, but it matches the behavior of the reference implementation.
-        let (id, public_key) = match Self::node_to_pre_key(node)? {
+    fn node_to_signed_pre_key(node: &Node) -> Result<(u32, [u8; 32], [u8; 64]), anyhow::Error> {
+        let (id, public_key_bytes) = match Self::node_to_pre_key(node)? {
             Some((id, key)) => (id, key),
-            None => (1, crate::signal::ecc::keys::DjbEcPublicKey::new([0u8; 32])),
+            None => return Err(anyhow::anyhow!("Signed pre-key is missing ID or value")),
         };
         let signature_bytes = node
             .get_optional_child("signature")
@@ -194,6 +180,6 @@ impl PreKeyUtils {
             return Err(anyhow::anyhow!("Invalid signature length"));
         }
 
-        Ok((id, public_key, signature_bytes.try_into().unwrap()))
+        Ok((id, public_key_bytes, signature_bytes.try_into().unwrap()))
     }
 }

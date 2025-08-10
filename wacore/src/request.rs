@@ -1,5 +1,5 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::types::jid::Jid;
+use crate::types::jid::{Jid, JidExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -131,10 +131,10 @@ impl RequestUtils {
         attrs.insert("type".into(), query.query_type.as_str().into());
         attrs.insert("to".into(), query.to.to_string());
 
-        if let Some(target) = &query.target {
-            if !target.is_empty() {
-                attrs.insert("target".into(), target.to_string());
-            }
+        if let Some(target) = &query.target
+            && !target.is_empty()
+        {
+            attrs.insert("target".into(), target.to_string());
         }
 
         Node {

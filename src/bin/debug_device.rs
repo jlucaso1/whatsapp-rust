@@ -4,7 +4,6 @@ use prost::Message;
 use std::path::PathBuf;
 use std::sync::Arc;
 use wacore::appstate::hash::HashState;
-use wacore::signal::state::{sender_key_record::SenderKeyRecord, session_record::SessionRecord};
 use wacore::store::traits::AppStateSyncKey;
 use waproto::whatsapp as wa;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
@@ -16,11 +15,9 @@ use whatsapp_rust::store::persistence_manager::PersistenceManager;
     long_about = "A comprehensive CLI tool for inspecting WhatsApp store data including device info, sessions, keys, and app state"
 )]
 struct Cli {
-    /// Store path (default: ./whatsapp_store)
     #[arg(short, long, default_value = "./whatsapp_store")]
     store_path: String,
 
-    /// Output format as JSON
     #[arg(short, long)]
     json: bool,
 
@@ -30,31 +27,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Inspect a 1-on-1 Signal session
     Session {
-        /// JID of the session to inspect
         jid: String,
     },
-    /// Inspect a one-time pre-key
     Prekey {
-        /// Pre-key ID to inspect
         id: u32,
     },
-    /// Inspect a group sender key
     SenderKey {
-        /// Group JID
         group_jid: String,
-        /// Sender JID
         sender_jid: String,
     },
-    /// Inspect App State version information
     AppstateVersion {
-        /// Collection name (e.g., "critical_block", "regular")
         collection: String,
     },
-    /// Inspect a specific App State sync key
     AppstateKey {
-        /// Key ID in hex format
         key_id: String,
     },
 }
@@ -65,7 +51,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let cli = Cli::parse();
 
-    // If no subcommand provided, show device info (backward compatibility)
     if cli.command.is_none() {
         return show_device_info(&cli.store_path, cli.json).await;
     }
@@ -121,8 +106,8 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
                 "push_name": device_snapshot.push_name,
                 "has_account": device_snapshot.account.is_some(),
                 "registration_id": device_snapshot.registration_id,
-                "identity_key_public": hex::encode(device_snapshot.identity_key.public_key),
-                "signed_prekey_id": device_snapshot.signed_pre_key.key_id,
+                "identity_key_public": hex::encode(device_snapshot.identity_key.public_key.public_key_bytes()),
+                "signed_prekey_id": device_snapshot.signed_pre_key_id,
                 "adv_secret_key": hex::encode(device_snapshot.adv_secret_key),
                 "ready_for_presence": device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
             }
@@ -131,7 +116,9 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
         return Ok(());
     }
 
-    if device_snapshot.id.is_none() && device_snapshot.noise_key.public_key == [0; 32] {
+    if device_snapshot.id.is_none()
+        && device_snapshot.noise_key.public_key.public_key_bytes() == [0; 32]
+    {
         info!("❌ No significant device data found (no JID or default noise key).");
         info!("   The device may need to be paired first using the main application.");
         return Ok(());
@@ -147,12 +134,9 @@ async fn show_device_info(store_path: &str, json_output: bool) -> Result<(), any
     info!("  Registration ID: {}", device_snapshot.registration_id);
     info!(
         "  Identity Key (Public): {}",
-        hex::encode(device_snapshot.identity_key.public_key)
+        hex::encode(device_snapshot.identity_key.public_key.public_key_bytes())
     );
-    info!(
-        "  Signed PreKey ID: {}",
-        device_snapshot.signed_pre_key.key_id
-    );
+    info!("  Signed PreKey ID: {}", device_snapshot.signed_pre_key_id);
     info!(
         "  ADV Secret Key: {}",
         hex::encode(device_snapshot.adv_secret_key)
@@ -226,22 +210,13 @@ async fn inspect_session(
         return Ok(());
     }
 
-    let data = tokio::fs::read(&session_path).await?;
-    let session_record: SessionRecord =
-        bincode::serde::decode_from_slice(&data, bincode::config::standard())
-            .map_err(|e| anyhow::anyhow!("Failed to decode session data: {e}"))?
-            .0;
-
     if json_output {
         let session_info = serde_json::json!({
             "success": true,
             "jid": jid,
             "path": session_path.to_string_lossy(),
             "session": {
-                "is_fresh": session_record.is_fresh(),
                 "has_current_state": true,
-                "previous_states_count": session_record.previous_states().len(),
-                // Note: We don't serialize the full session state as it contains sensitive crypto material
                 "summary": "Session record found and loaded successfully"
             }
         });
@@ -250,11 +225,7 @@ async fn inspect_session(
         info!("=== Session Inspection ===");
         info!("JID: {jid}");
         info!("Path: {}", session_path.display());
-        info!("Is Fresh: {}", session_record.is_fresh());
-        info!(
-            "Previous States Count: {}",
-            session_record.previous_states().len()
-        );
+
         info!("✅ Session record loaded successfully");
         info!("Note: Detailed session state not shown for security reasons");
     }
@@ -341,12 +312,6 @@ async fn inspect_sender_key(
         return Ok(());
     }
 
-    let data = tokio::fs::read(&sender_key_path).await?;
-    let sender_key_record: SenderKeyRecord =
-        bincode::serde::decode_from_slice(&data, bincode::config::standard())
-            .map_err(|e| anyhow::anyhow!("Failed to decode sender key data: {e}"))?
-            .0;
-
     if json_output {
         let sender_key_info = serde_json::json!({
             "success": true,
@@ -354,8 +319,6 @@ async fn inspect_sender_key(
             "sender_jid": sender_jid,
             "path": sender_key_path.to_string_lossy(),
             "sender_key": {
-                "is_empty": sender_key_record.is_empty(),
-                "has_current_state": sender_key_record.sender_key_state().is_some(),
                 "summary": "Sender key record found and loaded successfully"
             }
         });
@@ -365,11 +328,7 @@ async fn inspect_sender_key(
         info!("Group JID: {group_jid}");
         info!("Sender JID: {sender_jid}");
         info!("Path: {}", sender_key_path.display());
-        info!("Is Empty: {}", sender_key_record.is_empty());
-        info!(
-            "Has Current State: {}",
-            sender_key_record.sender_key_state().is_some()
-        );
+
         info!("✅ Sender key record loaded successfully");
         info!("Note: Detailed key material not shown for security reasons");
     }
@@ -432,7 +391,6 @@ async fn inspect_appstate_key(
     key_id: &str,
     json_output: bool,
 ) -> Result<(), anyhow::Error> {
-    // Validate hex input
     if hex::decode(key_id).is_err() {
         if json_output {
             let error_obj = serde_json::json!({

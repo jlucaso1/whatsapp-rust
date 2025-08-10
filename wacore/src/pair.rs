@@ -1,10 +1,11 @@
 use crate::binary::node::{Node, NodeContent};
-use crate::crypto::xed25519;
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
+use libsignal_protocol::{KeyPair, PublicKey};
 use prost::Message;
+use rand::TryRngCore;
 use sha2::Sha256;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::AdvEncryptionType;
@@ -39,8 +40,8 @@ impl std::error::Error for PairCryptoError {}
 
 /// Device state needed for pairing operations
 pub struct DeviceState {
-    pub identity_key: crate::crypto::key_pair::KeyPair,
-    pub noise_key: crate::crypto::key_pair::KeyPair,
+    pub identity_key: KeyPair,
+    pub noise_key: KeyPair,
     pub adv_secret_key: [u8; 32],
 }
 
@@ -50,8 +51,10 @@ pub struct PairUtils;
 impl PairUtils {
     /// Constructs the full QR code string from the ref and device keys.
     pub fn make_qr_data(device_state: &DeviceState, ref_str: String) -> String {
-        let noise_b64 = BASE64_STANDARD.encode(device_state.noise_key.public_key);
-        let identity_b64 = BASE64_STANDARD.encode(device_state.identity_key.public_key);
+        let noise_b64 =
+            BASE64_STANDARD.encode(device_state.noise_key.public_key.public_key_bytes());
+        let identity_b64 =
+            BASE64_STANDARD.encode(device_state.identity_key.public_key.public_key_bytes());
         let adv_b64 = BASE64_STANDARD.encode(device_state.adv_secret_key);
 
         [ref_str, noise_b64, identity_b64, adv_b64].join(",")
@@ -170,26 +173,21 @@ impl PairUtils {
         let msg_to_verify = Self::concat_bytes(&[
             account_sig_prefix,
             &inner_details_bytes,
-            &device_state.identity_key.public_key,
+            device_state.identity_key.public_key.public_key_bytes(),
         ]);
 
-        let Ok(signature) = ed25519_dalek::Signature::from_slice(account_sig_bytes) else {
-            return Err(PairCryptoError {
-                code: 500,
-                text: "internal-error",
-                source: anyhow::anyhow!("Invalid account signature format"),
-            });
-        };
+        let account_public_key = PublicKey::from_djb_public_key_bytes(account_sig_key_bytes)
+            .map_err(|e| PairCryptoError {
+                code: 401,
+                text: "invalid-key",
+                source: e.into(),
+            })?;
 
-        if !xed25519::verify(
-            account_sig_key_bytes.try_into().unwrap(),
-            &msg_to_verify,
-            &signature.to_bytes(),
-        ) {
+        if !account_public_key.verify_signature(&msg_to_verify, account_sig_bytes) {
             return Err(PairCryptoError {
                 code: 401,
                 text: "signature-mismatch",
-                source: anyhow::anyhow!("XEd25519 account signature mismatch"),
+                source: anyhow::anyhow!("libsignal signature verification failed"),
             });
         }
 
@@ -203,14 +201,22 @@ impl PairUtils {
         let msg_to_sign = Self::concat_bytes(&[
             device_sig_prefix,
             &inner_details_bytes,
-            &device_state.identity_key.public_key,
+            device_state.identity_key.public_key.public_key_bytes(),
             account_sig_key_bytes,
         ]);
         let device_signature = device_state
             .identity_key
-            .sign_message(&msg_to_sign)
-            .to_vec();
-        signed_identity.device_signature = Some(device_signature);
+            .private_key
+            .calculate_signature(
+                &msg_to_sign,
+                &mut rand::rngs::OsRng::unwrap_err(rand_core::OsRng),
+            )
+            .map_err(|e| PairCryptoError {
+                code: 500,
+                text: "internal-error",
+                source: e.into(),
+            })?;
+        signed_identity.device_signature = Some(device_signature.to_vec());
 
         // 4. Unmarshal final details to get key_index
         let identity_details =
@@ -288,7 +294,7 @@ impl PairUtils {
         pairing_ref: &str,
         dut_noise_pub: &[u8; 32],
         dut_identity_pub: &[u8; 32],
-        master_ephemeral: &crate::crypto::key_pair::KeyPair,
+        master_ephemeral: KeyPair,
     ) -> Result<Vec<u8>, anyhow::Error> {
         // Perform the cryptographic exchange to create the shared secrets
         let adv_key = &device_state.adv_secret_key;
@@ -297,16 +303,18 @@ impl PairUtils {
         let mut mac = HmacSha256::new_from_slice(adv_key).unwrap();
         mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
         mac.update(dut_identity_pub);
-        mac.update(&master_ephemeral.public_key);
+        mac.update(master_ephemeral.public_key.public_key_bytes());
         let account_signature = mac.finalize().into_bytes();
 
-        let secret = x25519_dalek::StaticSecret::from(master_ephemeral.private_key);
-        let shared_secret = x25519_dalek::x25519(secret.to_bytes(), *dut_noise_pub);
+        let their_public_key = PublicKey::from_djb_public_key_bytes(dut_noise_pub)?;
+        let shared_secret = master_ephemeral
+            .private_key
+            .calculate_agreement(&their_public_key)?;
 
         let mut final_message = Vec::new();
         final_message.extend_from_slice(&account_signature);
-        final_message.extend_from_slice(&master_ephemeral.public_key);
-        final_message.extend_from_slice(&identity_key.public_key);
+        final_message.extend_from_slice(master_ephemeral.public_key.public_key_bytes());
+        final_message.extend_from_slice(identity_key.public_key.public_key_bytes());
 
         // Encrypt the final message
         let encryption_key = crate::crypto::hkdf::sha256(&shared_secret, None, b"WA-Ads-Key", 32)?;
