@@ -15,6 +15,7 @@ use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
 pub struct SignalStores<'a, S, I, P, SP, KP> {
+    pub sender_key_store: &'a mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync),
     pub session_store: &'a mut S,
     pub identity_store: &'a mut I,
     pub prekey_store: &'a mut P,
@@ -22,7 +23,14 @@ pub struct SignalStores<'a, S, I, P, SP, KP> {
     pub kyber_prekey_store: &'a mut KP,
 }
 
-pub async fn prepare_dm_stanza<'a, S, I, P, SP, KP>(
+pub async fn prepare_dm_stanza<
+    'a,
+    S: libsignal_protocol::SessionStore + Send + Sync,
+    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
+    P: libsignal_protocol::PreKeyStore + Send + Sync,
+    SP: libsignal_protocol::SignedPreKeyStore + Send + Sync,
+    KP: libsignal_protocol::KyberPreKeyStore + Send + Sync,
+>(
     stores: &mut SignalStores<'a, S, I, P, SP, KP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
@@ -30,14 +38,7 @@ pub async fn prepare_dm_stanza<'a, S, I, P, SP, KP>(
     to_jid: Jid,
     message: wa::Message,
     request_id: String,
-) -> Result<Node>
-where
-    S: libsignal_protocol::SessionStore,
-    I: libsignal_protocol::IdentityKeyStore,
-    P: libsignal_protocol::PreKeyStore,
-    SP: libsignal_protocol::SignedPreKeyStore,
-    KP: libsignal_protocol::KyberPreKeyStore,
-{
+) -> Result<Node> {
     let padded_message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
 
     let dsm = wa::Message {
@@ -211,8 +212,14 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn prepare_group_stanza<'a, SK, S, I, P, SP, KP>(
-    sender_key_store: &mut SK,
+pub async fn prepare_group_stanza<
+    'a,
+    S: libsignal_protocol::SessionStore + Send + Sync,
+    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
+    P: libsignal_protocol::PreKeyStore + Send + Sync,
+    SP: libsignal_protocol::SignedPreKeyStore + Send + Sync,
+    KP: libsignal_protocol::KyberPreKeyStore + Send + Sync,
+>(
     stores: &mut SignalStores<'a, S, I, P, SP, KP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
@@ -221,15 +228,7 @@ pub async fn prepare_group_stanza<'a, SK, S, I, P, SP, KP>(
     to_jid: Jid,
     message: wa::Message,
     request_id: String,
-) -> Result<Node>
-where
-    SK: libsignal_protocol::SenderKeyStore,
-    S: libsignal_protocol::SessionStore,
-    I: libsignal_protocol::IdentityKeyStore,
-    P: libsignal_protocol::PreKeyStore,
-    SP: libsignal_protocol::SignedPreKeyStore,
-    KP: libsignal_protocol::KyberPreKeyStore,
-{
+) -> Result<Node> {
     let mut group_info = resolver.resolve_group_info(&to_jid).await?;
 
     let (own_sending_jid, addressing_mode_str) = match group_info.addressing_mode {
@@ -249,7 +248,7 @@ where
     let all_devices = resolver.resolve_devices(&group_info.participants).await?;
 
     let (skdm_bytes, sender_key_name) = create_sender_key_distribution_message_for_group(
-        sender_key_store,
+        stores.sender_key_store,
         &to_jid,
         &own_sending_jid,
     )
@@ -257,10 +256,16 @@ where
 
     let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
 
-    let group_sender_address =
-        ProtocolAddress::new(sender_key_name.group_id().to_string(), 0.into());
+    let group_sender_address = ProtocolAddress::new(
+        format!(
+            "{}\n{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        ),
+        0.into(),
+    );
     let skmsg_ciphertext = group_encrypt(
-        sender_key_store,
+        stores.sender_key_store,
         &group_sender_address,
         &padded_plaintext,
         &mut rand::rngs::OsRng.unwrap_err(),
@@ -273,12 +278,7 @@ where
     let mut includes_prekey_message = false;
     let phash = MessageUtils::participant_list_hash(&all_devices);
 
-    let recipient_devices: Vec<_> = all_devices
-        .into_iter()
-        .filter(|d| d != &own_sending_jid)
-        .collect();
-
-    for device_jid in recipient_devices {
+    for device_jid in all_devices {
         let signal_address =
             ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
         let session_record = stores.session_store.load_session(&signal_address).await?;
@@ -383,19 +383,24 @@ where
     Ok(stanza)
 }
 
-pub async fn create_sender_key_distribution_message_for_group<S>(
-    store: &mut S,
+pub async fn create_sender_key_distribution_message_for_group(
+    store: &mut dyn libsignal_protocol::SenderKeyStore,
     group_jid: &Jid,
     own_lid: &Jid,
-) -> Result<(Vec<u8>, SenderKeyName)>
-where
-    S: libsignal_protocol::SenderKeyStore,
-{
+) -> Result<(Vec<u8>, SenderKeyName)> {
     let sender_address =
         ProtocolAddress::new(own_lid.user.clone(), u32::from(own_lid.device).into());
     let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let group_sender_address = ProtocolAddress::new(
+        format!(
+            "{}\n{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        ),
+        0.into(),
+    );
     let skdm = create_sender_key_distribution_message(
-        &ProtocolAddress::new(sender_key_name.group_id().to_string(), 0.into()),
+        &group_sender_address,
         store,
         &mut rand::rngs::OsRng.unwrap_err(),
     )
@@ -407,6 +412,6 @@ where
         }),
         ..Default::default()
     };
-    let padded_skdm = MessageUtils::pad_message_v2(skdm_wrapper.encode_to_vec());
-    Ok((padded_skdm, sender_key_name))
+    let skdm_bytes = skdm_wrapper.encode_to_vec();
+    Ok((skdm_bytes, sender_key_name))
 }

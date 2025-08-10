@@ -51,7 +51,6 @@ impl Client {
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
 
-            let mut device_guard = device_store_arc.lock().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
             let mut stores = wacore::send::SignalStores {
@@ -60,10 +59,10 @@ impl Client {
                 prekey_store: &mut store_adapter.pre_key_store,
                 signed_prekey_store: &store_adapter.signed_pre_key_store,
                 kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
+                sender_key_store: &mut store_adapter.sender_key_store,
             };
 
             wacore::send::prepare_group_stanza(
-                &mut *device_guard,
                 &mut stores,
                 self,
                 &own_jid,
@@ -94,6 +93,7 @@ impl Client {
                 prekey_store: &mut store_adapter.pre_key_store,
                 signed_prekey_store: &store_adapter.signed_pre_key_store,
                 kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
+                sender_key_store: &mut store_adapter.sender_key_store,
             };
 
             wacore::send::prepare_dm_stanza(
