@@ -338,6 +338,9 @@ impl Client {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let key_store = device_snapshot.backend.clone();
 
+        let mut stored_count = 0;
+        let mut failed_count = 0;
+
         for key in &keys.keys {
             if let Some(key_id_proto) = &key.key_id
                 && let Some(key_id) = &key_id_proto.key_id
@@ -358,13 +361,20 @@ impl Client {
                         hex::encode(key_id),
                         e
                     );
+                    failed_count += 1;
                 } else {
-                    log::info!(
-                        "Stored new app state sync key with ID {:?}",
-                        hex::encode(key_id)
-                    );
+                    stored_count += 1;
                 }
             }
+        }
+
+        if stored_count > 0 || failed_count > 0 {
+            log::info!(
+                target: "Client/AppState",
+                "Processed app state key share: {} stored, {} failed.",
+                stored_count,
+                failed_count
+            );
         }
     }
 }

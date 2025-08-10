@@ -912,14 +912,13 @@ impl Client {
             return self.send_node_test_mode(node).await;
         }
 
-        debug!(target: "Client/Send", "Using normal mode for node: {node}");
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
             Some(socket) => socket,
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "{node}");
+        debug!(target: "Client/Send", "--> {node}");
 
         let payload = crate::binary::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");

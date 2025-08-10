@@ -152,5 +152,3 @@ impl<'a> NodeRef<'a> {
         }
     }
 }
-
-// See util.rs for the Display trait implementation (for XML string)
