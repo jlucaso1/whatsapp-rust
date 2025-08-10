@@ -96,6 +96,8 @@ impl Device {
         self.core.noise_key = loaded.noise_key;
         self.core.identity_key = loaded.identity_key;
         self.core.signed_pre_key = loaded.signed_pre_key;
+        self.core.signed_pre_key_id = loaded.signed_pre_key_id;
+        self.core.signed_pre_key_signature = loaded.signed_pre_key_signature;
         self.core.adv_secret_key = loaded.adv_secret_key;
         self.core.account = loaded.account;
         self.core.push_name = loaded.push_name;
