@@ -236,29 +236,6 @@ impl Client {
                 let client_clone = self.clone();
                 let info_clone = info.clone();
                 tokio::task::spawn_local(async move {
-                    let signal_address = ProtocolAddress::new(
-                        info_clone.source.sender.user.clone(),
-                        (info_clone.source.sender.device as u32).into(),
-                    );
-
-                    let device_store = client_clone.persistence_manager.get_device_arc().await;
-                    if let Err(e) = device_store
-                        .lock()
-                        .await
-                        .delete_session(&signal_address)
-                        .await
-                    {
-                        warn!(
-                            "Failed to delete session for {} during retry: {}",
-                            &signal_address, e
-                        );
-                    } else {
-                        log::info!(
-                            "Deleted session for {} to force re-establishment on retry.",
-                            &signal_address
-                        );
-                    }
-
                     if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
                         log::error!("Failed to send retry receipt: {:?}", e);
                     }

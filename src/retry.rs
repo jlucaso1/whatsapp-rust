@@ -103,22 +103,6 @@ impl Client {
                     receipt.source.chat, participant_jid
                 );
             }
-
-            let signal_address = ProtocolAddress::new(
-                participant_jid.user.clone(),
-                u32::from(participant_jid.device).into(),
-            );
-
-            if let Err(e) = device_store
-                .lock()
-                .await
-                .delete_session(&signal_address)
-                .await
-            {
-                log::warn!("Failed to delete session for {signal_address}: {e}");
-            } else {
-                info!("Deleted session for {signal_address} due to retry receipt");
-            }
         } else {
             let signal_address = ProtocolAddress::new(
                 participant_jid.user.clone(),
