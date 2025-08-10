@@ -1,10 +1,47 @@
-use crate::crypto::key_pair::{KeyPair, PreKey};
 use crate::types::jid::Jid;
+use libsignal_protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
+use rand::TryRngCore;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use std::collections::VecDeque;
 use waproto::whatsapp as wa;
+
+pub mod key_pair_serde {
+    use super::KeyPair;
+    use libsignal_protocol::{PrivateKey, PublicKey};
+    use serde::{self, Deserializer, Serializer};
+
+    pub fn serialize<S>(key_pair: &KeyPair, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes: Vec<u8> = key_pair
+            .private_key
+            .serialize()
+            .into_iter()
+            .chain(key_pair.public_key.public_key_bytes().iter().copied())
+            .collect();
+        serializer.serialize_bytes(&bytes)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<KeyPair, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: &[u8] = serde::Deserialize::deserialize(deserializer)?;
+        if bytes.len() != 64 {
+            return Err(serde::de::Error::invalid_length(bytes.len(), &"64"));
+        }
+        let private_key = PrivateKey::deserialize(&bytes[0..32])
+            .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+        let public_key = PublicKey::from_djb_public_key_bytes(&bytes[32..64])
+            .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+        Ok(KeyPair::new(public_key, private_key))
+    }
+}
 
 /// Represents a processed message key for deduplication
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -62,9 +99,15 @@ pub struct Device {
     pub id: Option<Jid>,
     pub lid: Option<Jid>,
     pub registration_id: u32,
+    #[serde(with = "key_pair_serde")]
     pub noise_key: KeyPair,
+    #[serde(with = "key_pair_serde")]
     pub identity_key: KeyPair,
-    pub signed_pre_key: PreKey,
+    #[serde(with = "key_pair_serde")]
+    pub signed_pre_key: KeyPair,
+    pub signed_pre_key_id: u32,
+    #[serde(with = "BigArray")]
+    pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
@@ -83,8 +126,21 @@ impl Device {
     pub fn new() -> Self {
         use rand::RngCore;
 
-        let identity_key = KeyPair::new();
-        let signed_pre_key = identity_key.create_signed_prekey(1).unwrap();
+        let identity_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+
+        let identity_key: KeyPair = KeyPair::new(
+            *identity_key_pair.public_key(),
+            *identity_key_pair.private_key(),
+        );
+        let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
+        let signature_box = identity_key_pair
+            .private_key()
+            .calculate_signature(
+                &signed_pre_key.public_key.serialize(),
+                &mut OsRng.unwrap_err(),
+            )
+            .unwrap();
+        let signed_pre_key_signature: [u8; 64] = signature_box.as_ref().try_into().unwrap();
         let mut adv_secret_key = [0u8; 32];
         rand::rng().fill_bytes(&mut adv_secret_key);
 
@@ -92,9 +148,11 @@ impl Device {
             id: None,
             lid: None,
             registration_id: 3718719151,
-            noise_key: KeyPair::new(),
+            noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
             identity_key,
             signed_pre_key,
+            signed_pre_key_id: 1,
+            signed_pre_key_signature,
             adv_secret_key,
             account: None,
             push_name: String::new(),
@@ -143,11 +201,11 @@ impl Device {
 
         let reg_data = wa::client_payload::DevicePairingRegistrationData {
             e_regid: Some(self.registration_id.to_be_bytes().to_vec()),
-            e_keytype: Some(vec![5]), // DJB_TYPE
-            e_ident: Some(self.identity_key.public_key.to_vec()),
-            e_skey_id: Some({ self.signed_pre_key.key_id }.to_be_bytes()[1..].to_vec()), // 3-byte ID
-            e_skey_val: Some(self.signed_pre_key.key_pair.public_key.to_vec()),
-            e_skey_sig: Some(self.signed_pre_key.signature.unwrap().to_vec()),
+            e_keytype: Some(vec![5]),
+            e_ident: Some(self.identity_key.public_key.public_key_bytes().to_vec()),
+            e_skey_id: Some(self.signed_pre_key_id.to_be_bytes()[1..].to_vec()),
+            e_skey_val: Some(self.signed_pre_key.public_key.public_key_bytes().to_vec()),
+            e_skey_sig: Some(self.signed_pre_key_signature.to_vec()),
             build_hash: Some(build_hash.to_vec()),
             device_props: Some(device_props_bytes),
         };

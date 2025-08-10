@@ -32,9 +32,9 @@ fn test_server_static_key_decryption_with_go_values() {
     let our_private_key = PrivateKey::deserialize(&client_eph_priv).unwrap();
     let their_public_key = PublicKey::from_djb_public_key_bytes(&server_eph_pub).unwrap();
 
-    let rust_shared_secret =
-        wacore::signal::ecc::curve::calculate_shared_secret(&our_private_key, &their_public_key)
-            .unwrap();
+    let rust_shared_secret = our_private_key
+        .calculate_agreement(&their_public_key)
+        .unwrap();
 
     let (rust_salt_after_mix, rust_key_for_decrypt) = {
         let okm = sha256(&rust_shared_secret, Some(&salt_before_mix), &[], 64).unwrap();

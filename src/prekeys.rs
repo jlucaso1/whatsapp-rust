@@ -21,21 +21,25 @@ impl Client {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
                 let identity_public_key = PublicKey::from_djb_public_key_bytes(
-                    &device_snapshot.core.identity_key.public_key,
+                    device_snapshot
+                        .core
+                        .identity_key
+                        .public_key
+                        .public_key_bytes(),
                 )?;
                 let identity_key = IdentityKey::new(identity_public_key);
 
                 let signed_pre_key_public = PublicKey::from_djb_public_key_bytes(
-                    &device_snapshot.core.signed_pre_key.key_pair.public_key,
+                    device_snapshot
+                        .core
+                        .signed_pre_key
+                        .public_key
+                        .public_key_bytes(),
                 )?;
                 let signed_pre_key_id: SignedPreKeyId =
-                    device_snapshot.core.signed_pre_key.key_id.into();
-                let signed_pre_key_signature = device_snapshot
-                    .core
-                    .signed_pre_key
-                    .signature
-                    .ok_or_else(|| anyhow::anyhow!("Test device missing signed pre-key signature"))?
-                    .to_vec();
+                    device_snapshot.core.signed_pre_key_id.into();
+                let signed_pre_key_signature =
+                    device_snapshot.core.signed_pre_key_signature.to_vec();
 
                 let pre_key_id: PreKeyId = 1u32.into();
                 let pre_key_public = identity_public_key;
