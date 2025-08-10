@@ -40,13 +40,11 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
 
                 let device_snapshot = client.persistence_manager.get_device_snapshot().await;
                 let old_name = device_snapshot.push_name.clone();
-                // drop(device_snapshot); // Not needed
 
                 if old_name != new_push_name {
                     info!(
                         "Received push name '{new_push_name}' via account_sync notification, updating store."
                     );
-                    // Use command to update push name
                     client
                         .persistence_manager
                         .process_command(crate::store::commands::DeviceCommand::SetPushName(
@@ -54,15 +52,13 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                         ))
                         .await;
 
-                    client
-                        .dispatch_event(Event::SelfPushNameUpdated(
-                            crate::types::events::SelfPushNameUpdated {
-                                from_server: true,
-                                old_name,
-                                new_name: new_push_name, // Use new_push_name
-                            },
-                        ))
-                        .await;
+                    client.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
+                        crate::types::events::SelfPushNameUpdated {
+                            from_server: true,
+                            old_name,
+                            new_name: new_push_name,
+                        },
+                    ));
 
                     let client_clone = client.clone();
                     tokio::task::spawn_local(async move {
@@ -76,19 +72,19 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                     });
                 }
             } else {
-                // The 'account_sync' can also contain other things like blocklist updates etc.
-                // For now, dispatching a generic event. A more complete implementation could parse these.
                 warn!(target: "Client", "TODO: Implement full handler for <notification type='account_sync'>, for now dispatching generic event.");
                 client
-                    .dispatch_event(Event::Notification(node.clone()))
-                    .await;
+                    .core
+                    .event_bus
+                    .dispatch(&Event::Notification(node.clone()));
             }
         }
         _ => {
             warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
             client
-                .dispatch_event(Event::Notification(node.clone()))
-                .await;
+                .core
+                .event_bus
+                .dispatch(&Event::Notification(node.clone()));
         }
     }
 }

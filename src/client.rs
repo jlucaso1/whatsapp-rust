@@ -8,7 +8,7 @@ use crate::qrcode;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
 use crate::handlers;
-use crate::types::events::{ConnectFailureReason, Event, EventBus, SelfPushNameUpdated};
+use crate::types::events::{ConnectFailureReason, Event, SelfPushNameUpdated};
 use crate::types::presence::Presence;
 
 use dashmap::DashMap;
@@ -17,13 +17,12 @@ use log::{debug, error, info, warn};
 use prost::Message;
 use rand::RngCore;
 use scopeguard;
-use waproto::whatsapp::HistorySync;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task;
 use tokio::time::{Duration, sleep};
 use wacore::types::jid::Jid;
@@ -32,16 +31,6 @@ use waproto::whatsapp::history_sync::HistorySyncType;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
-
-macro_rules! generate_subscription_methods {
-    ($(($method_name:ident, $return_type:ty, $bus_field:ident)),* $(,)?) => {
-        $(
-            pub fn $method_name(&self) -> broadcast::Receiver<$return_type> {
-                self.event_bus.$bus_field.subscribe()
-            }
-        )*
-    };
-}
 
 #[derive(Debug, Clone)]
 pub struct GroupInfo {
@@ -86,7 +75,6 @@ pub struct Client {
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::binary::Node>>>>,
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
-    pub(crate) event_bus: Arc<EventBus>,
 
     pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
     pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
@@ -147,7 +135,6 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
-            event_bus: Arc::new(EventBus::new()),
             chat_locks: Arc::new(DashMap::new()),
             group_cache: Arc::new(DashMap::new()),
 
@@ -287,7 +274,7 @@ impl Client {
                             None => {
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
-                                    self.dispatch_event(Event::Disconnected(crate::types::events::Disconnected)).await;
+                                    self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
                                     info!("Socket disconnected unexpectedly.");
                                     return Err(anyhow::anyhow!("Socket disconnected unexpectedly"));
                                 } else {
@@ -501,14 +488,13 @@ impl Client {
                     .process_command(DeviceCommand::SetPushName(new_name.clone()))
                     .await;
 
-                self.dispatch_event(Event::SelfPushNameUpdated(
+                self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
                     crate::types::events::SelfPushNameUpdated {
                         from_server: true,
                         old_name,
                         new_name,
                     },
-                ))
-                .await;
+                ));
             }
         }
 
@@ -538,8 +524,9 @@ impl Client {
             }
 
             client_clone
-                .dispatch_event(Event::Connected(crate::types::events::Connected))
-                .await;
+                .core
+                .event_bus
+                .dispatch(&Event::Connected(crate::types::events::Connected));
         });
     }
 
@@ -574,7 +561,7 @@ impl Client {
                         reason: ConnectFailureReason::LoggedOut,
                     })
                 };
-                self.dispatch_event(event).await;
+                self.core.event_bus.dispatch(&event);
             }
             ("503", _) => {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
@@ -582,11 +569,12 @@ impl Client {
             _ => {
                 error!(target: "Client", "Unknown stream error: {node}");
                 self.expect_disconnect().await;
-                self.dispatch_event(Event::StreamError(crate::types::events::StreamError {
-                    code: code.to_string(),
-                    raw: Some(node.clone()),
-                }))
-                .await;
+                self.core.event_bus.dispatch(&Event::StreamError(
+                    crate::types::events::StreamError {
+                        code: code.to_string(),
+                        raw: Some(node.clone()),
+                    },
+                ));
             }
         }
 
@@ -609,36 +597,40 @@ impl Client {
 
         if reason.is_logged_out() {
             info!(target: "Client", "Got {reason:?} connect failure, logging out.");
-            self.dispatch_event(Event::LoggedOut(crate::types::events::LoggedOut {
-                on_connect: true,
-                reason,
-            }))
-            .await;
+            self.core
+                .event_bus
+                .dispatch(&wacore::types::events::Event::LoggedOut(
+                    crate::types::events::LoggedOut {
+                        on_connect: true,
+                        reason,
+                    },
+                ));
         } else if let ConnectFailureReason::TempBanned = reason {
             let ban_code = attrs.optional_u64("code").unwrap_or(0) as i32;
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
             warn!(target: "Client", "Temporary ban connect failure: {node}");
-            self.dispatch_event(Event::TemporaryBan(crate::types::events::TemporaryBan {
-                code: crate::types::events::TempBanReason::from(ban_code),
-                expire: expire_duration,
-            }))
-            .await;
+            self.core.event_bus.dispatch(&Event::TemporaryBan(
+                crate::types::events::TemporaryBan {
+                    code: crate::types::events::TempBanReason::from(ban_code),
+                    expire: expire_duration,
+                },
+            ));
         } else if let ConnectFailureReason::ClientOutdated = reason {
             error!(target: "Client", "Client is outdated and was rejected by server.");
-            self.dispatch_event(Event::ClientOutdated(crate::types::events::ClientOutdated))
-                .await;
+            self.core
+                .event_bus
+                .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
             warn!(target: "Client", "Unknown connect failure: {node}");
-            self.dispatch_event(Event::ConnectFailure(
+            self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
                     message: attrs.optional_string("message").unwrap_or("").to_string(),
                     raw: Some(node.clone()),
                 },
-            ))
-            .await;
+            ));
         }
     }
 
@@ -689,232 +681,6 @@ impl Client {
 
     pub fn is_logged_in(&self) -> bool {
         self.is_logged_in.load(Ordering::Relaxed)
-    }
-
-    pub async fn dispatch_event(&self, event: Event) {
-        match event {
-            Event::Connected(data) => {
-                let _ = self.event_bus.connected.send(Arc::new(data));
-            }
-            Event::Disconnected(data) => {
-                let _ = self.event_bus.disconnected.send(Arc::new(data));
-            }
-            Event::PairSuccess(data) => {
-                let _ = self.event_bus.pair_success.send(Arc::new(data));
-            }
-            Event::PairError(data) => {
-                let _ = self.event_bus.pair_error.send(Arc::new(data));
-            }
-            Event::LoggedOut(data) => {
-                let _ = self.event_bus.logged_out.send(Arc::new(data));
-            }
-            Event::Qr(data) => {
-                let _ = self.event_bus.qr.send(Arc::new(data));
-            }
-            Event::QrScannedWithoutMultidevice(data) => {
-                let _ = self
-                    .event_bus
-                    .qr_scanned_without_multidevice
-                    .send(Arc::new(data));
-            }
-            Event::ClientOutdated(data) => {
-                let _ = self.event_bus.client_outdated.send(Arc::new(data));
-            }
-            Event::Message(msg, info) => {
-                let _ = self.event_bus.message.send(Arc::new((msg, info)));
-            }
-            Event::Receipt(data) => {
-                let _ = self.event_bus.receipt.send(Arc::new(data));
-            }
-            Event::UndecryptableMessage(data) => {
-                let _ = self.event_bus.undecryptable_message.send(Arc::new(data));
-            }
-            Event::Notification(data) => {
-                let _ = self.event_bus.notification.send(Arc::new(data));
-            }
-            Event::ChatPresence(data) => {
-                let _ = self.event_bus.chat_presence.send(Arc::new(data));
-            }
-            Event::Presence(data) => {
-                let _ = self.event_bus.presence.send(Arc::new(data));
-            }
-            Event::PictureUpdate(data) => {
-                let _ = self.event_bus.picture_update.send(Arc::new(data));
-            }
-            Event::UserAboutUpdate(data) => {
-                let _ = self.event_bus.user_about_update.send(Arc::new(data));
-            }
-            Event::JoinedGroup(data) => {
-                let _ = self.event_bus.joined_group.send(Arc::new(data));
-            }
-            Event::GroupInfoUpdate { jid, update } => {
-                let _ = self
-                    .event_bus
-                    .group_info_update
-                    .send(Arc::new((jid, update)));
-            }
-            Event::ContactUpdate(data) => {
-                let _ = self.event_bus.contact_update.send(Arc::new(data));
-            }
-            Event::PushNameUpdate(data) => {
-                let _ = self.event_bus.push_name_update.send(Arc::new(data));
-            }
-            Event::SelfPushNameUpdated(data) => {
-                let _ = self.event_bus.self_push_name_updated.send(Arc::new(data));
-            }
-            Event::PinUpdate(data) => {
-                let _ = self.event_bus.pin_update.send(Arc::new(data));
-            }
-            Event::MuteUpdate(data) => {
-                let _ = self.event_bus.mute_update.send(Arc::new(data));
-            }
-            Event::ArchiveUpdate(data) => {
-                let _ = self.event_bus.archive_update.send(Arc::new(data));
-            }
-            Event::HistorySync(data) => {
-                let _ = self.event_bus.history_sync.send(Arc::new(data));
-            }
-            Event::OfflineSyncPreview(data) => {
-                let _ = self.event_bus.offline_sync_preview.send(Arc::new(data));
-            }
-            Event::OfflineSyncCompleted(data) => {
-                let _ = self.event_bus.offline_sync_completed.send(Arc::new(data));
-            }
-            Event::StreamReplaced(data) => {
-                let _ = self.event_bus.stream_replaced.send(Arc::new(data));
-            }
-            Event::TemporaryBan(data) => {
-                let _ = self.event_bus.temporary_ban.send(Arc::new(data));
-            }
-            Event::ConnectFailure(data) => {
-                let _ = self.event_bus.connect_failure.send(Arc::new(data));
-            }
-            Event::StreamError(data) => {
-                let _ = self.event_bus.stream_error.send(Arc::new(data));
-            }
-        }
-    }
-
-    generate_subscription_methods! {
-        (subscribe_to_connected, Arc<crate::types::events::Connected>, connected),
-        (subscribe_to_disconnected, Arc<crate::types::events::Disconnected>, disconnected),
-        (subscribe_to_pair_success, Arc<crate::types::events::PairSuccess>, pair_success),
-        (subscribe_to_pair_error, Arc<crate::types::events::PairError>, pair_error),
-        (subscribe_to_logged_out, Arc<crate::types::events::LoggedOut>, logged_out),
-        (subscribe_to_qr, Arc<crate::types::events::Qr>, qr),
-        (subscribe_to_qr_scanned_without_multidevice, Arc<crate::types::events::QrScannedWithoutMultidevice>, qr_scanned_without_multidevice),
-        (subscribe_to_client_outdated, Arc<crate::types::events::ClientOutdated>, client_outdated),
-        (subscribe_to_messages, Arc<(Box<waproto::whatsapp::Message>, crate::types::message::MessageInfo)>, message),
-        (subscribe_to_receipts, Arc<crate::types::events::Receipt>, receipt),
-        (subscribe_to_undecryptable_messages, Arc<crate::types::events::UndecryptableMessage>, undecryptable_message),
-        (subscribe_to_notifications, Arc<crate::binary::node::Node>, notification),
-        (subscribe_to_chat_presence, Arc<crate::types::events::ChatPresenceUpdate>, chat_presence),
-        (subscribe_to_presence, Arc<crate::types::events::PresenceUpdate>, presence),
-        (subscribe_to_picture_updates, Arc<crate::types::events::PictureUpdate>, picture_update),
-        (subscribe_to_user_about_updates, Arc<crate::types::events::UserAboutUpdate>, user_about_update),
-        (subscribe_to_joined_groups, Arc<Box<waproto::whatsapp::Conversation>>, joined_group),
-        (subscribe_to_group_info_updates, Arc<(crate::types::jid::Jid, Box<waproto::whatsapp::SyncActionValue>)>, group_info_update),
-        (subscribe_to_contact_updates, Arc<crate::types::events::ContactUpdate>, contact_update),
-        (subscribe_to_push_name_updates, Arc<crate::types::events::PushNameUpdate>, push_name_update),
-        (subscribe_to_self_push_name_updated, Arc<crate::types::events::SelfPushNameUpdated>, self_push_name_updated),
-        (subscribe_to_pin_updates, Arc<crate::types::events::PinUpdate>, pin_update),
-        (subscribe_to_mute_updates, Arc<crate::types::events::MuteUpdate>, mute_update),
-        (subscribe_to_archive_updates, Arc<crate::types::events::ArchiveUpdate>, archive_update),
-        (subscribe_to_history_sync, Arc<HistorySync>, history_sync),
-        (subscribe_to_offline_sync_preview, Arc<crate::types::events::OfflineSyncPreview>, offline_sync_preview),
-        (subscribe_to_offline_sync_completed, Arc<crate::types::events::OfflineSyncCompleted>, offline_sync_completed),
-        (subscribe_to_stream_replaced, Arc<crate::types::events::StreamReplaced>, stream_replaced),
-        (subscribe_to_temporary_ban, Arc<crate::types::events::TemporaryBan>, temporary_ban),
-        (subscribe_to_connect_failure, Arc<crate::types::events::ConnectFailure>, connect_failure),
-        (subscribe_to_stream_error, Arc<crate::types::events::StreamError>, stream_error),
-    }
-
-    pub fn subscribe_to_all_events(&self) -> tokio::sync::mpsc::UnboundedReceiver<Event> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
-        macro_rules! forward_simple_events {
-            ($(($method_name:ident, $event_variant:ident)),* $(,)?) => {
-                $(
-                    {
-                        let tx = tx.clone();
-                        let mut recv = self.$method_name();
-                        task::spawn_local(async move {
-                            while let Ok(data) = recv.recv().await {
-                                let event = Event::$event_variant((*data).clone());
-                                if tx.send(event).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-                    }
-                )*
-            };
-        }
-
-        forward_simple_events! {
-            (subscribe_to_connected, Connected),
-            (subscribe_to_disconnected, Disconnected),
-            (subscribe_to_pair_success, PairSuccess),
-            (subscribe_to_pair_error, PairError),
-            (subscribe_to_logged_out, LoggedOut),
-            (subscribe_to_qr, Qr),
-            (subscribe_to_qr_scanned_without_multidevice, QrScannedWithoutMultidevice),
-            (subscribe_to_client_outdated, ClientOutdated),
-            (subscribe_to_receipts, Receipt),
-            (subscribe_to_undecryptable_messages, UndecryptableMessage),
-            (subscribe_to_notifications, Notification),
-            (subscribe_to_chat_presence, ChatPresence),
-            (subscribe_to_presence, Presence),
-            (subscribe_to_picture_updates, PictureUpdate),
-            (subscribe_to_user_about_updates, UserAboutUpdate),
-            (subscribe_to_joined_groups, JoinedGroup),
-            (subscribe_to_contact_updates, ContactUpdate),
-            (subscribe_to_push_name_updates, PushNameUpdate),
-            (subscribe_to_self_push_name_updated, SelfPushNameUpdated),
-            (subscribe_to_pin_updates, PinUpdate),
-            (subscribe_to_mute_updates, MuteUpdate),
-            (subscribe_to_archive_updates, ArchiveUpdate),
-            (subscribe_to_history_sync, HistorySync),
-            (subscribe_to_offline_sync_preview, OfflineSyncPreview),
-            (subscribe_to_offline_sync_completed, OfflineSyncCompleted),
-            (subscribe_to_stream_replaced, StreamReplaced),
-            (subscribe_to_temporary_ban, TemporaryBan),
-            (subscribe_to_connect_failure, ConnectFailure),
-            (subscribe_to_stream_error, StreamError),
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_messages();
-            task::spawn_local(async move {
-                while let Ok(data) = recv.recv().await {
-                    let (msg, info) = &*data;
-                    let event = Event::Message(msg.clone(), info.clone());
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let mut recv = self.subscribe_to_group_info_updates();
-            task::spawn_local(async move {
-                while let Ok(data) = recv.recv().await {
-                    let (jid, update) = &*data;
-                    let event = Event::GroupInfoUpdate {
-                        jid: jid.clone(),
-                        update: update.clone(),
-                    };
-                    if tx.send(event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        rx
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
@@ -981,14 +747,13 @@ impl Client {
                 .process_command(DeviceCommand::SetPushName(name.clone()))
                 .await;
 
-            self.dispatch_event(Event::SelfPushNameUpdated(
+            self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
                 crate::types::events::SelfPushNameUpdated {
                     from_server: false,
                     old_name,
                     new_name: name,
                 },
-            ))
-            .await;
+            ));
         }
         Ok(())
     }
@@ -1282,7 +1047,9 @@ impl Client {
                         }
 
                         // Dispatch the raw event for consumers who might want it
-                        self.dispatch_event(Event::HistorySync(history_data)).await;
+                        self.core
+                            .event_bus
+                            .dispatch(&Event::HistorySync(history_data));
                     }
                     Err(e) => {
                         log::error!("Failed to parse HistorySync protobuf: {:?}", e);
@@ -1332,12 +1099,13 @@ impl Client {
                         new_name.clone(),
                     ))
                     .await;
-                self.dispatch_event(Event::SelfPushNameUpdated(SelfPushNameUpdated {
-                    from_server: true,
-                    old_name,
-                    new_name,
-                }))
-                .await;
+                self.core
+                    .event_bus
+                    .dispatch(&Event::SelfPushNameUpdated(SelfPushNameUpdated {
+                        from_server: true,
+                        old_name,
+                        new_name,
+                    }));
 
                 // Send presence now that we have a name
                 let client_clone = self.clone();

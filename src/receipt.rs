@@ -57,7 +57,7 @@ impl Client {
                 }
             });
         } else {
-            self.dispatch_event(Event::Receipt(receipt)).await;
+            self.core.event_bus.dispatch(&Event::Receipt(receipt));
         }
     }
 }

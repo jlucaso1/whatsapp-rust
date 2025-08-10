@@ -1,7 +1,7 @@
 pub mod context;
 
-use crate::runtime::ProcessResult;
 use crate::store::Device;
+use crate::{runtime::ProcessResult, types::events::CoreEventBus};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
@@ -9,12 +9,16 @@ use sha2::{Digest, Sha256};
 pub struct CoreClient {
     /// Core device data
     pub device: Device,
+    pub event_bus: CoreEventBus,
 }
 
 impl CoreClient {
     /// Creates a new core client with the given device
     pub fn new(device: Device) -> Self {
-        Self { device }
+        Self {
+            device,
+            event_bus: CoreEventBus::new(),
+        }
     }
 
     /// Processes an incoming message/event and returns the result

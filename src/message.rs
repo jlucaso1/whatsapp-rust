@@ -171,9 +171,9 @@ impl Client {
                 if enc_type == "skmsg" {
                     match wa::Message::decode(plaintext.as_slice()) {
                         Ok(group_msg) => {
-                            let _ = self
-                                .dispatch_event(Event::Message(Box::new(group_msg), info.clone()))
-                                .await;
+                            self.core
+                                .event_bus
+                                .dispatch(&Event::Message(Box::new(group_msg), info.clone()));
                         }
                         Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
                     }
@@ -215,12 +215,9 @@ impl Client {
                                 });
                             }
 
-                            let _ = self
-                                .dispatch_event(Event::Message(
-                                    Box::new(original_msg),
-                                    info.clone(),
-                                ))
-                                .await;
+                            self.core
+                                .event_bus
+                                .dispatch(&Event::Message(Box::new(original_msg), info.clone()));
                         }
                         Err(e) => {
                             log::warn!("Failed to unmarshal decrypted pkmsg/msg plaintext: {e}")

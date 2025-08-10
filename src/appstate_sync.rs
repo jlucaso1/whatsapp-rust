@@ -237,7 +237,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                                 action: Box::new(contact_action.clone()),
                                                 from_full_sync: full_sync,
                                             });
-                                            let _ = client.dispatch_event(event).await;
+                                            client.core.event_bus.dispatch(&event);
                                         }
                                     }
                                 } else if let Some(push_name_setting) =
@@ -273,7 +273,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                                     new_name: final_name.clone(),
                                 },
                             );
-                            let _ = client.dispatch_event(event).await;
+                            client.core.event_bus.dispatch(&event);
 
                             if batch_start_name.is_empty() {
                                 let client_clone = client.clone();
