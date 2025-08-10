@@ -9,7 +9,7 @@ pub enum AppStateError {
     #[error("mismatching patch MAC")]
     MismatchingPatchMAC,
     #[error("mismatching content MAC")]
-    MismatchingContentMAC,
+    MismatchingContentMAC(String),
     #[error("mismatching index MAC")]
     MismatchingIndexMAC,
     #[error("app state sync key(s) not found")]

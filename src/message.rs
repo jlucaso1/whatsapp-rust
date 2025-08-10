@@ -198,6 +198,23 @@ impl Client {
                                 self.handle_app_state_sync_key_share(keys).await;
                             }
 
+                            // Handle HistorySyncNotification
+                            if let Some(protocol_msg) = &original_msg.protocol_message
+                                && let Some(history_sync) = &protocol_msg.history_sync_notification
+                            {
+                                log::info!(
+                                    "Received HistorySyncNotification, dispatching for download and processing."
+                                );
+                                let client_clone = self.clone();
+                                let history_sync_clone = history_sync.clone();
+                                let msg_id = info.id.clone();
+                                tokio::task::spawn_local(async move {
+                                    client_clone
+                                        .handle_history_sync(msg_id, history_sync_clone)
+                                        .await;
+                                });
+                            }
+
                             let _ = self
                                 .dispatch_event(Event::Message(
                                     Box::new(original_msg),

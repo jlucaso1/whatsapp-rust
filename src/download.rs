@@ -2,7 +2,6 @@ use crate::client::Client;
 use crate::mediaconn::MediaConn;
 use anyhow::{Result, anyhow};
 
-// Re-export core types and functionality
 pub use wacore::download::{DownloadUtils, Downloadable, MediaType};
 
 impl From<&MediaConn> for wacore::download::MediaConnection {
@@ -24,7 +23,6 @@ impl Client {
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
         let media_conn = self.refresh_media_conn(false).await?;
 
-        // Convert to core types
         let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
         let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
 
@@ -71,7 +69,6 @@ impl Client {
         })
         .await??;
 
-        // Use core decryption logic
         DownloadUtils::decrypt_downloaded_media(
             &encrypted_data,
             &request.media_key,

@@ -1,3 +1,4 @@
+use chrono::Local;
 use log::{error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,18 @@ use whatsapp_rust::store::commands::DeviceCommand;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
 
 fn main() -> Result<(), anyhow::Error> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "{} [{}] - {}",
+                Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -49,6 +49,8 @@ pub enum Event {
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
 
+    HistorySync(HistorySync),
+
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
     ConnectFailure(ConnectFailure),
