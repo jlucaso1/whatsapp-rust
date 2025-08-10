@@ -114,7 +114,7 @@ impl IdentityKeyStore for IdentityAdapter {
         let existing_identity = self.get_identity(address).await?;
 
         let mut device = self.0.device.lock().await;
-        IdentityKeyStore::save_identity(&mut*device, address, identity)
+        IdentityKeyStore::save_identity(&mut *device, address, identity)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))?;
 

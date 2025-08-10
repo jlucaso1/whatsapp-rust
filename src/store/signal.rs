@@ -242,10 +242,7 @@ impl IdentityKeyStore for Device {
             .is_trusted_identity(&address.to_string(), &key_array, direction)
             .await
             .map_err(|e| {
-                SignalProtocolError::InvalidState(
-                    "backend is_trusted_identity",
-                    e.to_string(),
-                )
+                SignalProtocolError::InvalidState("backend is_trusted_identity", e.to_string())
             })
     }
 
@@ -301,16 +298,18 @@ impl SignedPreKeyStore for Device {
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         if signed_prekey_id == self.signed_pre_key.key_id {
-            use wacore::signal::ecc::key_pair::EcKeyPair;
-            use wacore::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
+            use libsignal_protocol::{KeyPair, PrivateKey, PublicKey};
 
-            let key_pair = EcKeyPair::new(
-                DjbEcPublicKey::new(self.signed_pre_key.key_pair.public_key),
-                DjbEcPrivateKey::new(self.signed_pre_key.key_pair.private_key),
-            );
+            let public_key =
+                PublicKey::from_djb_public_key_bytes(&self.signed_pre_key.key_pair.public_key)
+                    .map_err(|e| Box::new(e) as StoreError)?;
+            let private_key = PrivateKey::deserialize(&self.signed_pre_key.key_pair.private_key)
+                .map_err(|e| Box::new(e) as StoreError)?;
+            let key_pair = KeyPair::new(public_key, private_key);
+
             let record = wacore::signal::state::record::new_signed_pre_key_record(
                 self.signed_pre_key.key_id,
-                key_pair,
+                &key_pair,
                 self.signed_pre_key
                     .signature
                     .ok_or("Signature missing from device's signed pre-key")?,
@@ -467,9 +466,7 @@ impl SenderKeyStore for Device {
         self.backend
             .put_sender_key(&unique_key, &serialized_record)
             .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("store_sender_key", e.to_string())
-            })
+            .map_err(|e| SignalProtocolError::InvalidState("store_sender_key", e.to_string()))
     }
 
     async fn load_sender_key(
@@ -481,9 +478,8 @@ impl SenderKeyStore for Device {
             .backend
             .get_sender_key(&unique_key)
             .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("load_sender_key", e.to_string())
-            })? {
+            .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
+        {
             Some(data) => {
                 let record = SenderKeyRecord::deserialize(&data)?;
                 if record.serialize()?.is_empty() {

@@ -1,3 +1,4 @@
+use libsignal_protocol::CurveError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -11,7 +12,7 @@ pub enum ProtocolError {
     #[error("invalid proto message: {0}")]
     Proto(#[from] prost::DecodeError),
     #[error("invalid key: {0}")]
-    InvalidKey(#[from] super::ecc::curve::CurveError),
+    InvalidKey(#[from] CurveError),
     #[error("untrusted identity")]
     UntrustedIdentity,
     #[error("old counter: current={0}, received={1}")]

@@ -1,64 +1,50 @@
-use crate::signal::ecc::key_pair::EcKeyPair;
-use crate::signal::ecc::keys::{DjbEcPrivateKey, DjbEcPublicKey};
 use chrono::Utc;
-// Correctly import from the new crate
+use libsignal_protocol::{KeyPair, PrivateKey, PublicKey};
 use waproto::whatsapp as wa;
 
-// Helper functions for PreKeyRecordStructure and SignedPreKeyRecordStructure
-
-pub fn new_pre_key_record(id: u32, key_pair: EcKeyPair) -> wa::PreKeyRecordStructure {
+pub fn new_pre_key_record(id: u32, key_pair: &KeyPair) -> wa::PreKeyRecordStructure {
     wa::PreKeyRecordStructure {
         id: Some(id),
-        public_key: Some(key_pair.public_key.public_key.to_vec()),
-        private_key: Some(key_pair.private_key.private_key.to_vec()),
+        public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
+        private_key: Some(key_pair.private_key.serialize()),
     }
 }
 
-pub fn pre_key_record_key_pair(record: &wa::PreKeyRecordStructure) -> EcKeyPair {
-    let public_bytes: [u8; 32] = record
-        .public_key()
-        .try_into()
-        .expect("invalid public key length in PreKeyRecordStructure");
+pub fn pre_key_record_key_pair(record: &wa::PreKeyRecordStructure) -> KeyPair {
+    let public_bytes = record.public_key();
+    let private_bytes = record.private_key();
 
-    let private_bytes: [u8; 32] = record
-        .private_key()
-        .try_into()
-        .expect("invalid private key length in PreKeyRecordStructure");
+    let public_key = PublicKey::from_djb_public_key_bytes(public_bytes)
+        .expect("invalid public key in PreKeyRecordStructure");
+    let private_key = PrivateKey::deserialize(private_bytes)
+        .expect("invalid private key in PreKeyRecordStructure");
 
-    EcKeyPair::new(
-        DjbEcPublicKey::new(public_bytes),
-        DjbEcPrivateKey::new(private_bytes),
-    )
+    KeyPair::new(public_key, private_key)
 }
 
 pub fn new_signed_pre_key_record(
     id: u32,
-    key_pair: EcKeyPair,
+    key_pair: &KeyPair,
     signature: [u8; 64],
     timestamp: chrono::DateTime<Utc>,
 ) -> wa::SignedPreKeyRecordStructure {
     wa::SignedPreKeyRecordStructure {
         id: Some(id),
-        public_key: Some(key_pair.public_key.public_key.to_vec()),
-        private_key: Some(key_pair.private_key.private_key.to_vec()),
+        public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
+        private_key: Some(key_pair.private_key.serialize()),
         signature: Some(signature.to_vec()),
         timestamp: Some(timestamp.timestamp().try_into().unwrap()),
     }
 }
 
-pub fn signed_pre_key_record_key_pair(record: &wa::SignedPreKeyRecordStructure) -> EcKeyPair {
-    let public_bytes: [u8; 32] = record
-        .public_key()
-        .try_into()
-        .expect("invalid public key length in SignedPreKeyRecordStructure");
+pub fn signed_pre_key_record_key_pair(record: &wa::SignedPreKeyRecordStructure) -> KeyPair {
+    let public_bytes = record.public_key();
+    let private_bytes = record.private_key();
 
-    let private_bytes: [u8; 32] = record
-        .private_key()
-        .try_into()
-        .expect("invalid private key length in SignedPreKeyRecordStructure");
+    let public_key = PublicKey::from_djb_public_key_bytes(public_bytes)
+        .expect("invalid public key in SignedPreKeyRecordStructure");
+    let private_key = PrivateKey::deserialize(private_bytes)
+        .expect("invalid private key in SignedPreKeyRecordStructure");
 
-    EcKeyPair::new(
-        DjbEcPublicKey::new(public_bytes),
-        DjbEcPrivateKey::new(private_bytes),
-    )
+    KeyPair::new(public_key, private_key)
 }

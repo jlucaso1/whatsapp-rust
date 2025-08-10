@@ -3,9 +3,10 @@ use crate::client::{Client, RecentMessageKey};
 use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
 use crate::types::jid::Jid;
-use libsignal_protocol::ProtocolAddress;
+use libsignal_protocol::{KeyPair, ProtocolAddress};
 use log::{info, warn};
 use prost::Message;
+use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
 use wacore::client::MessageUtils;
@@ -201,11 +202,9 @@ impl Client {
         let device_guard = device_store.lock().await;
 
         let new_prekey_id = (rand::random::<u32>() % 16777215) + 1;
-        let new_prekey_keypair = wacore::signal::ecc::curve::generate_key_pair();
-        let new_prekey_record = wacore::signal::state::record::new_pre_key_record(
-            new_prekey_id,
-            new_prekey_keypair.clone(),
-        );
+        let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let new_prekey_record =
+            wacore::signal::state::record::new_pre_key_record(new_prekey_id, &new_prekey_keypair);
         if let Err(e) = device_guard
             .store_prekey(new_prekey_id, new_prekey_record)
             .await
@@ -219,7 +218,7 @@ impl Client {
         let identity_key_bytes = device_snapshot.identity_key.public_key.to_vec();
 
         let prekey_id_bytes = new_prekey_id.to_be_bytes()[1..].to_vec();
-        let prekey_value_bytes = new_prekey_keypair.public_key.public_key.to_vec();
+        let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
 
         let skey_id_bytes = 1u32.to_be_bytes()[1..].to_vec();
         let skey_value_bytes = device_snapshot.signed_pre_key.key_pair.public_key.to_vec();

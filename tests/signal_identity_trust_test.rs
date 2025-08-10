@@ -1,6 +1,6 @@
 use libsignal_protocol::Direction;
-use libsignal_protocol::ProtocolAddress;
 use libsignal_protocol::IdentityKeyStore;
+use libsignal_protocol::ProtocolAddress;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use whatsapp_rust::store::{Device, memory::MemoryStore, signal::DeviceRwLockWrapper};
