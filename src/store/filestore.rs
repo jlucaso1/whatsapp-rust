@@ -1,5 +1,6 @@
 use crate::store::traits::*;
 use async_trait::async_trait;
+use libsignal_protocol::Direction;
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
@@ -127,15 +128,22 @@ impl IdentityStore for FileStore {
             .map_err(StoreError::from)
     }
 
-    async fn is_trusted_identity(&self, address: &str, key: &[u8; 32]) -> Result<bool> {
-        let path = self
-            .path_for("identities")
-            .join(Self::sanitize_filename(address));
-        match fs::read(path).await {
-            Ok(data) => Ok(data == key),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(StoreError::Io(e)),
-        }
+    async fn is_trusted_identity(
+        &self,
+        _address: &str,
+        _key: &[u8; 32],
+        _direction: Direction,
+    ) -> Result<bool> {
+        // let path = self
+        //     .path_for("identities")
+        //     .join(Self::sanitize_filename(address));
+        // match fs::read(path).await {
+        //     Ok(data) => Ok(data == key),
+        //     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        //     Err(e) => Err(StoreError::Io(e)),
+        // }
+
+        Ok(true)
     }
 
     async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
