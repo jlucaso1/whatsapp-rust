@@ -30,6 +30,14 @@ pub enum HandshakeError {
         expected: usize,
         got: usize,
     },
+    #[error("Invalid key length")]
+    InvalidKeyLength,
+}
+
+pub fn generate_iv(counter: u32) -> [u8; 12] {
+    let mut iv = [0u8; 12];
+    iv[8..].copy_from_slice(&counter.to_be_bytes());
+    iv
 }
 
 pub type Result<T> = std::result::Result<T, HandshakeError>;
@@ -193,9 +201,7 @@ impl HandshakeUtils {
         Ok(())
     }
 
-    /// Builds a ClientFinish message
     pub fn build_client_finish(
-        _device: &Device,
         encrypted_pubkey: Vec<u8>,
         encrypted_payload: Vec<u8>,
     ) -> HandshakeMessage {

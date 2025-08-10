@@ -106,6 +106,7 @@ fn main() -> Result<(), anyhow::Error> {
                 while let Ok(message_data) = message_rx.recv().await {
                     let (msg, info_node) = &*message_data;
                     if let Some(text) = msg.text_content() {
+                        log::info!("Received message: {}", text);
                         if text == "send" {
                             log::info!("Received 'send' command, sending a response.");
                             let response_text = "Hello from whatsapp-rust!";
