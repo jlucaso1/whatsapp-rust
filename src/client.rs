@@ -8,35 +8,27 @@ use crate::qrcode;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
 use crate::handlers;
-use crate::types::events::{ConnectFailureReason, Event, SelfPushNameUpdated};
+use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
 
 use dashmap::DashMap;
-use flate2::read::ZlibDecoder;
+
 use log::{debug, error, info, warn};
-use prost::Message;
+
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Read;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task;
 use tokio::time::{Duration, sleep};
-use wacore::types::jid::Jid;
+use wacore::{client::context::GroupInfo, types::jid::Jid};
 use waproto::whatsapp as wa;
-use waproto::whatsapp::history_sync::HistorySyncType;
-use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
-
-#[derive(Debug, Clone)]
-pub struct GroupInfo {
-    pub participants: Vec<Jid>,
-    pub addressing_mode: crate::types::message::AddressingMode,
-}
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -705,39 +697,6 @@ impl Client {
         noise_socket.send_frame(&payload).await.map_err(Into::into)
     }
 
-    pub async fn send_presence(&self, presence: Presence) -> Result<(), anyhow::Error> {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        debug!(
-            "🔍 send_presence called with push_name: '{}'",
-            device_snapshot.push_name
-        );
-        if device_snapshot.push_name.is_empty() {
-            warn!("❌ Cannot send presence: push_name is empty!");
-            return Err(anyhow::anyhow!(
-                "Cannot send presence without a push name set"
-            ));
-        }
-        let presence_type = match presence {
-            Presence::Available => "available",
-            Presence::Unavailable => "unavailable",
-        };
-        let node = crate::binary::node::Node {
-            tag: "presence".to_string(),
-            attrs: [
-                ("type".to_string(), presence_type.to_string()),
-                ("name".to_string(), device_snapshot.push_name.clone()),
-            ]
-            .into(),
-            content: None,
-        };
-        info!(
-            "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
-            presence_type,
-            node.attrs.get("name").unwrap_or(&"".to_string())
-        );
-        self.send_node(node).await.map_err(|e| e.into())
-    }
-
     pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
@@ -780,151 +739,6 @@ impl Client {
         )
     }
 
-    pub async fn query_group_info(
-        &self,
-        jid: &crate::types::jid::Jid,
-    ) -> Result<GroupInfo, anyhow::Error> {
-        if let Some(cached) = self.group_cache.get(jid) {
-            return Ok(cached.value().clone());
-        }
-
-        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            let info = GroupInfo {
-                participants: vec!["559984726662@s.whatsapp.net".parse()?],
-                addressing_mode: crate::types::message::AddressingMode::Pn,
-            };
-            self.group_cache.insert(jid.clone(), info.clone());
-            return Ok(info);
-        }
-
-        use crate::binary::node::{Node, NodeContent};
-        let query_node = Node {
-            tag: "query".to_string(),
-            attrs: [("request".to_string(), "interactive".to_string())].into(),
-            content: None,
-        };
-        let iq = crate::request::InfoQuery {
-            namespace: "w:g2",
-            query_type: crate::request::InfoQueryType::Get,
-            to: jid.clone(),
-            content: Some(NodeContent::Nodes(vec![query_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
-
-        let resp_node = self.send_iq(iq).await?;
-
-        let group_node = resp_node
-            .get_optional_child("group")
-            .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
-
-        let mut participants = Vec::new();
-        let addressing_mode_str = group_node
-            .attrs()
-            .optional_string("addressing_mode")
-            .unwrap_or("pn");
-        let addressing_mode = match addressing_mode_str {
-            "lid" => crate::types::message::AddressingMode::Lid,
-            _ => crate::types::message::AddressingMode::Pn,
-        };
-
-        for participant_node in group_node.get_children_by_tag("participant") {
-            participants.push(participant_node.attrs().jid("jid"));
-        }
-
-        let info = GroupInfo {
-            participants,
-            addressing_mode,
-        };
-        self.group_cache.insert(jid.clone(), info.clone());
-
-        Ok(info)
-    }
-
-    pub async fn get_user_devices(
-        &self,
-        jids: &[crate::types::jid::Jid],
-    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
-        if self.test_mode.load(Ordering::Relaxed) {
-            debug!("get_user_devices: Using test mode, returning mock devices for {jids:?}");
-            return Ok(jids.to_vec());
-        }
-
-        debug!("get_user_devices: Using normal mode for {jids:?}");
-        use crate::binary::node::{Node, NodeContent};
-        let mut user_nodes = Vec::new();
-        for jid in jids {
-            user_nodes.push(Node {
-                tag: "user".to_string(),
-                attrs: [("jid".to_string(), jid.to_non_ad().to_string())].into(),
-                content: None,
-            });
-        }
-
-        let usync_node = Node {
-            tag: "usync".to_string(),
-            attrs: [
-                ("context".to_string(), "message".to_string()),
-                ("index".to_string(), "0".to_string()),
-                ("last".to_string(), "true".to_string()),
-                ("mode".to_string(), "query".to_string()),
-                ("sid".to_string(), self.generate_request_id()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![
-                Node {
-                    tag: "query".to_string(),
-                    attrs: Default::default(),
-                    content: Some(NodeContent::Nodes(vec![Node {
-                        tag: "devices".to_string(),
-                        attrs: [("version".to_string(), "2".to_string())].into(),
-                        content: None,
-                    }])),
-                },
-                Node {
-                    tag: "list".to_string(),
-                    attrs: Default::default(),
-                    content: Some(NodeContent::Nodes(user_nodes)),
-                },
-            ])),
-        };
-
-        let iq = crate::request::InfoQuery {
-            namespace: "usync",
-            query_type: crate::request::InfoQueryType::Get,
-            to: crate::types::jid::SERVER_JID.parse().unwrap(),
-            content: Some(NodeContent::Nodes(vec![usync_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
-
-        let resp_node = self.send_iq(iq).await?;
-
-        let list_node = resp_node
-            .get_optional_child_by_tag(&["usync", "list"])
-            .ok_or_else(|| anyhow::anyhow!("<usync> or <list> not found in usync response"))?;
-
-        let mut all_devices = Vec::new();
-        for user_node in list_node.get_children_by_tag("user") {
-            let user_jid = user_node.attrs().jid("jid");
-            let device_list_node = user_node
-                .get_optional_child_by_tag(&["devices", "device-list"])
-                .ok_or_else(|| anyhow::anyhow!("<device-list> not found for user {user_jid}"))?;
-
-            for device_node in device_list_node.get_children_by_tag("device") {
-                let device_id_str = device_node.attrs().string("id");
-                let device_id: u16 = device_id_str.parse()?;
-
-                let mut device_jid = user_jid.clone();
-                device_jid.device = device_id;
-                all_devices.push(device_jid);
-            }
-        }
-
-        Ok(all_devices)
-    }
     pub async fn get_jid(&self) -> Option<crate::types::jid::Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.id.clone()
@@ -969,7 +783,7 @@ impl Client {
         Ok(())
     }
 
-    async fn send_protocol_receipt(
+    pub async fn send_protocol_receipt(
         &self,
         id: String,
         receipt_type: crate::types::presence::ReceiptType,
@@ -996,126 +810,8 @@ impl Client {
             if let Err(e) = self.send_node(node).await {
                 warn!(
                     "Failed to send protocol receipt of type {:?} for message ID {}: {:?}",
-                    receipt_type,
-                    self.unique_id, // just for logging context
-                    e
+                    receipt_type, self.unique_id, e
                 );
-            }
-        }
-    }
-
-    // Handles HistorySyncNotification: downloads, decompresses, parses, and processes history sync blobs.
-    pub async fn handle_history_sync(
-        self: &Arc<Self>,
-        message_id: String,
-        notification: HistorySyncNotification,
-    ) {
-        log::info!(
-            "Downloading history sync blob for message {} (Size: {}, Type: {:?})",
-            message_id,
-            notification.file_length(),
-            notification.sync_type()
-        );
-
-        self.send_protocol_receipt(message_id, crate::types::presence::ReceiptType::HistorySync)
-            .await;
-
-        match self.download(&notification).await {
-            Ok(decompressed_data) => {
-                log::info!("Successfully downloaded and decompressed history sync blob.");
-
-                let mut decoder = ZlibDecoder::new(&decompressed_data[..]);
-                let mut uncompressed = Vec::new();
-                if let Err(e) = decoder.read_to_end(&mut uncompressed) {
-                    log::error!("Failed to zlib decompress history sync data: {:?}", e);
-                    return;
-                }
-
-                match wa::HistorySync::decode(uncompressed.as_slice()) {
-                    Ok(history_data) => {
-                        log::info!(
-                            "Successfully parsed HistorySync protobuf (Type: {:?}, Conversations: {})",
-                            history_data.sync_type(),
-                            history_data.conversations.len()
-                        );
-
-                        // Process push names from history sync
-                        if history_data.sync_type() == HistorySyncType::PushName {
-                            self.clone()
-                                .handle_historical_pushnames(&history_data.pushnames)
-                                .await;
-                        }
-
-                        // Dispatch the raw event for consumers who might want it
-                        self.core
-                            .event_bus
-                            .dispatch(&Event::HistorySync(history_data));
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse HistorySync protobuf: {:?}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to download history sync blob: {:?}", e);
-            }
-        }
-    }
-
-    // Processes push names from history sync and updates own push name if needed.
-    pub async fn handle_historical_pushnames(self: Arc<Self>, pushnames: &[wa::Pushname]) {
-        if pushnames.is_empty() {
-            return;
-        }
-
-        log::info!(
-            "Processing {} push names from history sync.",
-            pushnames.len()
-        );
-
-        let mut latest_own_pushname = None;
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid_user = device_snapshot.id.as_ref().map(|j| j.user.as_str());
-
-        for pn in pushnames {
-            if let Some(id) = &pn.id
-                && Some(id.as_str()) == own_jid_user
-                && let Some(name) = &pn.pushname
-            {
-                latest_own_pushname = Some(name.clone());
-            }
-        }
-
-        if let Some(new_name) = latest_own_pushname {
-            let old_name = device_snapshot.push_name.clone();
-            if old_name != new_name {
-                log::info!(
-                    "Updating own push name from history sync: '{}' -> '{}'",
-                    old_name,
-                    new_name
-                );
-                self.persistence_manager
-                    .process_command(crate::store::commands::DeviceCommand::SetPushName(
-                        new_name.clone(),
-                    ))
-                    .await;
-                self.core
-                    .event_bus
-                    .dispatch(&Event::SelfPushNameUpdated(SelfPushNameUpdated {
-                        from_server: true,
-                        old_name,
-                        new_name,
-                    }));
-
-                // Send presence now that we have a name
-                let client_clone = self.clone();
-                tokio::task::spawn_local(async move {
-                    if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                        log::warn!("Failed to send presence after history sync update: {:?}", e);
-                    } else {
-                        log::info!("Sent presence after receiving push name via history sync");
-                    }
-                });
             }
         }
     }
