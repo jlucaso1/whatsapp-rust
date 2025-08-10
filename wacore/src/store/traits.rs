@@ -16,7 +16,12 @@ pub struct AppStateSyncKey {
 pub trait IdentityStore: Send + Sync {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
     async fn delete_identity(&self, address: &str) -> Result<()>;
-    async fn is_trusted_identity(&self, address: &str, key: &[u8; 32], direction: Direction) -> Result<bool>;
+    async fn is_trusted_identity(
+        &self,
+        address: &str,
+        key: &[u8; 32],
+        direction: Direction,
+    ) -> Result<bool>;
     async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
 }
 
