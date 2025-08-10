@@ -1,5 +1,5 @@
 use crate::socket::{FrameSocket, NoiseSocket};
-use log::info;
+use log::{debug, info};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
@@ -26,7 +26,7 @@ pub async fn do_handshake(
 ) -> Result<Arc<NoiseSocket>> {
     let mut handshake_state = HandshakeState::new(&device.core)?;
 
-    info!("--> Sending ClientHello");
+    debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
     frame_socket.send_frame(&client_hello_bytes).await?;
 
@@ -35,11 +35,11 @@ pub async fn do_handshake(
         .map_err(|_| HandshakeError::Timeout)?
         .ok_or(HandshakeError::Timeout)?;
 
-    info!("<-- Received handshake response, building ClientFinish");
+    debug!("<-- Received handshake response, building ClientFinish");
     let client_finish_bytes =
         handshake_state.read_server_hello_and_build_client_finish(&resp_frame)?;
 
-    info!("--> Sending ClientFinish");
+    debug!("--> Sending ClientFinish");
     frame_socket.send_frame(&client_finish_bytes).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;

@@ -2,7 +2,7 @@ use super::error::StoreError;
 use crate::store::Device;
 use crate::store::filestore::FileStore;
 use crate::store::traits::Backend;
-use log::{error, info};
+use log::{debug, error, info};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
@@ -80,14 +80,14 @@ impl PersistenceManager {
         if let Some(filestore) = &self.filestore {
             let mut dirty_guard = self.dirty.lock().await;
             if *dirty_guard {
-                info!("Device state is dirty, saving to disk.");
+                debug!("Device state is dirty, saving to disk.");
                 let device_guard = self.device.lock().await;
                 let serializable_device = device_guard.to_serializable();
                 drop(device_guard);
 
                 filestore.save_device_data(&serializable_device).await?;
                 *dirty_guard = false;
-                info!("Device state saved successfully.");
+                debug!("Device state saved successfully.");
             }
         }
         Ok(())
@@ -99,7 +99,7 @@ impl PersistenceManager {
                 loop {
                     tokio::select! {
                         _ = self.save_notify.notified() => {
-                            info!("Save notification received.");
+                            debug!("Save notification received.");
                         }
                         _ = sleep(interval) => {}
                     }
@@ -120,7 +120,7 @@ use super::commands::{DeviceCommand, apply_command_to_device};
 
 impl PersistenceManager {
     pub async fn process_command(&self, command: DeviceCommand) {
-        info!("Processing command: {command:?}");
+        debug!("Processing command: {command:?}");
         self.modify_device(|device| {
             apply_command_to_device(device, command);
         })
@@ -129,7 +129,7 @@ impl PersistenceManager {
 
     pub async fn save_now(&self) -> Result<(), StoreError> {
         if let Some(filestore) = &self.filestore {
-            info!("PersistenceManager: Forcing save_now.");
+            debug!("PersistenceManager: Forcing save_now.");
             let device_guard = self.device.lock().await;
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
@@ -138,7 +138,7 @@ impl PersistenceManager {
                 Ok(_) => {
                     let mut dirty_guard = self.dirty.lock().await;
                     *dirty_guard = false;
-                    info!("PersistenceManager: Forced save_now successful.");
+                    debug!("PersistenceManager: Forced save_now successful.");
                     Ok(())
                 }
                 Err(e) => {
@@ -147,7 +147,7 @@ impl PersistenceManager {
                 }
             }
         } else {
-            info!("PersistenceManager: save_now called on in-memory store, no action taken.");
+            debug!("PersistenceManager: save_now called on in-memory store, no action taken.");
             Ok(())
         }
     }

@@ -158,12 +158,24 @@ impl Processor {
             let keys = keys::expand_app_state_keys(&key_data);
 
             let mut patch_mutations: Vec<Mutation> = Vec::new();
+            let mut decode_errors = 0;
             for mutation in &patch.mutations {
-                if let Err(_e) =
+                if let Err(e) =
                     ProcessorUtils::decode_mutation(&keys, mutation, &mut patch_mutations)
+                    && matches!(e, AppStateError::MismatchingContentMAC(_))
                 {
-                    log::warn!(target: "AppStateProcessor", "Failed to decode mutation from patch: {:?}", _e);
+                    decode_errors += 1;
                 }
+            }
+
+            if decode_errors > 0 {
+                log::warn!(
+                    target: "AppStateProcessor",
+                    "Failed to decode {} mutations from patch for '{}' at version {}. Sync might be partially inconsistent.",
+                    decode_errors,
+                    list.name,
+                    patch.version.as_ref().map_or(0, |v| v.version())
+                );
             }
 
             if let Some(patch_mac_from_server) = &patch.patch_mac {

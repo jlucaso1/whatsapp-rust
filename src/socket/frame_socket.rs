@@ -5,7 +5,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use log::{debug, error, info, warn};
+use log::{error, info, trace, warn};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -94,7 +94,7 @@ impl FrameSocket {
         whole_frame.extend_from_slice(&u32::to_be_bytes(data_len as u32)[1..]);
         whole_frame.extend_from_slice(data);
 
-        debug!(
+        trace!(
             "--> Sending frame: payload {} bytes, total {} bytes",
             data_len,
             whole_frame.len()
@@ -116,7 +116,7 @@ impl FrameSocket {
             match stream.next().await {
                 Some(Ok(msg)) => {
                     if let Message::Binary(data) = msg {
-                        debug!("<-- Received WebSocket message: {} bytes", data.len());
+                        trace!("<-- Received WebSocket message: {} bytes", data.len());
                         buffer.extend_from_slice(&data);
 
                         while buffer.len() >= FRAME_LENGTH_SIZE {
@@ -127,7 +127,7 @@ impl FrameSocket {
                             if buffer.len() >= FRAME_LENGTH_SIZE + frame_len {
                                 buffer.advance(FRAME_LENGTH_SIZE);
                                 let frame_data = buffer.split_to(frame_len).freeze();
-                                debug!("<-- Assembled frame: {} bytes", frame_data.len());
+                                trace!("<-- Assembled frame: {} bytes", frame_data.len());
                                 if frames_tx.send(frame_data).await.is_err() {
                                     warn!("Frame receiver dropped, closing read pump");
                                     break;
@@ -137,7 +137,7 @@ impl FrameSocket {
                             }
                         }
                     } else if let Message::Close(_) = msg {
-                        debug!("Received close frame");
+                        trace!("Received close frame");
                         break;
                     }
                 }
@@ -146,7 +146,7 @@ impl FrameSocket {
                     break;
                 }
                 None => {
-                    debug!("Websocket stream ended");
+                    trace!("Websocket stream ended");
                     break;
                 }
             }

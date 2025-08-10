@@ -14,9 +14,10 @@ fn main() -> Result<(), anyhow::Error> {
             use std::io::Write;
             writeln!(
                 buf,
-                "{} [{}] - {}",
-                Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                "{} [{:<5}] [{}] - {}",
+                Local::now().format("%H:%M:%S"),
                 record.level(),
+                record.target(),
                 record.args()
             )
         })

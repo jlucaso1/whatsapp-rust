@@ -25,70 +25,36 @@ pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>> {
     }
 }
 
-// Implement Display for Node to generate an XML string for debugging.
-fn fmt_node(node: &Node, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Result {
-    let indentation = "  ".repeat(indent);
-    write!(
-        f,
-        "{}{}<{}",
-        indentation,
-        if indent > 0 { "\n" } else { "" },
-        node.tag
-    )?;
-
-    let mut sorted_attrs: Vec<_> = node.attrs.iter().collect();
-    sorted_attrs.sort_by_key(|(k, _)| *k);
-    for (k, v) in sorted_attrs {
-        write!(f, " {k}=\"{v}\"")?;
-    }
-
-    if node.tag == "enc" {
-        if let Some(NodeContent::Bytes(bytes)) = &node.content {
-            // Special handling for <enc> tags to avoid printing large byte arrays
-            write!(f, ">length: {}</{}>", bytes.len(), node.tag)?;
-        } else {
-            // If <enc> has no content or non-byte content, just self-close it
-            write!(f, "/>")?;
-        }
-    } else {
-        match &node.content {
-            Some(content) => {
-                write!(f, ">")?;
-                match content {
-                    NodeContent::Nodes(nodes) => {
-                        for child in nodes {
-                            fmt_node(child, f, indent + 1)?;
-                        }
-                        write!(f, "\n{}</{}>", indentation, node.tag)?;
-                    }
-                    NodeContent::Bytes(bytes) => {
-                        if let Ok(s) = std::str::from_utf8(bytes) {
-                            if s.len() > 512 {
-                                write!(f, "[{} bytes]", bytes.len())?;
-                            } else {
-                                write!(f, "{s}")?;
-                            }
-                        } else {
-                            write!(f, "{}", hex::encode(bytes))?;
-                        }
-                        write!(f, "</{}>", node.tag)?;
-                    }
-                }
-            }
-            None => {
-                write!(f, "/>")?;
-            }
-        }
-    }
-    if indent == 0 {
-        writeln!(f)?;
-    }
-    Ok(())
-}
-
-// Implement Display for Node using the above fmt_node function.
 impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_node(self, f, 0)
+        let mut parts = vec![format!("<{}", self.tag)];
+
+        if let Some(id) = self.attrs.get("id") {
+            parts.push(format!("id=\"{}\"", id));
+        }
+        if let Some(from) = self.attrs.get("from") {
+            parts.push(format!("from=\"{}\"", from));
+        }
+        if let Some(to) = self.attrs.get("to") {
+            parts.push(format!("to=\"{}\"", to));
+        }
+        if let Some(node_type) = self.attrs.get("type") {
+            parts.push(format!("type=\"{}\"", node_type));
+        }
+        if let Some(namespace) = self.attrs.get("xmlns") {
+            parts.push(format!("xmlns=\"{}\"", namespace));
+        }
+
+        let content_summary = match &self.content {
+            Some(NodeContent::Nodes(nodes)) => format!("[{} children]", nodes.len()),
+            Some(NodeContent::Bytes(bytes)) => format!("[{} bytes]", bytes.len()),
+            None => "".to_string(),
+        };
+
+        if content_summary.is_empty() {
+            write!(f, "{} />", parts.join(" "))
+        } else {
+            write!(f, "{} {}/>", parts.join(" "), content_summary)
+        }
     }
 }
