@@ -16,7 +16,6 @@ use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
-use wacore::signal::store::SessionStore as _;
 use wacore::types::jid::Jid;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp::{self as wa};
@@ -406,6 +405,7 @@ impl Client {
             info.source.sender.user.clone(),
             (info.source.sender.device as u32).into(),
         );
+
         let group_sender_address = ProtocolAddress::new(
             format!("{}\n{}", info.source.chat, sender_address),
             0.into(),

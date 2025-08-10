@@ -32,11 +32,15 @@ pub struct SignedPreKeyAdapter(SharedDevice);
 pub struct KyberPreKeyAdapter(SharedDevice);
 
 #[derive(Clone)]
+pub struct SenderKeyAdapter(SharedDevice);
+
+#[derive(Clone)]
 pub struct SignalProtocolStoreAdapter {
     pub session_store: SessionAdapter,
     pub identity_store: IdentityAdapter,
     pub pre_key_store: PreKeyAdapter,
     pub signed_pre_key_store: SignedPreKeyAdapter,
+    pub sender_key_store: SenderKeyAdapter,
     pub kyber_pre_key_store: KyberPreKeyAdapter,
 }
 
@@ -48,7 +52,8 @@ impl SignalProtocolStoreAdapter {
             identity_store: IdentityAdapter(shared.clone()),
             pre_key_store: PreKeyAdapter(shared.clone()),
             signed_pre_key_store: SignedPreKeyAdapter(shared.clone()),
-            kyber_pre_key_store: KyberPreKeyAdapter(shared),
+            kyber_pre_key_store: KyberPreKeyAdapter(shared.clone()),
+            sender_key_store: SenderKeyAdapter(shared),
         }
     }
 }
@@ -228,6 +233,26 @@ impl KyberPreKeyStore for KyberPreKeyAdapter {
             "mark_kyber_pre_key_used",
             "Unimplemented".into(),
         ))
+    }
+}
+
+#[async_trait(?Send)]
+impl libsignal_protocol::SenderKeyStore for SenderKeyAdapter {
+    async fn store_sender_key(
+        &mut self,
+        sender: &libsignal_protocol::ProtocolAddress,
+        record: &libsignal_protocol::SenderKeyRecord,
+    ) -> libsignal_protocol::error::Result<()> {
+        let mut device = self.0.device.lock().await;
+        libsignal_protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record).await
+    }
+
+    async fn load_sender_key(
+        &mut self,
+        sender: &libsignal_protocol::ProtocolAddress,
+    ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
+        let mut device = self.0.device.lock().await;
+        libsignal_protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
     }
 }
 
