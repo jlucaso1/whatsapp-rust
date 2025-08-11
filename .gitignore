@@ -3,3 +3,4 @@
 *.txt
 whatsapp_store
 .cargo
+.vscode

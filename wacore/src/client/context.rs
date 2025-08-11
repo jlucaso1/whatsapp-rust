@@ -19,5 +19,10 @@ pub trait SendContextResolver: Send + Sync {
         jids: &[Jid],
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error>;
 
+    async fn fetch_prekeys_for_identity_check(
+        &self,
+        jids: &[Jid],
+    ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error>;
+
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>;
 }

@@ -389,6 +389,7 @@ impl Client {
             "message" => {
                 let client_clone = self.clone();
                 let node_clone = node.clone();
+                debug!(target: "Client/Recv", "Received message raw: {node_clone:?}");
 
                 task::spawn_local(async move {
                     let info = match client_clone.parse_message_info(&node_clone).await {
@@ -413,7 +414,9 @@ impl Client {
                     client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
-            "ack" => {}
+            "ack" => {
+                info!(target: "Client/Recv", "Received ACK node: {node:?}");
+            }
             _ => {
                 warn!(target: "Client", "Received unknown top-level node: {node}");
             }
@@ -687,7 +690,7 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "--> {node}");
+        debug!(target: "Client/Send", "--> {node:?}");
 
         let payload = crate::binary::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
