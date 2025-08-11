@@ -36,8 +36,7 @@ impl Client {
             )
             .await?
         } else if to.is_group() {
-            self.add_recent_message(to.clone(), request_id.clone(), message.clone())
-                .await;
+            let mut group_info = self.query_group_info(&to).await?;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
@@ -52,7 +51,6 @@ impl Client {
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
 
-            let group_info = self.query_group_info(&to).await?;
             let (own_sending_jid, _) = match group_info.addressing_mode {
                 crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
                 crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
@@ -98,6 +96,7 @@ impl Client {
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
+                &mut group_info,
                 &own_jid,
                 &own_lid,
                 account_info.as_ref(),
@@ -131,6 +130,7 @@ impl Client {
                         wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
+                            &mut group_info,
                             &own_jid,
                             &own_lid,
                             account_info.as_ref(),

@@ -1,6 +1,6 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
 use crate::client::MessageUtils;
-use crate::client::context::SendContextResolver;
+use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
@@ -222,6 +222,7 @@ pub async fn prepare_group_stanza<
 >(
     stores: &mut SignalStores<'a, S, I, P, SP, KP>,
     resolver: &dyn SendContextResolver,
+    group_info: &mut GroupInfo,
     own_jid: &Jid,
     own_lid: &Jid,
     account: Option<&wa::AdvSignedDeviceIdentity>,
@@ -230,8 +231,6 @@ pub async fn prepare_group_stanza<
     request_id: String,
     force_skdm_distribution: bool,
 ) -> Result<Node> {
-    let mut group_info = resolver.resolve_group_info(&to_jid).await?;
-
     let (own_sending_jid, addressing_mode_str) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
