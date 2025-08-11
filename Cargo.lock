@@ -1034,7 +1034,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
 dependencies = [
  "curve25519-dalek",
  "derive_more",
@@ -1049,7 +1049,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -1432,9 +1432,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.95"
+version = "1.0.96"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
+checksum = "beef09f85ae72cea1ef96ba6870c51e6382ebfa4f0e85b643459331f3daa5be0"
 dependencies = [
  "unicode-ident",
 ]
@@ -1885,7 +1885,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
 dependencies = [
  "aes",
  "cbc",

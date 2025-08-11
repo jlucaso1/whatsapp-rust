@@ -12,6 +12,7 @@ use libsignal_protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
     message_decrypt,
 };
+use log::debug;
 use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
@@ -170,6 +171,9 @@ impl Client {
                 if enc_type == "skmsg" {
                     match wa::Message::decode(plaintext.as_slice()) {
                         Ok(group_msg) => {
+                            debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
+                            debug!(target: "Client/Recv", "Message info: {info:?}");
+
                             self.core
                                 .event_bus
                                 .dispatch(&Event::Message(Box::new(group_msg), info.clone()));

@@ -10,6 +10,7 @@ impl Client {
     pub async fn fetch_pre_keys(
         &self,
         jids: &[Jid],
+        reason: Option<&str>,
     ) -> Result<std::collections::HashMap<Jid, PreKeyBundle>, anyhow::Error> {
         if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
             use libsignal_protocol::{
@@ -59,7 +60,7 @@ impl Client {
             return Ok(bundles);
         }
 
-        let content = PreKeyUtils::build_fetch_prekeys_request(jids);
+        let content = PreKeyUtils::build_fetch_prekeys_request(jids, reason);
 
         let resp_node = self
             .send_iq(crate::request::InfoQuery {

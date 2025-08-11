@@ -9,7 +9,6 @@ use prost::Message;
 use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
-use wacore::client::MessageUtils;
 use wacore::signal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
@@ -128,41 +127,7 @@ impl Client {
                 message_id
             );
 
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            let own_sending_jid = device_snapshot
-                .lid
-                .clone()
-                .or(device_snapshot.id.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Cannot create SKDM for retry: No local sending JID available")
-                })?;
-
-            let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut device_guard = device_store_arc.lock().await;
-
-            let (skdm_bytes_padded, _sender_key_name) =
-                wacore::send::create_sender_key_distribution_message_for_group(
-                    &mut *device_guard,
-                    &receipt.source.chat,
-                    &own_sending_jid,
-                )
-                .await?;
-
-            let skdm_bytes = MessageUtils::unpad_message(&skdm_bytes_padded, 2).unwrap();
-            let skdm_wrapper = wa::Message::decode(skdm_bytes)?;
-
-            let mut resend_msg = original_msg;
-            if let Some(skdm) = skdm_wrapper.sender_key_distribution_message {
-                resend_msg.sender_key_distribution_message = Some(skdm);
-                info!("Attached new SKDM to message {} for retry.", message_id);
-            } else {
-                warn!(
-                    "Failed to extract SKDM from wrapper for retry of message {}.",
-                    message_id
-                );
-            }
-
-            self.send_message_impl(receipt.source.chat.clone(), resend_msg, message_id, false)
+            self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
                 .await?;
         } else {
             self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
