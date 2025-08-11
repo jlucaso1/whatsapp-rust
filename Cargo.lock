@@ -1034,7 +1034,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
 dependencies = [
  "curve25519-dalek",
  "derive_more",
@@ -1049,7 +1049,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -1885,7 +1885,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#32c3064790f95dabe0e51fa8ea93c2ba954d3ee6"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#45ab31132d2527463b73f03ab9bdfa304aa6bf16"
 dependencies = [
  "aes",
  "cbc",
