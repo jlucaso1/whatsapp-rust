@@ -1,6 +1,6 @@
 /target
-*.xml
-*.txt
-whatsapp_store
-.cargo
-.vscode
+/*.xml
+/*.txt
+/whatsapp_store
+/.cargo
+/.vscode
