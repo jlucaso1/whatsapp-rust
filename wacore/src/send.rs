@@ -68,12 +68,8 @@ pub async fn prepare_dm_stanza<
         let signal_address =
             ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
         let session_record = stores.session_store.load_session(&signal_address).await?;
-        let session_exists = match session_record {
-            Some(record) => record.has_usable_sender_chain(SystemTime::now())?,
-            None => false,
-        };
 
-        if !session_exists {
+        if session_record.is_none() {
             let prekey_bundles = resolver
                 .fetch_prekeys(std::slice::from_ref(&device_jid))
                 .await?;
@@ -231,7 +227,7 @@ pub async fn prepare_group_stanza<
     request_id: String,
     force_skdm_distribution: bool,
 ) -> Result<Node> {
-    let (own_sending_jid, addressing_mode_str) = match group_info.addressing_mode {
+    let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
     };
@@ -261,11 +257,11 @@ pub async fn prepare_group_stanza<
         for device_jid in all_devices {
             let signal_address =
                 ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
-            let session_record = stores.session_store.load_session(&signal_address).await?;
-            if session_record.is_none()
-                || !session_record
-                    .unwrap()
-                    .has_usable_sender_chain(SystemTime::now())?
+            if stores
+                .session_store
+                .load_session(&signal_address)
+                .await?
+                .is_none()
             {
                 let prekey_bundles = resolver
                     .fetch_prekeys_for_identity_check(std::slice::from_ref(&device_jid))
@@ -374,11 +370,7 @@ pub async fn prepare_group_stanza<
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
         let phash = MessageUtils::participant_list_hash(&all_devices);
-        stanza_attrs.insert("participant".to_string(), own_sending_jid.to_string());
-        stanza_attrs.insert(
-            "addressing_mode".to_string(),
-            addressing_mode_str.to_string(),
-        );
+        // The `participant` and `addressing_mode` attributes are not needed on the root message node.
         stanza_attrs.insert("phash".to_string(), phash);
     }
 
