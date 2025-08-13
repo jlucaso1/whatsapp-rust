@@ -1,5 +1,5 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::types::jid::{Jid, JidExt};
+use crate::types::jid::{self, Jid, JidExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -103,7 +103,8 @@ impl RequestUtils {
         // 2. Add own JID if available (best effort)
         if let Some(jid) = user_jid {
             data.extend_from_slice(jid.user.as_bytes());
-            data.extend_from_slice(b"@c.us"); // whatsmeow uses legacy server here
+            data.extend_from_slice(b"@");
+            data.extend_from_slice(jid::LEGACY_USER_SERVER.as_bytes());
         }
 
         // 3. Add random bytes (16 bytes)

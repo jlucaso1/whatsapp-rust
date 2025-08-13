@@ -103,10 +103,7 @@ impl Client {
                 );
             }
         } else {
-            let signal_address = ProtocolAddress::new(
-                participant_jid.user.clone(),
-                u32::from(participant_jid.device).into(),
-            );
+            let signal_address = participant_jid.to_protocol_address();
 
             let device_store = self.persistence_manager.get_device_arc().await;
             if let Err(e) = device_store

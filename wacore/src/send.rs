@@ -1,24 +1,74 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
 use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
-use crate::signal::sender_key_name::SenderKeyName;
+use crate::signal::store::GroupSenderKeyStore;
 use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
 use libsignal_protocol::{
-    CiphertextMessage, ProtocolAddress, SerializedState, create_sender_key_distribution_message,
-    group_encrypt, message_encrypt,
+    CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
+    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SerializedState,
+    aes_256_cbc_encrypt, message_encrypt,
 };
 use prost::Message as ProtoMessage;
-use rand::TryRngCore as _;
+use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::time::SystemTime;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
-// HKDF-based key derivation to obtain RootKey and initial sending ChainKey.
+pub async fn encrypt_group_message_correctly<S, R>(
+    sender_key_store: &mut S,
+    group_id: &Jid,
+    sender: &ProtocolAddress,
+    plaintext: &[u8],
+    csprng: &mut R,
+) -> Result<SenderKeyMessage>
+where
+    S: GroupSenderKeyStore + ?Sized,
+    R: Rng + CryptoRng,
+{
+    let mut record = sender_key_store
+        .load_sender_key(group_id, sender)
+        .await?
+        .ok_or_else(|| anyhow!("No SenderKeyRecord found for group session"))?;
+
+    let sender_key_state = record
+        .sender_key_state_mut()
+        .map_err(|e| anyhow!("Invalid SenderKey session: {:?}", e))?;
+
+    let sender_chain_key = sender_key_state
+        .sender_chain_key()
+        .ok_or_else(|| anyhow!("Invalid SenderKey session: missing chain key"))?;
+
+    let message_keys = sender_chain_key.sender_message_key();
+
+    let ciphertext = aes_256_cbc_encrypt(plaintext, message_keys.cipher_key(), message_keys.iv())
+        .map_err(|_| anyhow!("AES encryption failed"))?;
+
+    let signing_key = sender_key_state
+        .signing_key_private()
+        .map_err(|e| anyhow!("Invalid SenderKey session: missing signing key: {:?}", e))?;
+
+    let skm = SenderKeyMessage::new(
+        SENDERKEY_MESSAGE_CURRENT_VERSION,
+        sender_key_state.chain_id(),
+        message_keys.iteration(),
+        ciphertext.into_boxed_slice(),
+        csprng,
+        &signing_key,
+    )?;
+
+    sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
+
+    sender_key_store
+        .store_sender_key(group_id, sender, &record)
+        .await?;
+
+    Ok(skm)
+}
+
 pub fn derive_keys_pre_kyber(
     secret_input: &[u8],
 ) -> Result<(libsignal_protocol::RootKey, libsignal_protocol::ChainKey)> {
-    // Mirror reference Signal: salt = None, info label for pre-kyber
     let label = b"WhisperText";
     let mut okm = [0u8; 64];
     hkdf::Hkdf::<sha2::Sha256>::new(None, secret_input)
@@ -35,7 +85,6 @@ pub fn derive_keys_pre_kyber(
     Ok((root_key, chain_key))
 }
 
-// Full local implementation to build a fresh session from a PreKeyBundle without premature ratchet.
 async fn process_prekey_bundle_workaround<
     S: libsignal_protocol::SessionStore + Send + Sync,
     I: libsignal_protocol::IdentityKeyStore + Send + Sync,
@@ -48,7 +97,6 @@ async fn process_prekey_bundle_workaround<
 ) -> Result<()> {
     use libsignal_protocol::{Direction, IdentityKey, KeyPair, SessionRecord};
 
-    // 1) Trust and signature checks
     let their_identity_key: &IdentityKey = bundle
         .identity_key()
         .map_err(|e| anyhow!("bundle.identity_key: {e}"))?;
@@ -70,35 +118,28 @@ async fn process_prekey_bundle_workaround<
         .signed_pre_key_signature()
         .map_err(|e| anyhow!("bundle.signed_pre_key_signature: {e}"))?;
 
-    // Verify SPK signature
     let their_pub_for_verify = their_identity_key.public_key();
     if !their_pub_for_verify.verify_signature(&spk_pub.serialize(), spk_sig) {
         return Err(anyhow!("Signed prekey signature invalid"));
     }
 
-    // 2) Load or create session record
     let mut record: SessionRecord = match session_store.load_session(remote_address).await? {
         Some(r) => r,
         None => SessionRecord::new_fresh(),
     };
 
-    // 3) Generate our ephemeral (base) key pair; fetch our identity key pair
     let our_base_kp: KeyPair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
     let our_id_kp = identity_store.get_identity_key_pair().await?;
 
-    // 4) X3DH secret computation for Alice
-    // Secrets = 0xFF*32 || DH(IKa, SPKb) || DH(EKa, IKb) || DH(EKa, SPKb) || (optional DH(EKa, OPKb))
     let mut secrets: Vec<u8> = Vec::with_capacity(32 * 5);
     secrets.extend_from_slice(&[0xFFu8; 32]);
 
-    // DH1: IKa x SPKb
     let dh1 = our_id_kp
         .private_key()
         .calculate_agreement(&spk_pub)
         .map_err(|e| anyhow!("DH1 failed: {e}"))?;
     secrets.extend_from_slice(&dh1);
 
-    // DH2: EKa x IKb
     let their_ik_pub = their_identity_key.public_key();
     let dh2 = our_base_kp
         .private_key
@@ -106,14 +147,12 @@ async fn process_prekey_bundle_workaround<
         .map_err(|e| anyhow!("DH2 failed: {e}"))?;
     secrets.extend_from_slice(&dh2);
 
-    // DH3: EKa x SPKb
     let dh3 = our_base_kp
         .private_key
         .calculate_agreement(&spk_pub)
         .map_err(|e| anyhow!("DH3 failed: {e}"))?;
     secrets.extend_from_slice(&dh3);
 
-    // Optional DH4: EKa x OPKb
     if let Some(opk_pub) = bundle
         .pre_key_public()
         .map_err(|e| anyhow!("bundle.pre_key_public: {e}"))?
@@ -125,17 +164,13 @@ async fn process_prekey_bundle_workaround<
         secrets.extend_from_slice(&dh4);
     }
 
-    // 5) Derive RootKey and initial ChainKey from X3DH master secret
     let (root_key, _initial_ck) = derive_keys_pre_kyber(&secrets)?;
 
-    // 6) Perform the required initial ratchet step:
-    //    Create a fresh sending ratchet keypair and derive the new root and sending chain.
     let our_sending_ratchet_kp: libsignal_protocol::KeyPair =
         libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
     let (new_root_key, new_sending_chain_key) =
         root_key.create_chain(&spk_pub, &our_sending_ratchet_kp.private_key)?;
 
-    // 7) Build initial SessionState (pre-kyber) using ratcheted keys
     let version = libsignal_protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
     let mut state = libsignal_protocol::SessionState::new(
         version,
@@ -147,7 +182,6 @@ async fn process_prekey_bundle_workaround<
     )
     .with_sender_chain(&our_sending_ratchet_kp, &new_sending_chain_key);
 
-    // 8) Unacknowledged PreKey metadata so first message is pkmsg
     let prekey_id = bundle.pre_key_id().ok().flatten();
     let spk_id = bundle
         .signed_pre_key_id()
@@ -157,7 +191,6 @@ async fn process_prekey_bundle_workaround<
     state.set_local_registration_id(identity_store.get_local_registration_id().await?);
     state.set_remote_registration_id(bundle.registration_id()?);
 
-    // 9) Promote and persist
     record.promote_state(state);
     identity_store
         .save_identity(remote_address, their_identity_key)
@@ -168,7 +201,7 @@ async fn process_prekey_bundle_workaround<
 }
 
 pub struct SignalStores<'a, S, I, P, SP, KP> {
-    pub sender_key_store: &'a mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync),
+    pub sender_key_store: &'a mut (dyn GroupSenderKeyStore + Send + Sync),
     pub session_store: &'a mut S,
     pub identity_store: &'a mut I,
     pub prekey_store: &'a mut P,
@@ -315,7 +348,7 @@ where
     I: libsignal_protocol::IdentityKeyStore,
 {
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
-    let signal_address = ProtocolAddress::new(to_jid.user.clone(), (to_jid.device as u32).into());
+    let signal_address = to_jid.to_protocol_address();
 
     let encrypted_message = message_encrypt(
         &plaintext,
@@ -397,16 +430,13 @@ pub async fn prepare_group_stanza<
 
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
-        let (axolotl_skdm_bytes, _sender_key_name) =
-            create_sender_key_distribution_message_for_group(
-                stores.sender_key_store,
-                &to_jid,
-                &own_sending_jid,
-            )
-            .await?;
+        let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
+            stores.sender_key_store,
+            &to_jid,
+            &own_sending_jid,
+        )
+        .await?;
 
-        // The raw SenderKeyDistributionMessage must be wrapped in a wa::Message
-        // before being marshaled and encrypted for each participant device.
         let skdm_wrapper_msg = wa::Message {
             sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
                 group_id: Some(to_jid.to_string()),
@@ -436,10 +466,7 @@ pub async fn prepare_group_stanza<
                 .await?;
 
             for device_jid in &jids_needing_prekeys {
-                let signal_address = ProtocolAddress::new(
-                    device_jid.user.clone(),
-                    (device_jid.device as u32).into(),
-                );
+                let signal_address = device_jid.to_protocol_address();
                 let bundle = prekey_bundles.get(device_jid).ok_or_else(|| {
                     anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
                 })?;
@@ -497,22 +524,18 @@ pub async fn prepare_group_stanza<
             content: Some(NodeContent::Nodes(participant_nodes)),
         });
     }
-    let sender_address = ProtocolAddress::new(
-        own_sending_jid.user.clone(),
-        u32::from(own_sending_jid.device).into(),
-    );
-    let sender_key_name = SenderKeyName::new(to_jid.to_string(), sender_address.to_string());
-    let group_sender_address = sender_key_name.to_protocol_address();
+    let sender_address = own_sending_jid.to_protocol_address();
     let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
-    let skmsg_ciphertext = group_encrypt(
+    let skmsg = encrypt_group_message_correctly(
         stores.sender_key_store,
-        &group_sender_address,
+        &to_jid,
+        &sender_address,
         &padded_plaintext,
         &mut rand::rngs::OsRng.unwrap_err(),
     )
-    .await?
-    .serialized()
-    .to_vec();
+    .await?;
+
+    let skmsg_ciphertext = skmsg.serialized().to_vec();
 
     if includes_prekey_message && let Some(acc) = account {
         message_content_nodes.push(Node {
@@ -540,7 +563,6 @@ pub async fn prepare_group_stanza<
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
         let phash = MessageUtils::participant_list_hash(&all_devices);
-        // The `participant` and `addressing_mode` attributes are not needed on the root message node.
         stanza_attrs.insert("phash".to_string(), phash);
     }
 
@@ -551,26 +573,53 @@ pub async fn prepare_group_stanza<
     };
     Ok(stanza)
 }
-
 pub async fn create_sender_key_distribution_message_for_group(
-    store: &mut dyn libsignal_protocol::SenderKeyStore,
+    store: &mut (dyn GroupSenderKeyStore + Send + Sync),
     group_jid: &Jid,
     own_sending_jid: &Jid,
-) -> Result<(Vec<u8>, SenderKeyName)> {
-    let sender_address = ProtocolAddress::new(
-        own_sending_jid.user.clone(),
-        u32::from(own_sending_jid.device).into(),
-    );
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+) -> Result<Vec<u8>> {
+    let sender_address = own_sending_jid.to_protocol_address();
 
-    let group_sender_address = sender_key_name.to_protocol_address();
-    let skdm = create_sender_key_distribution_message(
-        &group_sender_address,
-        store,
-        &mut rand::rngs::OsRng.unwrap_err(),
-    )
-    .await?;
+    let mut record = store
+        .load_sender_key(group_jid, &sender_address)
+        .await?
+        .unwrap_or_else(SenderKeyRecord::new_empty);
 
-    let skdm_bytes = skdm.serialized().to_vec();
-    Ok((skdm_bytes, sender_key_name))
+    if record.sender_key_state().is_err() {
+        let signing_key =
+            libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+
+        let chain_id = (rand::rngs::OsRng.unwrap_err().random::<u32>()) >> 1;
+        let sender_key_seed: [u8; 32] = rand::rngs::OsRng.unwrap_err().random();
+        record.add_sender_key_state(
+            SENDERKEY_MESSAGE_CURRENT_VERSION,
+            chain_id,
+            0,
+            &sender_key_seed,
+            signing_key.public_key,
+            Some(signing_key.private_key),
+        );
+        store
+            .store_sender_key(group_jid, &sender_address, &record)
+            .await?;
+    }
+
+    let state = record
+        .sender_key_state()
+        .map_err(|e| anyhow!("Invalid SK state: {:?}", e))?;
+    let chain_key = state
+        .sender_chain_key()
+        .ok_or(anyhow!("Missing chain key"))?;
+
+    let skdm = SenderKeyDistributionMessage::new(
+        state.message_version().try_into().unwrap(),
+        state.chain_id(),
+        chain_key.iteration(),
+        chain_key.seed().to_vec(),
+        state
+            .signing_key_public()
+            .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,
+    )?;
+
+    Ok(skdm.serialized().to_vec())
 }

@@ -272,7 +272,7 @@ impl Client {
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: sender.clone(),
-                is_from_me: sender.user == own_jid.user,
+                is_from_me: sender.is_same_user_as(&own_jid),
                 is_group: true,
                 ..Default::default()
             }
@@ -364,8 +364,7 @@ impl Client {
         enc_type: &str,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        let device_id = (info.source.sender.device as u32).into();
-        let signal_address = ProtocolAddress::new(info.source.sender.user.clone(), device_id);
+        let signal_address = info.source.sender.to_protocol_address();
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
@@ -406,10 +405,7 @@ impl Client {
         info: &MessageInfo,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        let sender_address = ProtocolAddress::new(
-            info.source.sender.user.clone(),
-            (info.source.sender.device as u32).into(),
-        );
+        let sender_address = info.source.sender.to_protocol_address();
 
         let sender_key_name =
             SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
