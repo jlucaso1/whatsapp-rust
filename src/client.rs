@@ -285,7 +285,7 @@ impl Client {
         cache.contains(key)
     }
 
-    pub(crate) async fn take_recent_message(
+    pub async fn take_recent_message(
         &self,
         to: crate::types::jid::Jid,
         id: String,
@@ -357,10 +357,10 @@ impl Client {
                 let name = collection_node.attrs().string("name");
                 debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
             } else {
-                debug!(target: "Client/Recv", "{node}");
+                debug!(target: "Client/Recv", "{node:?}");
             }
         } else {
-            debug!(target: "Client/Recv", "{node}");
+            debug!(target: "Client/Recv", "{node:?}");
         }
 
         if node.tag == "xmlstreamend" {
