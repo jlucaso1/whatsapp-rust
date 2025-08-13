@@ -50,4 +50,9 @@ impl NodeBuilder {
             content: self.content,
         }
     }
+
+    pub fn apply_content(mut self, content: Option<NodeContent>) -> Self {
+        self.content = content;
+        self
+    }
 }

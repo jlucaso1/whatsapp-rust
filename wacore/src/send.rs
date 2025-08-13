@@ -1,4 +1,5 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
+use crate::binary::builder::NodeBuilder;
+use crate::binary::node::{Attrs, Node};
 use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::signal::store::GroupSenderKeyStore;
@@ -291,47 +292,41 @@ pub async fn prepare_dm_stanza<
             _ => return Err(anyhow!("Unexpected encryption message type")),
         };
 
-        let enc_node = Node {
-            tag: "enc".to_string(),
-            attrs: [
-                ("v".to_string(), "2".to_string()),
-                ("type".to_string(), enc_type.to_string()),
-            ]
-            .into(),
-            content: Some(NodeContent::Bytes(serialized_bytes)),
-        };
-        participant_nodes.push(Node {
-            tag: "to".to_string(),
-            attrs: [("jid".to_string(), device_jid.to_string())].into(),
-            content: Some(NodeContent::Nodes(vec![enc_node])),
-        });
+        let enc_node = NodeBuilder::new("enc")
+            .attrs([("v", "2"), ("type", enc_type)])
+            .bytes(serialized_bytes)
+            .build();
+        participant_nodes.push(
+            NodeBuilder::new("to")
+                .attr("jid", device_jid.to_string())
+                .children([enc_node])
+                .build(),
+        );
     }
 
-    let mut message_content_nodes = vec![Node {
-        tag: "participants".to_string(),
-        attrs: Default::default(),
-        content: Some(NodeContent::Nodes(participant_nodes)),
-    }];
+    let mut message_content_nodes = vec![
+        NodeBuilder::new("participants")
+            .children(participant_nodes)
+            .build(),
+    ];
 
     if includes_prekey_message && let Some(acc) = account {
         let device_identity_bytes = acc.encode_to_vec();
-        message_content_nodes.push(Node {
-            tag: "device-identity".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Bytes(device_identity_bytes)),
-        });
+        message_content_nodes.push(
+            NodeBuilder::new("device-identity")
+                .bytes(device_identity_bytes)
+                .build(),
+        );
     }
 
-    let stanza = Node {
-        tag: "message".to_string(),
-        attrs: [
-            ("to".to_string(), to_jid.to_string()),
-            ("id".to_string(), request_id),
-            ("type".to_string(), "text".to_string()),
-        ]
-        .into(),
-        content: Some(NodeContent::Nodes(message_content_nodes)),
-    };
+    let stanza = NodeBuilder::new("message")
+        .attrs([
+            ("to", to_jid.to_string()),
+            ("id", request_id),
+            ("type", "text".to_string()),
+        ])
+        .children(message_content_nodes)
+        .build();
 
     Ok(stanza)
 }
@@ -366,27 +361,20 @@ where
         _ => return Err(anyhow!("Unexpected peer encryption message type")),
     };
 
-    let enc_node = Node {
-        tag: "enc".to_string(),
-        attrs: [
-            ("v".to_string(), "2".to_string()),
-            ("type".to_string(), enc_type.to_string()),
-        ]
-        .into(),
-        content: Some(NodeContent::Bytes(serialized_bytes)),
-    };
+    let enc_node = NodeBuilder::new("enc")
+        .attrs([("v", "2"), ("type", enc_type)])
+        .bytes(serialized_bytes)
+        .build();
 
-    let stanza = Node {
-        tag: "message".to_string(),
-        attrs: [
-            ("to".to_string(), to_jid.to_string()),
-            ("id".to_string(), request_id),
-            ("type".to_string(), "text".to_string()),
-            ("category".to_string(), "peer".to_string()),
-        ]
-        .into(),
-        content: Some(NodeContent::Nodes(vec![enc_node])),
-    };
+    let stanza = NodeBuilder::new("message")
+        .attrs([
+            ("to", to_jid.to_string()),
+            ("id", request_id),
+            ("type", "text".to_string()),
+            ("category", "peer".to_string()),
+        ])
+        .children([enc_node])
+        .build();
 
     Ok(stanza)
 }
@@ -503,26 +491,22 @@ pub async fn prepare_group_stanza<
                 _ => continue,
             };
 
-            let enc_node = Node {
-                tag: "enc".to_string(),
-                attrs: [
-                    ("v".to_string(), "2".to_string()),
-                    ("type".to_string(), enc_type.to_string()),
-                ]
-                .into(),
-                content: Some(NodeContent::Bytes(serialized_bytes)),
-            };
-            participant_nodes.push(Node {
-                tag: "to".to_string(),
-                attrs: [("jid".to_string(), device_jid.to_string())].into(),
-                content: Some(NodeContent::Nodes(vec![enc_node])),
-            });
+            let enc_node = NodeBuilder::new("enc")
+                .attrs([("v", "2"), ("type", enc_type)])
+                .bytes(serialized_bytes)
+                .build();
+            participant_nodes.push(
+                NodeBuilder::new("to")
+                    .attr("jid", device_jid.to_string())
+                    .children([enc_node])
+                    .build(),
+            );
         }
-        message_content_nodes.push(Node {
-            tag: "participants".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Nodes(participant_nodes)),
-        });
+        message_content_nodes.push(
+            NodeBuilder::new("participants")
+                .children(participant_nodes)
+                .build(),
+        );
     }
     let sender_address = own_sending_jid.to_protocol_address();
     let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
@@ -538,22 +522,19 @@ pub async fn prepare_group_stanza<
     let skmsg_ciphertext = skmsg.serialized().to_vec();
 
     if includes_prekey_message && let Some(acc) = account {
-        message_content_nodes.push(Node {
-            tag: "device-identity".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Bytes(acc.encode_to_vec())),
-        });
+        message_content_nodes.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
     }
 
-    message_content_nodes.push(Node {
-        tag: "enc".to_string(),
-        attrs: [
-            ("v".to_string(), "2".to_string()),
-            ("type".to_string(), "skmsg".to_string()),
-        ]
-        .into(),
-        content: Some(NodeContent::Bytes(skmsg_ciphertext)),
-    });
+    message_content_nodes.push(
+        NodeBuilder::new("enc")
+            .attrs([("v", "2"), ("type", "skmsg")])
+            .bytes(skmsg_ciphertext)
+            .build(),
+    );
 
     let mut stanza_attrs = Attrs::new();
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
@@ -566,11 +547,10 @@ pub async fn prepare_group_stanza<
         stanza_attrs.insert("phash".to_string(), phash);
     }
 
-    let stanza = Node {
-        tag: "message".to_string(),
-        attrs: stanza_attrs,
-        content: Some(NodeContent::Nodes(message_content_nodes)),
-    };
+    let stanza = NodeBuilder::new("message")
+        .attrs(stanza_attrs.into_iter())
+        .children(message_content_nodes)
+        .build();
     Ok(stanza)
 }
 pub async fn create_sender_key_distribution_message_for_group(

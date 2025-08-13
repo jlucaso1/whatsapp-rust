@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use wacore::binary::builder::NodeBuilder;
 use wacore::binary::node::{Node, NodeContent};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::{Event, EventHandler};
@@ -163,11 +164,10 @@ mod test_utils {
                 Some(JsonStanzaContent::Buffer(JsonBuffer(data))) => Some(NodeContent::Bytes(data)),
                 None => None,
             };
-            Node {
-                tag: self.tag,
-                attrs: self.attrs,
-                content,
-            }
+            NodeBuilder::new(self.tag)
+                .attrs(self.attrs)
+                .apply_content(content)
+                .build()
         }
     }
 
