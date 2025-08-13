@@ -1,4 +1,5 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
+use crate::binary::builder::NodeBuilder;
+use crate::binary::node::{Node, NodeContent};
 use crate::types::jid::Jid;
 use libsignal_protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use std::collections::HashMap;
@@ -7,25 +8,15 @@ pub struct PreKeyUtils;
 
 impl PreKeyUtils {
     pub fn build_fetch_prekeys_request(jids: &[Jid], reason: Option<&str>) -> Node {
-        let mut user_nodes = Vec::with_capacity(jids.len());
-        for jid in jids {
-            let mut user_attrs = Attrs::new();
-            user_attrs.insert("jid".to_string(), jid.to_string());
+        let user_nodes = jids.iter().map(|jid| {
+            let mut user_builder = NodeBuilder::new("user").attr("jid", jid.to_string());
             if let Some(r) = reason {
-                user_attrs.insert("reason".to_string(), r.to_string());
+                user_builder = user_builder.attr("reason", r);
             }
-            user_nodes.push(Node {
-                tag: "user".into(),
-                attrs: user_attrs,
-                content: None,
-            });
-        }
+            user_builder.build()
+        });
 
-        Node {
-            tag: "key".into(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Nodes(user_nodes)),
-        }
+        NodeBuilder::new("key").children(user_nodes).build()
     }
 
     pub fn parse_prekeys_response(

@@ -160,6 +160,10 @@ impl Device {
         }
     }
 
+    pub fn is_ready_for_presence(&self) -> bool {
+        self.id.is_some() && !self.push_name.is_empty()
+    }
+
     /// Gets client payload for handshake
     pub fn get_client_payload(&self) -> wa::ClientPayload {
         match &self.id {

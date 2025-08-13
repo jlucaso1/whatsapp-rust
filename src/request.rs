@@ -6,10 +6,8 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
 
-// Re-export core types
 pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 
-/// Platform-specific IQ error that includes socket errors
 #[derive(Debug, Error)]
 pub enum IqError {
     #[error("IQ request timed out")]
@@ -42,24 +40,20 @@ impl From<wacore::request::IqError> for IqError {
 }
 
 impl Client {
-    /// Generates a new unique request ID string.
     pub fn generate_request_id(&self) -> String {
         self.get_request_utils().generate_request_id()
     }
 
-    /// Generates a proper WhatsApp message ID in the format expected by the protocol.
     pub async fn generate_message_id(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         self.get_request_utils()
             .generate_message_id(device_snapshot.id.as_ref())
     }
 
-    /// Gets the request utilities instance
     fn get_request_utils(&self) -> RequestUtils {
         RequestUtils::with_counter(self.unique_id.clone(), self.id_counter.clone())
     }
 
-    /// Sends an IQ (Info/Query) stanza and asynchronously waits for a response.
     pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
         let req_id = query
             .id
@@ -78,18 +72,15 @@ impl Client {
 
         if let Err(e) = self.send_node(node).await {
             self.response_waiters.lock().await.remove(&req_id);
-            // Convert the client error back to an IQ error
             return match e {
                 crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
                 crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
-                // Other client errors can be mapped to a generic network error
                 _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
             };
         }
 
         match timeout(query.timeout.unwrap_or(default_timeout), rx).await {
             Ok(Ok(response_node)) => {
-                // Use core logic to parse the response
                 request_utils.parse_iq_response(&response_node)?;
                 Ok(response_node)
             }
@@ -101,7 +92,6 @@ impl Client {
         }
     }
 
-    /// Handles an incoming IQ response by forwarding it to the waiting task.
     pub async fn handle_iq_response(&self, node: Node) -> bool {
         let id_opt = node.attrs.get("id").cloned();
         if let Some(id) = id_opt

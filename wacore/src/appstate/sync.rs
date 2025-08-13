@@ -1,4 +1,7 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
+use crate::binary::{
+    builder::NodeBuilder,
+    node::{Node, NodeContent},
+};
 use prost::Message;
 use waproto::whatsapp as wa;
 
@@ -24,24 +27,17 @@ impl SyncUtils {
     }
 
     pub fn build_fetch_patches_query(name: &str, version: u64, is_full_sync: bool) -> Node {
-        let mut attrs = Attrs::new();
-        attrs.insert("name".to_string(), name.to_string());
-        attrs.insert("return_snapshot".to_string(), is_full_sync.to_string());
+        let mut collection_builder = NodeBuilder::new("collection")
+            .attr("name", name)
+            .attr("return_snapshot", is_full_sync.to_string());
+
         if !is_full_sync {
-            attrs.insert("version".to_string(), version.to_string());
+            collection_builder = collection_builder.attr("version", version.to_string());
         }
 
-        let collection_node = Node {
-            tag: "collection".to_string(),
-            attrs,
-            content: None,
-        };
-
-        Node {
-            tag: "sync".to_string(),
-            attrs: Attrs::new(),
-            content: Some(NodeContent::Nodes(vec![collection_node])),
-        }
+        NodeBuilder::new("sync")
+            .children([collection_builder.build()])
+            .build()
     }
 
     pub fn parse_sync_response(resp_node: &Node) -> Option<(bool, Vec<wa::SyncdPatch>)> {

@@ -1,4 +1,3 @@
-use crate::binary::node::{Node, NodeContent};
 use crate::client::{Client, RecentMessageKey};
 use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
@@ -9,6 +8,7 @@ use prost::Message;
 use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
+use wacore::binary::builder::NodeBuilder;
 use wacore::signal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
@@ -184,78 +184,39 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("Missing device account info for retry receipt"))?
             .encode_to_vec();
 
-        let retry_node = Node {
-            tag: "retry".to_string(),
-            attrs: [
-                ("v".to_string(), "1".to_string()),
-                ("id".to_string(), info.id.clone()),
-                ("t".to_string(), info.timestamp.timestamp().to_string()),
-                ("count".to_string(), "1".to_string()),
-            ]
-            .into(),
-            content: None,
-        };
+        let retry_node = NodeBuilder::new("retry")
+            .attr("v", "1")
+            .attr("id", info.id.clone())
+            .attr("t", info.timestamp.timestamp().to_string())
+            .attr("count", "1")
+            .build();
 
         let type_bytes = "5".to_string().into_bytes();
 
-        let keys_node = Node {
-            tag: "keys".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Nodes(vec![
-                Node {
-                    tag: "type".to_string(),
-                    content: Some(NodeContent::Bytes(type_bytes)),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "identity".to_string(),
-                    content: Some(NodeContent::Bytes(identity_key_bytes)),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "key".to_string(),
-                    content: Some(NodeContent::Nodes(vec![
-                        Node {
-                            tag: "id".to_string(),
-                            content: Some(NodeContent::Bytes(prekey_id_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "value".to_string(),
-                            content: Some(NodeContent::Bytes(prekey_value_bytes)),
-                            ..Default::default()
-                        },
-                    ])),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "skey".to_string(),
-                    content: Some(NodeContent::Nodes(vec![
-                        Node {
-                            tag: "id".to_string(),
-                            content: Some(NodeContent::Bytes(skey_id_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "value".to_string(),
-                            content: Some(NodeContent::Bytes(skey_value_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "signature".to_string(),
-                            content: Some(NodeContent::Bytes(skey_sig_bytes)),
-                            ..Default::default()
-                        },
-                    ])),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "device-identity".to_string(),
-                    content: Some(NodeContent::Bytes(device_identity_bytes)),
-                    ..Default::default()
-                },
-            ])),
-        };
+        let keys_node = NodeBuilder::new("keys")
+            .children([
+                NodeBuilder::new("type").bytes(type_bytes).build(),
+                NodeBuilder::new("identity")
+                    .bytes(identity_key_bytes)
+                    .build(),
+                NodeBuilder::new("key")
+                    .children([
+                        NodeBuilder::new("id").bytes(prekey_id_bytes).build(),
+                        NodeBuilder::new("value").bytes(prekey_value_bytes).build(),
+                    ])
+                    .build(),
+                NodeBuilder::new("skey")
+                    .children([
+                        NodeBuilder::new("id").bytes(skey_id_bytes).build(),
+                        NodeBuilder::new("value").bytes(skey_value_bytes).build(),
+                        NodeBuilder::new("signature").bytes(skey_sig_bytes).build(),
+                    ])
+                    .build(),
+                NodeBuilder::new("device-identity")
+                    .bytes(device_identity_bytes)
+                    .build(),
+            ])
+            .build();
 
         let receipt_to = if info.source.is_group {
             info.source.chat.to_string()
@@ -263,25 +224,17 @@ impl Client {
             info.source.sender.to_string()
         };
 
-        let receipt_node = Node {
-            tag: "receipt".to_string(),
-            attrs: [
-                ("to".to_string(), receipt_to),
-                ("id".to_string(), info.id.clone()),
-                ("type".to_string(), "retry".to_string()),
-                ("participant".to_string(), info.source.sender.to_string()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![
-                retry_node,
-                Node {
-                    tag: "registration".to_string(),
-                    content: Some(NodeContent::Bytes(registration_id_bytes)),
-                    ..Default::default()
-                },
-                keys_node,
-            ])),
-        };
+        let registration_node = NodeBuilder::new("registration")
+            .bytes(registration_id_bytes)
+            .build();
+
+        let receipt_node = NodeBuilder::new("receipt")
+            .attr("to", receipt_to)
+            .attr("id", info.id.clone())
+            .attr("type", "retry")
+            .attr("participant", info.source.sender.to_string())
+            .children([retry_node, registration_node, keys_node])
+            .build();
 
         self.send_node(receipt_node).await?;
         Ok(())
