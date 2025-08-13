@@ -3,6 +3,7 @@ use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::jid::Jid;
 use anyhow::anyhow;
 use libsignal_protocol::{ProtocolAddress, SignalProtocolError};
+use std::sync::Arc;
 use wacore::{signal::sender_key_name::SenderKeyName, types::jid::JidExt};
 use waproto::whatsapp as wa;
 
@@ -23,6 +24,15 @@ impl Client {
         request_id: String,
         peer: bool,
     ) -> Result<(), anyhow::Error> {
+        // Serialize all send operations per chat to avoid races with receive-side
+        // processing (e.g., sender key distribution handled under the same lock).
+        let chat_mutex = self
+            .chat_locks
+            .entry(to.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _chat_guard = chat_mutex.lock().await;
+
         let stanza_to_send = if peer {
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
@@ -49,6 +59,12 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
             let account_info = device_snapshot.account.clone();
 
+            // Cache the outgoing group message so that a subsequent retry receipt
+            // can find and resend it (with fresh sender key distribution if needed).
+            // This mirrors the DM branch behavior below.
+            self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+                .await;
+
             let device_store_arc = self.persistence_manager.get_device_arc().await;
 
             let (own_sending_jid, _) = match group_info.addressing_mode {
@@ -65,14 +81,7 @@ impl Client {
                 let sender_key_name =
                     SenderKeyName::new(to.to_string(), sender_address.to_string());
 
-                let group_sender_address = libsignal_protocol::ProtocolAddress::new(
-                    format!(
-                        "{}\n{}",
-                        sender_key_name.group_id(),
-                        sender_key_name.sender_id()
-                    ),
-                    0.into(),
-                );
+                let group_sender_address = sender_key_name.to_protocol_address();
 
                 let store_ref: &mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync) =
                     &mut *device_guard;
@@ -92,6 +101,18 @@ impl Client {
                 kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
+
+            // If we're about to distribute a sender key but we don't have an account
+            // identity loaded, the resulting stanza will miss the <device-identity> node
+            // and peers may reject it with a retry receipt. Emit a clear warning for diagnosis.
+            if force_skdm && account_info.is_none() {
+                log::warn!(
+                    "Missing account identity when distributing sender key to group {}. \
+This will omit <device-identity> and may cause recipients to reject the message. \
+Re-pair the device to populate 'account'.",
+                    to
+                );
+            }
 
             match wacore::send::prepare_group_stanza(
                 &mut stores,

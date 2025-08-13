@@ -17,6 +17,7 @@ use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::types::jid::Jid;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp::{self as wa};
@@ -392,7 +393,7 @@ impl Client {
             &adapter.signed_pre_key_store,
             &mut adapter.kyber_pre_key_store,
             &mut rng.unwrap_err(),
-            UsePQRatchet::Yes,
+            UsePQRatchet::No,
         )
         .await
         .map_err(|e| {
@@ -410,10 +411,10 @@ impl Client {
             (info.source.sender.device as u32).into(),
         );
 
-        let group_sender_address = ProtocolAddress::new(
-            format!("{}\n{}", info.source.chat, sender_address),
-            0.into(),
-        );
+        let sender_key_name =
+            SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+
+        let group_sender_address = sender_key_name.to_protocol_address();
 
         let device_arc = self.persistence_manager.get_device_arc().await;
         let mut device_guard = device_arc.lock().await;

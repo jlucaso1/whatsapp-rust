@@ -1,18 +1,43 @@
 use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
+use crate::client::MessageUtils;
 use crate::signal::sender_key_name::SenderKeyName;
 use crate::types::jid::Jid;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use libsignal_protocol::{
-    CiphertextMessage, ProtocolAddress, UsePQRatchet, create_sender_key_distribution_message,
-    group_encrypt, message_encrypt, process_prekey_bundle,
+    create_sender_key_distribution_message, group_encrypt, message_encrypt, CiphertextMessage,
+    ProtocolAddress, UsePQRatchet,
 };
 use prost::Message as ProtoMessage;
 use rand::TryRngCore as _;
 use std::time::SystemTime;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
+
+// Local wrapper to allow swapping faulty library logic with a corrected implementation later
+async fn process_prekey_bundle_workaround<
+    S: libsignal_protocol::SessionStore + Send + Sync,
+    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
+>(
+    remote_address: &ProtocolAddress,
+    session_store: &mut S,
+    identity_store: &mut I,
+    bundle: &libsignal_protocol::PreKeyBundle,
+    now: SystemTime,
+) -> Result<()> {
+    // Delegate to the library for now; encapsulate to enable a drop-in replacement
+    libsignal_protocol::process_prekey_bundle(
+        remote_address,
+        session_store,
+        identity_store,
+        bundle,
+        now,
+        &mut rand::rngs::OsRng.unwrap_err(),
+        UsePQRatchet::No,
+    )
+    .await
+    .map_err(Into::into)
+}
 
 pub struct SignalStores<'a, S, I, P, SP, KP> {
     pub sender_key_store: &'a mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync),
@@ -76,14 +101,12 @@ pub async fn prepare_dm_stanza<
             let bundle = prekey_bundles
                 .get(&device_jid)
                 .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
-            process_prekey_bundle(
+            process_prekey_bundle_workaround(
                 &signal_address,
                 stores.session_store,
                 stores.identity_store,
                 bundle,
                 SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
-                UsePQRatchet::Yes,
             )
             .await?;
         }
@@ -246,15 +269,26 @@ pub async fn prepare_group_stanza<
 
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
-        let (skdm_bytes, _sender_key_name) = create_sender_key_distribution_message_for_group(
+        let (axolotl_skdm_bytes, _sender_key_name) = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
             &own_sending_jid,
         )
         .await?;
 
-        let mut participant_nodes = Vec::new();
-        for device_jid in all_devices {
+        // The raw SenderKeyDistributionMessage must be wrapped in a wa::Message
+        // before being marshaled and encrypted for each participant device.
+        let skdm_wrapper_msg = wa::Message {
+            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
+                group_id: Some(to_jid.to_string()),
+                axolotl_sender_key_distribution_message: Some(axolotl_skdm_bytes),
+            }),
+            ..Default::default()
+        };
+        let skdm_plaintext_to_encrypt = skdm_wrapper_msg.encode_to_vec();
+
+        let mut jids_needing_prekeys = Vec::new();
+        for device_jid in &all_devices {
             let signal_address =
                 ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
             if stores
@@ -263,26 +297,40 @@ pub async fn prepare_group_stanza<
                 .await?
                 .is_none()
             {
-                let prekey_bundles = resolver
-                    .fetch_prekeys_for_identity_check(std::slice::from_ref(&device_jid))
-                    .await?;
-                let bundle = prekey_bundles.get(&device_jid).ok_or_else(|| {
+                jids_needing_prekeys.push(device_jid.clone());
+            }
+        }
+
+        if !jids_needing_prekeys.is_empty() {
+            let prekey_bundles = resolver
+                .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+                .await?;
+
+            for device_jid in &jids_needing_prekeys {
+                let signal_address = ProtocolAddress::new(
+                    device_jid.user.clone(),
+                    (device_jid.device as u32).into(),
+                );
+                let bundle = prekey_bundles.get(device_jid).ok_or_else(|| {
                     anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
                 })?;
-                process_prekey_bundle(
+                process_prekey_bundle_workaround(
                     &signal_address,
                     stores.session_store,
                     stores.identity_store,
                     bundle,
                     SystemTime::now(),
-                    &mut rand::rngs::OsRng.unwrap_err(),
-                    UsePQRatchet::Yes,
                 )
                 .await?;
             }
+        }
 
+        let mut participant_nodes = Vec::new();
+        for device_jid in all_devices {
+            let signal_address =
+                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
             let encrypted_payload = message_encrypt(
-                &skdm_bytes,
+                &skdm_plaintext_to_encrypt,
                 &signal_address,
                 stores.session_store,
                 stores.identity_store,
@@ -325,14 +373,7 @@ pub async fn prepare_group_stanza<
         u32::from(own_sending_jid.device).into(),
     );
     let sender_key_name = SenderKeyName::new(to_jid.to_string(), sender_address.to_string());
-    let group_sender_address = ProtocolAddress::new(
-        format!(
-            "{}\n{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ),
-        0.into(),
-    );
+    let group_sender_address = sender_key_name.to_protocol_address();
     let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let skmsg_ciphertext = group_encrypt(
         stores.sender_key_store,
@@ -344,6 +385,14 @@ pub async fn prepare_group_stanza<
     .serialized()
     .to_vec();
 
+    if includes_prekey_message && let Some(acc) = account {
+        message_content_nodes.push(Node {
+            tag: "device-identity".to_string(),
+            attrs: Default::default(),
+            content: Some(NodeContent::Bytes(acc.encode_to_vec())),
+        });
+    }
+
     message_content_nodes.push(Node {
         tag: "enc".to_string(),
         attrs: [
@@ -353,14 +402,6 @@ pub async fn prepare_group_stanza<
         .into(),
         content: Some(NodeContent::Bytes(skmsg_ciphertext)),
     });
-
-    if includes_prekey_message && let Some(acc) = account {
-        message_content_nodes.push(Node {
-            tag: "device-identity".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Bytes(acc.encode_to_vec())),
-        });
-    }
 
     let mut stanza_attrs = Attrs::new();
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
@@ -393,14 +434,7 @@ pub async fn create_sender_key_distribution_message_for_group(
     );
     let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
 
-    let group_sender_address = ProtocolAddress::new(
-        format!(
-            "{}\n{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        ),
-        0.into(),
-    );
+    let group_sender_address = sender_key_name.to_protocol_address();
     let skdm = create_sender_key_distribution_message(
         &group_sender_address,
         store,
