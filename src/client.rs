@@ -727,7 +727,7 @@ impl Client {
 
     pub async fn is_ready_for_presence(&self) -> bool {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
+        device_snapshot.is_ready_for_presence()
     }
 
     pub async fn get_device_debug_info(&self) -> String {

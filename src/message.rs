@@ -276,9 +276,9 @@ impl Client {
                 is_group: true,
                 ..Default::default()
             }
-        } else if from.user == own_jid.user {
+        } else if from.is_same_user_as(&own_jid) {
             crate::types::message::MessageSource {
-                chat: attrs.jid("recipient").to_non_ad(),
+                chat: attrs.non_ad_jid("recipient"),
                 sender: from.clone(),
                 is_from_me: true,
                 ..Default::default()
