@@ -19,6 +19,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use wacore::{
+        binary::builder::NodeBuilder,
         binary::node::{Node, NodeContent},
         client::context::{GroupInfo, SendContextResolver},
         send::{SignalStores, derive_keys_pre_kyber},
@@ -31,6 +32,7 @@ mod tests {
 
     // --- Structs for Deserializing Captured Go Data ---
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     struct GoMetadata {
         #[serde(rename = "groupId")]
@@ -41,17 +43,20 @@ mod tests {
         sender_id: String,
     }
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     struct GoSenderKeyRecordBefore {
         b64_record: String,
     }
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     #[serde(rename_all = "PascalCase")]
     struct GoSenderKeyRecord {
         sender_key_states: Vec<GoSenderKeyState>,
     }
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     #[serde(rename_all = "PascalCase")]
     struct GoSenderKeyState {
@@ -62,6 +67,7 @@ mod tests {
         signing_key_private: String,
     }
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     #[serde(rename_all = "PascalCase")]
     struct GoSenderChainKey {
@@ -92,6 +98,7 @@ mod tests {
     // --- NEW E2E DECRYPTION TEST WITH CAPTURED STATE ---
 
     // Structs to deserialize the new capture files
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     struct CapturedState {
         registration_id: u32,
@@ -101,6 +108,7 @@ mod tests {
         session_with_peer_b64: Option<String>,
     }
 
+    #[allow(dead_code)]
     #[derive(Deserialize, Debug)]
     struct CapturedSignedPreKey {
         id: u32,
@@ -281,6 +289,7 @@ mod tests {
 
         device
     }
+    #[allow(dead_code)]
     async fn test_stanza_recreation_matches_go_capture() {
         let _ = env_logger::builder()
             .filter_level(log::LevelFilter::Debug) // Or LevelFilter::Trace for more verbosity
@@ -521,6 +530,7 @@ mod tests {
 
     // --- Helper Functions for Comparison and Deserialization ---
 
+    #[allow(dead_code)]
     fn serializable_to_node(s_node: SerializableNode) -> Node {
         let content = match s_node.content {
             Some(SerializableContent::Nodes(nodes)) => Some(NodeContent::Nodes(
@@ -532,13 +542,13 @@ mod tests {
             Some(SerializableContent::String(s)) => Some(NodeContent::Bytes(s.into_bytes())),
             None => None,
         };
-        Node {
-            tag: s_node.tag,
-            attrs: s_node.attrs.unwrap_or_default(),
-            content,
-        }
+        NodeBuilder::new(s_node.tag)
+            .attrs(s_node.attrs.unwrap_or_default())
+            .apply_content(content)
+            .build()
     }
 
+    #[allow(dead_code)]
     fn assert_nodes_equal(rust_node: &Node, go_node: &Node, path: &str) {
         assert_eq!(
             rust_node.tag, go_node.tag,
@@ -637,6 +647,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     async fn create_session_without_prekey<
         S: libsignal_protocol::SessionStore + Send + Sync,
         I: libsignal_protocol::IdentityKeyStore + Send + Sync,
