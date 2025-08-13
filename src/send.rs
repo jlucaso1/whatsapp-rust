@@ -14,7 +14,8 @@ impl Client {
             ..Default::default()
         };
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, content, request_id, false).await
+        self.send_message_impl(to, content, request_id, false, false)
+            .await
     }
 
     pub async fn send_message_impl(
@@ -23,6 +24,7 @@ impl Client {
         message: wa::Message,
         request_id: String,
         peer: bool,
+        force_key_distribution: bool,
     ) -> Result<(), anyhow::Error> {
         // Serialize all send operations per chat to avoid races with receive-side
         // processing (e.g., sender key distribution handled under the same lock).
@@ -82,10 +84,12 @@ impl Client {
 
                 let store_ref: &mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync) =
                     &mut *device_guard;
-                store_ref
-                    .load_sender_key(&group_sender_address)
-                    .await?
-                    .is_none()
+
+                force_key_distribution
+                    || store_ref
+                        .load_sender_key(&group_sender_address)
+                        .await?
+                        .is_none()
             };
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());

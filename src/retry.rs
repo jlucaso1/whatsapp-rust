@@ -124,11 +124,23 @@ impl Client {
                 message_id
             );
 
-            self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
-                .await?;
+            self.send_message_impl(
+                receipt.source.chat.clone(),
+                original_msg,
+                message_id,
+                false,
+                true,
+            )
+            .await?;
         } else {
-            self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
-                .await?;
+            self.send_message_impl(
+                receipt.source.chat.clone(),
+                original_msg,
+                message_id,
+                false,
+                true,
+            )
+            .await?;
         }
 
         Ok(())
