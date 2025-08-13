@@ -1,4 +1,4 @@
-use crate::binary::node::Node;
+use crate::binary::builder::NodeBuilder;
 use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::jid::SERVER_JID;
@@ -43,11 +43,9 @@ impl Client {
                 to: SERVER_JID.parse().unwrap(),
                 target: None,
                 id: None,
-                content: Some(crate::binary::node::NodeContent::Nodes(vec![Node {
-                    tag: "media_conn".to_string(),
-                    attrs: Default::default(),
-                    content: None,
-                }])),
+                content: Some(crate::binary::node::NodeContent::Nodes(vec![
+                    NodeBuilder::new("media_conn").build(),
+                ])),
                 timeout: None,
             })
             .await?;
