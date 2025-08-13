@@ -306,9 +306,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.44"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c1f056bae57e3e54c3375c41ff79619ddd13460a17d7438712bd0d83fda4ff8"
+checksum = "1fc0e74a703892159f5ae7d3aac52c8e6c392f5ae5f359c70b5881d60aaac318"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -328,9 +328,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.41"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4f52386a59ca4c860f7393bcf8abd8dfd91ecccc0f774635ff68e92eeef491"
+checksum = "14cb31bb0a7d536caef2639baa7fad459e15c3144efefa6dbd1c84562c4739f6"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1034,7 +1034,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#c0007d8a7494611ef5added4bdd5ed0798affb95"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#c9aabfa0702a2eb6bf022a88bc9787749b7b0e6f"
 dependencies = [
  "curve25519-dalek",
  "derive_more",
@@ -1049,7 +1049,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#c0007d8a7494611ef5added4bdd5ed0798affb95"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#c9aabfa0702a2eb6bf022a88bc9787749b7b0e6f"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -1596,9 +1596,9 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b418a60154510ca1a002a752ca9714984e21e4241e804d32555251faf8b78ffa"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
 dependencies = [
  "either",
  "rayon-core",
@@ -1606,9 +1606,9 @@ dependencies = [
 
 [[package]]
 name = "rayon-core"
-version = "1.12.1"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1465873a3dfdaa8ae7cb14b4383657caab0b3e8a0aa9ae8e04b044854c8dfce2"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
@@ -1885,7 +1885,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/libsignal?branch=working#c0007d8a7494611ef5added4bdd5ed0798affb95"
+source = "git+https://github.com/jlucaso1/libsignal?branch=working#c9aabfa0702a2eb6bf022a88bc9787749b7b0e6f"
 dependencies = [
  "aes",
  "cbc",
