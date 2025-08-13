@@ -335,7 +335,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
             .or_else(|| stanza.attrs.get("from"))
             .unwrap();
         let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
-        let sender_addr = ProtocolAddress::new(sender_jid.user, (sender_jid.device as u32).into());
+        let sender_addr = sender_jid.to_protocol_address();
         let session_record = test_utils::convert_session(&json);
         device_store_locked
             .store_session(&sender_addr, &session_record)

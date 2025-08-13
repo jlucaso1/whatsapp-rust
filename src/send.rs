@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::jid::Jid;
 use anyhow::anyhow;
-use libsignal_protocol::{ProtocolAddress, SignalProtocolError};
+use libsignal_protocol::SignalProtocolError;
 use std::sync::Arc;
 use wacore::{signal::sender_key_name::SenderKeyName, types::jid::JidExt};
 use waproto::whatsapp as wa;
@@ -74,10 +74,7 @@ impl Client {
 
             let force_skdm = {
                 let mut device_guard = device_store_arc.lock().await;
-                let sender_address = ProtocolAddress::new(
-                    own_sending_jid.user.clone(),
-                    u32::from(own_sending_jid.device).into(),
-                );
+                let sender_address = own_sending_jid.to_protocol_address();
                 let sender_key_name =
                     SenderKeyName::new(to.to_string(), sender_address.to_string());
 

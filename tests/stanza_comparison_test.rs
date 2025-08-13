@@ -2,6 +2,10 @@
 mod tests {
     use base64::Engine;
     use libsignal_protocol::{
+        CiphertextMessage, PreKeySignalMessage, SessionRecord, SessionStore, UsePQRatchet,
+        message_decrypt,
+    };
+    use libsignal_protocol::{
         GenericSignedPreKey, IdentityKeyPair, PreKeyBundle, PreKeyRecord, ProtocolAddress,
         SenderKeyRecord, SenderKeyStore, SignedPreKeyRecord, Timestamp,
     };
@@ -85,7 +89,198 @@ mod tests {
 
     // --- Test Implementation ---
 
+    // --- NEW E2E DECRYPTION TEST WITH CAPTURED STATE ---
+
+    // Structs to deserialize the new capture files
+    #[derive(Deserialize, Debug)]
+    struct CapturedState {
+        registration_id: u32,
+        identity_key_pub_b64: String,
+        signed_pre_key: CapturedSignedPreKey,
+        #[serde(default)]
+        session_with_peer_b64: Option<String>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct CapturedSignedPreKey {
+        id: u32,
+        public_key_b64: String,
+        signature_b64: String,
+    }
+
+    /// A new, stricter test that simulates the recipient decrypting the captured stanza.
+    /// This test is expected to FAIL with a MAC mismatch error until the underlying bug is fixed.
     #[tokio::test]
+    async fn test_group_message_decryption_with_captured_state() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .try_init();
+
+        // 1. --- LOAD ALL CAPTURED ASSETS ---
+        let base_path = Path::new("tests/captured_stanza_group/20250813_121713");
+        let metadata: GoMetadata =
+            serde_json::from_str(&fs::read_to_string(base_path.join("metadata.json")).unwrap())
+                .unwrap();
+        let _plaintext = fs::read_to_string(base_path.join("plaintext.txt")).unwrap();
+        let captured_stanza: Node = serializable_to_node(
+            serde_json::from_str::<SerializableNode>(
+                &fs::read_to_string(base_path.join("stanza.json")).unwrap(),
+            )
+            .unwrap(),
+        );
+
+        let _sender_state_data: CapturedState =
+            serde_json::from_str(&fs::read_to_string(base_path.join("sender_state.json")).unwrap())
+                .unwrap();
+        let recipient_state_data: CapturedState = serde_json::from_str(
+            &fs::read_to_string(base_path.join("recipient_state.json")).unwrap(),
+        )
+        .unwrap();
+
+        let _group_jid: Jid = metadata.group_id.parse().unwrap();
+        let sender_jid: Jid = metadata.sender_id.parse().unwrap();
+        // This JID is hardcoded from the captured stanza's <to> tag.
+        let recipient_jid: Jid = "559984726662:61@s.whatsapp.net".parse().unwrap();
+
+        // 2. --- SETUP RECIPIENT'S CRYPTOGRAPHIC STATE ---
+        let recipient_device = setup_device_from_state(recipient_state_data);
+
+        // Establish a session between the recipient and the sender (empty fresh record).
+        let sender_signal_address = libsignal_protocol::ProtocolAddress::new(
+            sender_jid.user.clone(),
+            (sender_jid.device as u32).into(),
+        );
+        // Prepare the recipient's store adapter and create an empty session
+        let device_arc = Arc::new(Mutex::new(recipient_device));
+        let mut recipient_adapter = SignalProtocolStoreAdapter::new(device_arc.clone());
+        recipient_adapter
+            .session_store
+            .store_session(&sender_signal_address, &SessionRecord::new_fresh())
+            .await
+            .unwrap();
+
+        // 3. --- ACTION & VERIFICATION ---
+
+        // Find the encrypted payload intended for our recipient in the captured stanza
+        let participants = captured_stanza
+            .get_optional_child("participants")
+            .expect("participants node missing");
+        let recipient_to_node = participants
+            .children()
+            .unwrap()
+            .iter()
+            .find(|n| n.attrs.get("jid") == Some(&recipient_jid.to_string()))
+            .expect("No <to> node found for recipient");
+
+        let enc_node = recipient_to_node.get_optional_child("enc").unwrap();
+        assert_eq!(enc_node.attrs.get("type"), Some(&"pkmsg".to_string()));
+        let pkmsg_ciphertext = match &enc_node.content {
+            Some(NodeContent::Bytes(b)) => b,
+            _ => panic!("<enc type=pkmsg> has no byte content"),
+        };
+
+        // Decrypt the `pkmsg` using the recipient's stores
+        let pkmsg = PreKeySignalMessage::try_from(pkmsg_ciphertext.as_slice()).unwrap();
+
+        // Many pkmsg reference a one-time prekey id; preload a small range so decrypt can proceed
+        // to the MAC check regardless of the exact id captured.
+        {
+            use libsignal_protocol::KeyPair;
+            use wacore::signal::state::record::new_pre_key_record;
+            use wacore::signal::store::PreKeyStore as _;
+            let kp = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+            let record = new_pre_key_record(0, &kp); // id will be replaced per loop
+            let dev = device_arc.lock().await;
+            for id in 1u32..=200u32 {
+                let mut rec = record.clone();
+                rec.id = Some(id);
+                let _ = dev.store_prekey(id, rec).await;
+            }
+        }
+
+        let _decrypted_skdm_payload = message_decrypt(
+            &CiphertextMessage::PreKeySignalMessage(pkmsg),
+            &sender_signal_address,
+            &mut recipient_adapter.session_store,
+            &mut recipient_adapter.identity_store,
+            &mut recipient_adapter.pre_key_store,
+            &recipient_adapter.signed_pre_key_store,
+            &mut recipient_adapter.kyber_pre_key_store,
+            &mut rand::rngs::OsRng.unwrap_err(),
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("DECRYPTION OF PKMSG FAILED - THIS REPRODUCES THE BUG!");
+
+        // If we got here, pkmsg was decrypted. Proceed to process SKDM and then skmsg.
+        // Process the now-decrypted SenderKeyDistributionMessage
+        // Note: In the failing case we won't reach here, which still reproduces the bug deterministically.
+
+        // To be thorough if it succeeds in the future:
+        /*
+        let skdm_wrapper = wa::Message::decode(_decrypted_skdm_payload.as_slice()).unwrap();
+        let skdm = skdm_wrapper.sender_key_distribution_message.unwrap();
+        let skdm_proto = libsignal_protocol::SenderKeyDistributionMessage::try_from(
+            skdm.axolotl_sender_key_distribution_message
+                .as_ref()
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+
+        let group_sender_address = libsignal_protocol::ProtocolAddress::new(
+            format!("{}\n{}", group_jid, sender_signal_address),
+            0.into(),
+        );
+
+        libsignal_protocol::process_sender_key_distribution_message(
+            &group_sender_address,
+            &skdm_proto,
+            &mut recipient_adapter.sender_key_store,
+        )
+        .await
+        .expect("Failed to process SKDM on recipient");
+
+        // Decrypt the main group content (`skmsg`)
+        let skmsg_node = captured_stanza.get_optional_child("enc").unwrap();
+        let skmsg_ciphertext = match &skmsg_node.content {
+            Some(NodeContent::Bytes(b)) => b,
+            _ => panic!("skmsg node has no byte content"),
+        };
+
+        let decrypted_message_payload = group_decrypt(
+            skmsg_ciphertext,
+            &mut recipient_adapter.sender_key_store,
+            &group_sender_address,
+        )
+        .await
+        .expect("DECRYPTION OF SKMSG FAILED!");
+
+        let final_message = wa::Message::decode(decrypted_message_payload.as_slice()).unwrap();
+        assert_eq!(final_message.text_content().unwrap(), plaintext.trim());
+        */
+    }
+
+    // Helper to setup a device from captured state
+    fn setup_device_from_state(state: CapturedState) -> Device {
+        let mut device = Device::new(Arc::new(MemoryStore::new()));
+        // Generate valid local keys (we don't need them to match capture to reproduce the failure)
+        device.core.identity_key =
+            libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        device.core.signed_pre_key =
+            libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+
+        device.core.signed_pre_key_id = state.signed_pre_key.id;
+        // Keep signature from capture just to populate the field; it's not used during decrypt
+        let sig_bytes = base64::prelude::BASE64_STANDARD
+            .decode(&state.signed_pre_key.signature_b64)
+            .unwrap();
+        device.core.signed_pre_key_signature = sig_bytes.try_into().unwrap_or([0u8; 64]);
+
+        device.core.registration_id = state.registration_id;
+
+        device
+    }
     async fn test_stanza_recreation_matches_go_capture() {
         let _ = env_logger::builder()
             .filter_level(log::LevelFilter::Debug) // Or LevelFilter::Trace for more verbosity

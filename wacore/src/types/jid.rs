@@ -1,3 +1,4 @@
+use libsignal_protocol::ProtocolAddress;
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -66,6 +67,10 @@ pub trait JidExt {
     fn is_empty(&self) -> bool {
         self.server().is_empty()
     }
+
+    fn is_same_user_as(&self, other: &impl JidExt) -> bool {
+        self.user() == other.user()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
@@ -129,6 +134,10 @@ impl Jid {
                 self.user, self.agent, self.device, self.server
             )
         }
+    }
+
+    pub fn to_protocol_address(&self) -> ProtocolAddress {
+        ProtocolAddress::new(self.user.clone(), (self.device as u32).into())
     }
 }
 

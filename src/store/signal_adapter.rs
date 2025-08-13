@@ -3,15 +3,20 @@ use async_trait::async_trait;
 use libsignal_protocol::{
     Direction, GenericSignedPreKey, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore,
     KeyPair, KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyId, PreKeyRecord,
-    PreKeyStore, PrivateKey, ProtocolAddress, PublicKey, SessionRecord, SessionStore,
-    SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
+    PreKeyStore, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SessionRecord,
+    SessionStore, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
+    Timestamp,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use waproto::whatsapp as wa;
 
-use wacore::signal::store::{
-    PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
+use wacore::{
+    signal::store::{
+        GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
+        SignedPreKeyStore as WacoreSignedPreKeyStore,
+    },
+    types::jid::Jid,
 };
 
 #[derive(Clone)]
@@ -65,10 +70,9 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
     ) -> Result<Option<SessionRecord>, SignalProtocolError> {
         let device = self.0.device.lock().await;
-        let wacore_address = ProtocolAddress::new(address.name().to_string(), address.device_id());
         match device
             .backend
-            .get_session(&wacore_address.to_string())
+            .get_session(&address.to_string())
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
         {
@@ -83,11 +87,10 @@ impl SessionStore for SessionAdapter {
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
         let device = self.0.device.lock().await;
-        let wacore_address = ProtocolAddress::new(address.name().to_string(), address.device_id());
         let record_bytes = record.serialize()?;
         device
             .backend
-            .put_session(&wacore_address.to_string(), &record_bytes)
+            .put_session(&address.to_string(), &record_bytes)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
     }
@@ -253,6 +256,28 @@ impl libsignal_protocol::SenderKeyStore for SenderKeyAdapter {
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
         let mut device = self.0.device.lock().await;
         libsignal_protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
+    }
+}
+
+#[async_trait(?Send)]
+impl GroupSenderKeyStore for SenderKeyAdapter {
+    async fn store_sender_key(
+        &mut self,
+        group_id: &Jid,
+        sender: &ProtocolAddress,
+        record: &SenderKeyRecord,
+    ) -> anyhow::Result<()> {
+        let mut device = self.0.device.lock().await;
+        device.store_sender_key(group_id, sender, record).await
+    }
+
+    async fn load_sender_key(
+        &self,
+        group_id: &Jid,
+        sender: &ProtocolAddress,
+    ) -> anyhow::Result<Option<SenderKeyRecord>> {
+        let device = self.0.device.lock().await;
+        device.load_sender_key(group_id, sender).await
     }
 }
 
