@@ -1,3 +1,4 @@
+use crate::binary::builder::NodeBuilder;
 use crate::client::Client;
 use wacore::client::context::GroupInfo;
 
@@ -19,12 +20,10 @@ impl Client {
             return Ok(info);
         }
 
-        use crate::binary::node::{Node, NodeContent};
-        let query_node = Node {
-            tag: "query".to_string(),
-            attrs: [("request".to_string(), "interactive".to_string())].into(),
-            content: None,
-        };
+        use crate::binary::node::NodeContent;
+        let query_node = NodeBuilder::new("query")
+            .attr("request", "interactive")
+            .build();
         let iq = crate::request::InfoQuery {
             namespace: "w:g2",
             query_type: crate::request::InfoQueryType::Get,

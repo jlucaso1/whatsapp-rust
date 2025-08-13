@@ -1,4 +1,5 @@
-use crate::binary::node::{Node, NodeContent};
+use crate::binary::builder::NodeBuilder;
+use crate::binary::node::NodeContent;
 use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::jid::SERVER_JID;
@@ -30,10 +31,7 @@ impl Client {
             to: SERVER_JID.parse().unwrap(),
             target: None,
             id: None,
-            content: Some(NodeContent::Nodes(vec![Node {
-                tag: "ping".to_string(),
-                ..Default::default()
-            }])),
+            content: Some(NodeContent::Nodes(vec![NodeBuilder::new("ping").build()])),
             timeout: Some(KEEP_ALIVE_RESPONSE_DEADLINE),
         };
 
