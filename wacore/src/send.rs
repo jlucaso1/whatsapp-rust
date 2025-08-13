@@ -7,8 +7,8 @@ use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
 use libsignal_protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
-    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SerializedState,
-    aes_256_cbc_encrypt, message_encrypt,
+    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, UsePQRatchet,
+    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -65,140 +65,6 @@ where
         .await?;
 
     Ok(skm)
-}
-
-pub fn derive_keys_pre_kyber(
-    secret_input: &[u8],
-) -> Result<(libsignal_protocol::RootKey, libsignal_protocol::ChainKey)> {
-    let label = b"WhisperText";
-    let mut okm = [0u8; 64];
-    hkdf::Hkdf::<sha2::Sha256>::new(None, secret_input)
-        .expand(label, &mut okm)
-        .map_err(|_| anyhow!("HKDF expand failed"))?;
-
-    let mut rk_bytes = [0u8; 32];
-    let mut ck_bytes = [0u8; 32];
-    rk_bytes.copy_from_slice(&okm[0..32]);
-    ck_bytes.copy_from_slice(&okm[32..64]);
-
-    let root_key = libsignal_protocol::RootKey::new(rk_bytes);
-    let chain_key = libsignal_protocol::ChainKey::new(ck_bytes, 0);
-    Ok((root_key, chain_key))
-}
-
-async fn process_prekey_bundle_workaround<
-    S: libsignal_protocol::SessionStore + Send + Sync,
-    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
->(
-    remote_address: &ProtocolAddress,
-    session_store: &mut S,
-    identity_store: &mut I,
-    bundle: &libsignal_protocol::PreKeyBundle,
-    now: SystemTime,
-) -> Result<()> {
-    use libsignal_protocol::{Direction, IdentityKey, KeyPair, SessionRecord};
-
-    let their_identity_key: &IdentityKey = bundle
-        .identity_key()
-        .map_err(|e| anyhow!("bundle.identity_key: {e}"))?;
-
-    let trusted = identity_store
-        .is_trusted_identity(remote_address, their_identity_key, Direction::Sending)
-        .await?;
-    if !trusted {
-        return Err(anyhow!(
-            "Untrusted identity for {}",
-            remote_address.to_string()
-        ));
-    }
-
-    let spk_pub = bundle
-        .signed_pre_key_public()
-        .map_err(|e| anyhow!("bundle.signed_pre_key_public: {e}"))?;
-    let spk_sig = bundle
-        .signed_pre_key_signature()
-        .map_err(|e| anyhow!("bundle.signed_pre_key_signature: {e}"))?;
-
-    let their_pub_for_verify = their_identity_key.public_key();
-    if !their_pub_for_verify.verify_signature(&spk_pub.serialize(), spk_sig) {
-        return Err(anyhow!("Signed prekey signature invalid"));
-    }
-
-    let mut record: SessionRecord = match session_store.load_session(remote_address).await? {
-        Some(r) => r,
-        None => SessionRecord::new_fresh(),
-    };
-
-    let our_base_kp: KeyPair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-    let our_id_kp = identity_store.get_identity_key_pair().await?;
-
-    let mut secrets: Vec<u8> = Vec::with_capacity(32 * 5);
-    secrets.extend_from_slice(&[0xFFu8; 32]);
-
-    let dh1 = our_id_kp
-        .private_key()
-        .calculate_agreement(&spk_pub)
-        .map_err(|e| anyhow!("DH1 failed: {e}"))?;
-    secrets.extend_from_slice(&dh1);
-
-    let their_ik_pub = their_identity_key.public_key();
-    let dh2 = our_base_kp
-        .private_key
-        .calculate_agreement(their_ik_pub)
-        .map_err(|e| anyhow!("DH2 failed: {e}"))?;
-    secrets.extend_from_slice(&dh2);
-
-    let dh3 = our_base_kp
-        .private_key
-        .calculate_agreement(&spk_pub)
-        .map_err(|e| anyhow!("DH3 failed: {e}"))?;
-    secrets.extend_from_slice(&dh3);
-
-    if let Some(opk_pub) = bundle
-        .pre_key_public()
-        .map_err(|e| anyhow!("bundle.pre_key_public: {e}"))?
-    {
-        let dh4 = our_base_kp
-            .private_key
-            .calculate_agreement(&opk_pub)
-            .map_err(|e| anyhow!("DH4 failed: {e}"))?;
-        secrets.extend_from_slice(&dh4);
-    }
-
-    let (root_key, _initial_ck) = derive_keys_pre_kyber(&secrets)?;
-
-    let our_sending_ratchet_kp: libsignal_protocol::KeyPair =
-        libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-    let (new_root_key, new_sending_chain_key) =
-        root_key.create_chain(&spk_pub, &our_sending_ratchet_kp.private_key)?;
-
-    let version = libsignal_protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
-    let mut state = libsignal_protocol::SessionState::new(
-        version,
-        our_id_kp.identity_key(),
-        their_identity_key,
-        &new_root_key,
-        &spk_pub,
-        SerializedState::new(),
-    )
-    .with_sender_chain(&our_sending_ratchet_kp, &new_sending_chain_key);
-
-    let prekey_id = bundle.pre_key_id().ok().flatten();
-    let spk_id = bundle
-        .signed_pre_key_id()
-        .map_err(|e| anyhow!("bundle.signed_pre_key_id: {e}"))?;
-    state.set_unacknowledged_pre_key_message(prekey_id, spk_id, &our_base_kp.public_key, now);
-
-    state.set_local_registration_id(identity_store.get_local_registration_id().await?);
-    state.set_remote_registration_id(bundle.registration_id()?);
-
-    record.promote_state(state);
-    identity_store
-        .save_identity(remote_address, their_identity_key)
-        .await?;
-    session_store.store_session(remote_address, &record).await?;
-
-    Ok(())
 }
 
 pub struct SignalStores<'a, S, I, P, SP, KP> {
@@ -263,12 +129,14 @@ pub async fn prepare_dm_stanza<
             let bundle = prekey_bundles
                 .get(&device_jid)
                 .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
-            process_prekey_bundle_workaround(
+            process_prekey_bundle(
                 &signal_address,
                 stores.session_store,
                 stores.identity_store,
                 bundle,
                 SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+                UsePQRatchet::No,
             )
             .await?;
         }
@@ -458,12 +326,14 @@ pub async fn prepare_group_stanza<
                 let bundle = prekey_bundles.get(device_jid).ok_or_else(|| {
                     anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
                 })?;
-                process_prekey_bundle_workaround(
+                process_prekey_bundle(
                     &signal_address,
                     stores.session_store,
                     stores.identity_store,
                     bundle,
                     SystemTime::now(),
+                    &mut rand::rngs::OsRng.unwrap_err(),
+                    UsePQRatchet::No,
                 )
                 .await?;
             }
