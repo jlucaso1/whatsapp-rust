@@ -1,9 +1,0 @@
-{
-  "registration_id": 1736103532,
-  "identity_key_pub_b64": "hOeuLr1tIyl4beAJ9skDV5IIci/1ajp7Cvouore1wCY=",
-  "signed_pre_key": {
-    "id": 1,
-    "public_key_b64": "6vw4dysfj81ZHMEkT0WT8kxvaKkWuB4ndqjKiwLn0Sg=",
-    "signature_b64": "rBYa6NwqNpD93xiE+NXjxfNzg0g+6mjmGYl1Mu3HPVBg4lL9S8SegW8dsE78zD8Y7WfQwjvlzS/IhG4jChqvhA=="
-  }
-}
