@@ -17,7 +17,7 @@ mod tests {
     use wacore::{
         binary::node::{Node, NodeContent},
         client::context::{GroupInfo, SendContextResolver},
-        send::SignalStores,
+        send::{SignalStores, derive_keys_pre_kyber},
         types::{jid::Jid, message::AddressingMode},
     };
     use waproto::whatsapp as wa;
@@ -262,7 +262,33 @@ mod tests {
         let mock_resolver = MockResolver;
         let mut group_info = mock_resolver.resolve_group_info(&group_jid).await.unwrap();
 
-    let mut adapter = SignalProtocolStoreAdapter::new(sender_device_arc.clone());
+        // Pre-create a session ONLY for the primary device so it uses 'msg' while
+        // other devices go through 'pkmsg', matching the Go capture.
+        {
+            let primary_jid: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+            let bundles = mock_resolver
+                .fetch_prekeys_for_identity_check(std::slice::from_ref(&primary_jid))
+                .await
+                .unwrap();
+            let bundle = bundles.get(&primary_jid).unwrap();
+
+            let mut adapter = SignalProtocolStoreAdapter::new(sender_device_arc.clone());
+            let primary_addr = libsignal_protocol::ProtocolAddress::new(
+                primary_jid.user.clone(),
+                (primary_jid.device as u32).into(),
+            );
+            create_session_without_prekey(
+                &primary_addr,
+                &mut adapter.session_store,
+                &mut adapter.identity_store,
+                bundle,
+            )
+            .await
+            .expect("failed to pre-create primary session");
+        }
+
+        // Build stores after priming the primary session
+        let mut adapter = SignalProtocolStoreAdapter::new(sender_device_arc.clone());
         let mut stores = SignalStores {
             sender_key_store: &mut adapter.sender_key_store,
             session_store: &mut adapter.session_store,
@@ -287,7 +313,10 @@ mod tests {
         .await
         .expect("Failed to prepare Rust group stanza");
 
-        debug!("Comparing nodes rust:{:?} vs go:{:?}", rust_stanza_node, captured_stanza_node);
+        debug!(
+            "Comparing nodes rust:{:?} vs go:{:?}",
+            rust_stanza_node, captured_stanza_node
+        );
 
         // 4. --- DEEP COMPARISON ---
         assert_nodes_equal(&rust_stanza_node, &captured_stanza_node, "root");
@@ -338,14 +367,12 @@ mod tests {
             let g_t = go_attrs_filtered.get("type").cloned().unwrap_or_default();
 
             if path.contains("/participants/to") {
-                // Participant enc nodes: if capture expects pkmsg, enforce pkmsg; if capture says msg, allow msg or pkmsg.
-                if g_t == "pkmsg" {
-                    assert_eq!(r_t, g_t, "Expected pkmsg at path '{}'", path);
-                } else if g_t == "msg" {
-                    assert!(r_t == "msg" || r_t == "pkmsg", "Unexpected type '{}' at path '{}' (expected msg or pkmsg)", r_t, path);
-                } else {
-                    assert_eq!(r_t, g_t, "Unexpected type at path '{}'", path);
-                }
+                // Participant enc nodes must match exactly to catch MAC/source key divergence.
+                assert_eq!(
+                    r_t, g_t,
+                    "Participant enc type mismatch at path '{}': rust={}, go={}",
+                    path, r_t, g_t
+                );
             } else {
                 // Root enc node should be skmsg and must match exactly
                 assert_eq!(r_t, g_t, "Root enc type mismatch at path '{}'", path);
@@ -413,5 +440,85 @@ mod tests {
                 path, rust_node.content, go_node.content
             ),
         }
+    }
+
+    async fn create_session_without_prekey<
+        S: libsignal_protocol::SessionStore + Send + Sync,
+        I: libsignal_protocol::IdentityKeyStore + Send + Sync,
+    >(
+        remote_address: &libsignal_protocol::ProtocolAddress,
+        session_store: &mut S,
+        identity_store: &mut I,
+        bundle: &libsignal_protocol::PreKeyBundle,
+    ) -> anyhow::Result<()> {
+        use libsignal_protocol::{IdentityKey, KeyPair, SessionRecord};
+
+        let their_identity_key: &IdentityKey = bundle.identity_key()?;
+        let spk_pub = bundle.signed_pre_key_public()?;
+
+        // Create or load session record
+        let mut record: SessionRecord = match session_store.load_session(remote_address).await? {
+            Some(r) => r,
+            None => SessionRecord::new_fresh(),
+        };
+
+        // Generate our base key and fetch our identity key pair
+        let our_base_kp: KeyPair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let our_id_kp = identity_store.get_identity_key_pair().await?;
+
+        // Compute X3DH secrets: 0xFF*32 || DH(IKa, SPKb) || DH(EKa, IKb) || DH(EKa, SPKb) || [DH(EKa, OPKb)]
+        let mut secrets: Vec<u8> = Vec::with_capacity(32 * 5);
+        secrets.extend_from_slice(&[0xFFu8; 32]);
+
+        // DH1: IKa x SPKb
+        let dh1 = our_id_kp.private_key().calculate_agreement(&spk_pub)?;
+        secrets.extend_from_slice(&dh1);
+
+        // DH2: EKa x IKb
+        let their_ik_pub = their_identity_key.public_key();
+        let dh2 = our_base_kp.private_key.calculate_agreement(their_ik_pub)?;
+        secrets.extend_from_slice(&dh2);
+
+        // DH3: EKa x SPKb
+        let dh3 = our_base_kp.private_key.calculate_agreement(&spk_pub)?;
+        secrets.extend_from_slice(&dh3);
+
+        // Optional DH4: EKa x OPKb
+        if let Some(opk_pub) = bundle.pre_key_public()? {
+            let dh4 = our_base_kp.private_key.calculate_agreement(&opk_pub)?;
+            secrets.extend_from_slice(&dh4);
+        }
+
+        // Derive initial RootKey
+        let (root_key, _initial_ck) = derive_keys_pre_kyber(&secrets)?;
+
+        // Initial ratchet step to get sending chain
+        let our_sending_ratchet_kp: libsignal_protocol::KeyPair =
+            libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let (new_root_key, new_sending_chain_key) =
+            root_key.create_chain(&spk_pub, &our_sending_ratchet_kp.private_key)?;
+
+        // Build SessionState WITHOUT unacknowledged prekey metadata
+        let version = libsignal_protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
+        let mut state = libsignal_protocol::SessionState::new(
+            version,
+            our_id_kp.identity_key(),
+            their_identity_key,
+            &new_root_key,
+            &spk_pub,
+            libsignal_protocol::SerializedState::new(),
+        )
+        .with_sender_chain(&our_sending_ratchet_kp, &new_sending_chain_key);
+
+        state.set_local_registration_id(identity_store.get_local_registration_id().await?);
+        state.set_remote_registration_id(bundle.registration_id()?);
+
+        record.promote_state(state);
+        identity_store
+            .save_identity(remote_address, their_identity_key)
+            .await?;
+        session_store.store_session(remote_address, &record).await?;
+
+        Ok(())
     }
 }
