@@ -5,11 +5,13 @@ use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::signal::store::GroupSenderKeyStore;
 use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
+use hex;
 use libsignal_protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
     SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SerializedState,
-    aes_256_cbc_encrypt, message_encrypt,
+    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle, UsePQRatchet,
 };
+use log;
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::time::SystemTime;
@@ -70,23 +72,35 @@ where
 pub fn derive_keys_pre_kyber(
     secret_input: &[u8],
 ) -> Result<(libsignal_protocol::RootKey, libsignal_protocol::ChainKey)> {
+    log::debug!("derive_keys_pre_kyber called");
+    log::debug!("  Secret input length: {}", secret_input.len());
+    log::debug!("  Secret input (hex): {}", hex::encode(secret_input));
+    
     let label = b"WhisperText";
+    log::debug!("  HKDF label: {:?}", std::str::from_utf8(label).unwrap_or("invalid utf8"));
+    
     let mut okm = [0u8; 64];
     hkdf::Hkdf::<sha2::Sha256>::new(None, secret_input)
         .expand(label, &mut okm)
         .map_err(|_| anyhow!("HKDF expand failed"))?;
+
+    log::debug!("  HKDF output (64 bytes): {}", hex::encode(&okm));
 
     let mut rk_bytes = [0u8; 32];
     let mut ck_bytes = [0u8; 32];
     rk_bytes.copy_from_slice(&okm[0..32]);
     ck_bytes.copy_from_slice(&okm[32..64]);
 
+    log::debug!("  RootKey bytes: {}", hex::encode(&rk_bytes));
+    log::debug!("  ChainKey bytes: {}", hex::encode(&ck_bytes));
+
     let root_key = libsignal_protocol::RootKey::new(rk_bytes);
     let chain_key = libsignal_protocol::ChainKey::new(ck_bytes, 0);
+    
     Ok((root_key, chain_key))
 }
 
-async fn process_prekey_bundle_workaround<
+pub async fn process_prekey_bundle_workaround<
     S: libsignal_protocol::SessionStore + Send + Sync,
     I: libsignal_protocol::IdentityKeyStore + Send + Sync,
 >(
@@ -132,6 +146,21 @@ async fn process_prekey_bundle_workaround<
     let our_base_kp: KeyPair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
     let our_id_kp = identity_store.get_identity_key_pair().await?;
 
+    log::debug!("X3DH Inputs for {}:", remote_address);
+    log::debug!("  Our IK(priv): {}", hex::encode(our_id_kp.private_key().serialize()));
+    log::debug!("  Our EK(priv): {}", hex::encode(our_base_kp.private_key.serialize()));
+    log::debug!("  Their IK(pub): {}", hex::encode(their_identity_key.public_key().public_key_bytes()));
+    log::debug!("  Their SPK(pub): {}", hex::encode(spk_pub.serialize()));
+    
+    let opk_pub = bundle
+        .pre_key_public()
+        .map_err(|e| anyhow!("bundle.pre_key_public: {e}"))?;
+    if let Some(opk) = opk_pub {
+        log::debug!("  Their OPK(pub): {}", hex::encode(opk.serialize()));
+    } else {
+        log::debug!("  Their OPK(pub): None");
+    }
+
     let mut secrets: Vec<u8> = Vec::with_capacity(32 * 5);
     secrets.extend_from_slice(&[0xFFu8; 32]);
 
@@ -154,16 +183,26 @@ async fn process_prekey_bundle_workaround<
         .map_err(|e| anyhow!("DH3 failed: {e}"))?;
     secrets.extend_from_slice(&dh3);
 
-    if let Some(opk_pub) = bundle
-        .pre_key_public()
-        .map_err(|e| anyhow!("bundle.pre_key_public: {e}"))?
-    {
+    if let Some(opk_pub_val) = opk_pub {
         let dh4 = our_base_kp
             .private_key
-            .calculate_agreement(&opk_pub)
+            .calculate_agreement(&opk_pub_val)
             .map_err(|e| anyhow!("DH4 failed: {e}"))?;
         secrets.extend_from_slice(&dh4);
     }
+
+    log::debug!("X3DH Outputs:");
+    log::debug!("  DH1 (IKa, SPKb): {}", hex::encode(&dh1));
+    log::debug!("  DH2 (EKa, IKb): {}", hex::encode(&dh2));
+    log::debug!("  DH3 (EKa, SPKb): {}", hex::encode(&dh3));
+    if let Some(opk_pub_val) = opk_pub {
+        let dh4 = our_base_kp
+            .private_key
+            .calculate_agreement(&opk_pub_val)
+            .map_err(|e| anyhow!("DH4 recalc failed: {e}"))?;
+        log::debug!("  DH4 (EKa, OPKb): {}", hex::encode(&dh4));
+    }
+    log::debug!("  Final secrets blob for HKDF: {}", hex::encode(&secrets));
 
     let (root_key, _initial_ck) = derive_keys_pre_kyber(&secrets)?;
 
@@ -263,12 +302,14 @@ pub async fn prepare_dm_stanza<
             let bundle = prekey_bundles
                 .get(&device_jid)
                 .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
-            process_prekey_bundle_workaround(
+            process_prekey_bundle(
                 &signal_address,
                 stores.session_store,
                 stores.identity_store,
                 bundle,
                 SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+                UsePQRatchet::No,
             )
             .await?;
         }
@@ -458,12 +499,14 @@ pub async fn prepare_group_stanza<
                 let bundle = prekey_bundles.get(device_jid).ok_or_else(|| {
                     anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
                 })?;
-                process_prekey_bundle_workaround(
+                process_prekey_bundle(
                     &signal_address,
                     stores.session_store,
                     stores.identity_store,
                     bundle,
                     SystemTime::now(),
+                    &mut rand::rngs::OsRng.unwrap_err(),
+                    UsePQRatchet::No,
                 )
                 .await?;
             }
