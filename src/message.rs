@@ -12,6 +12,7 @@ use libsignal_protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
     message_decrypt,
 };
+use libsignal_protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
 use log::debug;
 use log::warn;
 use prost::Message as ProtoMessage;
@@ -439,14 +440,50 @@ impl Client {
     ) {
         let skdm = match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
             Ok(msg) => msg,
-            Err(e) => {
-                log::error!(
-                    "Failed to parse SenderKeyDistributionMessage from {}: {:?}",
-                    sender_jid,
-                    e
-                );
-                return;
-            }
+            Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
+                Ok(go_msg) => {
+                    match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+                        Ok(pub_key) => {
+                            match SenderKeyDistributionMessage::new(
+                                SENDERKEY_MESSAGE_CURRENT_VERSION,
+                                go_msg.id.unwrap(),
+                                go_msg.iteration.unwrap(),
+                                go_msg.chain_key.unwrap(),
+                                pub_key,
+                            ) {
+                                Ok(skdm) => skdm,
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
+                                        sender_jid,
+                                        e,
+                                        e1
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
+                                sender_jid,
+                                e,
+                                e1
+                            );
+                            return;
+                        }
+                    }
+                }
+                Err(e2) => {
+                    log::error!(
+                        "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
+                        sender_jid,
+                        e1,
+                        e2
+                    );
+                    return;
+                }
+            },
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
