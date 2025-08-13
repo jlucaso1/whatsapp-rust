@@ -79,3 +79,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 incremental = false
+
+[[test]]
+name = "group_e2e_self_test"
+path = "tests/group_e2e_self_test.rs"
+harness = true
