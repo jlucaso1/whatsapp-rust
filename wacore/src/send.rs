@@ -379,12 +379,12 @@ pub async fn prepare_group_stanza<
         );
     }
     let sender_address = own_sending_jid.to_protocol_address();
-    let padded_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let plaintext = message.encode_to_vec();
     let skmsg = encrypt_group_message_correctly(
         stores.sender_key_store,
         &to_jid,
         &sender_address,
-        &padded_plaintext,
+        &plaintext,
         &mut rand::rngs::OsRng.unwrap_err(),
     )
     .await?;
