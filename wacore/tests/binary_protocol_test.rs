@@ -56,8 +56,8 @@ fn test_unmarshal_ref_known_good_data() {
 
     // Assert on the borrowed data without creating an owned Node.
     assert_eq!(node_ref.tag, "success");
-    assert_eq!(node_ref.attrs.get("location").unwrap().as_ref(), "frc");
-    assert_eq!(node_ref.attrs.get("props").unwrap().as_ref(), "27");
+    assert_eq!(node_ref.get_attr("location").unwrap().as_ref(), "frc");
+    assert_eq!(node_ref.get_attr("props").unwrap().as_ref(), "27");
 }
 
 #[test]
