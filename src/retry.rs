@@ -164,8 +164,9 @@ impl Client {
         let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
         let new_prekey_record =
             wacore::signal::state::record::new_pre_key_record(new_prekey_id, &new_prekey_keypair);
+        // This key is not uploaded to the server pool, so mark as false
         if let Err(e) = device_guard
-            .store_prekey(new_prekey_id, new_prekey_record)
+            .store_prekey(new_prekey_id, new_prekey_record, false)
             .await
         {
             warn!("Failed to store new prekey for retry receipt: {e:?}");
@@ -263,7 +264,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
+        let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
         let client = Arc::new(Client::new(pm.clone()).await);
 
         let chat: Jid = "120363021033254949@g.us".parse().unwrap();

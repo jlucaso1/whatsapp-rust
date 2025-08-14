@@ -9,7 +9,20 @@ use tokio::task;
 
 pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
     let notification_type = node.attrs.get("type").cloned().unwrap_or_default();
+
     match notification_type.as_str() {
+        "encrypt" => {
+            if let Some(from) = node.attrs.get("from")
+                && from == crate::types::jid::SERVER_JID
+            {
+                let client_clone = client.clone();
+                task::spawn_local(async move {
+                    if let Err(e) = client_clone.upload_pre_keys().await {
+                        warn!("Failed to upload pre-keys after notification: {:?}", e);
+                    }
+                });
+            }
+        }
         "server_sync" => {
             info!(target: "Client", "Received `server_sync` notification, scheduling app state sync(s).");
             for collection_node in node.get_children_by_tag("collection") {
