@@ -2,7 +2,7 @@ use crate::store::error::Result;
 use crate::{appstate::hash::HashState, signal};
 use async_trait::async_trait;
 
-use libsignal_protocol::{Direction, KeyPair};
+use libsignal_protocol::Direction;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -52,23 +52,6 @@ pub trait AppStateStore: Send + Sync {
     async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()>;
 }
 
-/// Application-specific pre-key management trait.
-/// This provides intelligent pre-key management separate from the generic libsignal traits.
-#[async_trait]
-pub trait AppPreKeyStore: Send + Sync {
-    /// Get the next available pre-key ID for sequential generation.
-    async fn get_next_prekey_id(&self) -> Result<u32>;
-    
-    /// Store an application pre-key with upload status tracking.
-    async fn store_app_prekey(&self, id: u32, key_pair: &KeyPair, uploaded: bool) -> Result<()>;
-    
-    /// Get a list of unuploaded pre-keys up to the specified count.
-    async fn get_unuploaded_pre_keys(&self, count: u32) -> Result<Vec<(u32, KeyPair)>>;
-    
-    /// Mark pre-keys as uploaded up to the specified ID (inclusive).
-    async fn mark_pre_keys_as_uploaded(&self, up_to_id: u32) -> Result<()>;
-}
-
 pub trait Backend:
     IdentityStore
     + SessionStore
@@ -77,7 +60,6 @@ pub trait Backend:
     + signal::store::PreKeyStore
     + signal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
-    + AppPreKeyStore
     + Send
     + Sync
 {
@@ -91,7 +73,6 @@ impl<T> Backend for T where
         + signal::store::PreKeyStore
         + signal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
-        + AppPreKeyStore
         + Send
         + Sync
 {
