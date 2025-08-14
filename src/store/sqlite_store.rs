@@ -15,7 +15,6 @@ use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStr
 
 use super::SerializableDevice;
 
-// Embed migrations into the binary
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
@@ -33,7 +32,6 @@ impl SqliteStore {
             .build(manager)
             .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-        // Run migrations
         {
             let mut conn = pool
                 .get()
@@ -56,7 +54,6 @@ impl SqliteStore {
             .map_err(|e| StoreError::Connection(e.to_string()))
     }
 
-    // Helper methods for KeyPair serialization/deserialization
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(64);
         bytes.extend_from_slice(&key_pair.private_key.serialize());
@@ -83,18 +80,15 @@ impl SqliteStore {
     pub async fn save_device_data(&self, device_data: &SerializableDevice) -> Result<()> {
         let mut conn = self.get_connection()?;
 
-        // Serialize KeyPairs and other complex data
         let noise_key_data = self.serialize_keypair(&device_data.noise_key)?;
         let identity_key_data = self.serialize_keypair(&device_data.identity_key)?;
         let signed_pre_key_data = self.serialize_keypair(&device_data.signed_pre_key)?;
 
-        // Serialize account if present
         let account_data = device_data
             .account
             .as_ref()
             .map(|account| account.encode_to_vec());
 
-        // Serialize processed messages
         let processed_messages_data = if !device_data.processed_messages.is_empty() {
             Some(
                 bincode::serde::encode_to_vec(
@@ -109,7 +103,7 @@ impl SqliteStore {
 
         diesel::insert_into(device::table)
             .values((
-                device::id.eq(1), // Single device per database
+                device::id.eq(1),
                 device::jid.eq(device_data.id.as_ref().map(|j| j.to_string())),
                 device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string())),
                 device::registration_id.eq(device_data.registration_id as i32),
@@ -151,19 +145,19 @@ impl SqliteStore {
         let result = device::table
             .filter(device::id.eq(1))
             .first::<(
-                Option<i32>,     // id
-                Option<String>,  // jid
-                Option<String>,  // lid
-                i32,             // registration_id
-                Vec<u8>,         // noise_key
-                Vec<u8>,         // identity_key
-                Vec<u8>,         // signed_pre_key
-                i32,             // signed_pre_key_id
-                Vec<u8>,         // signed_pre_key_signature
-                Vec<u8>,         // adv_secret_key
-                Option<Vec<u8>>, // account
-                String,          // push_name
-                Option<Vec<u8>>, // processed_messages
+                Option<i32>,
+                Option<String>,
+                Option<String>,
+                i32,
+                Vec<u8>,
+                Vec<u8>,
+                Vec<u8>,
+                i32,
+                Vec<u8>,
+                Vec<u8>,
+                Option<Vec<u8>>,
+                String,
+                Option<Vec<u8>>,
             )>(&mut conn)
             .optional()
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -184,7 +178,6 @@ impl SqliteStore {
             processed_messages_data,
         )) = result
         {
-            // Parse JIDs
             let id = if let Some(jid_str) = jid_str {
                 jid_str.parse().ok()
             } else {
@@ -197,12 +190,10 @@ impl SqliteStore {
                 None
             };
 
-            // Deserialize KeyPairs
             let noise_key = self.deserialize_keypair(&noise_key_data)?;
             let identity_key = self.deserialize_keypair(&identity_key_data)?;
             let signed_pre_key = self.deserialize_keypair(&signed_pre_key_data)?;
 
-            // Deserialize signature (ensure it's exactly 64 bytes)
             let mut signed_pre_key_signature = [0u8; 64];
             if signed_pre_key_signature_data.len() == 64 {
                 signed_pre_key_signature.copy_from_slice(&signed_pre_key_signature_data);
@@ -212,7 +203,6 @@ impl SqliteStore {
                 ));
             }
 
-            // Deserialize secret key (ensure it's exactly 32 bytes)
             let mut adv_secret_key = [0u8; 32];
             if adv_secret_key_data.len() == 32 {
                 adv_secret_key.copy_from_slice(&adv_secret_key_data);
@@ -222,7 +212,6 @@ impl SqliteStore {
                 ));
             }
 
-            // Deserialize account if present
             let account = if let Some(account_data) = account_data {
                 Some(
                     wa::AdvSignedDeviceIdentity::decode(account_data.as_slice())
@@ -232,7 +221,6 @@ impl SqliteStore {
                 None
             };
 
-            // Deserialize processed messages if present
             let processed_messages = if let Some(processed_messages_data) = processed_messages_data
             {
                 let (messages, _) = bincode::serde::decode_from_slice(
@@ -310,14 +298,8 @@ impl IdentityStore for SqliteStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         match result {
-            Some(stored_key) => {
-                // Trust the identity if it matches the stored key
-                Ok(stored_key.as_slice() == key)
-            }
-            None => {
-                // If no identity is stored, we trust it (first contact)
-                Ok(true)
-            }
+            Some(stored_key) => Ok(stored_key.as_slice() == key),
+            None => Ok(true),
         }
     }
 
@@ -403,11 +385,11 @@ impl signal::store::PreKeyStore for SqliteStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         if let Some(key_data) = result {
-            // Reconstruct the PreKeyRecordStructure from the stored private key
             if let Ok(private_key) = PrivateKey::deserialize(&key_data) {
                 if let Ok(public_key) = private_key.public_key() {
                     let key_pair = KeyPair::new(public_key, private_key);
-                    let record = wacore::signal::state::record::new_pre_key_record(prekey_id, &key_pair);
+                    let record =
+                        wacore::signal::state::record::new_pre_key_record(prekey_id, &key_pair);
                     Ok(Some(record))
                 } else {
                     Ok(None)
@@ -426,22 +408,18 @@ impl signal::store::PreKeyStore for SqliteStore {
         record: PreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
         let mut conn = self.get_connection()?;
-        
-        // Extract the private key from the record and store it directly
+
         let private_key_bytes = record.private_key.unwrap_or_default();
 
         diesel::insert_into(prekeys::table)
             .values((
-                prekeys::id.eq(prekey_id as i32), 
+                prekeys::id.eq(prekey_id as i32),
                 prekeys::key.eq(&private_key_bytes),
-                prekeys::uploaded.eq(false), // Default to not uploaded when storing via signal trait
+                prekeys::uploaded.eq(false),
             ))
             .on_conflict(prekeys::id)
             .do_update()
-            .set((
-                prekeys::key.eq(&private_key_bytes),
-                // Don't change uploaded status when updating via signal trait
-            ))
+            .set((prekeys::key.eq(&private_key_bytes),))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
@@ -692,5 +670,3 @@ impl AppStateStore for SqliteStore {
         Ok(())
     }
 }
-
-

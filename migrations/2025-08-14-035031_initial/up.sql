@@ -10,7 +10,8 @@ CREATE TABLE sessions (
 
 CREATE TABLE prekeys (
     id INTEGER PRIMARY KEY NOT NULL,
-    record BLOB NOT NULL
+    key BLOB NOT NULL,
+    uploaded BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE sender_keys (

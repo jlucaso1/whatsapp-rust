@@ -283,7 +283,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
         (Some(session), None)
     };
 
-    let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
+    let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
 
     pm.modify_device(|device| {
         let identity_public_key =

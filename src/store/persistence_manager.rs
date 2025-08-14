@@ -1,6 +1,5 @@
 use super::error::StoreError;
 use crate::store::Device;
-use crate::store::filestore::FileStore;
 use crate::store::sqlite_store::SqliteStore;
 use crate::store::traits::Backend;
 use log::{debug, error, info};
@@ -9,7 +8,6 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Duration, sleep};
 
 pub enum StoreBackend {
-    File(Arc<FileStore>),
     Sqlite(Arc<SqliteStore>),
 }
 
@@ -19,7 +17,6 @@ impl StoreBackend {
         device_data: &crate::store::SerializableDevice,
     ) -> Result<(), StoreError> {
         match self {
-            StoreBackend::File(store) => store.save_device_data(device_data).await,
             StoreBackend::Sqlite(store) => store.save_device_data(device_data).await,
         }
     }
@@ -28,14 +25,12 @@ impl StoreBackend {
         &self,
     ) -> Result<Option<crate::store::SerializableDevice>, StoreError> {
         match self {
-            StoreBackend::File(store) => store.load_device_data().await,
             StoreBackend::Sqlite(store) => store.load_device_data().await,
         }
     }
 
     pub fn as_backend(&self) -> Arc<dyn Backend> {
         match self {
-            StoreBackend::File(store) => store.clone() as Arc<dyn Backend>,
             StoreBackend::Sqlite(store) => store.clone() as Arc<dyn Backend>,
         }
     }
@@ -49,35 +44,7 @@ pub struct PersistenceManager {
 }
 
 impl PersistenceManager {
-    pub async fn new(store_path: impl Into<std::path::PathBuf>) -> Result<Self, StoreError> {
-        let filestore = Arc::new(FileStore::new(store_path).await.map_err(StoreError::Io)?);
-        let backend = StoreBackend::File(filestore);
-
-        info!("PersistenceManager: Attempting to load device data via FileStore.");
-        let device_data_opt = backend.load_device_data().await?;
-
-        let device = if let Some(serializable_device) = device_data_opt {
-            info!(
-                "PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.",
-                serializable_device.push_name
-            );
-            let mut dev = Device::new(backend.as_backend());
-            dev.load_from_serializable(serializable_device);
-            dev
-        } else {
-            info!("PersistenceManager: No existing device data found. Creating a new Device.");
-            Device::new(backend.as_backend())
-        };
-
-        Ok(Self {
-            device: Arc::new(RwLock::new(device)),
-            backend: Some(backend),
-            dirty: Arc::new(Mutex::new(false)),
-            save_notify: Arc::new(Notify::new()),
-        })
-    }
-
-    pub async fn new_sqlite(database_url: &str) -> Result<Self, StoreError> {
+    pub async fn new(database_url: &str) -> Result<Self, StoreError> {
         let sqlite_store = Arc::new(SqliteStore::new(database_url).await?);
         let backend = StoreBackend::Sqlite(sqlite_store);
 
@@ -100,18 +67,6 @@ impl PersistenceManager {
         Ok(Self {
             device: Arc::new(RwLock::new(device)),
             backend: Some(backend),
-            dirty: Arc::new(Mutex::new(false)),
-            save_notify: Arc::new(Notify::new()),
-        })
-    }
-
-    pub async fn new_in_memory() -> Result<Self, StoreError> {
-        info!("PersistenceManager: Initializing in-memory store.");
-        let memory_store = Arc::new(crate::store::memory::MemoryStore::new());
-        let device = Device::new(memory_store as Arc<dyn Backend>);
-        Ok(Self {
-            device: Arc::new(RwLock::new(device)),
-            backend: None,
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
         })

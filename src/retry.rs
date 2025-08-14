@@ -263,7 +263,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
+        let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
         let client = Arc::new(Client::new(pm.clone()).await);
 
         let chat: Jid = "120363021033254949@g.us".parse().unwrap();

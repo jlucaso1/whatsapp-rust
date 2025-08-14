@@ -147,7 +147,7 @@ impl Client {
         // Step 1: Try to get existing unuploaded keys from storage
         let mut keys_to_upload = Vec::new();
         let mut key_pairs_to_upload = Vec::new();
-        
+
         // Check if we have existing unuploaded keys by trying IDs sequentially
         // We'll check a reasonable range to find existing keys
         let found_count = 0;
@@ -155,7 +155,7 @@ impl Client {
             if found_count >= WANTED_PRE_KEY_COUNT {
                 break;
             }
-            
+
             if let Ok(Some(_record)) = device_guard.backend.load_prekey(id).await {
                 // Check if this key was already uploaded by seeing if it exists on server
                 // For simplicity, assume unuploaded keys have a specific pattern or we track separately
@@ -166,10 +166,15 @@ impl Client {
 
         // Step 2: Generate new keys with sequential IDs to avoid collisions
         let mut highest_existing_id = 0u32;
-        
+
         // Find the highest existing pre-key ID to start from
         for id in 1..=16777215u32 {
-            if device_guard.backend.contains_prekey(id).await.unwrap_or(false) {
+            if device_guard
+                .backend
+                .contains_prekey(id)
+                .await
+                .unwrap_or(false)
+            {
                 highest_existing_id = id;
             } else {
                 break; // Found first gap
@@ -177,19 +182,22 @@ impl Client {
         }
 
         let start_id = highest_existing_id + 1;
-        
+
         for i in 0..WANTED_PRE_KEY_COUNT {
             let pre_key_id = start_id + i as u32;
-            
+
             // Ensure we don't exceed the valid range (1 to 0xFFFFFF)
             if pre_key_id > 16777215 {
-                log::warn!("Pre-key ID {} exceeds maximum range, wrapping around", pre_key_id);
+                log::warn!(
+                    "Pre-key ID {} exceeds maximum range, wrapping around",
+                    pre_key_id
+                );
                 break;
             }
-            
+
             let key_pair = KeyPair::generate(&mut OsRng.unwrap_err());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
-            
+
             keys_to_upload.push((pre_key_id, pre_key_record));
             key_pairs_to_upload.push((pre_key_id, key_pair));
         }
@@ -201,7 +209,7 @@ impl Client {
 
         // Step 3: Build upload request nodes
         let mut pre_key_nodes = Vec::new();
-        
+
         for (pre_key_id, key_pair) in &key_pairs_to_upload {
             // The ID is sent as 3 bytes, big-endian.
             let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
