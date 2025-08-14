@@ -1,5 +1,9 @@
 use std::io::{Cursor, Read};
 
+/// Zero-copy parser for SenderKeyDistributionMessage (SKDM) protobuf blobs.
+///
+/// This parser is performance-focused and returns slices directly
+/// referencing the input buffer where possible (i.e. zero-copy).
 #[derive(Debug)]
 pub struct SkdmFields<'a> {
     pub id: Option<u32>,
@@ -9,6 +13,18 @@ pub struct SkdmFields<'a> {
 }
 
 impl<'a> SkdmFields<'a> {
+    /// Parse a SKDM protobuf message in a zero-copy manner.
+    ///
+    /// Returns `SkdmFields` where `chain_key` and `signing_key` (if present)
+    /// are slices pointing into the original `data` buffer.
+    ///
+    /// Note: This is a minimal parser tailored to the expected SKDM fields:
+    /// - field 1 (varint): id
+    /// - field 2 (varint): iteration
+    /// - field 3 (length-delimited): chain_key (bytes)
+    /// - field 4 (length-delimited): signing_key (bytes)
+    ///
+    /// Unknown fields are skipped according to their wire type.
     pub fn parse_zero_copy(data: &'a [u8]) -> Result<Self, &'static str> {
         let mut cursor = Cursor::new(data);
         let mut result = SkdmFields {
@@ -18,7 +34,7 @@ impl<'a> SkdmFields<'a> {
             signing_key: None,
         };
 
-        while cursor.position() < data.len() as u64 {
+        while (cursor.position() as usize) < data.len() {
             let tag_byte = read_varint32(&mut cursor).map_err(|_| "Invalid varint")?;
             let field_num = tag_byte >> 3;
             let wire_type = tag_byte & 0x07;
@@ -34,7 +50,9 @@ impl<'a> SkdmFields<'a> {
                 (3, 2) => {
                     let len = read_varint32(&mut cursor).map_err(|_| "Invalid chainKey length")?;
                     let start = cursor.position() as usize;
-                    let end = start + len as usize;
+                    let end = start
+                        .checked_add(len as usize)
+                        .ok_or("ChainKey length overflow")?;
                     if end > data.len() {
                         return Err("ChainKey length exceeds data");
                     }
@@ -45,7 +63,9 @@ impl<'a> SkdmFields<'a> {
                     let len =
                         read_varint32(&mut cursor).map_err(|_| "Invalid signingKey length")?;
                     let start = cursor.position() as usize;
-                    let end = start + len as usize;
+                    let end = start
+                        .checked_add(len as usize)
+                        .ok_or("SigningKey length overflow")?;
                     if end > data.len() {
                         return Err("SigningKey length exceeds data");
                     }
@@ -94,11 +114,23 @@ fn read_varint32(cursor: &mut Cursor<&[u8]>) -> std::io::Result<u32> {
 fn skip_field(cursor: &mut Cursor<&[u8]>, wire_type: u32) -> std::io::Result<()> {
     match wire_type {
         0 => {
+            // varint
             read_varint32(cursor)?;
         }
         2 => {
+            // length-delimited
             let len = read_varint32(cursor)?;
-            cursor.set_position(cursor.position() + len as u64);
+            // advance position by len bytes, ensuring we don't overflow
+            let new_pos = cursor.position().checked_add(len as u64).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Skip overflow")
+            })?;
+            if new_pos > cursor.get_ref().len() as u64 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Skip length exceeds buffer",
+                ));
+            }
+            cursor.set_position(new_pos);
         }
         _ => {
             return Err(std::io::Error::new(
