@@ -28,7 +28,6 @@ pub mod retry;
 pub mod groups;
 pub mod history_sync;
 pub mod presence;
-pub mod skdm_parser; // Zero-copy SKDM parser for performance
 pub mod usync;
 
 pub mod test_network;
