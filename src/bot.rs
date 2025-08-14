@@ -36,14 +36,14 @@ impl Bot {
 
 pub struct BotBuilder {
     message_handler: Option<MessageHandler>,
-    persistence_path: String,
+    db_path: String,
 }
 
 impl BotBuilder {
     fn new() -> Self {
         Self {
             message_handler: None,
-            persistence_path: "./whatsapp_store".to_string(),
+            db_path: "whatsapp.db".to_string(),
         }
     }
 
@@ -56,20 +56,20 @@ impl BotBuilder {
         self
     }
 
-    pub fn with_persistence_path(mut self, path: &str) -> Self {
-        self.persistence_path = path.to_string();
+    pub fn with_db_path(mut self, db_path: &str) -> Self {
+        self.db_path = db_path.to_string();
         self
     }
 
     pub async fn run(self) {
         info!(
-            "Initializing PersistenceManager at '{}'...",
-            self.persistence_path
+            "Initializing PersistenceManager with SQLite at '{}'...",
+            self.db_path
         );
         let persistence_manager = Arc::new(
-            PersistenceManager::new(self.persistence_path)
+            PersistenceManager::new_sqlite(&self.db_path)
                 .await
-                .expect("Failed to initialize PersistenceManager"),
+                .expect("Failed to initialize PersistenceManager with SQLite"),
         );
 
         persistence_manager
