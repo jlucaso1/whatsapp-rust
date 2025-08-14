@@ -388,7 +388,7 @@ async fn test_decrypt_skmsg() {
     client.core.event_bus.add_handler(handler);
 
     info!("Dispatching group message for decryption...");
-    client.handle_encrypted_message(stanza_node).await;
+    client.handle_encrypted_message(Arc::new(stanza_node)).await;
 
     let received_event = timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
