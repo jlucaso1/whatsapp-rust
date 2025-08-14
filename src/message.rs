@@ -694,8 +694,12 @@ impl Client {
         let skdm = match SkdmFields::parse_zero_copy(axolotl_bytes) {
             Ok(fields) => {
                 // Fast path: construct SKDM from parsed fields without protobuf allocations
-                if let (Some(id), Some(iteration), Some(chain_key), Some(signing_key)) = 
-                    (fields.id, fields.iteration, fields.chain_key, fields.signing_key) {
+                if let (Some(id), Some(iteration), Some(chain_key), Some(signing_key)) = (
+                    fields.id,
+                    fields.iteration,
+                    fields.chain_key,
+                    fields.signing_key,
+                ) {
                     match SignalPublicKey::from_djb_public_key_bytes(signing_key) {
                         Ok(pub_key) => {
                             match SenderKeyDistributionMessage::new(
@@ -743,7 +747,9 @@ impl Client {
                     Ok(msg) => msg,
                     Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
                         Ok(go_msg) => {
-                            match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+                            match SignalPublicKey::from_djb_public_key_bytes(
+                                &go_msg.signing_key.unwrap(),
+                            ) {
                                 Ok(pub_key) => {
                                     match SenderKeyDistributionMessage::new(
                                         SENDERKEY_MESSAGE_CURRENT_VERSION,

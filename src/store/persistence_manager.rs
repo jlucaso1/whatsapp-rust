@@ -4,7 +4,7 @@ use crate::store::filestore::FileStore;
 use crate::store::traits::Backend;
 use log::{debug, error, info};
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Duration, sleep};
 
 pub struct PersistenceManager {
