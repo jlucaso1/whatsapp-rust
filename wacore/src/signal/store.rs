@@ -17,6 +17,7 @@ pub trait PreKeyStore: Send + Sync {
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
+        uploaded: bool,
     ) -> Result<(), StoreError>;
     async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError>;
     async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError>;

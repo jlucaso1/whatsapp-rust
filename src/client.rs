@@ -395,21 +395,6 @@ impl Client {
             "receipt" => self.handle_receipt(node).await,
             "notification" => {
                 handlers::notification::handle_notification(self, node).await;
-
-                // If this is an 'encrypt' notification from the WhatsApp server, trigger
-                // a background upload of pre-keys to replenish the server-side pool.
-                if let Some(notif_type) = node.attrs.get("type")
-                    && notif_type == "encrypt"
-                    && let Some(from) = node.attrs.get("from")
-                    && from == crate::types::jid::SERVER_JID
-                {
-                    let client_clone = self.clone();
-                    task::spawn_local(async move {
-                        if let Err(e) = client_clone.upload_pre_keys().await {
-                            warn!("Failed to upload pre-keys after notification: {:?}", e);
-                        }
-                    });
-                }
             }
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
@@ -545,14 +530,6 @@ impl Client {
                 .core
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
-        });
-
-        // After successful connect, try to proactively upload pre-keys.
-        let client_clone_for_prekeys = self.clone();
-        task::spawn_local(async move {
-            if let Err(e) = client_clone_for_prekeys.upload_pre_keys().await {
-                warn!("Failed to upload pre-keys after connect: {:?}", e);
-            }
         });
     }
 
