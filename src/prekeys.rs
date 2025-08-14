@@ -10,7 +10,7 @@ use crate::request::{InfoQuery, InfoQueryType};
 use anyhow;
 use libsignal_protocol::KeyPair;
 use rand::TryRngCore;
-use wacore::signal::state::record::new_pre_key_record;
+use rand_core::OsRng;
 
 pub use wacore::prekeys::PreKeyUtils;
 
@@ -139,17 +139,46 @@ impl Client {
         log::info!("Server has {} pre-keys, uploading more.", server_count);
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
 
+        // Step 1: Fetch existing unuploaded keys from local database
+        let mut keys_to_upload = device_guard.backend.get_unuploaded_pre_keys(WANTED_PRE_KEY_COUNT as u32).await
+            .map_err(|e| anyhow::anyhow!("Failed to get unuploaded pre-keys: {:?}", e))?;
+
+        // Step 2: If we need more keys, generate them with sequential IDs
+        let needed_count = WANTED_PRE_KEY_COUNT.saturating_sub(keys_to_upload.len());
+        if needed_count > 0 {
+            log::info!("Need to generate {} new pre-keys", needed_count);
+            
+            for _ in 0..needed_count {
+                let pre_key_id = device_guard.backend.get_next_prekey_id().await
+                    .map_err(|e| anyhow::anyhow!("Failed to get next pre-key ID: {:?}", e))?;
+                
+                let key_pair = KeyPair::generate(&mut OsRng.unwrap_err());
+                
+                // Store the new key with uploaded = false
+                device_guard.backend.store_app_prekey(pre_key_id, &key_pair, false).await
+                    .map_err(|e| anyhow::anyhow!("Failed to store pre-key: {:?}", e))?;
+                
+                keys_to_upload.push((pre_key_id, key_pair));
+            }
+        }
+
+        if keys_to_upload.is_empty() {
+            log::warn!("No pre-keys available to upload");
+            return Ok(());
+        }
+
+        // Step 3: Build the upload request
         let mut pre_key_nodes = Vec::new();
-        let mut new_pre_keys_to_store: Vec<(u32, waproto::whatsapp::PreKeyRecordStructure)> =
-            Vec::new();
+        let mut highest_id = 0u32;
 
-        // Pre-key IDs should be random within the valid range (1 to 0xFFFFFF).
-        for _ in 0..WANTED_PRE_KEY_COUNT {
-            let pre_key_id = (rand::random::<u32>() % 16777215) + 1;
-            let key_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-            let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
-
+        for (pre_key_id, key_pair) in &keys_to_upload {
+            if *pre_key_id > highest_id {
+                highest_id = *pre_key_id;
+            }
+            
             // The ID is sent as 3 bytes, big-endian.
             let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
             let node = NodeBuilder::new("key")
@@ -161,7 +190,6 @@ impl Client {
                 ])
                 .build();
             pre_key_nodes.push(node);
-            new_pre_keys_to_store.push((pre_key_id, pre_key_record));
         }
 
         let registration_id_bytes = device_snapshot.registration_id.to_be_bytes().to_vec();
@@ -218,23 +246,19 @@ impl Client {
             timeout: None,
         };
 
-        // Send IQ to upload pre-keys
+        // Step 4: Send IQ to upload pre-keys
         if let Err(e) = self.send_iq(iq).await {
             return Err(anyhow::anyhow!(e));
         }
 
-        // Persist the new pre-keys using the backend (delegate to storage implementation)
-        let device_store = self.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
-        for (id, record) in new_pre_keys_to_store {
-            if let Err(e) = device_guard.backend.store_prekey(id, record).await {
-                log::warn!("Failed to store prekey id {}: {:?}", id, e);
-            }
-        }
+        // Step 5: Mark pre-keys as uploaded in the database
+        device_guard.backend.mark_pre_keys_as_uploaded(highest_id).await
+            .map_err(|e| anyhow::anyhow!("Failed to mark pre-keys as uploaded: {:?}", e))?;
 
         log::info!(
-            "Successfully uploaded {} new pre-keys.",
-            WANTED_PRE_KEY_COUNT
+            "Successfully uploaded {} pre-keys (up to ID {}).",
+            keys_to_upload.len(),
+            highest_id
         );
 
         Ok(())

@@ -42,7 +42,8 @@ diesel::table! {
 diesel::table! {
     prekeys (id) {
         id -> Integer,
-        record -> Binary,
+        key -> Binary,
+        uploaded -> Bool,
     }
 }
 
