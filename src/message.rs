@@ -44,7 +44,7 @@ fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Err
 }
 
 impl Client {
-    pub async fn handle_encrypted_message(self: Arc<Self>, node: Node) {
+    pub async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
             Err(e) => {

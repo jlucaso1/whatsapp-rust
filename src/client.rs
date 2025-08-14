@@ -344,13 +344,13 @@ impl Client {
         match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
                 let node = node_ref.to_owned();
-                self.process_node(node).await;
+                self.process_node(&node).await;
             }
             Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
         };
     }
 
-    pub async fn process_node(self: &Arc<Self>, node: Node) {
+    pub async fn process_node(self: &Arc<Self>, node: &Node) {
         if node.tag == "iq" {
             if let Some(sync_node) = node.get_optional_child("sync")
                 && let Some(collection_node) = sync_node.get_optional_child("collection")
@@ -370,8 +370,16 @@ impl Client {
             return;
         }
 
-        if node.tag == "iq" && self.handle_iq_response(node.clone()).await {
-            return;
+        // Check for IQ responses that need to be dispatched to waiters first
+        // This requires cloning, but only when we have an actual response waiter
+        if node.tag == "iq" {
+            let id_opt = node.attrs.get("id");
+            if let Some(id) = id_opt {
+                let has_waiter = self.response_waiters.lock().await.contains_key(id);
+                if has_waiter && self.handle_iq_response(node.clone()).await {
+                    return;
+                }
+            }
         }
 
         match node.tag.as_str() {
@@ -389,11 +397,11 @@ impl Client {
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
-                let node_clone = node.clone();
-                debug!(target: "Client/Recv", "Received message raw: {node_clone:?}");
+                let node_arc = Arc::new(node.clone()); // Only clone here for shared ownership
+                debug!(target: "Client/Recv", "Received message raw: {node_arc:?}");
 
                 task::spawn_local(async move {
-                    let info = match client_clone.parse_message_info(&node_clone).await {
+                    let info = match client_clone.parse_message_info(&node_arc).await {
                         Ok(info) => info,
                         Err(e) => {
                             log::warn!(
@@ -412,7 +420,7 @@ impl Client {
 
                     let _lock_guard = mutex_arc.lock().await;
 
-                    client_clone.handle_encrypted_message(node_clone).await;
+                    client_clone.handle_encrypted_message(node_arc).await;
                 });
             }
             "ack" => {
