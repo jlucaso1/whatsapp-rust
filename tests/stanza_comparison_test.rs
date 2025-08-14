@@ -25,9 +25,8 @@ mod tests {
         types::jid::Jid,
     };
     use waproto::whatsapp as wa;
-    use whatsapp_rust::store::{
-        Device, memory::MemoryStore, signal_adapter::SignalProtocolStoreAdapter,
-    };
+    use whatsapp_rust::store::sqlite_store::SqliteStore;
+    use whatsapp_rust::store::{Device, signal_adapter::SignalProtocolStoreAdapter};
 
     // --- Data Structures for Deserializing Captured JSON ---
 
@@ -405,7 +404,7 @@ mod tests {
     // --- Helper Functions ---
 
     async fn setup_device_from_state(state: CapturedState) -> Device {
-        let mut device = Device::new(Arc::new(MemoryStore::new()));
+        let mut device = Device::new(Arc::new(SqliteStore::new(":memory:").await.unwrap()));
 
         let identity_pub = PublicKey::from_djb_public_key_bytes(
             &base64::prelude::BASE64_STANDARD
@@ -459,7 +458,10 @@ mod tests {
             let record =
                 wacore::signal::state::record::new_pre_key_record(pre_key_data.id, &key_pair);
             // Now we can just .await the async method
-            device.store_prekey(pre_key_data.id, record).await.unwrap();
+            device
+                .store_prekey(pre_key_data.id, record, false)
+                .await
+                .unwrap();
         }
 
         device

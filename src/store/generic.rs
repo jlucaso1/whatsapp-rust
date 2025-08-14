@@ -46,6 +46,15 @@ where
         self.store.lock().await.values().cloned().collect()
     }
 
+    pub async fn all(&self) -> Vec<(K, V)> {
+        self.store
+            .lock()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     /// Retain only the elements specified by the predicate.
     pub async fn retain_where<F>(&self, mut f: F)
     where

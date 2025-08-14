@@ -64,7 +64,7 @@ async fn setup_test_client(
         wacore::types::message::MessageInfo,
     )>,
 ) {
-    let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
+    let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
     let client = Arc::new(Client::new(pm.clone()).await);
 
     // Enable test mode to route messages through our mock network
