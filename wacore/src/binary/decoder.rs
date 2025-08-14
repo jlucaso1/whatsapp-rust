@@ -249,13 +249,13 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_attributes(&mut self, size: usize) -> Result<AttrsRef<'a>> {
-        let mut attrs = std::collections::HashMap::new();
+        let mut attrs = AttrsRef::with_capacity(size);
         for _ in 0..size {
             let key = self
                 .read_value_as_string()?
                 .ok_or(BinaryError::NonStringKey)?;
             let value = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-            attrs.insert(key, value);
+            attrs.push((key, value));
         }
         Ok(attrs)
     }

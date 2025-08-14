@@ -2,6 +2,7 @@ use crate::binary::node::Node;
 use crate::client::Client;
 use crate::client::RecentMessageKey;
 use crate::error::decryption::DecryptionError;
+use crate::skdm_parser::SkdmFields;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -689,23 +690,83 @@ impl Client {
         sender_jid: &Jid,
         axolotl_bytes: &[u8],
     ) {
-        let skdm = match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
-            Ok(msg) => msg,
-            Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
-                Ok(go_msg) => {
-                    match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+        // Try fast zero-copy parsing first
+        let skdm = match SkdmFields::parse_zero_copy(axolotl_bytes) {
+            Ok(fields) => {
+                // Fast path: construct SKDM from parsed fields without protobuf allocations
+                if let (Some(id), Some(iteration), Some(chain_key), Some(signing_key)) = 
+                    (fields.id, fields.iteration, fields.chain_key, fields.signing_key) {
+                    match SignalPublicKey::from_djb_public_key_bytes(signing_key) {
                         Ok(pub_key) => {
                             match SenderKeyDistributionMessage::new(
                                 SENDERKEY_MESSAGE_CURRENT_VERSION,
-                                go_msg.id.unwrap(),
-                                go_msg.iteration.unwrap(),
-                                go_msg.chain_key.unwrap(),
+                                id,
+                                iteration,
+                                chain_key.to_vec(),
                                 pub_key,
                             ) {
                                 Ok(skdm) => skdm,
                                 Err(e) => {
                                     log::error!(
-                                        "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
+                                        "Failed to construct SKDM from fast-parsed fields for {}: {:?}",
+                                        sender_jid,
+                                        e
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to parse public key from fast-parsed SKDM for {}: {:?}",
+                                sender_jid,
+                                e
+                            );
+                            return;
+                        }
+                    }
+                } else {
+                    log::error!(
+                        "Incomplete SKDM fields from fast parser for {}: id={:?}, iteration={:?}, chain_key={}, signing_key={}",
+                        sender_jid,
+                        fields.id,
+                        fields.iteration,
+                        fields.chain_key.is_some(),
+                        fields.signing_key.is_some()
+                    );
+                    return;
+                }
+            }
+            Err(_) => {
+                // Fallback to original parsing logic for compatibility
+                match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
+                    Ok(msg) => msg,
+                    Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
+                        Ok(go_msg) => {
+                            match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+                                Ok(pub_key) => {
+                                    match SenderKeyDistributionMessage::new(
+                                        SENDERKEY_MESSAGE_CURRENT_VERSION,
+                                        go_msg.id.unwrap(),
+                                        go_msg.iteration.unwrap(),
+                                        go_msg.chain_key.unwrap(),
+                                        pub_key,
+                                    ) {
+                                        Ok(skdm) => skdm,
+                                        Err(e) => {
+                                            log::error!(
+                                                "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
+                                                sender_jid,
+                                                e,
+                                                e1
+                                            );
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
                                         sender_jid,
                                         e,
                                         e1
@@ -714,27 +775,18 @@ impl Client {
                                 }
                             }
                         }
-                        Err(e) => {
+                        Err(e2) => {
                             log::error!(
-                                "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
+                                "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
                                 sender_jid,
-                                e,
-                                e1
+                                e1,
+                                e2
                             );
                             return;
                         }
-                    }
+                    },
                 }
-                Err(e2) => {
-                    log::error!(
-                        "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
-                        sender_jid,
-                        e1,
-                        e2
-                    );
-                    return;
-                }
-            },
+            }
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
