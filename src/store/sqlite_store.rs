@@ -89,7 +89,10 @@ impl SqliteStore {
         let signed_pre_key_data = self.serialize_keypair(&device_data.signed_pre_key)?;
 
         // Serialize account if present
-        let account_data = device_data.account.as_ref().map(|account| account.encode_to_vec());
+        let account_data = device_data
+            .account
+            .as_ref()
+            .map(|account| account.encode_to_vec());
 
         // Serialize processed messages
         let processed_messages_data = if !device_data.processed_messages.is_empty() {
@@ -118,8 +121,7 @@ impl SqliteStore {
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
                 device::account.eq(account_data.as_deref()),
                 device::push_name.eq(&device_data.push_name),
-                device::processed_messages
-                    .eq(processed_messages_data.as_deref()),
+                device::processed_messages.eq(processed_messages_data.as_deref()),
             ))
             .on_conflict(device::id)
             .do_update()
@@ -135,8 +137,7 @@ impl SqliteStore {
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
                 device::account.eq(account_data.as_deref()),
                 device::push_name.eq(&device_data.push_name),
-                device::processed_messages
-                    .eq(processed_messages_data.as_deref()),
+                device::processed_messages.eq(processed_messages_data.as_deref()),
             ))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -295,12 +296,29 @@ impl IdentityStore for SqliteStore {
 
     async fn is_trusted_identity(
         &self,
-        _address: &str,
-        _key: &[u8; 32],
+        address: &str,
+        key: &[u8; 32],
         _direction: Direction,
     ) -> Result<bool> {
-        // For now, we trust all identities like in FileStore
-        Ok(true)
+        let mut conn = self.get_connection()?;
+
+        let result: Option<Vec<u8>> = identities::table
+            .select(identities::key)
+            .filter(identities::address.eq(address))
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        match result {
+            Some(stored_key) => {
+                // Trust the identity if it matches the stored key
+                Ok(stored_key.as_slice() == key)
+            }
+            None => {
+                // If no identity is stored, we trust it (first contact)
+                Ok(true)
+            }
+        }
     }
 
     async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
@@ -482,41 +500,95 @@ impl SenderKeyStoreHelper for SqliteStore {
 impl signal::store::SignedPreKeyStore for SqliteStore {
     async fn load_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
+        signed_prekey_id: u32,
     ) -> std::result::Result<Option<SignedPreKeyRecordStructure>, SignalStoreError> {
-        // For now, return None like FileStore
-        Ok(None)
+        let mut conn = self.get_connection()?;
+
+        let result: Option<Vec<u8>> = signed_prekeys::table
+            .select(signed_prekeys::record)
+            .filter(signed_prekeys::id.eq(signed_prekey_id as i32))
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if let Some(data) = result {
+            let record = SignedPreKeyRecordStructure::decode(data.as_slice())
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn load_signed_prekeys(
         &self,
     ) -> std::result::Result<Vec<SignedPreKeyRecordStructure>, SignalStoreError> {
-        // For now, return empty vector like FileStore
-        Ok(Vec::new())
+        let mut conn = self.get_connection()?;
+
+        let results: Vec<Vec<u8>> = signed_prekeys::table
+            .select(signed_prekeys::record)
+            .load(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut records = Vec::new();
+        for data in results {
+            let record = SignedPreKeyRecordStructure::decode(data.as_slice())
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            records.push(record);
+        }
+
+        Ok(records)
     }
 
     async fn store_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
-        _record: SignedPreKeyRecordStructure,
+        signed_prekey_id: u32,
+        record: SignedPreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
-        // For now, do nothing like FileStore
+        let mut conn = self.get_connection()?;
+        let data = record.encode_to_vec();
+
+        diesel::insert_into(signed_prekeys::table)
+            .values((
+                signed_prekeys::id.eq(signed_prekey_id as i32),
+                signed_prekeys::record.eq(&data),
+            ))
+            .on_conflict(signed_prekeys::id)
+            .do_update()
+            .set(signed_prekeys::record.eq(&data))
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
         Ok(())
     }
 
     async fn contains_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
+        signed_prekey_id: u32,
     ) -> std::result::Result<bool, SignalStoreError> {
-        // For now, return false like FileStore
-        Ok(false)
+        let mut conn = self.get_connection()?;
+
+        let count: i64 = signed_prekeys::table
+            .filter(signed_prekeys::id.eq(signed_prekey_id as i32))
+            .count()
+            .get_result(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(count > 0)
     }
 
     async fn remove_signed_prekey(
         &self,
-        _signed_prekey_id: u32,
+        signed_prekey_id: u32,
     ) -> std::result::Result<(), SignalStoreError> {
-        // For now, do nothing like FileStore
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(
+            signed_prekeys::table.filter(signed_prekeys::id.eq(signed_prekey_id as i32)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
         Ok(())
     }
 }
