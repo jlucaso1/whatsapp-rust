@@ -27,7 +27,7 @@ impl Client {
         info!(
             "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
-            node.attrs.get("name").unwrap_or("")
+            node.attrs.get("name").map_or("", |s| s.as_str())
         );
         self.send_node(node).await.map_err(|e| e.into())
     }
