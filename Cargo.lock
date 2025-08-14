@@ -2377,7 +2377,6 @@ dependencies = [
  "serde-big-array",
  "serde_json",
  "sha2",
- "tempfile",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
