@@ -22,12 +22,12 @@ impl Client {
         };
         let node = NodeBuilder::new("presence")
             .attr("type", presence_type)
-            .attr("name", device_snapshot.push_name.clone())
+            .attr("name", &device_snapshot.push_name)
             .build();
         info!(
             "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
-            node.attrs.get("name").unwrap_or(&"".to_string())
+            node.attrs.get("name").unwrap_or("")
         );
         self.send_node(node).await.map_err(|e| e.into())
     }
