@@ -1,17 +1,9 @@
-use std::collections::HashMap;
-use wacore::binary::{
-    marshal,
-    node::{Node, NodeContent},
-    unmarshal_ref,
-};
+use wacore::binary::builder::NodeBuilder;
+use wacore::binary::{marshal, unmarshal_ref};
 
 #[test]
 fn test_simple_node_roundtrip_with_ref() {
-    let original_node = Node {
-        tag: "test".to_string(),
-        attrs: HashMap::new(),
-        content: None,
-    };
+    let original_node = NodeBuilder::new("test").build();
 
     // marshal() adds a leading flag byte (0 for uncompressed)
     let marshaled_with_flag = marshal(&original_node).expect("Marshal failed");
@@ -26,15 +18,10 @@ fn test_simple_node_roundtrip_with_ref() {
 
 #[test]
 fn test_node_with_attributes_and_content_with_ref() {
-    let original_node = Node {
-        tag: "iq".to_string(),
-        attrs: [
-            ("key1".to_string(), "value1".to_string()),
-            ("type".to_string(), "get".to_string()),
-        ]
-        .into(),
-        content: Some(NodeContent::Bytes(b"hello world".to_vec())),
-    };
+    let original_node = NodeBuilder::new("iq")
+        .attrs([("key1", "value1"), ("type", "get")])
+        .bytes(b"hello world".to_vec())
+        .build();
 
     let marshaled_with_flag = marshal(&original_node).expect("Marshal failed");
     let unmarshaled_ref = unmarshal_ref(&marshaled_with_flag[1..]).expect("unmarshal_ref failed");
@@ -44,22 +31,12 @@ fn test_node_with_attributes_and_content_with_ref() {
 
 #[test]
 fn test_node_with_children_with_ref() {
-    let child1 = Node {
-        tag: "child1".to_string(),
-        attrs: HashMap::new(),
-        content: None,
-    };
-    let child2 = Node {
-        tag: "child2".to_string(),
-        attrs: [("id".to_string(), "123".to_string())].into(),
-        content: None,
-    };
+    let child1 = NodeBuilder::new("child1").build();
+    let child2 = NodeBuilder::new("child2").attr("id", "123").build();
 
-    let parent_node = Node {
-        tag: "parent".to_string(),
-        attrs: HashMap::new(),
-        content: Some(NodeContent::Nodes(vec![child1, child2])),
-    };
+    let parent_node = NodeBuilder::new("parent")
+        .children([child1, child2])
+        .build();
 
     let marshaled_with_flag = marshal(&parent_node).expect("Marshal failed");
     let unmarshaled_ref = unmarshal_ref(&marshaled_with_flag[1..]).expect("unmarshal_ref failed");
@@ -85,10 +62,7 @@ fn test_unmarshal_ref_known_good_data() {
 
 #[test]
 fn test_unmarshal_ref_leftover_data_error() {
-    let node_to_marshal = Node {
-        tag: "test".to_string(),
-        ..Default::default()
-    };
+    let node_to_marshal = NodeBuilder::new("test").build();
 
     // Construct the data that unmarshal_ref will receive.
     let marshaled_with_flag = marshal(&node_to_marshal).expect("Marshal failed");

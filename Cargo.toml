@@ -1,49 +1,54 @@
-[workspace]
-members = [".", "wacore", "waproto"]
-
-[workspace.dependencies]
-waproto = { path = "./waproto" }
-libsignal-protocol = { git = "https://github.com/jlucaso1/libsignal", branch = "working" }
-rand = "0.9"
-rand_core = "0.9"
 
 [package]
 name = "whatsapp-rust"
 version = "0.1.0"
 edition = "2024"
+[workspace]
+members = [".", "wacore", "waproto"]
+
+[workspace.dependencies]
+libsignal-protocol = { git = "https://github.com/jlucaso1/libsignal", branch = "working" }
+rand = "0.9"
+rand_core = "0.9"
+waproto = { path = "./waproto" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wacore = { path = "./wacore" }
-waproto = { workspace = true }
-libsignal-protocol = { workspace = true }
-serde = { version = "1.0.188", features = ["derive"] }
-bincode = { version = "2.0.1", features = ["serde"] }
-
-# Time handling
-chrono = { version = "0.4" }
-prost = { version = "0.14.1", default-features = false }
-bytes = { version = "1.5", default-features = false }
-
-# Cryptography
-rand = { workspace = true }
-rand_core = { workspace = true }
 aes-gcm = { version = "0.10.2", features = [
     "aes",
     "alloc",
 ], default-features = false }
+anyhow = { version = "1.0", default-features = false }
+async-trait = "0.1.88"
+bincode = { version = "2.0.1", features = ["serde"] }
+bytes = { version = "1.5", default-features = false }
 cbc = { version = "0.1.2", features = ["alloc"] }
-cipher = "0.4"
-sha2 = "0.10.6"
-hkdf = "0.12.3"
-thiserror = "2.0.12"
+
+# Time handling
+chrono = { version = "0.4" }
+clap = { version = "4.5", features = ["derive"] }
+dashmap = "6.1.0"
+env_logger = { version = "0.11", default-features = false }
+flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+futures-util = { version = "0.3.31", default-features = false }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-once_cell = { version = "1.19", default-features = false }
-futures-util = { version = "0.3.31", default-features = false }
-env_logger = { version = "0.11", default-features = false }
+hkdf = "0.12.3"
+libsignal-protocol = { workspace = true }
+log = "0.4.27"
+prost = { version = "0.14.1", default-features = false }
+
+# Cryptography
+rand = { workspace = true }
+rand_core = { workspace = true }
+scopeguard = "1.2"
+serde = { version = "1.0.188", features = ["derive"] }
+serde-big-array = "0.5.1"
+serde_json = "1.0"
+sha2 = "0.10.6"
+thiserror = "2.0.12"
 tokio = { version = "1.46.1", features = [
     "fs",
     "macros",
@@ -53,23 +58,14 @@ tokio = { version = "1.46.1", features = [
     "sync",
     "time",
 ] }
-log = "0.4.27"
 tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
-anyhow = { version = "1.0", default-features = false }
-urlencoding = "2.1"
-md5 = { version = "0.8.0", default-features = false }
-async-trait = "0.1.88"
-scopeguard = "1.2"
 ureq = "3.0.12"
-dashmap = "6.1.0"
-clap = { version = "4.5", features = ["derive"] }
-serde_json = "1.0"
-serde-big-array = "0.5.1"
-flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+urlencoding = "2.1"
+wacore = { path = "./wacore" }
+waproto = { workspace = true }
 
 [dev-dependencies]
 base64 = { version = "0.22.1", default-features = false }
-tempfile = "3.20"
 
 [profile.release]
 opt-level = "z"
@@ -79,3 +75,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 incremental = false
+
+[[test]]
+name = "group_e2e_self_test"
+path = "tests/group_e2e_self_test.rs"
+harness = true

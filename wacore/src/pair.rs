@@ -1,4 +1,5 @@
-use crate::binary::node::{Node, NodeContent};
+use crate::binary::builder::NodeBuilder;
+use crate::binary::node::Node;
 use crate::types::jid::{Jid, SERVER_JID};
 use base64::Engine as _;
 use base64::prelude::*;
@@ -64,18 +65,15 @@ impl PairUtils {
     pub fn build_ack_node(request_node: &Node) -> Option<Node> {
         if let (Some(to), Some(id)) = (request_node.attrs.get("from"), request_node.attrs.get("id"))
         {
-            Some(Node {
-                tag: "iq".into(),
-                attrs: [
-                    ("to".into(), to.clone()),
-                    ("id".into(), id.clone()),
-                    ("type".into(), "result".into()),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-                content: None,
-            })
+            Some(
+                NodeBuilder::new("iq")
+                    .attrs([
+                        ("to", to.clone()),
+                        ("id", id.clone()),
+                        ("type", "result".to_string()),
+                    ])
+                    .build(),
+            )
         } else {
             None
         }
@@ -83,25 +81,17 @@ impl PairUtils {
 
     /// Builds pair error node
     pub fn build_pair_error_node(req_id: &str, code: u16, text: &str) -> Node {
-        let error_node = Node {
-            tag: "error".into(),
-            attrs: [
-                ("code".into(), code.to_string()),
-                ("text".into(), text.to_string()),
-            ]
-            .into(),
-            content: None,
-        };
-        Node {
-            tag: "iq".into(),
-            attrs: [
-                ("to".into(), SERVER_JID.to_string()),
-                ("type".into(), "error".into()),
-                ("id".into(), req_id.to_string()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![error_node])),
-        }
+        let error_node = NodeBuilder::new("error")
+            .attrs([("code", code.to_string()), ("text", text.to_string())])
+            .build();
+        NodeBuilder::new("iq")
+            .attrs([
+                ("to", SERVER_JID.to_string()),
+                ("type", "error".to_string()),
+                ("id", req_id.to_string()),
+            ])
+            .children([error_node])
+            .build()
     }
 
     /// Performs the cryptographic operations for pairing
@@ -239,25 +229,20 @@ impl PairUtils {
         self_signed_identity_bytes: Vec<u8>,
         key_index: u32,
     ) -> Node {
-        let response_content = Node {
-            tag: "pair-device-sign".into(),
-            attrs: [].into(),
-            content: Some(NodeContent::Nodes(vec![Node {
-                tag: "device-identity".into(),
-                attrs: [("key-index".into(), key_index.to_string())].into(),
-                content: Some(NodeContent::Bytes(self_signed_identity_bytes)),
-            }])),
-        };
-        Node {
-            tag: "iq".into(),
-            attrs: [
-                ("to".into(), SERVER_JID.to_string()),
-                ("id".into(), req_id.to_string()),
-                ("type".into(), "result".into()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![response_content])),
-        }
+        let response_content = NodeBuilder::new("pair-device-sign")
+            .children([NodeBuilder::new("device-identity")
+                .attr("key-index", key_index.to_string())
+                .bytes(self_signed_identity_bytes)
+                .build()])
+            .build();
+        NodeBuilder::new("iq")
+            .attrs([
+                ("to", SERVER_JID.to_string()),
+                ("id", req_id.to_string()),
+                ("type", "result".to_string()),
+            ])
+            .children([response_content])
+            .build()
     }
 
     /// Parses QR code and extracts crypto keys for pairing
@@ -334,22 +319,19 @@ impl PairUtils {
         encrypted_message: Vec<u8>,
         req_id: String,
     ) -> Node {
-        let response_content = Node {
-            tag: "pair-device-sign".into(),
-            attrs: [("jid".into(), master_jid.to_string())].into(),
-            content: Some(NodeContent::Bytes(encrypted_message)),
-        };
-        Node {
-            tag: "iq".into(),
-            attrs: [
-                ("to".into(), SERVER_JID.to_string()),
-                ("type".into(), "set".into()),
-                ("id".into(), req_id),
-                ("xmlns".into(), "md".into()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![response_content])),
-        }
+        let response_content = NodeBuilder::new("pair-device-sign")
+            .attr("jid", master_jid.to_string())
+            .bytes(encrypted_message)
+            .build();
+        NodeBuilder::new("iq")
+            .attrs([
+                ("to", SERVER_JID.to_string()),
+                ("type", "set".to_string()),
+                ("id", req_id),
+                ("xmlns", "md".to_string()),
+            ])
+            .children([response_content])
+            .build()
     }
 
     /// Helper to concatenate multiple byte slices into a single Vec.

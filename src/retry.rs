@@ -1,4 +1,3 @@
-use crate::binary::node::{Node, NodeContent};
 use crate::client::{Client, RecentMessageKey};
 use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
@@ -9,13 +8,13 @@ use prost::Message;
 use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
-use wacore::client::MessageUtils;
+use wacore::binary::builder::NodeBuilder;
 use wacore::signal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
 
 impl Client {
-    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: wa::Message) {
+    pub async fn add_recent_message(&self, to: Jid, id: String, msg: Arc<wa::Message>) {
         const RECENT_MESSAGES_SIZE: usize = 256;
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
@@ -55,7 +54,7 @@ impl Client {
             });
         });
 
-        let original_msg = match self
+        let original_msg_arc = match self
             .take_recent_message(receipt.source.chat.clone(), message_id.clone())
             .await
         {
@@ -67,6 +66,7 @@ impl Client {
                 return Ok(());
             }
         };
+        let original_msg = (*original_msg_arc).clone();
 
         let participant_jid = receipt.source.sender.clone();
 
@@ -104,10 +104,7 @@ impl Client {
                 );
             }
         } else {
-            let signal_address = ProtocolAddress::new(
-                participant_jid.user.clone(),
-                u32::from(participant_jid.device).into(),
-            );
+            let signal_address = participant_jid.to_protocol_address();
 
             let device_store = self.persistence_manager.get_device_arc().await;
             if let Err(e) = device_store
@@ -128,45 +125,23 @@ impl Client {
                 message_id
             );
 
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-            let own_sending_jid = device_snapshot
-                .lid
-                .clone()
-                .or(device_snapshot.id.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Cannot create SKDM for retry: No local sending JID available")
-                })?;
-
-            let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut device_guard = device_store_arc.lock().await;
-
-            let (skdm_bytes_padded, _sender_key_name) =
-                wacore::send::create_sender_key_distribution_message_for_group(
-                    &mut *device_guard,
-                    &receipt.source.chat,
-                    &own_sending_jid,
-                )
-                .await?;
-
-            let skdm_bytes = MessageUtils::unpad_message(&skdm_bytes_padded, 2).unwrap();
-            let skdm_wrapper = wa::Message::decode(skdm_bytes)?;
-
-            let mut resend_msg = original_msg;
-            if let Some(skdm) = skdm_wrapper.sender_key_distribution_message {
-                resend_msg.sender_key_distribution_message = Some(skdm);
-                info!("Attached new SKDM to message {} for retry.", message_id);
-            } else {
-                warn!(
-                    "Failed to extract SKDM from wrapper for retry of message {}.",
-                    message_id
-                );
-            }
-
-            self.send_message_impl(receipt.source.chat.clone(), resend_msg, message_id, false)
-                .await?;
+            self.send_message_impl(
+                receipt.source.chat.clone(),
+                original_msg,
+                message_id,
+                false,
+                true,
+            )
+            .await?;
         } else {
-            self.send_message_impl(receipt.source.chat.clone(), original_msg, message_id, false)
-                .await?;
+            self.send_message_impl(
+                receipt.source.chat.clone(),
+                original_msg,
+                message_id,
+                false,
+                true,
+            )
+            .await?;
         }
 
         Ok(())
@@ -222,78 +197,39 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("Missing device account info for retry receipt"))?
             .encode_to_vec();
 
-        let retry_node = Node {
-            tag: "retry".to_string(),
-            attrs: [
-                ("v".to_string(), "1".to_string()),
-                ("id".to_string(), info.id.clone()),
-                ("t".to_string(), info.timestamp.timestamp().to_string()),
-                ("count".to_string(), "1".to_string()),
-            ]
-            .into(),
-            content: None,
-        };
+        let retry_node = NodeBuilder::new("retry")
+            .attr("v", "1")
+            .attr("id", info.id.clone())
+            .attr("t", info.timestamp.timestamp().to_string())
+            .attr("count", "1")
+            .build();
 
         let type_bytes = "5".to_string().into_bytes();
 
-        let keys_node = Node {
-            tag: "keys".to_string(),
-            attrs: Default::default(),
-            content: Some(NodeContent::Nodes(vec![
-                Node {
-                    tag: "type".to_string(),
-                    content: Some(NodeContent::Bytes(type_bytes)),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "identity".to_string(),
-                    content: Some(NodeContent::Bytes(identity_key_bytes)),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "key".to_string(),
-                    content: Some(NodeContent::Nodes(vec![
-                        Node {
-                            tag: "id".to_string(),
-                            content: Some(NodeContent::Bytes(prekey_id_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "value".to_string(),
-                            content: Some(NodeContent::Bytes(prekey_value_bytes)),
-                            ..Default::default()
-                        },
-                    ])),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "skey".to_string(),
-                    content: Some(NodeContent::Nodes(vec![
-                        Node {
-                            tag: "id".to_string(),
-                            content: Some(NodeContent::Bytes(skey_id_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "value".to_string(),
-                            content: Some(NodeContent::Bytes(skey_value_bytes)),
-                            ..Default::default()
-                        },
-                        Node {
-                            tag: "signature".to_string(),
-                            content: Some(NodeContent::Bytes(skey_sig_bytes)),
-                            ..Default::default()
-                        },
-                    ])),
-                    ..Default::default()
-                },
-                Node {
-                    tag: "device-identity".to_string(),
-                    content: Some(NodeContent::Bytes(device_identity_bytes)),
-                    ..Default::default()
-                },
-            ])),
-        };
+        let keys_node = NodeBuilder::new("keys")
+            .children([
+                NodeBuilder::new("type").bytes(type_bytes).build(),
+                NodeBuilder::new("identity")
+                    .bytes(identity_key_bytes)
+                    .build(),
+                NodeBuilder::new("key")
+                    .children([
+                        NodeBuilder::new("id").bytes(prekey_id_bytes).build(),
+                        NodeBuilder::new("value").bytes(prekey_value_bytes).build(),
+                    ])
+                    .build(),
+                NodeBuilder::new("skey")
+                    .children([
+                        NodeBuilder::new("id").bytes(skey_id_bytes).build(),
+                        NodeBuilder::new("value").bytes(skey_value_bytes).build(),
+                        NodeBuilder::new("signature").bytes(skey_sig_bytes).build(),
+                    ])
+                    .build(),
+                NodeBuilder::new("device-identity")
+                    .bytes(device_identity_bytes)
+                    .build(),
+            ])
+            .build();
 
         let receipt_to = if info.source.is_group {
             info.source.chat.to_string()
@@ -301,27 +237,55 @@ impl Client {
             info.source.sender.to_string()
         };
 
-        let receipt_node = Node {
-            tag: "receipt".to_string(),
-            attrs: [
-                ("to".to_string(), receipt_to),
-                ("id".to_string(), info.id.clone()),
-                ("type".to_string(), "retry".to_string()),
-                ("participant".to_string(), info.source.sender.to_string()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![
-                retry_node,
-                Node {
-                    tag: "registration".to_string(),
-                    content: Some(NodeContent::Bytes(registration_id_bytes)),
-                    ..Default::default()
-                },
-                keys_node,
-            ])),
-        };
+        let registration_node = NodeBuilder::new("registration")
+            .bytes(registration_id_bytes)
+            .build();
+
+        let receipt_node = NodeBuilder::new("receipt")
+            .attr("to", receipt_to)
+            .attr("id", info.id.clone())
+            .attr("type", "retry")
+            .attr("participant", info.source.sender.to_string())
+            .children([retry_node, registration_node, keys_node])
+            .build();
 
         self.send_node(receipt_node).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::persistence_manager::PersistenceManager;
+
+    #[tokio::test]
+    async fn recent_message_cache_insert_and_take() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let pm = Arc::new(PersistenceManager::new_in_memory().await.unwrap());
+        let client = Arc::new(Client::new(pm.clone()).await);
+
+        let chat: Jid = "120363021033254949@g.us".parse().unwrap();
+        let msg_id = "ABC123".to_string();
+        let msg = wa::Message {
+            conversation: Some("hello".into()),
+            ..Default::default()
+        };
+
+        client
+            .add_recent_message(chat.clone(), msg_id.clone(), Arc::new(msg.clone()))
+            .await;
+
+        // First take should return and remove it from cache
+        let taken = client
+            .take_recent_message(chat.clone(), msg_id.clone())
+            .await;
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
+
+        // Second take should return None
+        let taken_again = client.take_recent_message(chat, msg_id).await;
+        assert!(taken_again.is_none());
     }
 }

@@ -1,5 +1,6 @@
 mod context_impl;
 
+use crate::binary::builder::NodeBuilder;
 use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
@@ -73,7 +74,7 @@ pub struct Client {
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
-    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
+    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, Arc<wa::Message>>>>,
     pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
@@ -285,11 +286,11 @@ impl Client {
         cache.contains(key)
     }
 
-    pub(crate) async fn take_recent_message(
+    pub async fn take_recent_message(
         &self,
         to: crate::types::jid::Jid,
         id: String,
-    ) -> Option<wa::Message> {
+    ) -> Option<Arc<wa::Message>> {
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
         if let Some(msg) = map_guard.remove(&key) {
@@ -357,10 +358,10 @@ impl Client {
                 let name = collection_node.attrs().string("name");
                 debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
             } else {
-                debug!(target: "Client/Recv", "{node}");
+                debug!(target: "Client/Recv", "{node:?}");
             }
         } else {
-            debug!(target: "Client/Recv", "{node}");
+            debug!(target: "Client/Recv", "{node:?}");
         }
 
         if node.tag == "xmlstreamend" {
@@ -389,6 +390,7 @@ impl Client {
             "message" => {
                 let client_clone = self.clone();
                 let node_clone = node.clone();
+                debug!(target: "Client/Recv", "Received message raw: {node_clone:?}");
 
                 task::spawn_local(async move {
                     let info = match client_clone.parse_message_info(&node_clone).await {
@@ -413,7 +415,9 @@ impl Client {
                     client_clone.handle_encrypted_message(node_clone).await;
                 });
             }
-            "ack" => {}
+            "ack" => {
+                info!(target: "Client/Recv", "Received ACK node: {node:?}");
+            }
             _ => {
                 warn!(target: "Client", "Received unknown top-level node: {node}");
             }
@@ -425,7 +429,6 @@ impl Client {
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
-        use crate::binary::node::Node;
         use crate::request::{InfoQuery, InfoQueryType};
         use crate::types::jid::SERVER_JID;
 
@@ -437,10 +440,9 @@ impl Client {
             to: SERVER_JID.parse().unwrap(),
             target: None,
             id: None,
-            content: Some(crate::binary::node::NodeContent::Nodes(vec![Node {
-                tag: tag.to_string(),
-                ..Default::default()
-            }])),
+            content: Some(crate::binary::node::NodeContent::Nodes(vec![
+                NodeBuilder::new(tag).build(),
+            ])),
             timeout: None,
         };
 
@@ -634,18 +636,13 @@ impl Client {
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
             let id = parser.string("id");
-            let pong = Node {
-                tag: "iq".into(),
-                attrs: [
-                    ("to".into(), from_jid.to_string()),
-                    ("id".into(), id),
-                    ("type".into(), "result".into()),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-                content: None,
-            };
+            let pong = NodeBuilder::new("iq")
+                .attrs([
+                    ("to", from_jid.to_string()),
+                    ("id", id),
+                    ("type", "result".to_string()),
+                ])
+                .build();
             if let Err(e) = self.send_node(pong).await {
                 warn!("Failed to send pong: {e:?}");
             }
@@ -687,7 +684,7 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "--> {node}");
+        debug!(target: "Client/Send", "--> {node:?}");
 
         let payload = crate::binary::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
@@ -724,7 +721,7 @@ impl Client {
 
     pub async fn is_ready_for_presence(&self) -> bool {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
+        device_snapshot.is_ready_for_presence()
     }
 
     pub async fn get_device_debug_info(&self) -> String {
@@ -793,19 +790,13 @@ impl Client {
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         if let Some(own_jid) = &device_snapshot.id {
-            let node = Node {
-                tag: "receipt".to_string(),
-                attrs: [
-                    ("id".to_string(), id),
-                    (
-                        "type".to_string(),
-                        format!("{:?}", receipt_type).to_lowercase(),
-                    ),
-                    ("to".to_string(), own_jid.to_non_ad().to_string()),
-                ]
-                .into(),
-                content: None,
-            };
+            let node = NodeBuilder::new("receipt")
+                .attrs([
+                    ("id", id),
+                    ("type", format!("{:?}", receipt_type).to_lowercase()),
+                    ("to", own_jid.to_non_ad().to_string()),
+                ])
+                .build();
 
             if let Err(e) = self.send_node(node).await {
                 warn!(

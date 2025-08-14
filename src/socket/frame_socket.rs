@@ -5,7 +5,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -94,7 +94,7 @@ impl FrameSocket {
         whole_frame.extend_from_slice(&u32::to_be_bytes(data_len as u32)[1..]);
         whole_frame.extend_from_slice(data);
 
-        trace!(
+        debug!(
             "--> Sending frame: payload {} bytes, total {} bytes",
             data_len,
             whole_frame.len()
@@ -116,7 +116,7 @@ impl FrameSocket {
             match stream.next().await {
                 Some(Ok(msg)) => {
                     if let Message::Binary(data) = msg {
-                        trace!("<-- Received WebSocket message: {} bytes", data.len());
+                        debug!("<-- Received WebSocket message: {} bytes", data.len());
                         buffer.extend_from_slice(&data);
 
                         while buffer.len() >= FRAME_LENGTH_SIZE {

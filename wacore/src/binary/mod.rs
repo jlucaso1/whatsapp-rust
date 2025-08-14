@@ -2,6 +2,7 @@ use crate::binary::decoder::Decoder;
 use crate::binary::encoder::Encoder;
 
 pub mod attrs;
+pub mod builder;
 pub mod consts;
 mod decoder;
 mod encoder;

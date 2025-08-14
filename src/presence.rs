@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::types::presence::Presence;
 use log::{debug, info, warn};
+use wacore::binary::builder::NodeBuilder;
 
 impl Client {
     pub async fn send_presence(&self, presence: Presence) -> Result<(), anyhow::Error> {
@@ -19,15 +20,10 @@ impl Client {
             Presence::Available => "available",
             Presence::Unavailable => "unavailable",
         };
-        let node = crate::binary::node::Node {
-            tag: "presence".to_string(),
-            attrs: [
-                ("type".to_string(), presence_type.to_string()),
-                ("name".to_string(), device_snapshot.push_name.clone()),
-            ]
-            .into(),
-            content: None,
-        };
+        let node = NodeBuilder::new("presence")
+            .attr("type", presence_type)
+            .attr("name", device_snapshot.push_name.clone())
+            .build();
         info!(
             "📡 Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,

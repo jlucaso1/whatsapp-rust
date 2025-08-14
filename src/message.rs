@@ -12,10 +12,13 @@ use libsignal_protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
     message_decrypt,
 };
+use libsignal_protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
+use log::debug;
 use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::types::jid::Jid;
 use wacore::types::jid::JidExt;
 use waproto::whatsapp::{self as wa};
@@ -89,14 +92,12 @@ impl Client {
         let mut session_enc_nodes = Vec::new();
         let mut group_content_enc_nodes = Vec::new();
 
-        for enc_node in &all_enc_nodes {
+        for &enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
             match enc_type.as_str() {
                 "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
                 "skmsg" => group_content_enc_nodes.push(enc_node),
-                _ => {
-                    log::warn!("Unknown enc type: {enc_type}");
-                }
+                _ => log::warn!("Unknown enc type: {enc_type}"),
             }
         }
 
@@ -104,22 +105,42 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
-        for enc_node in session_enc_nodes {
-            let _ = self
+        if session_enc_nodes.len() > 1 {
+            if let Err(e) = self
                 .clone()
-                .process_enc_node(enc_node, &info, &message_key)
-                .await;
+                .process_session_enc_batch(&session_enc_nodes, &info, &message_key)
+                .await
+            {
+                log::warn!("Batch session decrypt encountered error (continuing): {e:?}");
+            }
+        } else {
+            for enc_node in session_enc_nodes {
+                let _ = self
+                    .clone()
+                    .process_enc_node(enc_node, &info, &message_key)
+                    .await;
+            }
         }
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",
             group_content_enc_nodes.len()
         );
-        for enc_node in group_content_enc_nodes {
-            let _ = self
+        if group_content_enc_nodes.len() > 1 {
+            if let Err(e) = self
                 .clone()
-                .process_enc_node(enc_node, &info, &message_key)
-                .await;
+                .process_group_enc_batch(&group_content_enc_nodes, &info, &message_key)
+                .await
+            {
+                log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+            }
+        } else {
+            for enc_node in group_content_enc_nodes {
+                let _ = self
+                    .clone()
+                    .process_enc_node(enc_node, &info, &message_key)
+                    .await;
+            }
         }
     }
 
@@ -170,6 +191,9 @@ impl Client {
                 if enc_type == "skmsg" {
                     match wa::Message::decode(plaintext.as_slice()) {
                         Ok(group_msg) => {
+                            debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
+                            debug!(target: "Client/Recv", "Message info: {info:?}");
+
                             self.core
                                 .event_bus
                                 .dispatch(&Event::Message(Box::new(group_msg), info.clone()));
@@ -197,7 +221,6 @@ impl Client {
                                 self.handle_app_state_sync_key_share(keys).await;
                             }
 
-                            // Handle HistorySyncNotification
                             if let Some(protocol_msg) = &original_msg.protocol_message
                                 && let Some(history_sync) = &protocol_msg.history_sync_notification
                             {
@@ -267,13 +290,13 @@ impl Client {
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: sender.clone(),
-                is_from_me: sender.user == own_jid.user,
+                is_from_me: sender.is_same_user_as(&own_jid),
                 is_group: true,
                 ..Default::default()
             }
-        } else if from.user == own_jid.user {
+        } else if from.is_same_user_as(&own_jid) {
             crate::types::message::MessageSource {
-                chat: attrs.jid("recipient").to_non_ad(),
+                chat: attrs.non_ad_jid("recipient"),
                 sender: from.clone(),
                 is_from_me: true,
                 ..Default::default()
@@ -353,14 +376,247 @@ impl Client {
 }
 
 impl Client {
+    async fn process_session_enc_batch(
+        self: Arc<Self>,
+        enc_nodes: &[&crate::binary::node::Node],
+        info: &MessageInfo,
+        message_key: &RecentMessageKey,
+    ) -> Result<(), DecryptionError> {
+        use libsignal_protocol::CiphertextMessage;
+        if enc_nodes.is_empty() {
+            return Ok(());
+        }
+
+        let mut adapter =
+            SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
+        let rng = rand::rngs::OsRng;
+
+        for enc_node in enc_nodes {
+            let ciphertext = match &enc_node.content {
+                Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+                _ => {
+                    log::warn!("Enc node has no byte content (batch session)");
+                    continue;
+                }
+            };
+            let enc_type = enc_node.attrs().string("type");
+            let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+
+            let parsed_message = if enc_type == "pkmsg" {
+                match PreKeySignalMessage::try_from(ciphertext.as_slice()) {
+                    Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
+                    Err(e) => {
+                        log::error!("Failed to parse PreKeySignalMessage: {e:?}");
+                        continue;
+                    }
+                }
+            } else {
+                match SignalMessage::try_from(ciphertext.as_slice()) {
+                    Ok(m) => CiphertextMessage::SignalMessage(m),
+                    Err(e) => {
+                        log::error!("Failed to parse SignalMessage: {e:?}");
+                        continue;
+                    }
+                }
+            };
+
+            let signal_address = info.source.sender.to_protocol_address();
+
+            let decrypt_res = message_decrypt(
+                &parsed_message,
+                &signal_address,
+                &mut adapter.session_store,
+                &mut adapter.identity_store,
+                &mut adapter.pre_key_store,
+                &adapter.signed_pre_key_store,
+                &mut adapter.kyber_pre_key_store,
+                &mut rng.unwrap_err(),
+                UsePQRatchet::No,
+            )
+            .await;
+
+            match decrypt_res {
+                Ok(padded_plaintext) => {
+                    if let Err(e) = self
+                        .clone()
+                        .handle_decrypted_plaintext(
+                            &enc_type,
+                            &padded_plaintext,
+                            padding_version,
+                            info,
+                            message_key,
+                        )
+                        .await
+                    {
+                        log::warn!("Failed processing plaintext (batch session): {e:?}");
+                    }
+                }
+                Err(e) => {
+                    log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                    self.mark_message_as_processed(message_key.clone()).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_group_enc_batch(
+        self: Arc<Self>,
+        enc_nodes: &[&crate::binary::node::Node],
+        info: &MessageInfo,
+        message_key: &RecentMessageKey,
+    ) -> Result<(), DecryptionError> {
+        if enc_nodes.is_empty() {
+            return Ok(());
+        }
+        let device_arc = self.persistence_manager.get_device_arc().await;
+        let mut device_guard = device_arc.lock().await;
+
+        for enc_node in enc_nodes {
+            let ciphertext = match &enc_node.content {
+                Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+                _ => {
+                    log::warn!("Enc node has no byte content (batch group)");
+                    continue;
+                }
+            };
+            let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+
+            let sender_address = info.source.sender.to_protocol_address();
+            let sender_key_name =
+                SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+            let group_sender_address = sender_key_name.to_protocol_address();
+
+            match group_decrypt(
+                ciphertext.as_slice(),
+                &mut *device_guard,
+                &group_sender_address,
+            )
+            .await
+            {
+                Ok(padded_plaintext) => {
+                    if let Err(e) = self
+                        .clone()
+                        .handle_decrypted_plaintext(
+                            "skmsg",
+                            &padded_plaintext,
+                            padding_version,
+                            info,
+                            message_key,
+                        )
+                        .await
+                    {
+                        log::warn!("Failed processing group plaintext (batch): {e:?}");
+                    }
+                }
+                Err(SignalProtocolError::NoSenderKeyState) => {
+                    warn!(
+                        "No sender key state for batched group message from {}, sending retry receipt.",
+                        info.source.sender
+                    );
+                    let client_clone = self.clone();
+                    let info_clone = info.clone();
+                    tokio::task::spawn_local(async move {
+                        if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
+                            log::error!("Failed to send retry receipt (batch): {:?}", e);
+                        }
+                    });
+                    self.mark_message_as_processed(message_key.clone()).await;
+                }
+                Err(e) => {
+                    log::error!(
+                        "Group batch decrypt failed for sender {}: {:?}",
+                        group_sender_address,
+                        e
+                    );
+                    self.mark_message_as_processed(message_key.clone()).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_decrypted_plaintext(
+        self: Arc<Self>,
+        enc_type: &str,
+        padded_plaintext: &[u8],
+        padding_version: u8,
+        info: &MessageInfo,
+        message_key: &RecentMessageKey,
+    ) -> Result<(), anyhow::Error> {
+        let plaintext = unpad_message_ref(padded_plaintext, padding_version)?.to_vec();
+        log::info!(
+            "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            info.source.sender,
+            plaintext.len(),
+            enc_type
+        );
+
+        if enc_type == "skmsg" {
+            match wa::Message::decode(plaintext.as_slice()) {
+                Ok(group_msg) => {
+                    debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
+                    debug!(target: "Client/Recv", "Message info: {info:?}");
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::Message(Box::new(group_msg), info.clone()));
+                }
+                Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
+            }
+        } else {
+            match wa::Message::decode(plaintext.as_slice()) {
+                Ok(original_msg) => {
+                    if let Some(skdm) = &original_msg.sender_key_distribution_message
+                        && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
+                    {
+                        self.handle_sender_key_distribution_message(
+                            &info.source.chat,
+                            &info.source.sender,
+                            axolotl_bytes,
+                        )
+                        .await;
+                    }
+
+                    if let Some(protocol_msg) = &original_msg.protocol_message
+                        && let Some(keys) = &protocol_msg.app_state_sync_key_share
+                    {
+                        self.handle_app_state_sync_key_share(keys).await;
+                    }
+
+                    if let Some(protocol_msg) = &original_msg.protocol_message
+                        && let Some(history_sync) = &protocol_msg.history_sync_notification
+                    {
+                        log::info!(
+                            "Received HistorySyncNotification, dispatching for download and processing."
+                        );
+                        let client_clone = self.clone();
+                        let history_sync_clone = history_sync.clone();
+                        let msg_id = info.id.clone();
+                        tokio::task::spawn_local(async move {
+                            client_clone
+                                .handle_history_sync(msg_id, history_sync_clone)
+                                .await;
+                        });
+                    }
+
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::Message(Box::new(original_msg), info.clone()));
+                }
+                Err(e) => log::warn!("Failed to unmarshal decrypted pkmsg/msg plaintext: {e}"),
+            }
+        }
+        self.mark_message_as_processed(message_key.clone()).await;
+        Ok(())
+    }
+
     pub async fn decrypt_dm_ciphertext(
         &self,
         info: &MessageInfo,
         enc_type: &str,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        let device_id = (info.source.sender.device as u32).into();
-        let signal_address = ProtocolAddress::new(info.source.sender.user.clone(), device_id);
+        let signal_address = info.source.sender.to_protocol_address();
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
@@ -388,7 +644,7 @@ impl Client {
             &adapter.signed_pre_key_store,
             &mut adapter.kyber_pre_key_store,
             &mut rng.unwrap_err(),
-            UsePQRatchet::Yes,
+            UsePQRatchet::No,
         )
         .await
         .map_err(|e| {
@@ -401,15 +657,12 @@ impl Client {
         info: &MessageInfo,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        let sender_address = ProtocolAddress::new(
-            info.source.sender.user.clone(),
-            (info.source.sender.device as u32).into(),
-        );
+        let sender_address = info.source.sender.to_protocol_address();
 
-        let group_sender_address = ProtocolAddress::new(
-            format!("{}\n{}", info.source.chat, sender_address),
-            0.into(),
-        );
+        let sender_key_name =
+            SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+
+        let group_sender_address = sender_key_name.to_protocol_address();
 
         let device_arc = self.persistence_manager.get_device_arc().await;
         let mut device_guard = device_arc.lock().await;
@@ -438,14 +691,50 @@ impl Client {
     ) {
         let skdm = match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
             Ok(msg) => msg,
-            Err(e) => {
-                log::error!(
-                    "Failed to parse SenderKeyDistributionMessage from {}: {:?}",
-                    sender_jid,
-                    e
-                );
-                return;
-            }
+            Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
+                Ok(go_msg) => {
+                    match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+                        Ok(pub_key) => {
+                            match SenderKeyDistributionMessage::new(
+                                SENDERKEY_MESSAGE_CURRENT_VERSION,
+                                go_msg.id.unwrap(),
+                                go_msg.iteration.unwrap(),
+                                go_msg.chain_key.unwrap(),
+                                pub_key,
+                            ) {
+                                Ok(skdm) => skdm,
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
+                                        sender_jid,
+                                        e,
+                                        e1
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
+                                sender_jid,
+                                e,
+                                e1
+                            );
+                            return;
+                        }
+                    }
+                }
+                Err(e2) => {
+                    log::error!(
+                        "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
+                        sender_jid,
+                        e1,
+                        e2
+                    );
+                    return;
+                }
+            },
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
