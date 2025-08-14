@@ -10,7 +10,9 @@ pub(crate) struct Encoder {
 impl Encoder {
     pub(crate) fn new() -> Self {
         // Start with a reasonable capacity to reduce allocations during encoding
-        Self { writer: BytesMut::with_capacity(1024) }
+        Self {
+            writer: BytesMut::with_capacity(1024),
+        }
     }
 
     pub(crate) fn into_data(self) -> Vec<u8> {
