@@ -75,7 +75,7 @@ impl Client {
             };
 
             let force_skdm = {
-                let mut device_guard = device_store_arc.lock().await;
+                let mut device_guard = device_store_arc.write().await;
                 let sender_address = own_sending_jid.to_protocol_address();
                 let sender_key_name =
                     SenderKeyName::new(to.to_string(), sender_address.to_string());

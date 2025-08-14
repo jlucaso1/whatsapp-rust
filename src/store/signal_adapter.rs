@@ -8,7 +8,7 @@ use libsignal_protocol::{
     Timestamp,
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use waproto::whatsapp as wa;
 
 use wacore::{
@@ -21,7 +21,7 @@ use wacore::{
 
 #[derive(Clone)]
 struct SharedDevice {
-    device: Arc<Mutex<Device>>,
+    device: Arc<RwLock<Device>>,
 }
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ pub struct SignalProtocolStoreAdapter {
 }
 
 impl SignalProtocolStoreAdapter {
-    pub fn new(device: Arc<Mutex<Device>>) -> Self {
+    pub fn new(device: Arc<RwLock<Device>>) -> Self {
         let shared = SharedDevice { device };
         Self {
             session_store: SessionAdapter(shared.clone()),
@@ -69,7 +69,7 @@ impl SessionStore for SessionAdapter {
         &self,
         address: &ProtocolAddress,
     ) -> Result<Option<SessionRecord>, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         match device
             .backend
             .get_session(&address.to_string())
@@ -86,7 +86,7 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         let record_bytes = record.serialize()?;
         device
             .backend
@@ -99,14 +99,14 @@ impl SessionStore for SessionAdapter {
 #[async_trait(?Send)]
 impl IdentityKeyStore for IdentityAdapter {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         IdentityKeyStore::get_identity_key_pair(&*device)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("get_identity_key_pair", e.to_string()))
     }
 
     async fn get_local_registration_id(&self) -> Result<u32, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         IdentityKeyStore::get_local_registration_id(&*device)
             .await
             .map_err(|e| {
@@ -121,7 +121,7 @@ impl IdentityKeyStore for IdentityAdapter {
     ) -> Result<IdentityChange, SignalProtocolError> {
         let existing_identity = self.get_identity(address).await?;
 
-        let mut device = self.0.device.lock().await;
+        let mut device = self.0.device.write().await;
         IdentityKeyStore::save_identity(&mut *device, address, identity)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))?;
@@ -139,7 +139,7 @@ impl IdentityKeyStore for IdentityAdapter {
         identity: &IdentityKey,
         direction: Direction,
     ) -> Result<bool, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         IdentityKeyStore::is_trusted_identity(&*device, address, identity, direction)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("is_trusted_identity", e.to_string()))
@@ -149,7 +149,7 @@ impl IdentityKeyStore for IdentityAdapter {
         &self,
         address: &ProtocolAddress,
     ) -> Result<Option<IdentityKey>, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         IdentityKeyStore::get_identity(&*device, address)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))
@@ -159,7 +159,7 @@ impl IdentityKeyStore for IdentityAdapter {
 #[async_trait(?Send)]
 impl PreKeyStore for PreKeyAdapter {
     async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         WacorePreKeyStore::load_prekey(&*device, prekey_id.into())
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
@@ -171,14 +171,14 @@ impl PreKeyStore for PreKeyAdapter {
         prekey_id: PreKeyId,
         record: &PreKeyRecord,
     ) -> Result<(), SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         let structure = prekey_record_to_structure(record)?;
         WacorePreKeyStore::store_prekey(&*device, prekey_id.into(), structure)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
     }
     async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> Result<(), SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         WacorePreKeyStore::remove_prekey(&*device, prekey_id.into())
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
@@ -191,7 +191,7 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
         &self,
         signed_prekey_id: SignedPreKeyId,
     ) -> Result<SignedPreKeyRecord, SignalProtocolError> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         WacoreSignedPreKeyStore::load_signed_prekey(&*device, signed_prekey_id.into())
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
@@ -246,7 +246,7 @@ impl libsignal_protocol::SenderKeyStore for SenderKeyAdapter {
         sender: &libsignal_protocol::ProtocolAddress,
         record: &libsignal_protocol::SenderKeyRecord,
     ) -> libsignal_protocol::error::Result<()> {
-        let mut device = self.0.device.lock().await;
+        let mut device = self.0.device.write().await;
         libsignal_protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record).await
     }
 
@@ -254,7 +254,7 @@ impl libsignal_protocol::SenderKeyStore for SenderKeyAdapter {
         &mut self,
         sender: &libsignal_protocol::ProtocolAddress,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
-        let mut device = self.0.device.lock().await;
+        let mut device = self.0.device.write().await;
         libsignal_protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
     }
 }
@@ -267,7 +267,7 @@ impl GroupSenderKeyStore for SenderKeyAdapter {
         sender: &ProtocolAddress,
         record: &SenderKeyRecord,
     ) -> anyhow::Result<()> {
-        let mut device = self.0.device.lock().await;
+        let mut device = self.0.device.write().await;
         device.store_sender_key(group_id, sender, record).await
     }
 
@@ -276,7 +276,7 @@ impl GroupSenderKeyStore for SenderKeyAdapter {
         group_id: &Jid,
         sender: &ProtocolAddress,
     ) -> anyhow::Result<Option<SenderKeyRecord>> {
-        let device = self.0.device.lock().await;
+        let device = self.0.device.read().await;
         device.load_sender_key(group_id, sender).await
     }
 }
