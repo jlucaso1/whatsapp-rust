@@ -39,10 +39,10 @@ fn test_packed_string_optimization() {
     assert_eq!(node, unmarshaled.to_owned());
 
     // Verify specific attribute values are preserved
-    assert_eq!(unmarshaled.attrs.get("nibble1").unwrap().as_ref(), "123");
-    assert_eq!(unmarshaled.attrs.get("nibble2").unwrap().as_ref(), "1234");
-    assert_eq!(unmarshaled.attrs.get("hex1").unwrap().as_ref(), "ABC");
-    assert_eq!(unmarshaled.attrs.get("hex2").unwrap().as_ref(), "ABCD");
+    assert_eq!(unmarshaled.get_attr("nibble1").unwrap().as_ref(), "123");
+    assert_eq!(unmarshaled.get_attr("nibble2").unwrap().as_ref(), "1234");
+    assert_eq!(unmarshaled.get_attr("hex1").unwrap().as_ref(), "ABC");
+    assert_eq!(unmarshaled.get_attr("hex2").unwrap().as_ref(), "ABCD");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn test_zero_copy_parsing_large_data() {
         assert_eq!(children.len(), 10);
         for (i, child) in children.iter().enumerate() {
             assert_eq!(child.tag.as_ref(), format!("child_{}", i));
-            assert_eq!(child.attrs.get("id").unwrap().as_ref(), i.to_string());
+            assert_eq!(child.get_attr("id").unwrap().as_ref(), i.to_string());
         }
     } else {
         panic!("Parent should have children");
@@ -93,8 +93,11 @@ fn test_roundtrip_preserves_zero_copy_semantics() {
     let mut current_data = marshal(&original).expect("Initial marshal failed");
 
     for _ in 0..3 {
-        let unmarshaled = unmarshal_ref(&current_data[1..]).expect("Unmarshal failed");
-        assert_eq!(original, unmarshaled.to_owned());
-        current_data = marshal(&unmarshaled.to_owned()).expect("Re-marshal failed");
+        let new_data = {
+            let unmarshaled = unmarshal_ref(&current_data[1..]).expect("Unmarshal failed");
+            assert_eq!(original, unmarshaled.to_owned());
+            marshal(&unmarshaled.to_owned()).expect("Re-marshal failed")
+        };
+        current_data = new_data;
     }
 }

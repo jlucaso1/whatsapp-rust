@@ -383,17 +383,17 @@ impl Client {
         }
 
         match node.tag.as_str() {
-            "success" => self.handle_success(&node).await,
-            "failure" => self.handle_connect_failure(&node).await,
-            "stream:error" => self.handle_stream_error(&node).await,
-            "ib" => handlers::ib::handle_ib(self.clone(), &node).await,
+            "success" => self.handle_success(node).await,
+            "failure" => self.handle_connect_failure(node).await,
+            "stream:error" => self.handle_stream_error(node).await,
+            "ib" => handlers::ib::handle_ib(self.clone(), node).await,
             "iq" => {
-                if !self.handle_iq(&node).await {
+                if !self.handle_iq(node).await {
                     warn!(target: "Client", "Received unhandled IQ: {node}");
                 }
             }
-            "receipt" => self.handle_receipt(&node).await,
-            "notification" => handlers::notification::handle_notification(self, &node).await,
+            "receipt" => self.handle_receipt(node).await,
+            "notification" => handlers::notification::handle_notification(self, node).await,
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
