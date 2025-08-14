@@ -1,5 +1,5 @@
 use crate::binary::error::{BinaryError, Result};
-use crate::binary::node::{AttrsRef, NodeContentRef, NodeRef};
+use crate::binary::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
 use crate::binary::token;
 use crate::types::jid::JidRef;
 use std::borrow::Cow;
@@ -249,13 +249,13 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_attributes(&mut self, size: usize) -> Result<AttrsRef<'a>> {
-        let mut attrs = std::collections::HashMap::new();
+        let mut attrs = AttrsRef::with_capacity(size);
         for _ in 0..size {
             let key = self
                 .read_value_as_string()?
                 .ok_or(BinaryError::NonStringKey)?;
             let value = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-            attrs.insert(key, value);
+            attrs.push((key, value));
         }
         Ok(attrs)
     }
@@ -282,7 +282,7 @@ impl<'a> Decoder<'a> {
             // It's a list of child nodes
             _ => {
                 let size = self.read_list_size(tag)?;
-                let mut nodes = Vec::with_capacity(size);
+                let mut nodes = NodeVec::with_capacity(size);
                 for _ in 0..size {
                     nodes.push(self.read_node_ref()?);
                 }
@@ -307,7 +307,7 @@ impl<'a> Decoder<'a> {
 
         let attrs = self.read_attributes(attr_count)?;
         let content = if has_content {
-            self.read_content()?
+            self.read_content()?.map(Box::new)
         } else {
             None
         };

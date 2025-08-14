@@ -1,9 +1,14 @@
 use crate::binary::attrs::AttrParser;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub type Attrs = HashMap<String, String>;
-pub type AttrsRef<'a> = HashMap<Cow<'a, str>, Cow<'a, str>>;
+// Small optimization for attributes - use SmallVec to avoid HashMap overhead for ≤4 attrs
+pub type AttrsRef<'a> = SmallVec<[(Cow<'a, str>, Cow<'a, str>); 4]>;
+
+// SmallVec with inline storage for 4 nodes - most nodes have ≤4 children
+pub type NodeVec<'a> = SmallVec<[NodeRef<'a>; 4]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
@@ -14,7 +19,7 @@ pub enum NodeContent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
-    Nodes(Vec<NodeRef<'a>>),
+    Nodes(NodeVec<'a>), // Use SmallVec for stack allocation optimization
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -28,7 +33,7 @@ pub struct Node {
 pub struct NodeRef<'a> {
     pub tag: Cow<'a, str>,
     pub attrs: AttrsRef<'a>,
-    pub content: Option<NodeContentRef<'a>>,
+    pub content: Option<Box<NodeContentRef<'a>>>,
 }
 
 impl Node {
@@ -92,15 +97,25 @@ impl<'a> NodeRef<'a> {
         Self {
             tag,
             attrs,
-            content,
+            content: content.map(Box::new),
         }
     }
 
     pub fn children(&self) -> Option<&[NodeRef<'a>]> {
-        match &self.content {
-            Some(NodeContentRef::Nodes(nodes)) => Some(nodes),
+        match self.content.as_deref() {
+            Some(NodeContentRef::Nodes(nodes)) => Some(nodes.as_slice()),
             _ => None,
         }
+    }
+
+    /// Get attribute value by key - optimized for small attribute counts
+    pub fn get_attr(&self, key: &str) -> Option<&Cow<'a, str>> {
+        self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// Get all attributes as iterator for compatibility
+    pub fn attrs_iter(&self) -> impl Iterator<Item = (&Cow<'a, str>, &Cow<'a, str>)> {
+        self.attrs.iter().map(|(k, v)| (k, v))
     }
 
     pub fn get_optional_child_by_tag(&self, tags: &[&str]) -> Option<&NodeRef<'a>> {
@@ -142,8 +157,8 @@ impl<'a> NodeRef<'a> {
                 .attrs
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            content: self.content.as_ref().map(|c| match c {
+                .collect::<HashMap<String, String>>(),
+            content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
                 NodeContentRef::Nodes(nodes) => {
                     NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
