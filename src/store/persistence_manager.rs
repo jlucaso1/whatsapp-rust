@@ -1,15 +1,44 @@
 use super::error::StoreError;
 use crate::store::Device;
 use crate::store::filestore::FileStore;
+use crate::store::sqlite_store::SqliteStore;
 use crate::store::traits::Backend;
 use log::{debug, error, info};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Duration, sleep};
 
+pub enum StoreBackend {
+    File(Arc<FileStore>),
+    Sqlite(Arc<SqliteStore>),
+}
+
+impl StoreBackend {
+    pub async fn save_device_data(&self, device_data: &crate::store::SerializableDevice) -> Result<(), StoreError> {
+        match self {
+            StoreBackend::File(store) => store.save_device_data(device_data).await,
+            StoreBackend::Sqlite(store) => store.save_device_data(device_data).await,
+        }
+    }
+
+    pub async fn load_device_data(&self) -> Result<Option<crate::store::SerializableDevice>, StoreError> {
+        match self {
+            StoreBackend::File(store) => store.load_device_data().await,
+            StoreBackend::Sqlite(store) => store.load_device_data().await,
+        }
+    }
+
+    pub fn as_backend(&self) -> Arc<dyn Backend> {
+        match self {
+            StoreBackend::File(store) => store.clone() as Arc<dyn Backend>,
+            StoreBackend::Sqlite(store) => store.clone() as Arc<dyn Backend>,
+        }
+    }
+}
+
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
-    filestore: Option<Arc<FileStore>>,
+    backend: Option<StoreBackend>,
     dirty: Arc<Mutex<bool>>,
     save_notify: Arc<Notify>,
 }
@@ -17,26 +46,55 @@ pub struct PersistenceManager {
 impl PersistenceManager {
     pub async fn new(store_path: impl Into<std::path::PathBuf>) -> Result<Self, StoreError> {
         let filestore = Arc::new(FileStore::new(store_path).await.map_err(StoreError::Io)?);
+        let backend = StoreBackend::File(filestore);
 
         info!("PersistenceManager: Attempting to load device data via FileStore.");
-        let device_data_opt = filestore.load_device_data().await?;
+        let device_data_opt = backend.load_device_data().await?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             info!(
                 "PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.",
                 serializable_device.push_name
             );
-            let mut dev = Device::new(filestore.clone() as Arc<dyn Backend>);
+            let mut dev = Device::new(backend.as_backend());
             dev.load_from_serializable(serializable_device);
             dev
         } else {
             info!("PersistenceManager: No existing device data found. Creating a new Device.");
-            Device::new(filestore.clone() as Arc<dyn Backend>)
+            Device::new(backend.as_backend())
         };
 
         Ok(Self {
             device: Arc::new(RwLock::new(device)),
-            filestore: Some(filestore),
+            backend: Some(backend),
+            dirty: Arc::new(Mutex::new(false)),
+            save_notify: Arc::new(Notify::new()),
+        })
+    }
+
+    pub async fn new_sqlite(database_url: &str) -> Result<Self, StoreError> {
+        let sqlite_store = Arc::new(SqliteStore::new(database_url).await?);
+        let backend = StoreBackend::Sqlite(sqlite_store);
+
+        info!("PersistenceManager: Attempting to load device data via SqliteStore.");
+        let device_data_opt = backend.load_device_data().await?;
+
+        let device = if let Some(serializable_device) = device_data_opt {
+            info!(
+                "PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.",
+                serializable_device.push_name
+            );
+            let mut dev = Device::new(backend.as_backend());
+            dev.load_from_serializable(serializable_device);
+            dev
+        } else {
+            info!("PersistenceManager: No existing device data found. Creating a new Device.");
+            Device::new(backend.as_backend())
+        };
+
+        Ok(Self {
+            device: Arc::new(RwLock::new(device)),
+            backend: Some(backend),
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
         })
@@ -48,7 +106,7 @@ impl PersistenceManager {
         let device = Device::new(memory_store as Arc<dyn Backend>);
         Ok(Self {
             device: Arc::new(RwLock::new(device)),
-            filestore: None,
+            backend: None,
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
         })
@@ -68,7 +126,7 @@ impl PersistenceManager {
     {
         let mut device_guard = self.device.write().await;
         let result = modifier(&mut device_guard);
-        if self.filestore.is_some() {
+        if self.backend.is_some() {
             let mut dirty_guard = self.dirty.lock().await;
             *dirty_guard = true;
             self.save_notify.notify_one();
@@ -77,7 +135,7 @@ impl PersistenceManager {
     }
 
     async fn save_to_disk(&self) -> Result<(), StoreError> {
-        if let Some(filestore) = &self.filestore {
+        if let Some(backend) = &self.backend {
             let mut dirty_guard = self.dirty.lock().await;
             if *dirty_guard {
                 debug!("Device state is dirty, saving to disk.");
@@ -85,7 +143,7 @@ impl PersistenceManager {
                 let serializable_device = device_guard.to_serializable();
                 drop(device_guard);
 
-                filestore.save_device_data(&serializable_device).await?;
+                backend.save_device_data(&serializable_device).await?;
                 *dirty_guard = false;
                 debug!("Device state saved successfully.");
             }
@@ -94,7 +152,7 @@ impl PersistenceManager {
     }
 
     pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-        if self.filestore.is_some() {
+        if self.backend.is_some() {
             tokio::task::spawn_local(async move {
                 loop {
                     tokio::select! {
@@ -128,13 +186,13 @@ impl PersistenceManager {
     }
 
     pub async fn save_now(&self) -> Result<(), StoreError> {
-        if let Some(filestore) = &self.filestore {
+        if let Some(backend) = &self.backend {
             debug!("PersistenceManager: Forcing save_now.");
             let device_guard = self.device.read().await;
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
 
-            match filestore.save_device_data(&serializable_device).await {
+            match backend.save_device_data(&serializable_device).await {
                 Ok(_) => {
                     let mut dirty_guard = self.dirty.lock().await;
                     *dirty_guard = false;

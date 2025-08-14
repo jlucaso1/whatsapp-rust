@@ -9,7 +9,9 @@ pub mod filestore;
 pub mod generic;
 pub mod memory;
 pub mod persistence_manager; // Background persistence manager
+pub mod schema; // Diesel schema
 pub mod signal_adapter;
+pub mod sqlite_store; // SQLite storage backend
 pub mod traits;
 use serde_big_array::BigArray;
 
