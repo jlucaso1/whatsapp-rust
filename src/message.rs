@@ -470,7 +470,7 @@ impl Client {
             return Ok(());
         }
         let device_arc = self.persistence_manager.get_device_arc().await;
-        let mut device_guard = device_arc.lock().await;
+        let mut device_guard = device_arc.write().await;
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
@@ -665,7 +665,7 @@ impl Client {
         let group_sender_address = sender_key_name.to_protocol_address();
 
         let device_arc = self.persistence_manager.get_device_arc().await;
-        let mut device_guard = device_arc.lock().await;
+        let mut device_guard = device_arc.write().await;
 
         group_decrypt(ciphertext, &mut *device_guard, &group_sender_address)
             .await
@@ -738,7 +738,7 @@ impl Client {
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
-        let mut device_guard = device_arc.lock().await;
+        let mut device_guard = device_arc.write().await;
 
         let sender_address =
             ProtocolAddress::new(sender_jid.user.clone(), (sender_jid.device as u32).into());
