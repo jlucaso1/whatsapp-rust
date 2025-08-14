@@ -204,7 +204,7 @@ impl Client {
             .attr("count", "1")
             .build();
 
-        let type_bytes = "5".to_string().into_bytes();
+        let type_bytes = vec![5u8];
 
         let keys_node = NodeBuilder::new("keys")
             .children([
