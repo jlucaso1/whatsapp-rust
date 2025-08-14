@@ -50,8 +50,8 @@ fn test_zero_copy_parsing_large_data() {
     // Test zero-copy semantics with larger data structures
     let child_nodes = (0..10)
         .map(|i| {
-            NodeBuilder::new(&format!("child_{}", i))
-                .attr("id", &i.to_string())
+            NodeBuilder::new(format!("child_{}", i))
+                .attr("id", i.to_string())
                 .bytes(vec![i as u8; 100]) // 100 bytes per child
                 .build()
         })
