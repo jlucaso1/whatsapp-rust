@@ -19,7 +19,7 @@ pub enum NodeContent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
-    Nodes(NodeVec<'a>), // Use SmallVec for stack allocation optimization
+    Nodes(Box<NodeVec<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
