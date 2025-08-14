@@ -1,6 +1,6 @@
 use crate::store::traits::*;
 use async_trait::async_trait;
-use libsignal_protocol::Direction;
+use libsignal_protocol::{Direction, KeyPair, PrivateKey};
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::io;
@@ -25,6 +25,7 @@ impl FileStore {
         fs::create_dir_all(store.path_for("sessions")).await?;
         fs::create_dir_all(store.path_for("identities")).await?;
         fs::create_dir_all(store.path_for("prekeys")).await?;
+        fs::create_dir_all(store.path_for("app_prekeys")).await?;
         fs::create_dir_all(store.path_for("sender_keys")).await?;
         fs::create_dir_all(store.path_for("appstate/keys")).await?;
         fs::create_dir_all(store.path_for("appstate/versions")).await?;
@@ -339,5 +340,95 @@ impl AppStateStore for FileStore {
             .path_for("appstate/versions")
             .join(Self::sanitize_filename(name));
         self.write_bincode(&path, &state).await
+    }
+}
+
+#[derive(Serialize, serde::Deserialize)]
+struct AppPreKeyData {
+    private_key_bytes: Vec<u8>,
+    uploaded: bool,
+}
+
+#[async_trait]
+impl AppPreKeyStore for FileStore {
+    async fn get_next_prekey_id(&self) -> Result<u32> {
+        let app_prekeys_path = self.path_for("app_prekeys");
+        
+        // Read all existing pre-key files to find the maximum ID
+        let mut max_id = 0u32;
+        
+        if let Ok(mut entries) = fs::read_dir(&app_prekeys_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Some(filename) = entry.file_name().to_str() {
+                    if let Ok(id) = filename.parse::<u32>() {
+                        if id > max_id {
+                            max_id = id;
+                        }
+                    }
+                }
+            }
+        }
+        
+        let next_id = max_id + 1;
+        // Ensure we stay within the valid range (1 to 0xFFFFFF)
+        Ok(if next_id > 16777215 { 1 } else { next_id })
+    }
+
+    async fn store_app_prekey(&self, id: u32, key_pair: &KeyPair, uploaded: bool) -> Result<()> {
+        let path = self.path_for("app_prekeys").join(id.to_string());
+        let data = AppPreKeyData {
+            private_key_bytes: key_pair.private_key.serialize().to_vec(),
+            uploaded,
+        };
+        self.write_bincode(&path, &data).await
+    }
+
+    async fn get_unuploaded_pre_keys(&self, count: u32) -> Result<Vec<(u32, KeyPair)>> {
+        let app_prekeys_path = self.path_for("app_prekeys");
+        let mut unuploaded_keys = Vec::new();
+        
+        if let Ok(mut entries) = fs::read_dir(&app_prekeys_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await && unuploaded_keys.len() < count as usize {
+                if let Some(filename) = entry.file_name().to_str() {
+                    if let Ok(id) = filename.parse::<u32>() {
+                        let path = entry.path();
+                        if let Ok(Some(data)) = self.read_bincode::<AppPreKeyData>(&path).await {
+                            if !data.uploaded {
+                                if let Ok(private_key) = PrivateKey::deserialize(&data.private_key_bytes) {
+                                    if let Ok(public_key) = private_key.public_key() {
+                                        let key_pair = KeyPair::new(public_key, private_key);
+                                        unuploaded_keys.push((id, key_pair));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(unuploaded_keys)
+    }
+
+    async fn mark_pre_keys_as_uploaded(&self, up_to_id: u32) -> Result<()> {
+        let app_prekeys_path = self.path_for("app_prekeys");
+        
+        if let Ok(mut entries) = fs::read_dir(&app_prekeys_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Some(filename) = entry.file_name().to_str() {
+                    if let Ok(id) = filename.parse::<u32>() {
+                        if id <= up_to_id {
+                            let path = entry.path();
+                            if let Ok(Some(mut data)) = self.read_bincode::<AppPreKeyData>(&path).await {
+                                data.uploaded = true;
+                                self.write_bincode(&path, &data).await?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
     }
 }

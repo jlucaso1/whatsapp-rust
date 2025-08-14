@@ -396,16 +396,25 @@ impl signal::store::PreKeyStore for SqliteStore {
         let mut conn = self.get_connection()?;
 
         let result: Option<Vec<u8>> = prekeys::table
-            .select(prekeys::record)
+            .select(prekeys::key)
             .filter(prekeys::id.eq(prekey_id as i32))
             .first(&mut conn)
             .optional()
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        if let Some(data) = result {
-            let record = PreKeyRecordStructure::decode(data.as_slice())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            Ok(Some(record))
+        if let Some(key_data) = result {
+            // Reconstruct the PreKeyRecordStructure from the stored private key
+            if let Ok(private_key) = PrivateKey::deserialize(&key_data) {
+                if let Ok(public_key) = private_key.public_key() {
+                    let key_pair = KeyPair::new(public_key, private_key);
+                    let record = wacore::signal::state::record::new_pre_key_record(prekey_id, &key_pair);
+                    Ok(Some(record))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
         } else {
             Ok(None)
         }
@@ -417,13 +426,22 @@ impl signal::store::PreKeyStore for SqliteStore {
         record: PreKeyRecordStructure,
     ) -> std::result::Result<(), SignalStoreError> {
         let mut conn = self.get_connection()?;
-        let data = record.encode_to_vec();
+        
+        // Extract the private key from the record and store it directly
+        let private_key_bytes = record.private_key.unwrap_or_default();
 
         diesel::insert_into(prekeys::table)
-            .values((prekeys::id.eq(prekey_id as i32), prekeys::record.eq(&data)))
+            .values((
+                prekeys::id.eq(prekey_id as i32), 
+                prekeys::key.eq(&private_key_bytes),
+                prekeys::uploaded.eq(false), // Default to not uploaded when storing via signal trait
+            ))
             .on_conflict(prekeys::id)
             .do_update()
-            .set(prekeys::record.eq(&data))
+            .set((
+                prekeys::key.eq(&private_key_bytes),
+                // Don't change uploaded status when updating via signal trait
+            ))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
@@ -668,6 +686,87 @@ impl AppStateStore for SqliteStore {
             .on_conflict(app_state_versions::name)
             .do_update()
             .set(app_state_versions::state_data.eq(&data))
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AppPreKeyStore for SqliteStore {
+    async fn get_next_prekey_id(&self) -> Result<u32> {
+        let mut conn = self.get_connection()?;
+
+        // Get the maximum ID currently in use and increment by 1
+        let max_id: Option<i32> = prekeys::table
+            .select(diesel::dsl::max(prekeys::id))
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .flatten();
+
+        let next_id = max_id.map(|id| id + 1).unwrap_or(1);
+        
+        // Ensure we stay within the valid range (1 to 0xFFFFFF)
+        let next_id = if next_id > 16777215 { 1 } else { next_id };
+        
+        Ok(next_id as u32)
+    }
+
+    async fn store_app_prekey(&self, id: u32, key_pair: &KeyPair, uploaded: bool) -> Result<()> {
+        let mut conn = self.get_connection()?;
+        
+        // Store the private key bytes directly
+        let key_data = key_pair.private_key.serialize();
+
+        diesel::insert_into(prekeys::table)
+            .values((
+                prekeys::id.eq(id as i32),
+                prekeys::key.eq(key_data.as_slice()),
+                prekeys::uploaded.eq(uploaded),
+            ))
+            .on_conflict(prekeys::id)
+            .do_update()
+            .set((
+                prekeys::key.eq(key_data.as_slice()),
+                prekeys::uploaded.eq(uploaded),
+            ))
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_unuploaded_pre_keys(&self, count: u32) -> Result<Vec<(u32, KeyPair)>> {
+        let mut conn = self.get_connection()?;
+
+        let results: Vec<(i32, Vec<u8>)> = prekeys::table
+            .select((prekeys::id, prekeys::key))
+            .filter(prekeys::uploaded.eq(false))
+            .limit(count as i64)
+            .load(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut pre_keys = Vec::new();
+        for (id, key_bytes) in results {
+            // Reconstruct the KeyPair from the stored private key bytes
+            if let Ok(private_key) = PrivateKey::deserialize(&key_bytes) {
+                if let Ok(public_key) = private_key.public_key() {
+                    let key_pair = KeyPair::new(public_key, private_key);
+                    pre_keys.push((id as u32, key_pair));
+                }
+            }
+        }
+
+        Ok(pre_keys)
+    }
+
+    async fn mark_pre_keys_as_uploaded(&self, up_to_id: u32) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(prekeys::table.filter(prekeys::id.le(up_to_id as i32)))
+            .set(prekeys::uploaded.eq(true))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
