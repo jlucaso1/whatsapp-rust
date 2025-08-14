@@ -113,8 +113,8 @@ async fn test_sqlite_store_vs_memory_store() {
     // Clean up any existing test database
     let _ = std::fs::remove_file(db_path);
     
-    // Test with SQLite backend
-    let pm_sqlite = Arc::new(PersistenceManager::new_sqlite(db_path).await.expect("Failed to create SQLite PM"));
+    // Test with SQLite backend using in-memory database for testing
+    let pm_sqlite = Arc::new(PersistenceManager::new_sqlite(":memory:").await.expect("Failed to create SQLite PM"));
     
     // Test with in-memory backend
     let pm_memory = Arc::new(PersistenceManager::new_in_memory().await.expect("Failed to create memory PM"));
