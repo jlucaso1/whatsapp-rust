@@ -164,8 +164,9 @@ impl Client {
         let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
         let new_prekey_record =
             wacore::signal::state::record::new_pre_key_record(new_prekey_id, &new_prekey_keypair);
+        // This key is not uploaded to the server pool, so mark as false
         if let Err(e) = device_guard
-            .store_prekey(new_prekey_id, new_prekey_record)
+            .store_prekey(new_prekey_id, new_prekey_record, false)
             .await
         {
             warn!("Failed to store new prekey for retry receipt: {e:?}");

@@ -322,7 +322,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
                 public_key: Some(kp.public.to_vec()),
                 private_key: Some(kp.private.to_vec()),
             };
-            if let Err(e) = device_store_locked.store_prekey(id, record).await {
+            if let Err(e) = device_store_locked.store_prekey(id, record, false).await {
                 println!("ERROR: Failed to store prekey id {id}: {e:?}");
             }
         }

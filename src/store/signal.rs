@@ -72,11 +72,12 @@ macro_rules! impl_store_wrapper {
                 &self,
                 prekey_id: u32,
                 record: PreKeyRecordStructure,
+                uploaded: bool,
             ) -> Result<(), StoreError> {
                 self.0
                     .$write_lock()
                     .await
-                    .store_prekey(prekey_id, record)
+                    .store_prekey(prekey_id, record, uploaded)
                     .await
             }
 
@@ -279,8 +280,9 @@ impl PreKeyStore for Device {
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
+        uploaded: bool,
     ) -> Result<(), StoreError> {
-        self.backend.store_prekey(prekey_id, record).await
+        self.backend.store_prekey(prekey_id, record, uploaded).await
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {

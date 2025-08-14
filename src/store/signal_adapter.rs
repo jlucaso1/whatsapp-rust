@@ -173,7 +173,7 @@ impl PreKeyStore for PreKeyAdapter {
     ) -> Result<(), SignalProtocolError> {
         let device = self.0.device.read().await;
         let structure = prekey_record_to_structure(record)?;
-        WacorePreKeyStore::store_prekey(&*device, prekey_id.into(), structure)
+        WacorePreKeyStore::store_prekey(&*device, prekey_id.into(), structure, false)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
     }

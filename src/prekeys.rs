@@ -285,7 +285,8 @@ impl Client {
 
         // Step 5: Store the new pre-keys using existing backend interface
         for (id, record) in keys_to_upload {
-            if let Err(e) = device_guard.backend.store_prekey(id, record).await {
+            // Mark as uploaded since the IQ was successful
+            if let Err(e) = device_guard.backend.store_prekey(id, record, true).await {
                 log::warn!("Failed to store prekey id {}: {:?}", id, e);
             }
         }

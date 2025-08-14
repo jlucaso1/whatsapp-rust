@@ -406,6 +406,7 @@ impl signal::store::PreKeyStore for SqliteStore {
         &self,
         prekey_id: u32,
         record: PreKeyRecordStructure,
+        uploaded: bool,
     ) -> std::result::Result<(), SignalStoreError> {
         let mut conn = self.get_connection()?;
 
@@ -415,11 +416,14 @@ impl signal::store::PreKeyStore for SqliteStore {
             .values((
                 prekeys::id.eq(prekey_id as i32),
                 prekeys::key.eq(&private_key_bytes),
-                prekeys::uploaded.eq(false),
+                prekeys::uploaded.eq(uploaded),
             ))
             .on_conflict(prekeys::id)
             .do_update()
-            .set((prekeys::key.eq(&private_key_bytes),))
+            .set((
+                prekeys::key.eq(&private_key_bytes),
+                prekeys::uploaded.eq(uploaded),
+            ))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 

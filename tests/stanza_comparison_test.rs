@@ -458,7 +458,10 @@ mod tests {
             let record =
                 wacore::signal::state::record::new_pre_key_record(pre_key_data.id, &key_pair);
             // Now we can just .await the async method
-            device.store_prekey(pre_key_data.id, record).await.unwrap();
+            device
+                .store_prekey(pre_key_data.id, record, false)
+                .await
+                .unwrap();
         }
 
         device
