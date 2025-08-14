@@ -70,10 +70,6 @@ waproto = { workspace = true }
 base64 = { version = "0.22.1", default-features = false }
 criterion = { version = "0.5", features = ["html_reports"] }
 
-[[bench]]
-name = "optimization_bench"
-harness = false
-
 [profile.release]
 opt-level = "z"
 debug = false

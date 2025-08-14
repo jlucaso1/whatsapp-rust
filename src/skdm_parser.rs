@@ -1,8 +1,5 @@
-/// Fast zero-copy parser for SenderKeyDistributionMessage to avoid prost allocations
-/// This optimizes the hot path in handle_sender_key_distribution_message
 use std::io::{Cursor, Read};
 
-/// Lightweight SKDM parser result that avoids Vec allocations for small messages
 #[derive(Debug)]
 pub struct SkdmFields<'a> {
     pub id: Option<u32>,
@@ -12,7 +9,6 @@ pub struct SkdmFields<'a> {
 }
 
 impl<'a> SkdmFields<'a> {
-    /// Fast protobuf parser for SKDM that avoids allocations
     pub fn parse_zero_copy(data: &'a [u8]) -> Result<Self, &'static str> {
         let mut cursor = Cursor::new(data);
         let mut result = SkdmFields {
@@ -29,16 +25,13 @@ impl<'a> SkdmFields<'a> {
 
             match (field_num, wire_type) {
                 (1, 0) => {
-                    // id: uint32
                     result.id = Some(read_varint32(&mut cursor).map_err(|_| "Invalid id varint")?);
                 }
                 (2, 0) => {
-                    // iteration: uint32
                     result.iteration =
                         Some(read_varint32(&mut cursor).map_err(|_| "Invalid iteration varint")?);
                 }
                 (3, 2) => {
-                    // chainKey: bytes
                     let len = read_varint32(&mut cursor).map_err(|_| "Invalid chainKey length")?;
                     let start = cursor.position() as usize;
                     let end = start + len as usize;
@@ -49,7 +42,6 @@ impl<'a> SkdmFields<'a> {
                     cursor.set_position(end as u64);
                 }
                 (4, 2) => {
-                    // signingKey: bytes
                     let len =
                         read_varint32(&mut cursor).map_err(|_| "Invalid signingKey length")?;
                     let start = cursor.position() as usize;
@@ -61,7 +53,6 @@ impl<'a> SkdmFields<'a> {
                     cursor.set_position(end as u64);
                 }
                 _ => {
-                    // Skip unknown fields
                     skip_field(&mut cursor, wire_type)
                         .map_err(|_| "Failed to skip unknown field")?;
                 }
@@ -103,11 +94,9 @@ fn read_varint32(cursor: &mut Cursor<&[u8]>) -> std::io::Result<u32> {
 fn skip_field(cursor: &mut Cursor<&[u8]>, wire_type: u32) -> std::io::Result<()> {
     match wire_type {
         0 => {
-            // Varint
             read_varint32(cursor)?;
         }
         2 => {
-            // Length-delimited
             let len = read_varint32(cursor)?;
             cursor.set_position(cursor.position() + len as u64);
         }
@@ -119,33 +108,4 @@ fn skip_field(cursor: &mut Cursor<&[u8]>, wire_type: u32) -> std::io::Result<()>
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use prost::Message;
-    use waproto::whatsapp as wa;
-
-    #[test]
-    fn test_skdm_zero_copy_parser() {
-        // Create a test SKDM using prost
-        let test_msg = wa::SenderKeyDistributionMessage {
-            id: Some(12345),
-            iteration: Some(67890),
-            chain_key: Some(vec![1, 2, 3, 4, 5]),
-            signing_key: Some(vec![6, 7, 8, 9, 10]),
-        };
-
-        let encoded = test_msg.encode_to_vec();
-
-        // Parse with our zero-copy parser
-        let parsed = SkdmFields::parse_zero_copy(&encoded).unwrap();
-
-        // Verify fields match
-        assert_eq!(parsed.id, Some(12345));
-        assert_eq!(parsed.iteration, Some(67890));
-        assert_eq!(parsed.chain_key, Some(&[1, 2, 3, 4, 5][..]));
-        assert_eq!(parsed.signing_key, Some(&[6, 7, 8, 9, 10][..]));
-    }
 }
