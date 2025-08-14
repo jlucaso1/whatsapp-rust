@@ -1,4 +1,5 @@
-use crate::binary::node::{Node, NodeContent};
+use crate::binary::builder::NodeBuilder;
+use crate::binary::node::NodeContent;
 use crate::client::Client;
 use log::debug;
 use std::sync::atomic::Ordering;
@@ -16,40 +17,28 @@ impl Client {
         debug!("get_user_devices: Using normal mode for {jids:?}");
         let mut user_nodes = Vec::new();
         for jid in jids {
-            user_nodes.push(Node {
-                tag: "user".to_string(),
-                attrs: [("jid".to_string(), jid.to_non_ad().to_string())].into(),
-                content: None,
-            });
+            user_nodes.push(
+                NodeBuilder::new("user")
+                    .attr("jid", jid.to_non_ad().to_string())
+                    .build(),
+            );
         }
 
-        let usync_node = Node {
-            tag: "usync".to_string(),
-            attrs: [
-                ("context".to_string(), "message".to_string()),
-                ("index".to_string(), "0".to_string()),
-                ("last".to_string(), "true".to_string()),
-                ("mode".to_string(), "query".to_string()),
-                ("sid".to_string(), self.generate_request_id()),
-            ]
-            .into(),
-            content: Some(NodeContent::Nodes(vec![
-                Node {
-                    tag: "query".to_string(),
-                    attrs: Default::default(),
-                    content: Some(NodeContent::Nodes(vec![Node {
-                        tag: "devices".to_string(),
-                        attrs: [("version".to_string(), "2".to_string())].into(),
-                        content: None,
-                    }])),
-                },
-                Node {
-                    tag: "list".to_string(),
-                    attrs: Default::default(),
-                    content: Some(NodeContent::Nodes(user_nodes)),
-                },
-            ])),
-        };
+        let query_node = NodeBuilder::new("query")
+            .children([NodeBuilder::new("devices").attr("version", "2").build()])
+            .build();
+        let list_node = NodeBuilder::new("list").children(user_nodes).build();
+        let sid = self.generate_request_id();
+        let usync_node = NodeBuilder::new("usync")
+            .attrs([
+                ("context", "message"),
+                ("index", "0"),
+                ("last", "true"),
+                ("mode", "query"),
+                ("sid", sid.as_str()),
+            ])
+            .children([query_node, list_node])
+            .build();
 
         let iq = crate::request::InfoQuery {
             namespace: "usync",

@@ -65,6 +65,10 @@ impl<'a> AttrParser<'a> {
         self.optional_jid(key).unwrap_or_default()
     }
 
+    pub fn non_ad_jid(&mut self, key: &str) -> Jid {
+        self.jid(key).to_non_ad()
+    }
+
     // --- Boolean ---
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {
         self.get_raw(key, require)

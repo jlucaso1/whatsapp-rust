@@ -4,38 +4,23 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-waproto = { workspace = true }
-libsignal-protocol = { workspace = true }
-serde = { version = "1.0.188", features = ["derive"] }
-serde-big-array = "0.5"
-serde_json = "1.0"
-tokio = { version = "1.46.1", features = [
-    "sync",
-] }
+aes = "0.8.3"
+aes-gcm = { version = "0.10.2", features = [
+    "aes",
+    "alloc",
+], default-features = false }
+anyhow = { version = "1.0", default-features = false }
+async-trait = "0.1.88"
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+bytes = { version = "1.5", default-features = false }
+cbc = { version = "0.1.2", features = ["alloc"] }
 
 # Time handling
 chrono = { version = "0.4", features = [
     "now",
     "serde",
 ], default-features = false }
-prost = { version = "0.14.1", default-features = false }
-bytes = { version = "1.5", default-features = false }
-
-# Cryptography
-rand = { version = "0.9" }
-rand_core = "0.9"
-aes-gcm = { version = "0.10.2", features = [
-    "aes",
-    "alloc",
-], default-features = false }
-cbc = { version = "0.1.2", features = ["alloc"] }
 cipher = "0.4"
-aes = "0.8.3"
-sha2 = "0.10.6"
-hmac = "0.12.1"
-hkdf = "0.12.3"
-md5 = "0.8.0"
-thiserror = "2.0.12"
 
 # Zlib decompression for WABinary
 flate2 = { version = "1.0", default-features = false, features = [
@@ -43,11 +28,21 @@ flate2 = { version = "1.0", default-features = false, features = [
     "libz-sys",
 ] }
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-once_cell = { version = "1.19", default-features = false, features = ["std"] }
-anyhow = { version = "1.0", default-features = false }
-serde_bytes = "0.11.17"
-subtle = "2.6.1"
-async-trait = "0.1.88"
-base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+hkdf = "0.12.3"
+hmac = "0.12.1"
+libsignal-protocol = { workspace = true }
 log = "0.4.27"
+md5 = "0.8.0"
+once_cell = { version = "1.19", default-features = false, features = ["std"] }
+prost = { version = "0.14.1", default-features = false }
+
+# Cryptography
+rand = { version = "0.9" }
+rand_core = "0.9"
+serde = { version = "1.0.188", features = ["derive"] }
+serde-big-array = "0.5"
+serde_json = "1.0"
+sha2 = "0.10.6"
+thiserror = "2.0.12"
+waproto = { workspace = true }
 [dev-dependencies]

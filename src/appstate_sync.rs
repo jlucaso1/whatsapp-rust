@@ -21,7 +21,7 @@ async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
         let own_non_ad = own_jid.to_non_ad();
         let request_id = client.generate_message_id().await;
         if let Err(e) = client
-            .send_message_impl(own_non_ad, msg, request_id, true)
+            .send_message_impl(own_non_ad, msg, request_id, true, false)
             .await
         {
             warn!("Failed to send app state key request: {e:?}");
