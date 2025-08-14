@@ -4,11 +4,11 @@ use crate::store::filestore::FileStore;
 use crate::store::traits::Backend;
 use log::{debug, error, info};
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{RwLock, Mutex, Notify};
 use tokio::time::{Duration, sleep};
 
 pub struct PersistenceManager {
-    device: Arc<Mutex<Device>>,
+    device: Arc<RwLock<Device>>,
     filestore: Option<Arc<FileStore>>,
     dirty: Arc<Mutex<bool>>,
     save_notify: Arc<Notify>,
@@ -35,7 +35,7 @@ impl PersistenceManager {
         };
 
         Ok(Self {
-            device: Arc::new(Mutex::new(device)),
+            device: Arc::new(RwLock::new(device)),
             filestore: Some(filestore),
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
@@ -47,26 +47,26 @@ impl PersistenceManager {
         let memory_store = Arc::new(crate::store::memory::MemoryStore::new());
         let device = Device::new(memory_store as Arc<dyn Backend>);
         Ok(Self {
-            device: Arc::new(Mutex::new(device)),
+            device: Arc::new(RwLock::new(device)),
             filestore: None,
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
         })
     }
 
-    pub async fn get_device_arc(&self) -> Arc<Mutex<Device>> {
+    pub async fn get_device_arc(&self) -> Arc<RwLock<Device>> {
         self.device.clone()
     }
 
     pub async fn get_device_snapshot(&self) -> Device {
-        self.device.lock().await.clone()
+        self.device.read().await.clone()
     }
 
     pub async fn modify_device<F, R>(&self, modifier: F) -> R
     where
         F: FnOnce(&mut Device) -> R,
     {
-        let mut device_guard = self.device.lock().await;
+        let mut device_guard = self.device.write().await;
         let result = modifier(&mut device_guard);
         if self.filestore.is_some() {
             let mut dirty_guard = self.dirty.lock().await;
@@ -81,7 +81,7 @@ impl PersistenceManager {
             let mut dirty_guard = self.dirty.lock().await;
             if *dirty_guard {
                 debug!("Device state is dirty, saving to disk.");
-                let device_guard = self.device.lock().await;
+                let device_guard = self.device.read().await;
                 let serializable_device = device_guard.to_serializable();
                 drop(device_guard);
 
@@ -130,7 +130,7 @@ impl PersistenceManager {
     pub async fn save_now(&self) -> Result<(), StoreError> {
         if let Some(filestore) = &self.filestore {
             debug!("PersistenceManager: Forcing save_now.");
-            let device_guard = self.device.lock().await;
+            let device_guard = self.device.read().await;
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
 

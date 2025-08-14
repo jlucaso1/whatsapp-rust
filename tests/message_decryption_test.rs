@@ -313,7 +313,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
         .await;
 
     let device_store = client.persistence_manager.get_device_arc().await;
-    let mut device_store_locked = device_store.lock().await;
+    let mut device_store_locked = device_store.write().await;
 
     for (id, keypair) in prekeys {
         if let Some(kp) = keypair {
