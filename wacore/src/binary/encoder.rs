@@ -1,19 +1,22 @@
 use crate::binary::error::Result;
 use crate::binary::node::{Attrs, Node, NodeContent};
 use crate::binary::token;
-use bytes::BufMut;
+use bytes::{BufMut, BytesMut};
 
 pub(crate) struct Encoder {
-    writer: Vec<u8>,
+    writer: BytesMut,
 }
 
 impl Encoder {
     pub(crate) fn new() -> Self {
-        Self { writer: Vec::new() }
+        // Start with a reasonable capacity to reduce allocations during encoding
+        Self {
+            writer: BytesMut::with_capacity(1024),
+        }
     }
 
     pub(crate) fn into_data(self) -> Vec<u8> {
-        self.writer
+        self.writer.to_vec()
     }
 
     fn write_u8(&mut self, val: u8) {
@@ -128,17 +131,11 @@ impl Encoder {
             Self::pack_hex
         };
 
-        let chars: Vec<char> = value.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            let part1 = chars[i];
-            let part2 = if i + 1 < chars.len() {
-                chars[i + 1]
-            } else {
-                '\x00'
-            };
+        // Iterate over character pairs without allocating a Vec<char>
+        let mut chars = value.chars();
+        while let Some(part1) = chars.next() {
+            let part2 = chars.next().unwrap_or('\x00');
             self.write_u8(self.pack_byte_pair(packer, part1, part2));
-            i += 2;
         }
     }
 
