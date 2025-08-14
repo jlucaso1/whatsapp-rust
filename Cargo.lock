@@ -1813,15 +1813,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_bytes"
-version = "0.11.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8437fd221bde2d4ca316d61b90e337e9e702b3820b87d63caa9ba6c02bd06d96"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "serde_derive"
 version = "1.0.219"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2251,12 +2242,9 @@ dependencies = [
  "rand_core 0.9.3",
  "serde",
  "serde-big-array",
- "serde_bytes",
  "serde_json",
  "sha2",
- "subtle",
  "thiserror",
- "tokio",
  "waproto",
 ]
 
@@ -2372,7 +2360,6 @@ dependencies = [
  "bytes",
  "cbc",
  "chrono",
- "cipher",
  "clap",
  "dashmap",
  "env_logger",
@@ -2382,8 +2369,6 @@ dependencies = [
  "hkdf",
  "libsignal-protocol",
  "log",
- "md5",
- "once_cell",
  "prost 0.14.1",
  "rand",
  "rand_core 0.9.3",
