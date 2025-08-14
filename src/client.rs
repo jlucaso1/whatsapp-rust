@@ -74,7 +74,7 @@ pub struct Client {
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
-    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, wa::Message>>>,
+    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, Arc<wa::Message>>>>,
     pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
@@ -290,7 +290,7 @@ impl Client {
         &self,
         to: crate::types::jid::Jid,
         id: String,
-    ) -> Option<wa::Message> {
+    ) -> Option<Arc<wa::Message>> {
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
         if let Some(msg) = map_guard.remove(&key) {

@@ -20,7 +20,7 @@ async fn test_recent_message_cache_insert_and_take() {
     };
 
     client
-        .add_recent_message(chat.clone(), msg_id.clone(), msg.clone())
+        .add_recent_message(chat.clone(), msg_id.clone(), Arc::new(msg.clone()))
         .await;
 
     // First take should return the message and remove it from cache

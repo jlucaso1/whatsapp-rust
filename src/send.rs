@@ -64,7 +64,7 @@ impl Client {
             // Cache the outgoing group message so that a subsequent retry receipt
             // can find and resend it (with fresh sender key distribution if needed).
             // This mirrors the DM branch behavior below.
-            self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+            self.add_recent_message(to.clone(), request_id.clone(), Arc::new(message.clone()))
                 .await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -168,7 +168,7 @@ Re-pair the device to populate 'account'.",
                 }
             }
         } else {
-            self.add_recent_message(to.clone(), request_id.clone(), message.clone())
+            self.add_recent_message(to.clone(), request_id.clone(), Arc::new(message.clone()))
                 .await;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
