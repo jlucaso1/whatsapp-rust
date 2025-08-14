@@ -14,7 +14,7 @@ use wacore::types::jid::JidExt;
 use waproto::whatsapp as wa;
 
 impl Client {
-    pub async fn add_recent_message(&self, to: Jid, id: String, msg: wa::Message) {
+    pub async fn add_recent_message(&self, to: Jid, id: String, msg: Arc<wa::Message>) {
         const RECENT_MESSAGES_SIZE: usize = 256;
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
@@ -54,7 +54,7 @@ impl Client {
             });
         });
 
-        let original_msg = match self
+        let original_msg_arc = match self
             .take_recent_message(receipt.source.chat.clone(), message_id.clone())
             .await
         {
@@ -66,6 +66,7 @@ impl Client {
                 return Ok(());
             }
         };
+        let original_msg = (*original_msg_arc).clone();
 
         let participant_jid = receipt.source.sender.clone();
 
@@ -273,7 +274,7 @@ mod tests {
         };
 
         client
-            .add_recent_message(chat.clone(), msg_id.clone(), msg.clone())
+            .add_recent_message(chat.clone(), msg_id.clone(), Arc::new(msg.clone()))
             .await;
 
         // First take should return and remove it from cache
