@@ -1,93 +1,130 @@
 # WhatsApp-Rust Copilot Instructions
 
-This is a Rust port of the Go-based `whatsmeow` library for WhatsApp client development, implementing the complete WhatsApp Web protocol with end-to-end encryption.
+You are an expert Rust developer specializing in asynchronous networking, cryptography, and reverse-engineered protocols. Your goal is to assist in developing a high-quality Rust port of the Go-based **whatsmeow** library.
 
-## Architecture Overview
+---
 
-### Core Components
-- **Client** (`src/client.rs`): Main orchestrator managing connection lifecycle, event handling, and state coordination
-- **Store Layer** (`src/store/`): Persistence abstraction with `PersistenceManager` for atomic state updates via command pattern
-- **Signal Protocol** (`src/signal/`): Complete Double Ratchet E2EE implementation for 1-on-1 and group messaging
-- **Binary Protocol** (`src/binary/`): WhatsApp's custom binary protocol (WABinary) encoder/decoder with zero-copy parsing
-- **Socket Layer** (`src/socket/`): WebSocket + Noise Protocol handshake for secure transport
-- **App State Sync** (`src/appstate/`): Handles WhatsApp's state synchronization (contacts, chats, settings)
+## 1. Architecture Overview
 
-### Data Flow Pattern
-1. **Connection**: `FrameSocket` → `NoiseSocket` → authenticated WebSocket
-2. **Message Processing**: Binary frames → `Node` structures → protocol handlers → Signal decryption → events
-3. **State Updates**: Commands → `PersistenceManager` → background persistence with dirty tracking
+The project is split into three main crates:
 
-## Development Workflows
+- **wacore**
+  A platform-agnostic library containing the pure, `no_std`-compatible core logic for the WhatsApp binary protocol, cryptography primitives (via `libsignal-protocol`), and state management traits.
+  It has **no dependencies** on Tokio or specific databases.
 
-### Building & Testing
-```bash
-# Build with all features
-cargo build --release
+- **waproto**
+  Houses the Protocol Buffers definitions (`whatsapp.proto`).
+  It contains a `build.rs` script that uses **prost** to compile these definitions into Rust structs.
+  The pre-generated `whatsapp.rs` file is checked into the repository, so developers do not need the `protoc` compiler installed to build the main project.
 
-# Run integration tests (includes E2E encryption tests)
-cargo test
+- **whatsapp-rust** (main crate)
+  The main client implementation that integrates `wacore` with the Tokio runtime for asynchronous operations, Diesel for SQLite persistence, and provides the high-level client API.
 
-# Debug device state
-cargo run --bin debug_device
+### Key Components
 
-# Run main client (handles QR pairing automatically)
-cargo run
+- **Client** (`src/client.rs`): Orchestrates the connection lifecycle, event bus, and high-level operations.
+- **PersistenceManager** (`src/store/persistence_manager.rs`): Manages all state.
+  - All state mutations **must** go through this manager via the `DeviceCommand` pattern.
+  - Direct modification of the Device state is **forbidden**.
+- **Store Layer** (`src/store/`): Abstraction for persistence. Main implementation: `SqliteStore` (via Diesel).
+- **Signal Protocol** (`wacore/src/signal/` & `src/store/signal*.rs`): E2E encryption via `libsignal-protocol`.
+- **Binary Protocol** (`wacore/src/binary/`): Zero-copy parser (`unmarshal_ref`) and encoder (`marshal`) for WhatsApp’s binary protocol.
+- **Socket & Handshake** (`src/socket/`, `src/handshake.rs`): Handles WebSocket connection and Noise Protocol handshake.
 
-# After modifications run format
-cargo fmt
+---
 
-```
+## 2. Current Project State & Focus
 
-### Key Testing Patterns
-- Integration tests in `tests/` simulate full WhatsApp protocol flows
-- `one_on_one_test.rs` demonstrates complete Signal Protocol session establishment
-- Tests use `MemoryStore` for isolated state vs `FileStore` for persistence
-- Mock clients can simulate phone-side pairing for automated testing
+### Stable
 
-## Critical Patterns & Conventions
+- 1-on-1 E2E messaging (send/receive)
+- QR code pairing
+- Connection management
 
-### State Management
-- **Never access device state directly** - use `PersistenceManager::process_command()` for all mutations
-- **Command Pattern**: All state changes go through `DeviceCommand` enum for atomicity and background persistence
-- **Snapshot Pattern**: Use `get_device_snapshot()` for read-only access to current state
+## 3. Development & Testing Workflow
 
-### Async Concurrency
-- **Per-chat locks**: `chat_locks: DashMap<Jid, Arc<Mutex<()>>>` serializes messages within chats while allowing cross-chat concurrency
-- **Event-driven**: Client emits `Event` enum for all protocol events (messages, presence, state changes)
-- **Background tasks**: Keepalive, state sync, and persistence run as separate Tokio tasks
+- **Build**: `cargo build`
+- **Test**: `cargo test --all`
+- **Format**: `cargo fmt`
 
-### Protocol Specifics
-- **JID Format**: WhatsApp user/group identifiers use custom parsing in `types/jid.rs`
-- **Binary Encoding**: Use `binary::marshal()` / `binary::unmarshal_ref()` for WABinary protocol
-- **Signal Sessions**: Session establishment requires prekey bundles and device registration
-- **Multi-device**: Handle `DeviceSentMessage` wrappers for messages sent from other user devices
+### Testing Strategy
 
-### Error Handling
-- **Protocol Errors**: Use `BinaryError` for WABinary parsing, `SocketError` for connection issues
-- **Crypto Errors**: Signal Protocol errors in `signal/` modules, app state sync errors in `appstate/errors.rs`
-- **Graceful degradation**: Connection drops trigger automatic reconnection with exponential backoff
+- Integration tests live in `tests/`
+- Many tests use **captured network data** (`tests/captured_*`) for protocol verification
+- When adding features, replicate or extend existing captured-data tests
 
-### Key Files for Understanding
-- `src/main.rs`: Complete client lifecycle example with QR pairing and event handling
-- `src/handshake.rs`: WhatsApp authentication flow and server key verification
-- `src/message.rs`: Message encryption/decryption and multi-device handling
-- `src/appstate/processor.rs`: App state mutation processing (contacts, chat settings)
-- `tests/conversation_e2e_test.rs`: Full E2E messaging test demonstrating proper usage patterns
+---
 
-## Integration Points
+## 4. Critical Patterns & Conventions
 
-### External Dependencies
-- **Tokio**: All async operations, client uses `Arc<Client>` for shared state across tasks
-- **Protobuf**: Generated bindings in `waproto/` crate for WhatsApp's wire protocol
+- **State Management is Paramount**
 
-### Store Backend Abstraction
-- Implement `Backend` trait in `store/traits.rs` for custom persistence (SQLite, Redis, etc.)
-- Current implementations: `FileStore` (production), `MemoryStore` (testing)
-- All crypto material (identity keys, sessions, prekeys) stored via backend abstraction
+  - Never modify Device state directly.
+  - Use `DeviceCommand` + `PersistenceManager::process_command()`.
+  - For read-only, use `PersistenceManager::get_device_snapshot()`.
 
-### Event System
-- Add handlers via `client.add_event_handler(Box::new(handler))`
-- Events are `Arc<Event>` for efficient sharing across handlers
-- Critical events: `Event::Message`, `Event::LoggedOut`, `Event::Connected`, `Event::AppStateSyncComplete`
+- **Asynchronous Code**
 
-When working on WhatsApp protocol features, always reference the existing integration tests for proper patterns and consult the Go `whatsmeow` documentation for protocol behavior.
+  - All I/O uses Tokio.
+  - Be mindful of race conditions.
+  - Use `Client::chat_locks` to serialize per-chat operations.
+
+- **Error Handling**
+
+  - Use `thiserror` for custom errors (`SocketError`, `DecryptionError`, …).
+  - Use `anyhow::Error` for functions with multiple failure modes.
+  - Avoid `.unwrap()` and `.expect()` outside tests.
+
+- **Protocol Implementation**
+  - When in doubt, refer to the **whatsmeow** Go library as the source of truth.
+
+---
+
+## 5. Pull Request Review Guidelines
+
+When reviewing PRs, act as a **senior developer**:
+
+### Architectural Adherence
+
+- Correct separation of crates (`wacore` vs `whatsapp-rust`)
+- State changes **must** go through PersistenceManager + DeviceCommand
+
+### Correctness & Robustness
+
+- Proper error handling (`Result`, no risky `.unwrap()`)
+- Async safety:
+  - Shared state via `Arc<Mutex<T>>` / `Arc<RwLock<T>>`
+  - Correct use of `client.chat_locks` for chat-specific state
+
+### Testing
+
+- Are tests included for new functionality?
+- For bug fixes: is there a regression test?
+- For protocol changes: can captured data be added?
+
+### Code Style
+
+- Formatted with `cargo fmt`
+- Uses idiomatic Rust (iterators, combinators, pattern matching)
+- Clear & concise comments
+
+---
+
+## 6. Key Files for Understanding
+
+- `src/client.rs`: Central hub of the client
+- `src/store/persistence_manager.rs`: Gatekeeper of state changes
+- `src/message.rs`: Incoming message decryption
+- `src/send.rs`: Outgoing message encryption
+- `tests/message_decryption_test.rs`: Good cryptographic test example
+- `wacore/src/binary/`: Encoding/decoding WhatsApp binary format
+- `waproto/src/whatsapp.proto`: Source of all message structures
+
+---
+
+## 7. Final Implementation Checks
+
+Before finalizing a feature/fix, always run:
+
+- **Format**: `cargo fmt`
+- **Lint**: `cargo clippy --all-targets`
