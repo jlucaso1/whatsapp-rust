@@ -87,7 +87,3 @@ incremental = false
 name = "group_e2e_self_test"
 path = "tests/group_e2e_self_test.rs"
 harness = true
-
-[[example]]
-name = "sqlite_demo"
-path = "examples/sqlite_demo.rs"
