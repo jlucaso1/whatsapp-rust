@@ -286,7 +286,7 @@ impl<'a> Decoder<'a> {
                 for _ in 0..size {
                     nodes.push(self.read_node_ref()?);
                 }
-                Ok(Some(NodeContentRef::Nodes(nodes)))
+                Ok(Some(NodeContentRef::Nodes(Box::new(nodes))))
             }
         }
     }
