@@ -5,3 +5,4 @@
 /.cargo
 /.vscode
 whatsapp.db*
+.env

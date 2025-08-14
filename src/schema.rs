@@ -60,6 +60,13 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    signed_prekeys (id) {
+        id -> Integer,
+        record -> Binary,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_versions,
@@ -68,4 +75,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     prekeys,
     sender_keys,
     sessions,
+    signed_prekeys,
 );
