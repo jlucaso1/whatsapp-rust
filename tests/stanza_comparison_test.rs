@@ -17,7 +17,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
     use wacore::signal::store::PreKeyStore as WacorePreKeyStore;
     use wacore::{
         binary::node::{Node, NodeContent},
@@ -171,7 +171,7 @@ mod tests {
 
             // 2. --- SETUP RECIPIENT'S CRYPTOGRAPHIC STATE ---
             let recipient_device = setup_device_from_state(recipient_state_data).await;
-            let device_arc = Arc::new(Mutex::new(recipient_device));
+            let device_arc = Arc::new(RwLock::new(recipient_device));
             let mut recipient_adapter = SignalProtocolStoreAdapter::new(device_arc.clone());
 
             let sender_signal_address = case.sender_id.to_protocol_address();

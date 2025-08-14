@@ -85,7 +85,7 @@ impl Client {
             );
 
             let device_store = self.persistence_manager.get_device_arc().await;
-            let device_guard = device_store.lock().await;
+            let device_guard = device_store.read().await;
 
             if let Err(e) = device_guard
                 .backend
@@ -108,7 +108,7 @@ impl Client {
 
             let device_store = self.persistence_manager.get_device_arc().await;
             if let Err(e) = device_store
-                .lock()
+                .write()
                 .await
                 .delete_session(&signal_address)
                 .await
@@ -158,7 +158,7 @@ impl Client {
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let device_store = self.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.lock().await;
+        let device_guard = device_store.read().await;
 
         let new_prekey_id = (rand::random::<u32>() % 16777215) + 1;
         let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
