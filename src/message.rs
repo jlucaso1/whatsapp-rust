@@ -775,7 +775,7 @@ mod tests {
     fn test_unpad_message_ref_v3_returns_same_slice() {
         let data = b"Hello, World!";
         let result = unpad_message_ref(data, 3).unwrap();
-        
+
         // For version 3, should return the same slice (zero-copy)
         assert_eq!(result, data);
         assert_eq!(result.as_ptr(), data.as_ptr()); // Same memory address - true zero-copy
@@ -786,9 +786,9 @@ mod tests {
         // Create data with v2 padding (3 bytes of padding with value 3)
         let mut data = b"Hello".to_vec();
         data.extend_from_slice(&[3, 3, 3]); // Add padding
-        
+
         let result = unpad_message_ref(&data, 2).unwrap();
-        
+
         // Should return slice without padding
         assert_eq!(result, b"Hello");
         // For v2, the slice points to the beginning of the original data (which is correct)
@@ -801,9 +801,9 @@ mod tests {
         // Create data with v1 padding (2 bytes of padding with value 2)
         let mut data = b"Test".to_vec();
         data.extend_from_slice(&[2, 2]); // Add padding
-        
+
         let result = unpad_message_ref(&data, 1).unwrap();
-        
+
         // Should return slice without padding
         assert_eq!(result, b"Test");
     }
