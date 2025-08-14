@@ -179,17 +179,17 @@ impl Client {
 
         match result {
             Ok(padded_plaintext) => {
-                let plaintext = unpad_message_ref(&padded_plaintext, padding_version)?.to_vec();
+                let plaintext_slice = unpad_message_ref(&padded_plaintext, padding_version)?;
 
                 log::info!(
                     "Successfully decrypted message from {}: {} bytes (type: {})",
                     info.source.sender,
-                    plaintext.len(),
+                    plaintext_slice.len(),
                     enc_type
                 );
 
                 if enc_type == "skmsg" {
-                    match wa::Message::decode(plaintext.as_slice()) {
+                    match wa::Message::decode(plaintext_slice) {
                         Ok(group_msg) => {
                             debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
                             debug!(target: "Client/Recv", "Message info: {info:?}");
@@ -201,7 +201,7 @@ impl Client {
                         Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
                     }
                 } else {
-                    match wa::Message::decode(plaintext.as_slice()) {
+                    match wa::Message::decode(plaintext_slice) {
                         Ok(original_msg) => {
                             if let Some(skdm) = &original_msg.sender_key_distribution_message
                                 && let Some(axolotl_bytes) =
@@ -544,16 +544,16 @@ impl Client {
         info: &MessageInfo,
         message_key: &RecentMessageKey,
     ) -> Result<(), anyhow::Error> {
-        let plaintext = unpad_message_ref(padded_plaintext, padding_version)?.to_vec();
+        let plaintext_slice = unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
             "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
             info.source.sender,
-            plaintext.len(),
+            plaintext_slice.len(),
             enc_type
         );
 
         if enc_type == "skmsg" {
-            match wa::Message::decode(plaintext.as_slice()) {
+            match wa::Message::decode(plaintext_slice) {
                 Ok(group_msg) => {
                     debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
                     debug!(target: "Client/Recv", "Message info: {info:?}");
@@ -564,7 +564,7 @@ impl Client {
                 Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
             }
         } else {
-            match wa::Message::decode(plaintext.as_slice()) {
+            match wa::Message::decode(plaintext_slice) {
                 Ok(original_msg) => {
                     if let Some(skdm) = &original_msg.sender_key_distribution_message
                         && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
@@ -764,5 +764,47 @@ impl Client {
                 sender_jid
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unpad_message_ref_v3_returns_same_slice() {
+        let data = b"Hello, World!";
+        let result = unpad_message_ref(data, 3).unwrap();
+        
+        // For version 3, should return the same slice (zero-copy)
+        assert_eq!(result, data);
+        assert_eq!(result.as_ptr(), data.as_ptr()); // Same memory address - true zero-copy
+    }
+
+    #[test]
+    fn test_unpad_message_ref_v2_removes_padding() {
+        // Create data with v2 padding (3 bytes of padding with value 3)
+        let mut data = b"Hello".to_vec();
+        data.extend_from_slice(&[3, 3, 3]); // Add padding
+        
+        let result = unpad_message_ref(&data, 2).unwrap();
+        
+        // Should return slice without padding
+        assert_eq!(result, b"Hello");
+        // For v2, the slice points to the beginning of the original data (which is correct)
+        assert_eq!(result.len(), 5); // Original length without padding
+        assert_eq!(data.len(), 8); // Original data with padding
+    }
+
+    #[test]
+    fn test_unpad_message_ref_v1_removes_padding() {
+        // Create data with v1 padding (2 bytes of padding with value 2)
+        let mut data = b"Test".to_vec();
+        data.extend_from_slice(&[2, 2]); // Add padding
+        
+        let result = unpad_message_ref(&data, 1).unwrap();
+        
+        // Should return slice without padding
+        assert_eq!(result, b"Test");
     }
 }
