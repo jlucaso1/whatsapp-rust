@@ -11,7 +11,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use waproto::whatsapp as wa;
-    use whatsapp_rust::store::{Device, memory::MemoryStore};
+    use whatsapp_rust::store::Device;
+    use whatsapp_rust::store::sqlite_store::SqliteStore;
 
     /// A helper struct to deserialize the specific JSON format for the SenderKeyRecord
     /// that was captured from the Go implementation.
@@ -148,7 +149,7 @@ mod tests {
             .expect("Failed to read expected_ciphertext.bin");
 
         // 2. --- SETUP STORE: Initialize an in-memory store and load the state ---
-        let store_backend = Arc::new(MemoryStore::new());
+        let store_backend = Arc::new(SqliteStore::new(":memory:").await.unwrap());
         let mut device = Device::new(store_backend);
         device
             .store_sender_key(&group_sender_address, &sender_key_record)

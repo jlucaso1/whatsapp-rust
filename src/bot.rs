@@ -67,7 +67,7 @@ impl BotBuilder {
             self.db_path
         );
         let persistence_manager = Arc::new(
-            PersistenceManager::new_sqlite(&self.db_path)
+            PersistenceManager::new(&self.db_path)
                 .await
                 .expect("Failed to initialize PersistenceManager with SQLite"),
         );

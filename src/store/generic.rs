@@ -47,7 +47,12 @@ where
     }
 
     pub async fn all(&self) -> Vec<(K, V)> {
-        self.store.lock().await.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.store
+            .lock()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Retain only the elements specified by the predicate.

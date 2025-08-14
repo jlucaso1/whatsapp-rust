@@ -3,19 +3,16 @@ use libsignal_protocol::KeyPair;
 use wacore::store::device::key_pair_serde;
 use wacore::types::jid::Jid;
 use waproto::whatsapp as wa;
-pub mod commands; // Device commands for the persistence manager
+pub mod commands;
 pub mod error;
-pub mod filestore;
 pub mod generic;
-pub mod memory;
-pub mod persistence_manager; // Background persistence manager
-pub mod schema; // Diesel schema
+pub mod persistence_manager;
+pub mod schema;
 pub mod signal_adapter;
-pub mod sqlite_store; // SQLite storage backend
+pub mod sqlite_store;
 pub mod traits;
 use serde_big_array::BigArray;
 
-// Re-export traits from both wacore and local extensions
 pub use crate::store::traits::*;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -34,7 +31,6 @@ pub struct SerializableDevice {
     #[serde(with = "key_pair_serde")]
     pub signed_pre_key: KeyPair,
     pub signed_pre_key_id: u32,
-    // FIX: Add the serde_big_array attribute
     #[serde(with = "BigArray")]
     pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
@@ -44,12 +40,9 @@ pub struct SerializableDevice {
     pub processed_messages: VecDeque<wacore::store::device::ProcessedMessageKey>,
 }
 
-/// Platform-specific Device wrapper that contains core device data plus backend
 #[derive(Clone)]
 pub struct Device {
-    /// Core device data
     pub core: wacore::store::Device,
-    /// Platform-specific backend for storage operations
     pub backend: Arc<dyn Backend>,
 }
 
@@ -68,7 +61,6 @@ impl DerefMut for Device {
 }
 
 impl Device {
-    /// Creates a new, unregistered device with fresh keys and abstracted stores.
     pub fn new(backend: Arc<dyn Backend>) -> Self {
         let core = wacore::store::Device::new();
         Self { core, backend }
