@@ -480,21 +480,20 @@ impl Client {
         }
 
         if let Some(push_name_attr) = node.attrs.get("pushname") {
-            let new_name = push_name_attr.clone();
             let current_device = self.persistence_manager.get_device_snapshot().await;
             let old_name = current_device.push_name.clone();
 
-            if old_name != new_name {
-                info!(target: "Client", "Updating push name from server to '{new_name}'");
+            if old_name != *push_name_attr {
+                info!(target: "Client", "Updating push name from server to '{push_name_attr}'");
                 self.persistence_manager
-                    .process_command(DeviceCommand::SetPushName(new_name.clone()))
+                    .process_command(DeviceCommand::SetPushName(push_name_attr.clone()))
                     .await;
 
                 self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
                     crate::types::events::SelfPushNameUpdated {
                         from_server: true,
                         old_name,
-                        new_name,
+                        new_name: push_name_attr.clone(),
                     },
                 ));
             }

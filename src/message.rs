@@ -152,7 +152,7 @@ impl Client {
         message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
         let ciphertext = match &enc_node.content {
-            Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+            Some(crate::binary::node::NodeContent::Bytes(b)) => b.as_slice(),
             _ => {
                 log::warn!("Enc node has no byte content");
                 return Err(DecryptionError::Crypto(anyhow::anyhow!(
@@ -166,10 +166,10 @@ impl Client {
 
         let result = match enc_type.as_str() {
             "pkmsg" | "msg" => {
-                self.decrypt_dm_ciphertext(info, &enc_type, &ciphertext)
+                self.decrypt_dm_ciphertext(info, &enc_type, ciphertext)
                     .await
             }
-            "skmsg" => self.decrypt_group_ciphertext(info, &ciphertext).await,
+            "skmsg" => self.decrypt_group_ciphertext(info, ciphertext).await,
             _ => {
                 log::warn!("Unsupported enc type: {enc_type}");
                 return Err(DecryptionError::Crypto(anyhow::anyhow!(
