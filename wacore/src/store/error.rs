@@ -13,6 +13,15 @@ pub enum StoreError {
 
     #[error("Database backend error: {0}")]
     Backend(#[from] Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("Database connection error: {0}")]
+    Connection(String),
+
+    #[error("Database operation error: {0}")]
+    Database(String),
+
+    #[error("Migration error: {0}")]
+    Migration(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

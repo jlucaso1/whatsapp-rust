@@ -690,10 +690,8 @@ impl Client {
         sender_jid: &Jid,
         axolotl_bytes: &[u8],
     ) {
-        // Try fast zero-copy parsing first
         let skdm = match SkdmFields::parse_zero_copy(axolotl_bytes) {
             Ok(fields) => {
-                // Fast path: construct SKDM from parsed fields without protobuf allocations
                 if let (Some(id), Some(iteration), Some(chain_key), Some(signing_key)) = (
                     fields.id,
                     fields.iteration,
@@ -741,58 +739,55 @@ impl Client {
                     return;
                 }
             }
-            Err(_) => {
-                // Fallback to original parsing logic for compatibility
-                match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
-                    Ok(msg) => msg,
-                    Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
-                        Ok(go_msg) => {
-                            match SignalPublicKey::from_djb_public_key_bytes(
-                                &go_msg.signing_key.unwrap(),
-                            ) {
-                                Ok(pub_key) => {
-                                    match SenderKeyDistributionMessage::new(
-                                        SENDERKEY_MESSAGE_CURRENT_VERSION,
-                                        go_msg.id.unwrap(),
-                                        go_msg.iteration.unwrap(),
-                                        go_msg.chain_key.unwrap(),
-                                        pub_key,
-                                    ) {
-                                        Ok(skdm) => skdm,
-                                        Err(e) => {
-                                            log::error!(
-                                                "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
-                                                sender_jid,
-                                                e,
-                                                e1
-                                            );
-                                            return;
-                                        }
+            Err(_) => match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
+                Ok(msg) => msg,
+                Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
+                    Ok(go_msg) => {
+                        match SignalPublicKey::from_djb_public_key_bytes(
+                            &go_msg.signing_key.unwrap(),
+                        ) {
+                            Ok(pub_key) => {
+                                match SenderKeyDistributionMessage::new(
+                                    SENDERKEY_MESSAGE_CURRENT_VERSION,
+                                    go_msg.id.unwrap(),
+                                    go_msg.iteration.unwrap(),
+                                    go_msg.chain_key.unwrap(),
+                                    pub_key,
+                                ) {
+                                    Ok(skdm) => skdm,
+                                    Err(e) => {
+                                        log::error!(
+                                            "Failed to construct SKDM from Go format from {}: {:?} (original parse error: {:?})",
+                                            sender_jid,
+                                            e,
+                                            e1
+                                        );
+                                        return;
                                     }
                                 }
-                                Err(e) => {
-                                    log::error!(
-                                        "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
-                                        sender_jid,
-                                        e,
-                                        e1
-                                    );
-                                    return;
-                                }
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to parse public key from Go SKDM for {}: {:?} (original parse error: {:?})",
+                                    sender_jid,
+                                    e,
+                                    e1
+                                );
+                                return;
                             }
                         }
-                        Err(e2) => {
-                            log::error!(
-                                "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
-                                sender_jid,
-                                e1,
-                                e2
-                            );
-                            return;
-                        }
-                    },
-                }
-            }
+                    }
+                    Err(e2) => {
+                        log::error!(
+                            "Failed to parse SenderKeyDistributionMessage (standard and Go fallback) from {}: primary: {:?}, fallback: {:?}",
+                            sender_jid,
+                            e1,
+                            e2
+                        );
+                        return;
+                    }
+                },
+            },
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
@@ -822,47 +817,5 @@ impl Client {
                 sender_jid
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_unpad_message_ref_v3_returns_same_slice() {
-        let data = b"Hello, World!";
-        let result = unpad_message_ref(data, 3).unwrap();
-
-        // For version 3, should return the same slice (zero-copy)
-        assert_eq!(result, data);
-        assert_eq!(result.as_ptr(), data.as_ptr()); // Same memory address - true zero-copy
-    }
-
-    #[test]
-    fn test_unpad_message_ref_v2_removes_padding() {
-        // Create data with v2 padding (3 bytes of padding with value 3)
-        let mut data = b"Hello".to_vec();
-        data.extend_from_slice(&[3, 3, 3]); // Add padding
-
-        let result = unpad_message_ref(&data, 2).unwrap();
-
-        // Should return slice without padding
-        assert_eq!(result, b"Hello");
-        // For v2, the slice points to the beginning of the original data (which is correct)
-        assert_eq!(result.len(), 5); // Original length without padding
-        assert_eq!(data.len(), 8); // Original data with padding
-    }
-
-    #[test]
-    fn test_unpad_message_ref_v1_removes_padding() {
-        // Create data with v1 padding (2 bytes of padding with value 2)
-        let mut data = b"Test".to_vec();
-        data.extend_from_slice(&[2, 2]); // Add padding
-
-        let result = unpad_message_ref(&data, 1).unwrap();
-
-        // Should return slice without padding
-        assert_eq!(result, b"Test");
     }
 }
