@@ -9,8 +9,8 @@ use wacore::appstate::{
 use wacore::crypto::{cbc, hmac_sha512};
 use waproto::whatsapp as wa;
 
-#[tokio::test]
-async fn test_decode_mutation_success_with_valid_macs() {
+#[test]
+fn test_decode_mutation_success_with_valid_macs() {
     let key_data = b"a-correct-32-byte-secret-key-!!";
     let expanded_keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"key_id_1";
@@ -85,8 +85,8 @@ async fn test_decode_mutation_success_with_valid_macs() {
     assert_eq!(decoded.value_mac, value_mac.as_slice());
 }
 
-#[tokio::test]
-async fn test_decode_mutation_bad_value_mac_fails() {
+#[test]
+fn test_decode_mutation_bad_value_mac_fails() {
     let key_data = b"a-correct-32-byte-secret-key-!!";
     let expanded_keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"key_id_1";
@@ -148,8 +148,8 @@ async fn test_decode_mutation_bad_value_mac_fails() {
     assert!(output_mutations.is_empty());
 }
 
-#[tokio::test]
-async fn test_decode_mutation_bad_index_mac_fails() {
+#[test]
+fn test_decode_mutation_bad_index_mac_fails() {
     let key_data = b"a-correct-32-byte-secret-key-!!";
     let expanded_keys = keys::expand_app_state_keys(key_data);
     let key_id_bytes = b"key_id_1";
