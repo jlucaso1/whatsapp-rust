@@ -25,7 +25,6 @@ anyhow = { version = "1.0", default-features = false }
 async-trait = "0.1.88"
 bincode = { version = "2.0.1", features = ["serde"] }
 bytes = { version = "1.5", default-features = false }
-cbc = { version = "0.1.2", features = ["alloc"] }
 
 # Time handling
 chrono = { version = "0.4" }

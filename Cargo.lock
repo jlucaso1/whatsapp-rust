@@ -1913,7 +1913,6 @@ dependencies = [
  "base64",
  "bincode",
  "bytes",
- "cbc",
  "chrono",
  "dashmap",
  "diesel",
