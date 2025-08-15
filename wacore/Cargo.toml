@@ -46,7 +46,7 @@ sha1 = "0.10.6"
 sha2 = "0.10.6"
 subtle = "2.6.1"
 thiserror = "2.0.12"
-uuid = "1.18.0"
+uuid = { version = "1.18.0", default-features = false, features = ["v4"] }
 wacore-binary = { workspace = true, features = ["serde"] }
 waproto = { workspace = true }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
