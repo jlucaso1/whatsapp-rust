@@ -10,6 +10,7 @@ pub mod error;
 pub mod node;
 pub mod token;
 pub mod util;
+mod xml;
 
 pub use error::{BinaryError, Result};
 pub use node::{Node, NodeRef};
