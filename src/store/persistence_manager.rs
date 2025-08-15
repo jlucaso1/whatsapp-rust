@@ -138,35 +138,9 @@ use super::commands::{DeviceCommand, apply_command_to_device};
 
 impl PersistenceManager {
     pub async fn process_command(&self, command: DeviceCommand) {
-        debug!("Processing command: {command:?}");
         self.modify_device(|device| {
             apply_command_to_device(device, command);
         })
         .await;
-    }
-
-    pub async fn save_now(&self) -> Result<(), StoreError> {
-        if let Some(backend) = &self.backend {
-            debug!("PersistenceManager: Forcing save_now.");
-            let device_guard = self.device.read().await;
-            let serializable_device = device_guard.to_serializable();
-            drop(device_guard);
-
-            match backend.save_device_data(&serializable_device).await {
-                Ok(_) => {
-                    let mut dirty_guard = self.dirty.lock().await;
-                    *dirty_guard = false;
-                    debug!("PersistenceManager: Forced save_now successful.");
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("PersistenceManager: Forced save_now failed: {e}");
-                    Err(e)
-                }
-            }
-        } else {
-            debug!("PersistenceManager: save_now called on in-memory store, no action taken.");
-            Ok(())
-        }
     }
 }
