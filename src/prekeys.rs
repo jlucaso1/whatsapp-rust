@@ -1,16 +1,16 @@
 use crate::binary::node::NodeContent;
 use crate::client::Client;
 use crate::types::jid::{Jid, SERVER_JID};
-use wacore::libsignal::protocol::PreKeyBundle;
 use log;
+use wacore::libsignal::protocol::PreKeyBundle;
 
 use crate::binary::builder::NodeBuilder;
 use crate::request::{InfoQuery, InfoQueryType};
 
 use anyhow;
-use wacore::libsignal::protocol::KeyPair;
 use rand::TryRngCore;
 use rand_core::OsRng;
+use wacore::libsignal::protocol::KeyPair;
 use wacore::signal::state::record::new_pre_key_record;
 
 pub use wacore::prekeys::PreKeyUtils;

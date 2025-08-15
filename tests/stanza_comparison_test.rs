@@ -1,14 +1,6 @@
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use wacore::libsignal::protocol::{
-        CiphertextMessage, KeyPair, PreKeySignalMessage, PrivateKey, PublicKey, UsePQRatchet,
-        message_decrypt,
-    };
-    use wacore::libsignal::protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
-    use wacore::libsignal::protocol::{
-        SenderKeyDistributionMessage, process_sender_key_distribution_message,
-    };
     use log::info;
     use prost::Message;
     use rand::TryRngCore;
@@ -18,6 +10,16 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tokio::sync::RwLock;
+    use wacore::libsignal::protocol::{
+        CiphertextMessage, KeyPair, PreKeySignalMessage, PrivateKey, PublicKey, UsePQRatchet,
+        message_decrypt,
+    };
+    use wacore::libsignal::protocol::{
+        PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
+    };
+    use wacore::libsignal::protocol::{
+        SenderKeyDistributionMessage, process_sender_key_distribution_message,
+    };
     use wacore::signal::store::PreKeyStore as WacorePreKeyStore;
     use wacore::{
         binary::node::{Node, NodeContent},
@@ -237,8 +239,10 @@ mod tests {
                 )
             } else if enc_type == "msg" {
                 CiphertextMessage::SignalMessage(
-                    wacore::libsignal::protocol::SignalMessage::try_from(pkmsg_ciphertext.as_slice())
-                        .expect("Failed to parse SignalMessage"),
+                    wacore::libsignal::protocol::SignalMessage::try_from(
+                        pkmsg_ciphertext.as_slice(),
+                    )
+                    .expect("Failed to parse SignalMessage"),
                 )
             } else {
                 panic!(
