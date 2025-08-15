@@ -1,5 +1,7 @@
+use crate::libsignal::protocol::{
+    IdentityKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord,
+};
 use async_trait::async_trait;
-use libsignal_protocol::{IdentityKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord};
 use std::error::Error;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 

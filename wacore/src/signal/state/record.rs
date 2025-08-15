@@ -1,5 +1,5 @@
+use crate::libsignal::protocol::KeyPair;
 use chrono::Utc;
-use libsignal_protocol::KeyPair;
 use waproto::whatsapp as wa;
 
 pub fn new_pre_key_record(id: u32, key_pair: &KeyPair) -> wa::PreKeyRecordStructure {

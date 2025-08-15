@@ -1,7 +1,7 @@
+use crate::libsignal::protocol::PreKeyBundle;
 use crate::types::jid::Jid;
 use crate::types::message::AddressingMode;
 use async_trait::async_trait;
-use libsignal_protocol::PreKeyBundle;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

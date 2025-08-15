@@ -1,5 +1,5 @@
 pub mod signal;
-use libsignal_protocol::KeyPair;
+use wacore::libsignal::protocol::KeyPair;
 use wacore::store::device::key_pair_serde;
 use wacore::types::jid::Jid;
 use waproto::whatsapp as wa;

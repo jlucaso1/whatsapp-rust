@@ -1,7 +1,7 @@
 use crate::client::Client;
 use async_trait::async_trait;
-use libsignal_protocol::PreKeyBundle;
 use std::collections::HashMap;
+use wacore::libsignal::protocol::PreKeyBundle;
 use wacore::{
     client::context::{GroupInfo, SendContextResolver},
     types::jid::Jid,

@@ -2,7 +2,7 @@ use crate::store::error::Result;
 use crate::{appstate::hash::HashState, signal};
 use async_trait::async_trait;
 
-use libsignal_protocol::Direction;
+use crate::libsignal::protocol::Direction;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

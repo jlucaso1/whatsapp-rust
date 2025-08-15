@@ -1,15 +1,15 @@
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use libsignal_protocol::{
-        DeviceId, ProtocolAddress, SenderKeyMessage, SenderKeyRecord, SenderKeyStore, group_encrypt,
-    };
     use prost::Message;
     use rand::TryRngCore;
     use serde::Deserialize;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use wacore::libsignal::protocol::{
+        DeviceId, ProtocolAddress, SenderKeyMessage, SenderKeyRecord, SenderKeyStore, group_encrypt,
+    };
     use waproto::whatsapp as wa;
     use whatsapp_rust::store::Device;
     use whatsapp_rust::store::sqlite_store::SqliteStore;
