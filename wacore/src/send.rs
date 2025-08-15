@@ -2,14 +2,14 @@ use crate::binary::builder::NodeBuilder;
 use crate::binary::node::{Attrs, Node};
 use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
-use crate::signal::store::GroupSenderKeyStore;
-use crate::types::jid::Jid;
-use anyhow::{Result, anyhow};
-use libsignal_protocol::{
+use crate::libsignal::protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
     SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SignalProtocolError,
     UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
+use crate::signal::store::GroupSenderKeyStore;
+use crate::types::jid::Jid;
+use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::time::SystemTime;
@@ -67,24 +67,22 @@ where
     Ok(skm)
 }
 
-pub struct SignalStores<'a, S, I, P, SP, KP> {
+pub struct SignalStores<'a, S, I, P, SP> {
     pub sender_key_store: &'a mut (dyn GroupSenderKeyStore + Send + Sync),
     pub session_store: &'a mut S,
     pub identity_store: &'a mut I,
     pub prekey_store: &'a mut P,
     pub signed_prekey_store: &'a SP,
-    pub kyber_prekey_store: &'a mut KP,
 }
 
 pub async fn prepare_dm_stanza<
     'a,
-    S: libsignal_protocol::SessionStore + Send + Sync,
-    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
-    P: libsignal_protocol::PreKeyStore + Send + Sync,
-    SP: libsignal_protocol::SignedPreKeyStore + Send + Sync,
-    KP: libsignal_protocol::KyberPreKeyStore + Send + Sync,
+    S: crate::libsignal::protocol::SessionStore + Send + Sync,
+    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 >(
-    stores: &mut SignalStores<'a, S, I, P, SP, KP>,
+    stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
     account: Option<&wa::AdvSignedDeviceIdentity>,
@@ -147,7 +145,6 @@ pub async fn prepare_dm_stanza<
             stores.session_store,
             stores.identity_store,
             SystemTime::now(),
-            &mut rand::rngs::OsRng.unwrap_err(),
         )
         .await?;
 
@@ -207,8 +204,8 @@ pub async fn prepare_peer_stanza<S, I>(
     request_id: String,
 ) -> Result<Node>
 where
-    S: libsignal_protocol::SessionStore,
-    I: libsignal_protocol::IdentityKeyStore,
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
 {
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let signal_address = to_jid.to_protocol_address();
@@ -219,7 +216,6 @@ where
         session_store,
         identity_store,
         SystemTime::now(),
-        &mut rand::rngs::OsRng.unwrap_err(),
     )
     .await?;
 
@@ -250,13 +246,12 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_group_stanza<
     'a,
-    S: libsignal_protocol::SessionStore + Send + Sync,
-    I: libsignal_protocol::IdentityKeyStore + Send + Sync,
-    P: libsignal_protocol::PreKeyStore + Send + Sync,
-    SP: libsignal_protocol::SignedPreKeyStore + Send + Sync,
-    KP: libsignal_protocol::KyberPreKeyStore + Send + Sync,
+    S: crate::libsignal::protocol::SessionStore + Send + Sync,
+    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 >(
-    stores: &mut SignalStores<'a, S, I, P, SP, KP>,
+    stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     group_info: &mut GroupInfo,
     own_jid: &Jid,
@@ -350,7 +345,6 @@ pub async fn prepare_group_stanza<
                 stores.session_store,
                 stores.identity_store,
                 SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
             )
             .await?;
             let (enc_type, serialized_bytes) = match encrypted_payload {
@@ -440,7 +434,7 @@ pub async fn create_sender_key_distribution_message_for_group(
 
     if record.sender_key_state().is_err() {
         let signing_key =
-            libsignal_protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+            crate::libsignal::protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
 
         let chain_id = (rand::rngs::OsRng.unwrap_err().random::<u32>()) >> 1;
         let sender_key_seed: [u8; 32] = rand::rngs::OsRng.unwrap_err().random();

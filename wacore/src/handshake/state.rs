@@ -1,10 +1,10 @@
 use super::noise::{self, NoiseHandshake};
+use crate::libsignal::protocol::KeyPair;
 use crate::{
     binary::consts::NOISE_START_PATTERN,
     handshake::utils::{HandshakeError, HandshakeUtils},
 };
 use aes_gcm::Aes256Gcm;
-use libsignal_protocol::KeyPair;
 use prost::Message;
 use rand::TryRngCore;
 use rand_core::OsRng;

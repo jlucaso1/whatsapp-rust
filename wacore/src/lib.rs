@@ -4,6 +4,7 @@ pub mod client;
 pub mod crypto;
 pub mod download;
 pub mod handshake;
+pub mod libsignal;
 pub mod pair;
 pub mod prekeys;
 pub mod proto_helpers;

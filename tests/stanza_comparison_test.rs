@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use libsignal_protocol::{
+    use wacore::libsignal::protocol::{
         CiphertextMessage, KeyPair, PreKeySignalMessage, PrivateKey, PublicKey, UsePQRatchet,
         message_decrypt,
     };
-    use libsignal_protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
-    use libsignal_protocol::{
+    use wacore::libsignal::protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
+    use wacore::libsignal::protocol::{
         SenderKeyDistributionMessage, process_sender_key_distribution_message,
     };
     use log::info;
@@ -237,7 +237,7 @@ mod tests {
                 )
             } else if enc_type == "msg" {
                 CiphertextMessage::SignalMessage(
-                    libsignal_protocol::SignalMessage::try_from(pkmsg_ciphertext.as_slice())
+                    wacore::libsignal::protocol::SignalMessage::try_from(pkmsg_ciphertext.as_slice())
                         .expect("Failed to parse SignalMessage"),
                 )
             } else {
@@ -253,7 +253,6 @@ mod tests {
                 &mut recipient_adapter.identity_store,
                 &mut recipient_adapter.pre_key_store,
                 &recipient_adapter.signed_pre_key_store,
-                &mut recipient_adapter.kyber_pre_key_store,
                 &mut rand::rngs::OsRng.unwrap_err(),
                 UsePQRatchet::No,
             )
@@ -337,7 +336,7 @@ mod tests {
                 }
             };
 
-            let group_sender_address = libsignal_protocol::ProtocolAddress::new(
+            let group_sender_address = wacore::libsignal::protocol::ProtocolAddress::new(
                 format!("{}\n{}", case.group_id, sender_signal_address),
                 0.into(),
             );
@@ -357,7 +356,7 @@ mod tests {
                 _ => panic!("skmsg node has no byte content"),
             };
 
-            let decrypted_message_payload = libsignal_protocol::group_decrypt(
+            let decrypted_message_payload = wacore::libsignal::protocol::group_decrypt(
                 skmsg_ciphertext,
                 &mut recipient_adapter.sender_key_store,
                 &group_sender_address,

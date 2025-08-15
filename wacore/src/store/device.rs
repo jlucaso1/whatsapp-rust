@@ -1,5 +1,6 @@
 use crate::types::jid::Jid;
-use libsignal_protocol::{IdentityKeyPair, KeyPair};
+// use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
+use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
 use rand::TryRngCore;
@@ -11,7 +12,7 @@ use waproto::whatsapp as wa;
 
 pub mod key_pair_serde {
     use super::KeyPair;
-    use libsignal_protocol::{PrivateKey, PublicKey};
+    use crate::libsignal::protocol::{PrivateKey, PublicKey};
     use serde::{self, Deserializer, Serializer};
 
     pub fn serialize<S>(key_pair: &KeyPair, serializer: S) -> Result<S::Ok, S::Error>

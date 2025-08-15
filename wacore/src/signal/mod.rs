@@ -4,5 +4,5 @@ pub mod store;
 
 pub mod skdm_parser;
 
-pub use libsignal_protocol::{IdentityKey, IdentityKeyPair};
+pub use crate::libsignal::protocol::{IdentityKey, IdentityKeyPair};
 pub use skdm_parser::SkdmFields;
