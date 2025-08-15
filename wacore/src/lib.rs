@@ -15,3 +15,7 @@ pub mod signal;
 pub mod store;
 pub mod types;
 pub mod usync;
+#[cfg(feature = "wasm")]
+pub mod wasm_api;
+#[cfg(feature = "wasm")]
+pub mod wasm_types;
