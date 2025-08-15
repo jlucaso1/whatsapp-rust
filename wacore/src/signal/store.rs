@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use std::error::Error;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-use crate::types::jid::Jid;
+use wacore_binary::jid::Jid;
 
 type StoreError = Box<dyn Error + Send + Sync>;
 

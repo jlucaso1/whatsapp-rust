@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::types::presence::Presence;
 use log::{debug, info, warn};
-use wacore::binary::builder::NodeBuilder;
+use wacore_binary::builder::NodeBuilder;
 
 impl Client {
     pub async fn send_presence(&self, presence: Presence) -> Result<(), anyhow::Error> {

@@ -1,11 +1,11 @@
 use crate::appstate_sync;
-use crate::binary::node::Node;
 use crate::client::Client;
 use crate::types::events::Event;
 use crate::types::presence::Presence;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::task;
+use wacore_binary::{jid::SERVER_JID, node::Node};
 
 pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
     let notification_type = node.attrs.get("type").cloned().unwrap_or_default();
@@ -13,7 +13,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
     match notification_type.as_str() {
         "encrypt" => {
             if let Some(from) = node.attrs.get("from")
-                && from == crate::types::jid::SERVER_JID
+                && from == SERVER_JID
             {
                 let client_clone = client.clone();
                 task::spawn_local(async move {

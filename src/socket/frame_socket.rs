@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
-use wacore::binary::consts::WA_CONN_HEADER;
+use wacore_binary::consts::WA_CONN_HEADER;
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WsStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;

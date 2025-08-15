@@ -60,7 +60,7 @@ pub struct SignalMessage {
     message_version: u8,
     sender_ratchet_key: PublicKey,
     counter: u32,
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[expect(dead_code)]
     previous_counter: u32,
     ciphertext: Box<[u8]>,
     serialized: Box<[u8]>,

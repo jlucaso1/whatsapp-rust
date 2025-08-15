@@ -20,12 +20,13 @@ mod tests {
     use wacore::libsignal::protocol::{
         SenderKeyDistributionMessage, process_sender_key_distribution_message,
     };
+    use wacore::proto_helpers::MessageExt;
     use wacore::signal::store::PreKeyStore as WacorePreKeyStore;
-    use wacore::{
-        binary::node::{Node, NodeContent},
-        proto_helpers::MessageExt,
-        types::jid::Jid,
-    };
+    use wacore::types::jid::JidExt as _;
+    use wacore_binary::Node;
+    use wacore_binary::builder::NodeBuilder;
+    use wacore_binary::jid::Jid;
+    use wacore_binary::node::NodeContent;
     use waproto::whatsapp as wa;
     use whatsapp_rust::store::sqlite_store::SqliteStore;
     use whatsapp_rust::store::{Device, signal_adapter::SignalProtocolStoreAdapter};
@@ -481,7 +482,7 @@ mod tests {
             Some(SerializableContent::String(s)) => Some(NodeContent::Bytes(s.into_bytes())),
             None => None,
         };
-        wacore::binary::builder::NodeBuilder::new(s_node.tag)
+        NodeBuilder::new(s_node.tag)
             .attrs(s_node.attrs.unwrap_or_default())
             .apply_content(content)
             .build()

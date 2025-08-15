@@ -1,7 +1,7 @@
-use crate::binary::error::{BinaryError, Result};
-use crate::binary::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
-use crate::binary::token;
-use crate::types::jid::JidRef;
+use crate::error::{BinaryError, Result};
+use crate::jid::JidRef;
+use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
+use crate::token;
 use std::borrow::Cow;
 
 pub(crate) struct Decoder<'a> {
@@ -117,9 +117,9 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
 
         let server = match agent {
-            0 => Cow::Borrowed(crate::types::jid::DEFAULT_USER_SERVER),
-            1 => Cow::Borrowed(crate::types::jid::HIDDEN_USER_SERVER),
-            _ => Cow::Borrowed(crate::types::jid::HOSTED_SERVER),
+            0 => Cow::Borrowed(crate::jid::DEFAULT_USER_SERVER),
+            1 => Cow::Borrowed(crate::jid::HIDDEN_USER_SERVER),
+            _ => Cow::Borrowed(crate::jid::HOSTED_SERVER),
         };
 
         Ok(JidRef {
@@ -138,7 +138,7 @@ impl<'a> Decoder<'a> {
         let device = self.read_u16_be()?;
         let integrator = self.read_u16_be()?;
         let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-        if server != crate::types::jid::INTEROP_SERVER {
+        if server != crate::jid::INTEROP_SERVER {
             return Err(BinaryError::InvalidNode);
         }
         Ok(JidRef {
@@ -156,7 +156,7 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
         let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-        if server != crate::types::jid::MESSENGER_SERVER {
+        if server != crate::jid::MESSENGER_SERVER {
             return Err(BinaryError::InvalidNode);
         }
         Ok(JidRef {

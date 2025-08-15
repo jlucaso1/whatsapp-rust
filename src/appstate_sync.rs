@@ -1,14 +1,14 @@
 use wacore::appstate::errors::AppStateError;
 
 pub use wacore::appstate::*;
+use wacore_binary::jid::{Jid, SERVER_JID};
 
 use crate::client::Client;
 use crate::types::events::{ContactUpdate, Event};
-use crate::types::jid::{self, Jid};
 use log::{error, info, warn};
 use processor::PatchList;
 use prost::Message;
-use std::str::FromStr;
+use std::str::FromStr as _;
 use std::sync::Arc;
 use wacore::appstate::processor::Processor;
 use waproto::whatsapp::{self as wa, ExternalBlobReference};
@@ -36,7 +36,7 @@ pub async fn fetch_app_state_patches(
     name: &str,
     version: u64,
     is_full_sync: bool,
-) -> Result<crate::binary::node::Node, crate::request::IqError> {
+) -> Result<wacore_binary::node::Node, crate::request::IqError> {
     let sync_node = if is_full_sync {
         sync::SyncUtils::build_fetch_patches_query(name, 0, true)
     } else {
@@ -46,10 +46,10 @@ pub async fn fetch_app_state_patches(
     let iq = crate::request::InfoQuery {
         namespace: "w:sync:app:state",
         query_type: crate::request::InfoQueryType::Set,
-        to: jid::SERVER_JID.parse().unwrap(),
+        to: SERVER_JID.parse().unwrap(),
         target: None,
         id: None,
-        content: Some(crate::binary::node::NodeContent::Nodes(vec![sync_node])),
+        content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
         timeout: None,
     };
 
@@ -107,7 +107,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
 
                 if let Some(patches_node) = collection_node.get_optional_child("patches") {
                     for patch_child in patches_node.children().unwrap_or_default() {
-                        if let Some(crate::binary::node::NodeContent::Bytes(b)) =
+                        if let Some(wacore_binary::node::NodeContent::Bytes(b)) =
                             &patch_child.content
                             && let Ok(mut patch) = wa::SyncdPatch::decode(b.as_slice())
                         {
@@ -149,7 +149,7 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
 
                 let mut snapshot: Option<wa::SyncdSnapshot> = None;
                 if let Some(snapshot_node) = collection_node.get_optional_child("snapshot")
-                    && let Some(crate::binary::node::NodeContent::Bytes(b)) = &snapshot_node.content
+                    && let Some(wacore_binary::node::NodeContent::Bytes(b)) = &snapshot_node.content
                 {
                     // First, try to decode as a downloadable reference.
                     if let Ok(blob_ref) = ExternalBlobReference::decode(b.as_slice()) {

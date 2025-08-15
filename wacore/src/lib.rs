@@ -1,5 +1,4 @@
 pub mod appstate;
-pub mod binary;
 pub mod client;
 pub mod crypto;
 pub mod download;
@@ -15,7 +14,4 @@ pub mod signal;
 pub mod store;
 pub mod types;
 pub mod usync;
-#[cfg(feature = "wasm")]
-pub mod wasm_api;
-#[cfg(feature = "wasm")]
-pub mod wasm_types;
+pub mod xml;

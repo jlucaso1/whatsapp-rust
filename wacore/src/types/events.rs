@@ -1,5 +1,3 @@
-use crate::binary::node::Node;
-use crate::types::jid::{Jid, MessageId};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
@@ -7,6 +5,8 @@ use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use wacore_binary::jid::{Jid, MessageId};
+use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa, HistorySync};
 
 pub trait EventHandler: Send + Sync {

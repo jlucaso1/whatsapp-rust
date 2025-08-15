@@ -1,13 +1,13 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::NodeContent;
 use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
-use crate::types::jid::SERVER_JID;
 use log::{debug, info, warn};
 use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::SERVER_JID;
+use wacore_binary::node::NodeContent;
 
 // Constants ported from whatsmeow/keepalive.go
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);

@@ -1,16 +1,16 @@
 use crate::client::{Client, RecentMessageKey};
 use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
-use crate::types::jid::Jid;
 use log::{info, warn};
 use prost::Message;
 use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
-use wacore::binary::builder::NodeBuilder;
 use wacore::libsignal::protocol::{KeyPair, ProtocolAddress};
 use wacore::signal::store::SessionStore;
 use wacore::types::jid::JidExt;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
 impl Client {
@@ -32,7 +32,7 @@ impl Client {
     pub(crate) async fn handle_retry_receipt(
         self: &Arc<Self>,
         receipt: &Receipt,
-        node: &crate::binary::node::Node,
+        node: &wacore_binary::node::Node,
     ) -> Result<(), anyhow::Error> {
         let retry_child = node
             .get_optional_child("retry")

@@ -1,14 +1,11 @@
-use crate::binary::attrs::AttrParser;
-use smallvec::SmallVec;
+use crate::attrs::AttrParser;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub type Attrs = HashMap<String, String>;
-// Small optimization for attributes - use SmallVec to avoid HashMap overhead for ≤4 attrs
-pub type AttrsRef<'a> = SmallVec<[(Cow<'a, str>, Cow<'a, str>); 4]>;
+pub type AttrsRef<'a> = Vec<(Cow<'a, str>, Cow<'a, str>)>;
 
-// SmallVec with inline storage for 4 nodes - most nodes have ≤4 children
-pub type NodeVec<'a> = SmallVec<[NodeRef<'a>; 4]>;
+pub type NodeVec<'a> = Vec<NodeRef<'a>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
@@ -72,7 +69,6 @@ impl Node {
         Some(current_node)
     }
 
-    /// Returns a slice of direct children that have the specified tag.
     pub fn get_children_by_tag(&self, tag: &str) -> Vec<&Node> {
         if let Some(children) = self.children() {
             children.iter().filter(|c| c.tag == tag).collect()
@@ -81,7 +77,6 @@ impl Node {
         }
     }
 
-    /// Finds the first direct child with the given tag and returns it.
     pub fn get_optional_child(&self, tag: &str) -> Option<&Node> {
         self.children()
             .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
@@ -108,12 +103,10 @@ impl<'a> NodeRef<'a> {
         }
     }
 
-    /// Get attribute value by key - optimized for small attribute counts
     pub fn get_attr(&self, key: &str) -> Option<&Cow<'a, str>> {
         self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    /// Get all attributes as iterator for compatibility
     pub fn attrs_iter(&self) -> impl Iterator<Item = (&Cow<'a, str>, &Cow<'a, str>)> {
         self.attrs.iter().map(|(k, v)| (k, v))
     }
@@ -134,7 +127,6 @@ impl<'a> NodeRef<'a> {
         Some(current_node)
     }
 
-    /// Returns a slice of direct children that have the specified tag.
     pub fn get_children_by_tag(&self, tag: &str) -> Vec<&NodeRef<'a>> {
         if let Some(children) = self.children() {
             children.iter().filter(|c| c.tag == tag).collect()
@@ -143,13 +135,11 @@ impl<'a> NodeRef<'a> {
         }
     }
 
-    /// Finds the first direct child with the given tag and returns it.
     pub fn get_optional_child(&self, tag: &str) -> Option<&NodeRef<'a>> {
         self.children()
             .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
     }
 
-    /// Convert to owned Node
     pub fn to_owned(&self) -> Node {
         Node {
             tag: self.tag.to_string(),

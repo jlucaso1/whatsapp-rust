@@ -1,11 +1,11 @@
-use crate::binary::node::NodeContent;
 use crate::client::Client;
-use crate::types::jid::{Jid, SERVER_JID};
 use log;
 use wacore::libsignal::protocol::PreKeyBundle;
+use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::node::NodeContent;
 
-use crate::binary::builder::NodeBuilder;
 use crate::request::{InfoQuery, InfoQueryType};
+use wacore_binary::builder::NodeBuilder;
 
 use anyhow;
 use rand::TryRngCore;
@@ -102,7 +102,7 @@ impl Client {
             namespace: "encrypt",
             query_type: InfoQueryType::Get,
             to: SERVER_JID.parse().unwrap(),
-            content: Some(crate::binary::node::NodeContent::Nodes(vec![count_node])),
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![count_node])),
             id: None,
             target: None,
             timeout: None,
@@ -272,7 +272,7 @@ impl Client {
             namespace: "encrypt",
             query_type: InfoQueryType::Set,
             to: SERVER_JID.parse().unwrap(),
-            content: Some(crate::binary::node::NodeContent::Nodes(iq_content)),
+            content: Some(wacore_binary::node::NodeContent::Nodes(iq_content)),
             id: None,
             target: None,
             timeout: None,
@@ -280,7 +280,7 @@ impl Client {
 
         // Step 4: Send IQ to upload pre-keys
         if let Err(e) = self.send_iq(iq).await {
-            return Err(anyhow::anyhow!(e));
+            return Err(e.into());
         }
 
         // Step 5: Store the new pre-keys using existing backend interface

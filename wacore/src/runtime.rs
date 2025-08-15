@@ -1,5 +1,5 @@
-use crate::binary::node::Node;
 use async_trait::async_trait;
+use wacore_binary::node::Node;
 
 /// Trait for sending data over the network.
 /// The driver implementation will handle the actual I/O operations.

@@ -1,10 +1,10 @@
-use crate::binary::node::Node;
 use crate::client::Client;
 use crate::socket::error::SocketError;
 use log::warn;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
+use wacore_binary::node::Node;
 
 pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 
