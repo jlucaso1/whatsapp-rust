@@ -37,7 +37,6 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 futures-util = { version = "0.3.31", default-features = false }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-hkdf = "0.12.3"
 libsqlite3-sys = { version = "0.35.0", default-features = false, features = ["bundled"] }
 log = "0.4.27"
 prost = { version = "0.14.1", default-features = false }
@@ -49,7 +48,6 @@ scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde-big-array = "0.5.1"
 serde_json = "1.0"
-sha2 = "0.10.6"
 thiserror = "2.0.12"
 tokio = { workspace = true, features = [
     "macros",
