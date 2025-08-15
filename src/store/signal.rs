@@ -1,13 +1,13 @@
 use crate::store::Device;
 use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use wacore::libsignal::protocol::error::Result as SignalResult;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PrivateKey,
     ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
     SignalProtocolError,
 };
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use wacore::signal::store::*;
 use wacore::types::jid::Jid;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};

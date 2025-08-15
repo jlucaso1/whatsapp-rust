@@ -1,5 +1,5 @@
-use wacore::libsignal::protocol::{PrivateKey, PublicKey};
 use aes_gcm::aead::{Aead, Payload};
+use wacore::libsignal::protocol::{PrivateKey, PublicKey};
 use wacore::{
     binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER},
     crypto::{gcm, hkdf::sha256},

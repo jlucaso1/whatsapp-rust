@@ -5,6 +5,10 @@ use crate::error::decryption::DecryptionError;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
+use log::warn;
+use prost::Message as ProtoMessage;
+use rand::TryRngCore;
+use std::sync::Arc;
 use wacore::libsignal::protocol::SenderKeyDistributionMessage;
 use wacore::libsignal::protocol::group_decrypt;
 use wacore::libsignal::protocol::process_sender_key_distribution_message;
@@ -12,11 +16,9 @@ use wacore::libsignal::protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
     message_decrypt,
 };
-use wacore::libsignal::protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
-use log::warn;
-use prost::Message as ProtoMessage;
-use rand::TryRngCore;
-use std::sync::Arc;
+use wacore::libsignal::protocol::{
+    PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
+};
 use wacore::signal::SkdmFields;
 use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::types::jid::Jid;
