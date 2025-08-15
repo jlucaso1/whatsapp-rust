@@ -1,7 +1,3 @@
-#[cfg(feature = "wee_alloc")]
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
 pub mod attrs;
 pub mod builder;
 pub mod consts;
@@ -16,8 +12,3 @@ pub mod util;
 
 pub use error::{BinaryError, Result};
 pub use node::{Node, NodeRef};
-
-#[cfg(feature = "wasm")]
-pub mod wasm_api;
-#[cfg(feature = "wasm")]
-pub mod wasm_types;
