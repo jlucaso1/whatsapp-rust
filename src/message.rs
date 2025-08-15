@@ -13,7 +13,6 @@ use libsignal_protocol::{
     message_decrypt,
 };
 use libsignal_protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
-use log::debug;
 use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
@@ -192,9 +191,6 @@ impl Client {
                 if enc_type == "skmsg" {
                     match wa::Message::decode(plaintext_slice) {
                         Ok(group_msg) => {
-                            debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
-                            debug!(target: "Client/Recv", "Message info: {info:?}");
-
                             self.core
                                 .event_bus
                                 .dispatch(&Event::Message(Box::new(group_msg), info.clone()));
@@ -556,8 +552,6 @@ impl Client {
         if enc_type == "skmsg" {
             match wa::Message::decode(plaintext_slice) {
                 Ok(group_msg) => {
-                    debug!(target: "Client/Recv", "Received group message: {group_msg:?}");
-                    debug!(target: "Client/Recv", "Message info: {info:?}");
                     self.core
                         .event_bus
                         .dispatch(&Event::Message(Box::new(group_msg), info.clone()));

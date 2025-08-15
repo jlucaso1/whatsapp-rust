@@ -38,19 +38,18 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     }
 
                     let mut codes = Vec::new();
+
+                    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+                    let device_state = DeviceState {
+                        identity_key: device_snapshot.identity_key,
+                        noise_key: device_snapshot.noise_key,
+                        adv_secret_key: device_snapshot.adv_secret_key,
+                    };
+
                     for grandchild in child.get_children_by_tag("ref") {
                         if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
                             && let Ok(r) = String::from_utf8(bytes.clone())
                         {
-                            let device_snapshot =
-                                client.persistence_manager.get_device_snapshot().await;
-
-                            let device_state = DeviceState {
-                                identity_key: device_snapshot.identity_key,
-                                noise_key: device_snapshot.noise_key,
-                                adv_secret_key: device_snapshot.adv_secret_key,
-                            };
-
                             codes.push(PairUtils::make_qr_data(&device_state, r));
                         }
                     }

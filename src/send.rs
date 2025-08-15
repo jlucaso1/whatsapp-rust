@@ -4,7 +4,7 @@ use crate::types::jid::Jid;
 use anyhow::anyhow;
 use libsignal_protocol::SignalProtocolError;
 use std::sync::Arc;
-use wacore::{signal::sender_key_name::SenderKeyName, types::jid::JidExt};
+use wacore::{signal::store::GroupSenderKeyStore, types::jid::JidExt};
 use waproto::whatsapp as wa;
 
 impl Client {
@@ -26,8 +26,6 @@ impl Client {
         peer: bool,
         force_key_distribution: bool,
     ) -> Result<(), anyhow::Error> {
-        // Serialize all send operations per chat to avoid races with receive-side
-        // processing (e.g., sender key distribution handled under the same lock).
         let chat_mutex = self
             .chat_locks
             .entry(to.clone())
@@ -61,9 +59,6 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
             let account_info = device_snapshot.account.clone();
 
-            // Cache the outgoing group message so that a subsequent retry receipt
-            // can find and resend it (with fresh sender key distribution if needed).
-            // This mirrors the DM branch behavior below.
             self.add_recent_message(to.clone(), request_id.clone(), Arc::new(message.clone()))
                 .await;
 
@@ -75,21 +70,15 @@ impl Client {
             };
 
             let force_skdm = {
-                let mut device_guard = device_store_arc.write().await;
+                let device_guard = device_store_arc.read().await;
                 let sender_address = own_sending_jid.to_protocol_address();
-                let sender_key_name =
-                    SenderKeyName::new(to.to_string(), sender_address.to_string());
 
-                let group_sender_address = sender_key_name.to_protocol_address();
+                let key_exists = device_guard
+                    .load_sender_key(&to, &sender_address)
+                    .await?
+                    .is_some();
 
-                let store_ref: &mut (dyn libsignal_protocol::SenderKeyStore + Send + Sync) =
-                    &mut *device_guard;
-
-                force_key_distribution
-                    || store_ref
-                        .load_sender_key(&group_sender_address)
-                        .await?
-                        .is_none()
+                force_key_distribution || !key_exists
             };
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
@@ -102,18 +91,6 @@ impl Client {
                 kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
-
-            // If we're about to distribute a sender key but we don't have an account
-            // identity loaded, the resulting stanza will miss the <device-identity> node
-            // and peers may reject it with a retry receipt. Emit a clear warning for diagnosis.
-            if force_skdm && account_info.is_none() {
-                log::warn!(
-                    "Missing account identity when distributing sender key to group {}. \
-This will omit <device-identity> and may cause recipients to reject the message. \
-Re-pair the device to populate 'account'.",
-                    to
-                );
-            }
 
             match wacore::send::prepare_group_stanza(
                 &mut stores,
@@ -131,13 +108,11 @@ Re-pair the device to populate 'account'.",
             {
                 Ok(stanza) => stanza,
                 Err(e) => {
-                    // If encryption fails because the key is missing, force a distribution.
                     if let Some(SignalProtocolError::NoSenderKeyState) =
                         e.downcast_ref::<SignalProtocolError>()
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
-                        // Re-create the store adapter to ensure state is fresh
                         let mut store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
                         let mut stores_retry = wacore::send::SignalStores {

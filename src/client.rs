@@ -351,17 +351,14 @@ impl Client {
     }
 
     pub async fn process_node(self: &Arc<Self>, node: &Node) {
-        if node.tag == "iq" {
-            if let Some(sync_node) = node.get_optional_child("sync")
-                && let Some(collection_node) = sync_node.get_optional_child("collection")
-            {
-                let name = collection_node.attrs().string("name");
-                debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
-            } else {
-                debug!(target: "Client/Recv", "{node:?}");
-            }
+        if node.tag == "iq"
+            && let Some(sync_node) = node.get_optional_child("sync")
+            && let Some(collection_node) = sync_node.get_optional_child("collection")
+        {
+            let name = collection_node.attrs().string("name");
+            debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            debug!(target: "Client/Recv", "{node:?}");
+            debug!(target: "Client/Recv", "{node}");
         }
 
         if node.tag == "xmlstreamend" {
@@ -370,8 +367,6 @@ impl Client {
             return;
         }
 
-        // Check for IQ responses that need to be dispatched to waiters first
-        // This requires cloning, but only when we have an actual response waiter
         if node.tag == "iq" {
             let id_opt = node.attrs.get("id");
             if let Some(id) = id_opt {
@@ -399,8 +394,7 @@ impl Client {
             "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
             "message" => {
                 let client_clone = self.clone();
-                let node_arc = Arc::new(node.clone()); // Only clone here for shared ownership
-                debug!(target: "Client/Recv", "Received message raw: {node_arc:?}");
+                let node_arc = Arc::new(node.clone());
 
                 task::spawn_local(async move {
                     let info = match client_clone.parse_message_info(&node_arc).await {
@@ -426,7 +420,7 @@ impl Client {
                 });
             }
             "ack" => {
-                info!(target: "Client/Recv", "Received ACK node: {node:?}");
+                info!(target: "Client/Recv", "Received ACK node: {node}");
             }
             _ => {
                 warn!(target: "Client", "Received unknown top-level node: {node}");
@@ -467,8 +461,8 @@ impl Client {
 
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<crate::types::jid::Jid>() {
-                let current_device = self.persistence_manager.get_device_snapshot().await;
-                if current_device.lid.as_ref() != Some(&lid) {
+                let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+                if device_snapshot.lid.as_ref() != Some(&lid) {
                     info!(target: "Client", "Updating LID from server to '{lid}'");
                     self.persistence_manager
                         .process_command(DeviceCommand::SetLid(Some(lid)))
@@ -479,26 +473,6 @@ impl Client {
             }
         } else {
             warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
-        }
-
-        if let Some(push_name_attr) = node.attrs.get("pushname") {
-            let current_device = self.persistence_manager.get_device_snapshot().await;
-            let old_name = current_device.push_name.clone();
-
-            if old_name != *push_name_attr {
-                info!(target: "Client", "Updating push name from server to '{push_name_attr}'");
-                self.persistence_manager
-                    .process_command(DeviceCommand::SetPushName(push_name_attr.clone()))
-                    .await;
-
-                self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
-                    crate::types::events::SelfPushNameUpdated {
-                        from_server: true,
-                        old_name,
-                        new_name: push_name_attr.clone(),
-                    },
-                ));
-            }
         }
 
         let client_clone = self.clone();
@@ -693,7 +667,7 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "--> {node:?}");
+        debug!(target: "Client/Send", "--> {node}");
 
         let payload = crate::binary::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");

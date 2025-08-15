@@ -7,8 +7,8 @@ use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
 use libsignal_protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
-    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, UsePQRatchet,
-    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
+    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SignalProtocolError,
+    UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
-pub async fn encrypt_group_message_correctly<S, R>(
+pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_id: &Jid,
     sender: &ProtocolAddress,
@@ -30,7 +30,7 @@ where
     let mut record = sender_key_store
         .load_sender_key(group_id, sender)
         .await?
-        .ok_or_else(|| anyhow!("No SenderKeyRecord found for group session"))?;
+        .ok_or(SignalProtocolError::NoSenderKeyState)?;
 
     let sender_key_state = record
         .sender_key_state_mut()
@@ -283,6 +283,7 @@ pub async fn prepare_group_stanza<
 
     let mut message_content_nodes = Vec::new();
     let mut includes_prekey_message = false;
+    let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
 
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
@@ -340,7 +341,7 @@ pub async fn prepare_group_stanza<
         }
 
         let mut participant_nodes = Vec::new();
-        for device_jid in all_devices {
+        for device_jid in &all_devices {
             let signal_address =
                 ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
             let encrypted_payload = message_encrypt(
@@ -377,10 +378,13 @@ pub async fn prepare_group_stanza<
                 .children(participant_nodes)
                 .build(),
         );
+
+        // Save resolved devices for later phash calculation to avoid resolving twice
+        resolved_devices_for_phash = Some(all_devices.clone());
     }
     let sender_address = own_sending_jid.to_protocol_address();
     let plaintext = message.encode_to_vec();
-    let skmsg = encrypt_group_message_correctly(
+    let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
         &sender_address,
@@ -411,9 +415,8 @@ pub async fn prepare_group_stanza<
     stanza_attrs.insert("id".to_string(), request_id);
     stanza_attrs.insert("type".to_string(), "text".to_string());
 
-    if force_skdm_distribution {
-        let all_devices = resolver.resolve_devices(&group_info.participants).await?;
-        let phash = MessageUtils::participant_list_hash(&all_devices);
+    if let Some(devices) = &resolved_devices_for_phash {
+        let phash = MessageUtils::participant_list_hash(devices);
         stanza_attrs.insert("phash".to_string(), phash);
     }
 
