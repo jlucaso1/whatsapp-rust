@@ -1,9 +1,9 @@
-use crate::binary::builder::NodeBuilder;
 use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
-use crate::types::jid::SERVER_JID;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::SERVER_JID;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MediaConnHost {
@@ -43,7 +43,7 @@ impl Client {
                 to: SERVER_JID.parse().unwrap(),
                 target: None,
                 id: None,
-                content: Some(crate::binary::node::NodeContent::Nodes(vec![
+                content: Some(wacore_binary::node::NodeContent::Nodes(vec![
                     NodeBuilder::new("media_conn").build(),
                 ])),
                 timeout: None,

@@ -1,8 +1,8 @@
-use crate::binary::node::Node;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
 use log::{info, warn};
 use std::sync::Arc;
+use wacore_binary::node::Node;
 
 pub async fn handle_ib(client: Arc<Client>, node: &Node) {
     for child in node.children().unwrap_or_default() {

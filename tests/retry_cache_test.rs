@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::persistence_manager::PersistenceManager;
-use whatsapp_rust::types::jid::Jid;
 
 #[tokio::test]
 async fn test_recent_message_cache_insert_and_take() {

@@ -1,9 +1,8 @@
-use crate::binary::node::Node;
-use crate::types::jid::Jid;
 use crate::types::message::MessageInfo;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 pub use wacore::types::events::*;
+use wacore_binary::{jid::Jid, node::Node};
 use waproto::whatsapp::{self as wa, HistorySync};
 
 // The size of the broadcast channel buffer.

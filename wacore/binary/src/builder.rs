@@ -1,4 +1,4 @@
-use crate::binary::node::{Node, NodeContent};
+use crate::node::{Node, NodeContent};
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
