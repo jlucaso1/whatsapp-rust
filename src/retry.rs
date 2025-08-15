@@ -2,7 +2,7 @@ use crate::client::{Client, RecentMessageKey};
 use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
 use crate::types::jid::Jid;
-use libsignal_protocol::{KeyPair, ProtocolAddress};
+use wacore::libsignal::protocol::{KeyPair, ProtocolAddress};
 use log::{info, warn};
 use prost::Message;
 use rand::TryRngCore;

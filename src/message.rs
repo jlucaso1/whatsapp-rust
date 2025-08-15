@@ -5,14 +5,14 @@ use crate::error::decryption::DecryptionError;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
-use libsignal_protocol::SenderKeyDistributionMessage;
-use libsignal_protocol::group_decrypt;
-use libsignal_protocol::process_sender_key_distribution_message;
-use libsignal_protocol::{
+use wacore::libsignal::protocol::SenderKeyDistributionMessage;
+use wacore::libsignal::protocol::group_decrypt;
+use wacore::libsignal::protocol::process_sender_key_distribution_message;
+use wacore::libsignal::protocol::{
     PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
     message_decrypt,
 };
-use libsignal_protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
+use wacore::libsignal::protocol::{PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION};
 use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
@@ -132,7 +132,7 @@ impl Client {
         info: &MessageInfo,
         message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
-        use libsignal_protocol::CiphertextMessage;
+        use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
             return Ok(());
         }
@@ -179,7 +179,6 @@ impl Client {
                 &mut adapter.identity_store,
                 &mut adapter.pre_key_store,
                 &adapter.signed_pre_key_store,
-                &mut adapter.kyber_pre_key_store,
                 &mut rng.unwrap_err(),
                 UsePQRatchet::No,
             )

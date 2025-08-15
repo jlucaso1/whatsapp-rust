@@ -5,7 +5,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use libsignal_protocol::{Direction, KeyPair, PrivateKey, PublicKey};
+use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use prost::Message;
 use std::collections::VecDeque;
 use wacore::appstate::hash::HashState;

@@ -1,14 +1,13 @@
 use crate::store::Device;
 use async_trait::async_trait;
-use libsignal_protocol::{
-    Direction, GenericSignedPreKey, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore,
-    KeyPair, KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyId, PreKeyRecord,
-    PreKeyStore, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SessionRecord,
-    SessionStore, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
-    Timestamp,
-};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use wacore::libsignal::protocol::{
+    Direction, GenericSignedPreKey, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore,
+    KeyPair, PreKeyId, PreKeyRecord, PreKeyStore, PrivateKey, ProtocolAddress, PublicKey,
+    SenderKeyRecord, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId,
+    SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
+};
 use waproto::whatsapp as wa;
 
 use wacore::{
@@ -32,9 +31,6 @@ pub struct IdentityAdapter(SharedDevice);
 pub struct PreKeyAdapter(SharedDevice);
 #[derive(Clone)]
 pub struct SignedPreKeyAdapter(SharedDevice);
-#[derive(Clone)]
-#[allow(dead_code)]
-pub struct KyberPreKeyAdapter(SharedDevice);
 
 #[derive(Clone)]
 pub struct SenderKeyAdapter(SharedDevice);
@@ -46,7 +42,6 @@ pub struct SignalProtocolStoreAdapter {
     pub pre_key_store: PreKeyAdapter,
     pub signed_pre_key_store: SignedPreKeyAdapter,
     pub sender_key_store: SenderKeyAdapter,
-    pub kyber_pre_key_store: KyberPreKeyAdapter,
 }
 
 impl SignalProtocolStoreAdapter {
@@ -57,7 +52,6 @@ impl SignalProtocolStoreAdapter {
             identity_store: IdentityAdapter(shared.clone()),
             pre_key_store: PreKeyAdapter(shared.clone()),
             signed_pre_key_store: SignedPreKeyAdapter(shared.clone()),
-            kyber_pre_key_store: KyberPreKeyAdapter(shared.clone()),
             sender_key_store: SenderKeyAdapter(shared),
         }
     }
@@ -208,54 +202,25 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
 }
 
 #[async_trait(?Send)]
-impl KyberPreKeyStore for KyberPreKeyAdapter {
-    async fn get_kyber_pre_key(
-        &self,
-        _id: KyberPreKeyId,
-    ) -> Result<KyberPreKeyRecord, SignalProtocolError> {
-        Err(SignalProtocolError::InvalidState(
-            "get_kyber_pre_key",
-            "Unimplemented".into(),
-        ))
-    }
-    async fn save_kyber_pre_key(
-        &mut self,
-        _id: KyberPreKeyId,
-        _record: &KyberPreKeyRecord,
-    ) -> Result<(), SignalProtocolError> {
-        Err(SignalProtocolError::InvalidState(
-            "save_kyber_pre_key",
-            "Unimplemented".into(),
-        ))
-    }
-    async fn mark_kyber_pre_key_used(
-        &mut self,
-        _id: KyberPreKeyId,
-    ) -> Result<(), SignalProtocolError> {
-        Err(SignalProtocolError::InvalidState(
-            "mark_kyber_pre_key_used",
-            "Unimplemented".into(),
-        ))
-    }
-}
-
-#[async_trait(?Send)]
-impl libsignal_protocol::SenderKeyStore for SenderKeyAdapter {
+impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
-        sender: &libsignal_protocol::ProtocolAddress,
-        record: &libsignal_protocol::SenderKeyRecord,
-    ) -> libsignal_protocol::error::Result<()> {
+        sender: &wacore::libsignal::protocol::ProtocolAddress,
+        record: &wacore::libsignal::protocol::SenderKeyRecord,
+    ) -> wacore::libsignal::protocol::error::Result<()> {
         let mut device = self.0.device.write().await;
-        libsignal_protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record).await
+        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record)
+            .await
     }
 
     async fn load_sender_key(
         &mut self,
-        sender: &libsignal_protocol::ProtocolAddress,
-    ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
+        sender: &wacore::libsignal::protocol::ProtocolAddress,
+    ) -> wacore::libsignal::protocol::error::Result<
+        Option<wacore::libsignal::protocol::SenderKeyRecord>,
+    > {
         let mut device = self.0.device.write().await;
-        libsignal_protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
+        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
     }
 }
 

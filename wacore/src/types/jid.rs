@@ -1,4 +1,4 @@
-use libsignal_protocol::ProtocolAddress;
+use crate::libsignal::protocol::ProtocolAddress;
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;

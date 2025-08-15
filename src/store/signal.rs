@@ -1,7 +1,7 @@
 use crate::store::Device;
 use async_trait::async_trait;
-use libsignal_protocol::error::Result as SignalResult;
-use libsignal_protocol::{
+use wacore::libsignal::protocol::error::Result as SignalResult;
+use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PrivateKey,
     ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
     SignalProtocolError,
@@ -301,7 +301,7 @@ impl SignedPreKeyStore for Device {
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         if signed_prekey_id == self.signed_pre_key_id {
-            use libsignal_protocol::{KeyPair, PrivateKey, PublicKey};
+            use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 
             let public_key = PublicKey::from_djb_public_key_bytes(
                 self.signed_pre_key.public_key.public_key_bytes(),

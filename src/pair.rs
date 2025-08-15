@@ -2,7 +2,7 @@ use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::Jid;
-use libsignal_protocol::KeyPair;
+use wacore::libsignal::protocol::KeyPair;
 use log::{debug, error, info, warn};
 use prost::Message;
 use rand::TryRngCore;

@@ -1,14 +1,14 @@
 use crate::binary::node::NodeContent;
 use crate::client::Client;
 use crate::types::jid::{Jid, SERVER_JID};
-use libsignal_protocol::PreKeyBundle;
+use wacore::libsignal::protocol::PreKeyBundle;
 use log;
 
 use crate::binary::builder::NodeBuilder;
 use crate::request::{InfoQuery, InfoQueryType};
 
 use anyhow;
-use libsignal_protocol::KeyPair;
+use wacore::libsignal::protocol::KeyPair;
 use rand::TryRngCore;
 use rand_core::OsRng;
 use wacore::signal::state::record::new_pre_key_record;
@@ -25,7 +25,7 @@ impl Client {
         reason: Option<&str>,
     ) -> Result<std::collections::HashMap<Jid, PreKeyBundle>, anyhow::Error> {
         if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            use libsignal_protocol::{
+            use wacore::libsignal::protocol::{
                 DeviceId, IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId,
             };
 

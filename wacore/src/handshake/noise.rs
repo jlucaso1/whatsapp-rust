@@ -1,9 +1,9 @@
 use crate::crypto::{gcm, hkdf};
 use crate::handshake::state::Result;
 use crate::handshake::utils::{HandshakeError, generate_iv};
+use crate::libsignal::protocol::{PrivateKey, PublicKey};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, Payload};
-use libsignal_protocol::{PrivateKey, PublicKey};
 use sha2::{Digest, Sha256};
 
 pub fn sha256_slice(data: &[u8]) -> [u8; 32] {

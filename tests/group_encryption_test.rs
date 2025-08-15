@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use base64::Engine;
-    use libsignal_protocol::{
+    use wacore::libsignal::protocol::{
         DeviceId, ProtocolAddress, SenderKeyMessage, SenderKeyRecord, SenderKeyStore, group_encrypt,
     };
     use prost::Message;

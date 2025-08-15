@@ -1,6 +1,6 @@
-use libsignal_protocol::Direction;
-use libsignal_protocol::IdentityKeyStore;
-use libsignal_protocol::ProtocolAddress;
+use wacore::libsignal::protocol::Direction;
+use wacore::libsignal::protocol::IdentityKeyStore;
+use wacore::libsignal::protocol::ProtocolAddress;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use whatsapp_rust::store::sqlite_store::SqliteStore;

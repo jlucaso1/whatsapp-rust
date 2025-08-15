@@ -9,7 +9,7 @@ use wacore::binary::node::{Node, NodeContent};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::{Event, EventHandler};
 
-use libsignal_protocol::{
+use wacore::libsignal::protocol::{
     KeyPair, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
 };
 
