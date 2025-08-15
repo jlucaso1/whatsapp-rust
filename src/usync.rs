@@ -1,13 +1,11 @@
-use crate::binary::node::NodeContent;
 use crate::client::Client;
 use log::debug;
 use std::sync::atomic::Ordering;
+use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::node::NodeContent;
 
 impl Client {
-    pub async fn get_user_devices(
-        &self,
-        jids: &[crate::types::jid::Jid],
-    ) -> Result<Vec<crate::types::jid::Jid>, anyhow::Error> {
+    pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         if self.test_mode.load(Ordering::Relaxed) {
             debug!("get_user_devices: Using test mode, returning mock devices for {jids:?}");
             return Ok(jids.to_vec());
@@ -21,7 +19,7 @@ impl Client {
         let iq = crate::request::InfoQuery {
             namespace: "usync",
             query_type: crate::request::InfoQueryType::Get,
-            to: crate::types::jid::SERVER_JID.parse().unwrap(),
+            to: SERVER_JID.parse().unwrap(),
             content: Some(NodeContent::Nodes(vec![usync_node])),
             id: None,
             target: None,

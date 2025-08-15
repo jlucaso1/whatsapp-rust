@@ -1,10 +1,10 @@
-use crate::binary::node::Node;
 use crate::client::Client;
 use crate::client::RecentMessageKey;
 use crate::error::decryption::DecryptionError;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
+use chrono::DateTime;
 use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
@@ -21,8 +21,10 @@ use wacore::libsignal::protocol::{
 };
 use wacore::signal::SkdmFields;
 use wacore::signal::sender_key_name::SenderKeyName;
-use wacore::types::jid::Jid;
 use wacore::types::jid::JidExt;
+use wacore_binary::jid::Jid;
+use wacore_binary::jid::JidExt as _;
+use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa};
 
 fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
@@ -130,7 +132,7 @@ impl Client {
 
     async fn process_session_enc_batch(
         self: Arc<Self>,
-        enc_nodes: &[&crate::binary::node::Node],
+        enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
@@ -145,7 +147,7 @@ impl Client {
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
-                Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
                 _ => {
                     log::warn!("Enc node has no byte content (batch session)");
                     continue;
@@ -213,7 +215,7 @@ impl Client {
 
     async fn process_group_enc_batch(
         self: Arc<Self>,
-        enc_nodes: &[&crate::binary::node::Node],
+        enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
@@ -224,7 +226,7 @@ impl Client {
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
-                Some(crate::binary::node::NodeContent::Bytes(b)) => b.clone(),
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
                 _ => {
                     log::warn!("Enc node has no byte content (batch group)");
                     continue;
@@ -408,7 +410,7 @@ impl Client {
                 .optional_string("notify")
                 .map(|s| s.to_string())
                 .unwrap_or_default(),
-            timestamp: attrs.unix_time("t"),
+            timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0).unwrap(),
             ..Default::default()
         })
     }

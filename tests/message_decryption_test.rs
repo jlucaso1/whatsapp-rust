@@ -4,10 +4,12 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use wacore::binary::builder::NodeBuilder;
-use wacore::binary::node::{Node, NodeContent};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::{Event, EventHandler};
+use wacore::types::jid::JidExt as _;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
+use wacore_binary::node::{Node, NodeContent};
 
 use wacore::libsignal::protocol::{
     KeyPair, PrivateKey, ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
@@ -334,7 +336,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
             .get("participant")
             .or_else(|| stanza.attrs.get("from"))
             .unwrap();
-        let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
+        let sender_jid: Jid = sender_jid_str.parse().unwrap();
         let sender_addr = sender_jid.to_protocol_address();
         let session_record = test_utils::convert_session(&json);
         device_store_locked
@@ -358,7 +360,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
 
         let group_jid_str = stanza.attrs.get("from").unwrap();
         let sender_jid_str = stanza.attrs.get("participant").unwrap();
-        let sender_jid: whatsapp_rust::types::jid::Jid = sender_jid_str.parse().unwrap();
+        let sender_jid: Jid = sender_jid_str.parse().unwrap();
 
         let sender_address =
             ProtocolAddress::new(sender_jid.user.clone(), (sender_jid.device as u32).into());

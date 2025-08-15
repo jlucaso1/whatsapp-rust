@@ -1,4 +1,4 @@
-use crate::binary::token::DICT_VERSION;
+use crate::token::DICT_VERSION;
 
 pub const NOISE_START_PATTERN: &str = "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00";
 

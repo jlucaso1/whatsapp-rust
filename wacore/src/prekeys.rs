@@ -1,8 +1,9 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::{Node, NodeContent};
 use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
-use crate::types::jid::Jid;
+use crate::xml::DisplayableNode;
 use std::collections::HashMap;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
+use wacore_binary::node::{Node, NodeContent};
 
 pub struct PreKeyUtils;
 
@@ -56,7 +57,7 @@ impl PreKeyUtils {
         if let Some(error_node) = node.get_optional_child("error") {
             return Err(anyhow::anyhow!(
                 "Error getting prekeys: {}",
-                error_node.to_string()
+                DisplayableNode(error_node).to_string()
             ));
         }
 

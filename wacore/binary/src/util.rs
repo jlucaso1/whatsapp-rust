@@ -1,4 +1,4 @@
-use crate::binary::error::{BinaryError, Result};
+use crate::error::{BinaryError, Result};
 use flate2::read::ZlibDecoder;
 use std::borrow::Cow;
 use std::io::Read;

@@ -9,7 +9,7 @@ use wacore::libsignal::protocol::{
     SignalProtocolError,
 };
 use wacore::signal::store::*;
-use wacore::types::jid::Jid;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn std::error::Error + Send + Sync>;

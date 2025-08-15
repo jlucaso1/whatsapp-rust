@@ -1,8 +1,8 @@
-use crate::binary::{
+use prost::Message;
+use wacore_binary::{
     builder::NodeBuilder,
     node::{Node, NodeContent},
 };
-use prost::Message;
 use waproto::whatsapp as wa;
 
 pub struct SyncUtils;

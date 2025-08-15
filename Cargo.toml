@@ -9,6 +9,8 @@ members = [".", "wacore", "waproto"]
 [workspace.dependencies]
 rand = "0.9"
 rand_core = "0.9"
+tokio = { version = "1.4.1" }
+wacore-binary = { path = "./wacore/binary" }
 waproto = { path = "./waproto" }
 
 [lib]
@@ -27,9 +29,8 @@ cbc = { version = "0.1.2", features = ["alloc"] }
 
 # Time handling
 chrono = { version = "0.4" }
-clap = { version = "4.5", features = ["derive"] }
 dashmap = "6.1.0"
-diesel = { version = "2.2.12", features = ["sqlite", "r2d2", "returning_clauses_for_sqlite_3_35"] }
+diesel = { version = "2.2.12", default-features = false, features = ["sqlite", "r2d2"] }
 diesel_migrations = "2.2.0"
 env_logger = { version = "0.11", default-features = false }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
@@ -37,7 +38,7 @@ futures-util = { version = "0.3.31", default-features = false }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 hkdf = "0.12.3"
-libsqlite3-sys = { version = "0.35.0", features = ["bundled"] }
+libsqlite3-sys = { version = "0.35.0", default-features = false, features = ["bundled"] }
 log = "0.4.27"
 prost = { version = "0.14.1", default-features = false }
 
@@ -50,24 +51,23 @@ serde-big-array = "0.5.1"
 serde_json = "1.0"
 sha2 = "0.10.6"
 thiserror = "2.0.12"
-tokio = { version = "1.46.1", features = [
-    "fs",
+tokio = { workspace = true, features = [
     "macros",
     "net",
-    "rt-multi-thread",
-    "signal",
+    "rt",
     "sync",
     "time",
 ] }
-tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
-ureq = "3.0.12"
+tokio-tungstenite = { version = "0.27.0", default-features = false, features = ["connect","tokio-rustls", "rustls-tls-webpki-roots"] }
+ureq = { version = "3.0.12", default-features = false, features = ["rustls"] }
 urlencoding = "2.1"
 wacore = { path = "./wacore" }
+wacore-binary = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
 base64 = { version = "0.22.1", default-features = false }
-criterion = { version = "0.7.0", features = ["html_reports"] }
+tokio = { workspace = true, features = ["fs"] }
 
 [profile.release]
 opt-level = "z"

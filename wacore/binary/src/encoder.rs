@@ -1,44 +1,42 @@
-use crate::binary::error::Result;
-use crate::binary::node::{Attrs, Node, NodeContent};
-use crate::binary::token;
-use bytes::{BufMut, BytesMut};
+use crate::error::Result;
+use crate::node::{Attrs, Node, NodeContent};
+use crate::token;
 
 pub(crate) struct Encoder {
-    writer: BytesMut,
+    writer: Vec<u8>,
 }
 
 impl Encoder {
     pub(crate) fn new() -> Self {
-        // Start with a reasonable capacity to reduce allocations during encoding
         Self {
-            writer: BytesMut::with_capacity(1024),
+            writer: Vec::with_capacity(1024),
         }
     }
 
     pub(crate) fn into_data(self) -> Vec<u8> {
-        self.writer.to_vec()
+        self.writer
     }
 
     fn write_u8(&mut self, val: u8) {
-        self.writer.put_u8(val);
+        self.writer.push(val);
     }
 
     fn write_u16_be(&mut self, val: u16) {
-        self.writer.put_u16(val);
+        self.writer.extend_from_slice(&val.to_be_bytes());
     }
 
     fn write_u32_be(&mut self, val: u32) {
-        self.writer.put_u32(val);
+        self.writer.extend_from_slice(&val.to_be_bytes());
     }
 
     fn write_u20_be(&mut self, value: u32) {
-        self.writer.put_u8(((value >> 16) & 0x0F) as u8);
-        self.writer.put_u8(((value >> 8) & 0xFF) as u8);
-        self.writer.put_u8((value & 0xFF) as u8);
+        self.writer.push(((value >> 16) & 0x0F) as u8);
+        self.writer.push(((value >> 8) & 0xFF) as u8);
+        self.writer.push((value & 0xFF) as u8);
     }
 
     fn write_raw_bytes(&mut self, bytes: &[u8]) {
-        self.writer.put_slice(bytes);
+        self.writer.extend_from_slice(bytes);
     }
 
     fn write_bytes_with_len(&mut self, bytes: &[u8]) {
@@ -84,7 +82,7 @@ impl Encoder {
         match value {
             '-' => 10,
             '.' => 11,
-            '\x00' => 15, // Handle null padding
+            '\x00' => 15,
             c if c.is_ascii_digit() => c as u8 - b'0',
             _ => panic!("Invalid char for nibble packing: {value}"),
         }
@@ -103,7 +101,7 @@ impl Encoder {
         match value {
             c if c.is_ascii_digit() => c as u8 - b'0',
             c if ('A'..='F').contains(&c) => 10 + (c as u8 - b'A'),
-            '\x00' => 15, // Handle null padding
+            '\x00' => 15,
             _ => panic!("Invalid char for hex packing: {value}"),
         }
     }
@@ -131,7 +129,6 @@ impl Encoder {
             Self::pack_hex
         };
 
-        // Iterate over character pairs without allocating a Vec<char>
         let mut chars = value.chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
@@ -143,23 +140,21 @@ impl Encoder {
         if len == 0 {
             self.write_u8(token::LIST_EMPTY);
         } else if len < 256 {
-            self.write_u8(248); // LIST_8
+            self.write_u8(248);
             self.write_u8(len as u8);
         } else {
-            self.write_u8(249); // LIST_16
+            self.write_u8(249);
             self.write_u16_be(len as u16);
         }
     }
 
     fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
-        // A sorted iteration is not required for correctness but matches the Go implementation
-        // and makes debugging easier.
         let mut sorted_attrs: Vec<_> = attrs.iter().collect();
         sorted_attrs.sort_by_key(|(k, _)| *k);
 
         for (key, value) in sorted_attrs {
             self.write_string(key);
-            self.write_string(value); // Always use write_string for attribute values.
+            self.write_string(value);
         }
         Ok(())
     }

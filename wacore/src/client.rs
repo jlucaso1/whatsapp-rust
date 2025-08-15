@@ -103,7 +103,7 @@ impl MessageUtils {
         }
     }
 
-    pub fn participant_list_hash(devices: &[crate::types::jid::Jid]) -> String {
+    pub fn participant_list_hash(devices: &[wacore_binary::jid::Jid]) -> String {
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
         jids.sort();
 

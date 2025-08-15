@@ -1,7 +1,7 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::Node;
-use crate::types::jid::Jid;
 use anyhow::{Result, anyhow};
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
+use wacore_binary::node::Node;
 
 pub fn build_get_user_devices_query(jids: &[Jid], sid: &str) -> Node {
     let user_nodes = jids

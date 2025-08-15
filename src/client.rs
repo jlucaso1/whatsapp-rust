@@ -1,10 +1,11 @@
 mod context_impl;
 
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::Node;
 use crate::handshake;
 use crate::pair;
 use crate::qrcode;
+use wacore::xml::DisplayableNode;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::node::Node;
 
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
@@ -19,6 +20,8 @@ use log::{debug, error, info, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, HashSet, VecDeque};
+use wacore_binary::jid::Jid;
+use wacore_binary::jid::SERVER_JID;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -26,7 +29,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task;
 use tokio::time::{Duration, sleep};
-use wacore::{client::context::GroupInfo, types::jid::Jid};
+use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
@@ -45,7 +48,7 @@ pub enum ClientError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RecentMessageKey {
-    pub to: crate::types::jid::Jid,
+    pub to: Jid,
     pub id: String,
 }
 
@@ -65,11 +68,11 @@ pub struct Client {
     pub(crate) frames_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<bytes::Bytes>>>>,
 
     pub(crate) response_waiters:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::binary::Node>>>>,
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<wacore_binary::Node>>>>,
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
 
-    pub(crate) chat_locks: Arc<DashMap<crate::types::jid::Jid, Arc<tokio::sync::Mutex<()>>>>,
+    pub(crate) chat_locks: Arc<DashMap<Jid, Arc<tokio::sync::Mutex<()>>>>,
     pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -286,11 +289,7 @@ impl Client {
         cache.contains(key)
     }
 
-    pub async fn take_recent_message(
-        &self,
-        to: crate::types::jid::Jid,
-        id: String,
-    ) -> Option<Arc<wa::Message>> {
+    pub async fn take_recent_message(&self, to: Jid, id: String) -> Option<Arc<wa::Message>> {
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
         if let Some(msg) = map_guard.remove(&key) {
@@ -333,7 +332,7 @@ impl Client {
             }
         };
 
-        let unpacked_data_cow = match crate::binary::util::unpack(&decrypted_payload) {
+        let unpacked_data_cow = match wacore_binary::util::unpack(&decrypted_payload) {
             Ok(data) => data,
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
@@ -341,7 +340,7 @@ impl Client {
             }
         };
 
-        match crate::binary::unmarshal_ref(unpacked_data_cow.as_ref()) {
+        match wacore_binary::marshal::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
                 let node = node_ref.to_owned();
                 self.process_node(&node).await;
@@ -358,7 +357,7 @@ impl Client {
             let name = collection_node.attrs().string("name");
             debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            debug!(target: "Client/Recv", "{node}");
+            debug!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
         if node.tag == "xmlstreamend" {
@@ -384,7 +383,7 @@ impl Client {
             "ib" => handlers::ib::handle_ib(self.clone(), node).await,
             "iq" => {
                 if !self.handle_iq(node).await {
-                    warn!(target: "Client", "Received unhandled IQ: {node}");
+                    warn!(target: "Client", "Received unhandled IQ: {}", DisplayableNode(node));
                 }
             }
             "receipt" => self.handle_receipt(node).await,
@@ -420,10 +419,10 @@ impl Client {
                 });
             }
             "ack" => {
-                info!(target: "Client/Recv", "Received ACK node: {node}");
+                info!(target: "Client/Recv", "Received ACK node: {}", DisplayableNode(node));
             }
             _ => {
-                warn!(target: "Client", "Received unknown top-level node: {node}");
+                warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(node));
             }
         }
     }
@@ -434,7 +433,7 @@ impl Client {
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
         use crate::request::{InfoQuery, InfoQueryType};
-        use crate::types::jid::SERVER_JID;
+        use SERVER_JID;
 
         let tag = if passive { "passive" } else { "active" };
 
@@ -444,7 +443,7 @@ impl Client {
             to: SERVER_JID.parse().unwrap(),
             target: None,
             id: None,
-            content: Some(crate::binary::node::NodeContent::Nodes(vec![
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
                 NodeBuilder::new(tag).build(),
             ])),
             timeout: None,
@@ -460,7 +459,7 @@ impl Client {
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
         if let Some(lid_str) = node.attrs.get("lid") {
-            if let Ok(lid) = lid_str.parse::<crate::types::jid::Jid>() {
+            if let Ok(lid) = lid_str.parse::<Jid>() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
                     info!(target: "Client", "Updating LID from server to '{lid}'");
@@ -544,7 +543,7 @@ impl Client {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
             }
             _ => {
-                error!(target: "Client", "Unknown stream error: {node}");
+                error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
                 self.expect_disconnect().await;
                 self.core.event_bus.dispatch(&Event::StreamError(
                     crate::types::events::StreamError {
@@ -587,7 +586,7 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!(target: "Client", "Temporary ban connect failure: {node}");
+            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::TemporaryBan(
                 crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
@@ -600,7 +599,7 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!(target: "Client", "Unknown connect failure: {node}");
+            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
@@ -657,7 +656,7 @@ impl Client {
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         if self.test_mode.load(Ordering::Relaxed) {
-            debug!(target: "Client/Send", "Using test mode for node: {node}");
+            debug!(target: "Client/Send", "Using test mode for node: {}", DisplayableNode(&node));
             return self.send_node_test_mode(node).await;
         }
 
@@ -667,9 +666,9 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "--> {node}");
+        debug!(target: "Client/Send", "--> {}", DisplayableNode(&node));
 
-        let payload = crate::binary::marshal(&node).map_err(|e| {
+        let payload = wacore_binary::marshal::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
             SocketError::Crypto("Marshal error".to_string())
         })?;
@@ -719,7 +718,7 @@ impl Client {
         )
     }
 
-    pub async fn get_jid(&self) -> Option<crate::types::jid::Jid> {
+    pub async fn get_jid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.id.clone()
     }
@@ -736,7 +735,7 @@ impl Client {
     async fn send_node_test_mode(&self, node: Node) -> Result<(), ClientError> {
         use crate::test_network::TestMessage;
 
-        debug!(target: "Client/TestSend", "Sending node in test mode: {node}");
+        debug!(target: "Client/TestSend", "Sending node in test mode: {}", DisplayableNode(&node));
 
         let sender_guard = self.test_network_sender.lock().await;
         let sender = match sender_guard.as_ref() {

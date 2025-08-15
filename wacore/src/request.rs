@@ -1,10 +1,10 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::{Node, NodeContent};
-use crate::types::jid::{self, Jid, JidExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::{self, Jid, JidExt};
+use wacore_binary::node::{Node, NodeContent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoQueryType {
@@ -145,7 +145,7 @@ impl RequestUtils {
         {
             let error_child = response_node.get_optional_child_by_tag(&["error"]);
             if let Some(error_node) = error_child {
-                let mut parser = crate::binary::attrs::AttrParser::new(error_node);
+                let mut parser = wacore_binary::attrs::AttrParser::new(error_node);
                 let code = parser.optional_u64("code").unwrap_or(0) as u16;
                 let text = parser.optional_string("text").unwrap_or("").to_string();
                 return Err(IqError::ServerError { code, text });

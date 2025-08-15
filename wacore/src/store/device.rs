@@ -1,4 +1,4 @@
-use crate::types::jid::Jid;
+use wacore_binary::jid::Jid;
 // use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
