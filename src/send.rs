@@ -2,8 +2,8 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::jid::Jid;
 use anyhow::anyhow;
-use libsignal_protocol::SignalProtocolError;
 use std::sync::Arc;
+use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::{signal::store::GroupSenderKeyStore, types::jid::JidExt};
 use waproto::whatsapp as wa;
 
@@ -88,7 +88,6 @@ impl Client {
                 identity_store: &mut store_adapter.identity_store,
                 prekey_store: &mut store_adapter.pre_key_store,
                 signed_prekey_store: &store_adapter.signed_pre_key_store,
-                kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 
@@ -120,7 +119,6 @@ impl Client {
                             identity_store: &mut store_adapter_retry.identity_store,
                             prekey_store: &mut store_adapter_retry.pre_key_store,
                             signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
-                            kyber_prekey_store: &mut store_adapter_retry.kyber_pre_key_store,
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
@@ -161,7 +159,6 @@ impl Client {
                 identity_store: &mut store_adapter.identity_store,
                 prekey_store: &mut store_adapter.pre_key_store,
                 signed_prekey_store: &store_adapter.signed_pre_key_store,
-                kyber_prekey_store: &mut store_adapter.kyber_pre_key_store,
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 

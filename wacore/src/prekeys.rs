@@ -1,7 +1,7 @@
 use crate::binary::builder::NodeBuilder;
 use crate::binary::node::{Node, NodeContent};
+use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use crate::types::jid::Jid;
-use libsignal_protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use std::collections::HashMap;
 
 pub struct PreKeyUtils;

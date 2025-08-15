@@ -2,13 +2,13 @@ use crate::binary::node::{Node, NodeContent};
 use crate::client::Client;
 use crate::types::events::{Event, PairError, PairSuccess, Qr};
 use crate::types::jid::Jid;
-use libsignal_protocol::KeyPair;
 use log::{debug, error, info, warn};
 use prost::Message;
 use rand::TryRngCore;
 use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use wacore::libsignal::protocol::KeyPair;
 use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
