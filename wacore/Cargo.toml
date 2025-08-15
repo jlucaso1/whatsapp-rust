@@ -13,7 +13,6 @@ anyhow = { version = "1.0", default-features = false }
 arrayref = "0.3.9"
 async-trait = "0.1.88"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-bytes = { version = "1.5", default-features = false }
 cbc = { version = "0.1.2", features = ["alloc"] }
 
 # Time handling
@@ -27,11 +26,6 @@ curve25519-dalek = { version = "4.1.3", features = ["digest"] }
 derive_more = { version = "2.0.1", features = ["deref", "from", "into", "try_from"] }
 displaydoc = "0.2.5"
 
-# Zlib decompression for WABinary
-flate2 = { version = "1.0", default-features = false, features = [
-    "any_zlib",
-    "libz-sys",
-] }
 ghash = "0.5.1"
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 hkdf = "0.12.3"
@@ -40,7 +34,6 @@ itertools = "0.14.0"
 log = "0.4.27"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
-phf = { version = "0.12.1", features = ["macros"] }
 prost = { version = "0.14.1", default-features = false }
 
 # Cryptography
@@ -51,15 +44,9 @@ serde-big-array = "0.5"
 serde_json = "1.0"
 sha1 = "0.10.6"
 sha2 = "0.10.6"
-smallvec = "1.13"
 subtle = "2.6.1"
 thiserror = "2.0.12"
 uuid = "1.18.0"
 wacore-binary = { workspace = true, features = ["serde"] }
 waproto = { workspace = true }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
-
-[build-dependencies]
-phf_codegen = "0.12.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
