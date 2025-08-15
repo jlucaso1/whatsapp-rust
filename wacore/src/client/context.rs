@@ -1,8 +1,8 @@
 use crate::libsignal::protocol::PreKeyBundle;
-use crate::types::jid::Jid;
 use crate::types::message::AddressingMode;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use wacore_binary::jid::Jid;
 
 #[derive(Debug, Clone)]
 pub struct GroupInfo {

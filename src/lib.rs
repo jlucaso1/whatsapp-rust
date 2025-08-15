@@ -1,4 +1,4 @@
-pub use wacore::{binary, crypto, proto_helpers, signal, store::traits};
+pub use wacore::{crypto, proto_helpers, signal, store::traits};
 
 pub mod types {
     pub use wacore::types::*;

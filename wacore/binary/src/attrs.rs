@@ -1,8 +1,8 @@
-use crate::binary::error::{BinaryError, Result};
-use crate::binary::node::{Attrs, Node};
-use crate::types::jid::Jid;
-use chrono::{DateTime, Utc};
 use std::str::FromStr;
+
+use crate::error::{BinaryError, Result};
+use crate::jid::Jid;
+use crate::node::{Attrs, Node};
 
 pub struct AttrParser<'a> {
     attrs: &'a Attrs,
@@ -105,32 +105,24 @@ impl<'a> AttrParser<'a> {
             })
     }
 
-    pub fn unix_time(&mut self, key: &str) -> DateTime<Utc> {
+    pub fn unix_time(&mut self, key: &str) -> i64 {
         self.get_raw(key, true);
         self.optional_unix_time(key).unwrap_or_default()
     }
-    pub fn optional_unix_time(&mut self, key: &str) -> Option<DateTime<Utc>> {
-        self.get_i64(key, false).and_then(|ts| {
-            if ts == 0 {
-                None
-            } else {
-                DateTime::from_timestamp(ts, 0)
-            }
-        })
+
+    pub fn optional_unix_time(&mut self, key: &str) -> Option<i64> {
+        self.get_i64(key, false)
     }
-    pub fn unix_milli(&mut self, key: &str) -> DateTime<Utc> {
+
+    pub fn unix_milli(&mut self, key: &str) -> i64 {
         self.get_raw(key, true);
         self.optional_unix_milli(key).unwrap_or_default()
     }
-    pub fn optional_unix_milli(&mut self, key: &str) -> Option<DateTime<Utc>> {
-        self.get_i64(key, false).and_then(|ms| {
-            if ms == 0 {
-                None
-            } else {
-                DateTime::from_timestamp_millis(ms)
-            }
-        })
+
+    pub fn optional_unix_milli(&mut self, key: &str) -> Option<i64> {
+        self.get_i64(key, false)
     }
+
     fn get_i64(&mut self, key: &str, require: bool) -> Option<i64> {
         self.get_raw(key, require)
             .and_then(|s| match s.parse::<i64>() {

@@ -1,5 +1,5 @@
-use crate::types::jid::{Jid, JidExt, MessageId, MessageServerId};
 use chrono::{DateTime, Utc};
+use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

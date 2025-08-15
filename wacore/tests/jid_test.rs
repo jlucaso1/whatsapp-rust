@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use wacore::types::jid::{Jid, JidExt};
+use wacore_binary::jid::{Jid, JidExt};
 
 #[test]
 fn test_jid_parsing_and_serialization() {

@@ -1,6 +1,6 @@
 use crate::store::Device;
 use crate::store::device::ProcessedMessageKey;
-use crate::types::jid::Jid;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone)]

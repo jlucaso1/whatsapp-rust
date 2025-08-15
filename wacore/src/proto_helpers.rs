@@ -1,5 +1,5 @@
-use crate::types::jid::Jid;
 use std::str::FromStr;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 /// Extension trait for wa::Message

@@ -1,13 +1,13 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::Node;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
-use crate::types::jid::{Jid, SERVER_JID};
 use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use prost::Message;
 use rand::TryRngCore;
 use sha2::Sha256;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::AdvEncryptionType;
 

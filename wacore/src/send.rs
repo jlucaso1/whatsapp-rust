@@ -1,5 +1,3 @@
-use crate::binary::builder::NodeBuilder;
-use crate::binary::node::{Attrs, Node};
 use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
@@ -8,11 +6,14 @@ use crate::libsignal::protocol::{
     UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
 use crate::signal::store::GroupSenderKeyStore;
-use crate::types::jid::Jid;
+use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::time::SystemTime;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
+use wacore_binary::node::{Attrs, Node};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 

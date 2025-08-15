@@ -4,10 +4,10 @@ use crate::types::presence::ReceiptType;
 use log::info;
 use std::sync::Arc;
 use tokio::task;
-use wacore::types::jid::JidExt;
+use wacore_binary::jid::JidExt as _;
 
 impl Client {
-    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: &crate::binary::node::Node) {
+    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: &wacore_binary::node::Node) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
         let id = attrs.string("id");

@@ -9,6 +9,7 @@ members = [".", "wacore", "waproto"]
 [workspace.dependencies]
 rand = "0.9"
 rand_core = "0.9"
+wacore-binary = { path = "./wacore/binary" }
 waproto = { path = "./waproto" }
 
 [lib]
@@ -63,6 +64,7 @@ tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
 ureq = "3.0.12"
 urlencoding = "2.1"
 wacore = { path = "./wacore" }
+wacore-binary = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]

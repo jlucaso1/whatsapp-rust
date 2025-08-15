@@ -1,13 +1,11 @@
 use super::noise::{self, NoiseHandshake};
+use crate::handshake::utils::{HandshakeError, HandshakeUtils};
 use crate::libsignal::protocol::KeyPair;
-use crate::{
-    binary::consts::NOISE_START_PATTERN,
-    handshake::utils::{HandshakeError, HandshakeUtils},
-};
 use aes_gcm::Aes256Gcm;
 use prost::Message;
 use rand::TryRngCore;
 use rand_core::OsRng;
+use wacore_binary::consts::NOISE_START_PATTERN;
 
 pub type Result<T> = std::result::Result<T, HandshakeError>;
 
@@ -21,7 +19,7 @@ pub struct HandshakeState {
 impl HandshakeState {
     pub fn new(device: &crate::store::Device) -> Result<Self> {
         let ephemeral_kp = KeyPair::generate(&mut OsRng.unwrap_err());
-        let wa_header = &crate::binary::consts::WA_CONN_HEADER;
+        let wa_header = &wacore_binary::consts::WA_CONN_HEADER;
 
         let mut noise = noise::NoiseHandshake::new(NOISE_START_PATTERN, wa_header)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;

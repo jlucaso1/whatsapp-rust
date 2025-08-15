@@ -1,10 +1,10 @@
 use aes_gcm::aead::{Aead, Payload};
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
 use wacore::{
-    binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER},
     crypto::{gcm, hkdf::sha256},
     handshake::{NoiseHandshake, noise::sha256_slice, utils::generate_iv},
 };
+use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)

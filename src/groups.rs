@@ -1,12 +1,10 @@
-use crate::binary::builder::NodeBuilder;
 use crate::client::Client;
 use wacore::client::context::GroupInfo;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
 
 impl Client {
-    pub async fn query_group_info(
-        &self,
-        jid: &crate::types::jid::Jid,
-    ) -> Result<GroupInfo, anyhow::Error> {
+    pub async fn query_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
         if let Some(cached) = self.group_cache.get(jid) {
             return Ok(cached.value().clone());
         }
@@ -20,7 +18,7 @@ impl Client {
             return Ok(info);
         }
 
-        use crate::binary::node::NodeContent;
+        use wacore_binary::node::NodeContent;
         let query_node = NodeBuilder::new("query")
             .attr("request", "interactive")
             .build();

@@ -8,14 +8,12 @@ use wacore::libsignal::protocol::{
     SenderKeyRecord, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId,
     SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
 };
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
-use wacore::{
-    signal::store::{
-        GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
-        SignedPreKeyStore as WacoreSignedPreKeyStore,
-    },
-    types::jid::Jid,
+use wacore::signal::store::{
+    GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
+    SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
 
 #[derive(Clone)]

@@ -19,7 +19,7 @@ use tokio::time::timeout;
 use wacore::client::context::GroupInfo;
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::{Event, EventHandler};
-use wacore::types::jid::Jid;
+use wacore_binary::jid::Jid;
 use whatsapp_rust::{
     client::Client,
     store::{commands::DeviceCommand, persistence_manager::PersistenceManager},

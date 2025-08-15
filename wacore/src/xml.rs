@@ -1,9 +1,7 @@
-use crate::binary::node::{Attrs, Node, NodeContent};
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use wacore_binary::node::{Attrs, Node, NodeContent};
 
-static INDENT_XML: AtomicBool = AtomicBool::new(false);
-static MAX_BYTES_TO_PRINT_AS_HEX: AtomicUsize = AtomicUsize::new(128);
+pub struct DisplayableNode<'a>(pub &'a Node);
 
 fn get_printable_str(data: &[u8]) -> Option<&str> {
     let s = std::str::from_utf8(data).ok()?;
@@ -31,12 +29,16 @@ fn format_attributes(attrs: &Attrs) -> String {
 }
 
 fn format_content_lines(content: &Option<NodeContent>, indent: bool) -> Vec<String> {
-    let max_bytes = MAX_BYTES_TO_PRINT_AS_HEX.load(Ordering::Relaxed);
-
     match content {
         Some(NodeContent::Nodes(nodes)) => nodes
             .iter()
-            .flat_map(|n| n.to_string().lines().map(String::from).collect::<Vec<_>>())
+            .flat_map(|n| {
+                DisplayableNode(n)
+                    .to_string()
+                    .lines()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
             .collect(),
         Some(NodeContent::Bytes(bytes)) => {
             if let Some(s) = get_printable_str(bytes) {
@@ -45,33 +47,23 @@ fn format_content_lines(content: &Option<NodeContent>, indent: bool) -> Vec<Stri
                 } else {
                     vec![s.replace('\n', "\\n")]
                 }
-            } else if bytes.len() > max_bytes {
-                vec![format!("")]
             } else {
-                let hex_data = hex::encode(bytes);
-                if indent {
-                    hex_data
-                        .as_bytes()
-                        .chunks(80)
-                        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-                        .collect()
-                } else {
-                    vec![hex_data]
-                }
+                vec![String::new()]
             }
         }
         None => vec![],
     }
 }
 
-impl fmt::Display for Node {
+impl<'a> fmt::Display for DisplayableNode<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let indent_xml = INDENT_XML.load(Ordering::Relaxed);
-        let attrs = format_attributes(&self.attrs);
-        let mut content_lines = format_content_lines(&self.content, indent_xml);
+        let node = self.0;
+        let indent_xml = false;
+        let attrs = format_attributes(&node.attrs);
+        let mut content_lines = format_content_lines(&node.content, indent_xml);
 
         if content_lines.is_empty() {
-            write!(f, "<{}{}/>", self.tag, attrs)
+            write!(f, "<{}{}/>", node.tag, attrs)
         } else {
             let newline = "";
             let indent = if indent_xml { "  " } else { "" };
@@ -84,7 +76,7 @@ impl fmt::Display for Node {
             write!(
                 f,
                 "<{}{}>{}{}{}</{}>",
-                self.tag, attrs, newline, final_content, newline, self.tag
+                node.tag, attrs, newline, final_content, newline, node.tag
             )
         }
     }

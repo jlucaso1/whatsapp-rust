@@ -1,13 +1,13 @@
-use crate::binary::{
-    builder::NodeBuilder,
-    marshal,
-    node::{Node, NodeContent},
-    unmarshal_ref,
-};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use crate::wasm_types::WasmNode;
+use crate::{
+    Node,
+    builder::NodeBuilder,
+    marshal::{marshal, unmarshal_ref},
+    node::NodeContent,
+    wasm_types::WasmNode,
+};
 
 fn to_wasm_node(node: &Node) -> WasmNode {
     let content = match &node.content {
