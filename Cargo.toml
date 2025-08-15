@@ -30,7 +30,7 @@ cbc = { version = "0.1.2", features = ["alloc"] }
 # Time handling
 chrono = { version = "0.4" }
 dashmap = "6.1.0"
-diesel = { version = "2.2.12", features = ["sqlite", "r2d2", "returning_clauses_for_sqlite_3_35"] }
+diesel = { version = "2.2.12", default-features = false, features = ["sqlite", "r2d2"] }
 diesel_migrations = "2.2.0"
 env_logger = { version = "0.11", default-features = false }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
@@ -38,7 +38,7 @@ futures-util = { version = "0.3.31", default-features = false }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 hkdf = "0.12.3"
-libsqlite3-sys = { version = "0.35.0", features = ["bundled"] }
+libsqlite3-sys = { version = "0.35.0", default-features = false, features = ["bundled"] }
 log = "0.4.27"
 prost = { version = "0.14.1", default-features = false }
 
