@@ -1768,6 +1768,7 @@ dependencies = [
  "curve25519-dalek",
  "derive_more",
  "displaydoc",
+ "flate2",
  "ghash",
  "hex",
  "hkdf",
