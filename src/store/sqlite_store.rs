@@ -13,7 +13,7 @@ use wacore::signal;
 use wacore::store::error::{Result, StoreError};
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
-use super::SerializableDevice;
+use wacore::store::Device as CoreDevice;
 
 #[derive(Insertable, AsChangeset)]
 #[diesel(table_name = chat_conversations)]
@@ -118,7 +118,7 @@ impl SqliteStore {
         Ok(KeyPair::new(public_key, private_key))
     }
 
-    pub async fn save_device_data(&self, device_data: &SerializableDevice) -> Result<()> {
+    pub async fn save_device_data(&self, device_data: &CoreDevice) -> Result<()> {
         let mut conn = self.get_connection()?;
 
         let noise_key_data = self.serialize_keypair(&device_data.noise_key)?;
@@ -180,7 +180,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn load_device_data(&self) -> Result<Option<SerializableDevice>> {
+    pub async fn load_device_data(&self) -> Result<Option<CoreDevice>> {
         let mut conn = self.get_connection()?;
 
         let result = device::table
@@ -274,7 +274,7 @@ impl SqliteStore {
                 VecDeque::new()
             };
 
-            Ok(Some(SerializableDevice {
+            Ok(Some(CoreDevice {
                 id,
                 lid,
                 registration_id: registration_id as u32,

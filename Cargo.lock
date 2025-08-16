@@ -1915,7 +1915,6 @@ dependencies = [
  "rand_core 0.9.3",
  "scopeguard",
  "serde",
- "serde-big-array",
  "serde_json",
  "thiserror",
  "tokio",
