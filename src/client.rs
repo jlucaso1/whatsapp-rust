@@ -38,6 +38,9 @@ use waproto::whatsapp as wa;
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use crate::sync_task::MajorSyncTask;
 
+const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
+
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("client is not connected")]
@@ -564,7 +567,7 @@ impl Client {
                     // Wait (with timeout) for initial key share so critical_* collections don't fail due to missing keys
                     info!(target: "Client/AppState", "Waiting for initial app state keys before starting full sync (15s timeout)...");
                     match tokio::time::timeout(
-                        Duration::from_secs(15),
+                        APP_STATE_KEY_WAIT_TIMEOUT,
                         client_clone.initial_keys_synced_notifier.notified(),
                     )
                     .await
@@ -603,7 +606,6 @@ impl Client {
 
     async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
         let mut attempt = 0u32;
-        let max_attempts = 6u32; // includes initial attempt
         loop {
             attempt += 1;
             let res = self.process_app_state_sync_task(name, true).await;
@@ -626,7 +628,7 @@ impl Client {
                         }
                         continue;
                     }
-                    if es.contains("database is locked") && attempt < max_attempts {
+                    if es.contains("database is locked") && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
                         tokio::time::sleep(backoff).await;
