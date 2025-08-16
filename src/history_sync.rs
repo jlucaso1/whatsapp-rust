@@ -1,8 +1,5 @@
 use crate::types::events::{Event, SelfPushNameUpdated};
 use crate::types::presence::Presence;
-use flate2::read::ZlibDecoder;
-use prost::Message;
-use std::io::Read;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::history_sync::HistorySyncType;
@@ -27,17 +24,10 @@ impl Client {
             .await;
 
         match self.download(&notification).await {
-            Ok(decompressed_data) => {
-                log::info!("Successfully downloaded and decompressed history sync blob.");
+            Ok(compressed_data) => {
+                log::info!("Successfully downloaded history sync blob.");
 
-                let mut decoder = ZlibDecoder::new(&decompressed_data[..]);
-                let mut uncompressed = Vec::new();
-                if let Err(e) = decoder.read_to_end(&mut uncompressed) {
-                    log::error!("Failed to zlib decompress history sync data: {:?}", e);
-                    return;
-                }
-
-                match wa::HistorySync::decode(uncompressed.as_slice()) {
+                match wacore::history_sync::process_history_sync_blob(&compressed_data) {
                     Ok(history_data) => {
                         log::info!(
                             "Successfully parsed HistorySync protobuf (Type: {:?}, Conversations: {})",
@@ -56,7 +46,7 @@ impl Client {
                             .dispatch(&Event::HistorySync(history_data));
                     }
                     Err(e) => {
-                        log::error!("Failed to parse HistorySync protobuf: {:?}", e);
+                        log::error!("Failed to process HistorySync data: {:?}", e);
                     }
                 }
             }

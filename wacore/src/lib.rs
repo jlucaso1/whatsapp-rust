@@ -3,6 +3,7 @@ pub mod client;
 pub mod crypto;
 pub mod download;
 pub mod handshake;
+pub mod history_sync;
 pub mod libsignal;
 pub mod pair;
 pub mod prekeys;

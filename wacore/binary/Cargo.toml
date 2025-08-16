@@ -11,7 +11,7 @@ default = []
 serde = ["dep:serde"]
 
 [dependencies]
-flate2 = { version = "1.0", default-features = false, features = ["zlib-rs"] }
+flate2 = { workspace = true }
 phf = { version = "0.12.1", features = ["macros"] }
 serde = { version = "1.0", features = ["derive"], optional = true }
 
