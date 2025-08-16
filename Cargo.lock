@@ -1896,7 +1896,6 @@ dependencies = [
 name = "whatsapp-rust"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "async-trait",
  "base64",

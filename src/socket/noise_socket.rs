@@ -1,8 +1,7 @@
 use crate::socket::error::{Result, SocketError};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::Aead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use wacore::aes_gcm::{Aes256Gcm, aead::Aead};
 use wacore::handshake::utils::generate_iv;
 
 use crate::socket::FrameSocket;

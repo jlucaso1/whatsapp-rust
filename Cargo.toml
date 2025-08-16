@@ -14,14 +14,8 @@ tokio = { version = "1.4.1" }
 wacore-binary = { path = "./wacore/binary" }
 waproto = { path = "./waproto" }
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
-aes-gcm = { version = "0.10.2", features = [
-    "aes",
-    "alloc",
-], default-features = false }
+
 anyhow = { version = "1.0", default-features = false }
 async-trait = "0.1.88"
 bincode = { version = "2.0.1", features = ["serde"] }
@@ -46,7 +40,6 @@ rand_core = { workspace = true }
 scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde-big-array = "0.5.1"
-serde_json = "1.0"
 thiserror = "2.0.12"
 tokio = { workspace = true, features = [
     "macros",
@@ -65,6 +58,7 @@ waproto = { workspace = true }
 [dev-dependencies]
 base64 = { version = "0.22.1", default-features = false }
 tokio = { workspace = true, features = ["fs"] }
+serde_json = "1.0"
 
 [profile.release]
 opt-level = "z"
