@@ -696,6 +696,37 @@ impl Client {
         Ok(())
     }
 
+    pub async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let old_name = device_snapshot.push_name.clone();
+
+        if old_name == new_name {
+            return;
+        }
+
+        log::info!("Updating push name from '{}' -> '{}'", old_name, new_name);
+        self.persistence_manager
+            .process_command(DeviceCommand::SetPushName(new_name.clone()))
+            .await;
+
+        self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
+            crate::types::events::SelfPushNameUpdated {
+                from_server: true,
+                old_name,
+                new_name: new_name.clone(),
+            },
+        ));
+
+        let client_clone = self.clone();
+        tokio::task::spawn_local(async move {
+            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+                log::warn!("Failed to send presence after push name update: {:?}", e);
+            } else {
+                log::info!("Sent presence after push name update.");
+            }
+        });
+    }
+
     pub async fn get_push_name(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         device_snapshot.push_name.clone()

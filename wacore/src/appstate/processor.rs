@@ -64,6 +64,15 @@ impl Processor {
         Self { key_store }
     }
 
+    async fn get_expanded_keys(&self, key_id: &[u8]) -> Result<keys::ExpandedAppStateKeys> {
+        let key_data = match self.key_store.get_app_state_sync_key(key_id).await {
+            Ok(Some(key)) => key.key_data,
+            Err(e) => return Err(AppStateError::GetKeyFailed(key_id.to_vec(), Box::new(e))),
+            Ok(None) => return Err(AppStateError::KeysNotFound(vec![key_id.to_vec()])),
+        };
+        Ok(keys::expand_app_state_keys(&key_data))
+    }
+
     pub async fn decode_patches(
         &self,
         list: &PatchList,
@@ -88,15 +97,13 @@ impl Processor {
                 .as_ref()
                 .and_then(|k| k.id.as_deref())
                 .unwrap_or_default();
-            let key_data = match self.key_store.get_app_state_sync_key(key_id).await {
-                Ok(Some(key)) => key.key_data,
-                _ => {
+            let keys = match self.get_expanded_keys(key_id).await {
+                Ok(k) => k,
+                Err(e) => {
                     missing_keys.push(key_id.to_vec());
-                    // Can't proceed without the key for the snapshot
-                    return Err(AppStateError::KeysNotFound(missing_keys));
+                    return Err(e);
                 }
             };
-            let keys = keys::expand_app_state_keys(&key_data);
 
             for record in &snapshot.records {
                 let mut decoded_mutations = Vec::new();
@@ -148,14 +155,13 @@ impl Processor {
                 .and_then(|k| k.id.as_ref())
                 .map_or(&[][..], |v| &v[..]);
 
-            let key_data = match self.key_store.get_app_state_sync_key(key_id).await {
-                Ok(Some(key)) => key.key_data,
-                _ => {
+            let keys = match self.get_expanded_keys(key_id).await {
+                Ok(k) => k,
+                Err(_e) => {
                     missing_keys.push(key_id.to_vec());
                     continue;
                 }
             };
-            let keys = keys::expand_app_state_keys(&key_data);
 
             let mut patch_mutations: Vec<Mutation> = Vec::new();
             let mut decode_errors = 0;
