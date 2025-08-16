@@ -1,6 +1,5 @@
 use crate::client::Client;
 use crate::client::RecentMessageKey;
-use crate::error::decryption::DecryptionError;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -9,6 +8,7 @@ use log::warn;
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use wacore::libsignal::crypto::DecryptionError;
 use wacore::libsignal::protocol::SenderKeyDistributionMessage;
 use wacore::libsignal::protocol::group_decrypt;
 use wacore::libsignal::protocol::process_sender_key_distribution_message;

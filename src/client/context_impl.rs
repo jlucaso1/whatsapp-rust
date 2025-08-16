@@ -22,7 +22,7 @@ impl SendContextResolver for Client {
         &self,
         jids: &[Jid],
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {
-        self.fetch_pre_keys(jids, Some("identity")).await // Pass "identity" for group setup
+        self.fetch_pre_keys(jids, Some("identity")).await
     }
 
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
