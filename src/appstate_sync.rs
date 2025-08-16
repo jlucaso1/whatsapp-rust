@@ -10,7 +10,10 @@ use processor::PatchList;
 use prost::Message; // still used for decoding patches & mutations
 use std::str::FromStr as _;
 use std::sync::Arc;
-use wacore::appstate::processor::{Mutation, Processor, ProcessorUtils};
+use wacore::appstate::processor::Processor;
+use wacore::appstate::snapshot::{
+    apply_snapshot_mutations, decode_snapshot_records, verify_snapshot_mac,
+};
 use waproto::whatsapp::{self as wa, ExternalBlobReference};
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
@@ -151,9 +154,9 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                 if let Some(snapshot_node) = collection_node.get_optional_child("snapshot")
                     && let Some(wacore_binary::node::NodeContent::Bytes(b)) = &snapshot_node.content
                 {
-                    // Get raw snapshot bytes (external or inline) then single-pass parse
+                    // Get raw snapshot bytes (external or inline) then parse via wacore helper
                     let raw = if let Ok(blob_ref) = ExternalBlobReference::decode(b.as_slice()) {
-                        info!(target: "Client/AppState", "Snapshot for '{name}' external blob; downloading (single-pass parse)...");
+                        info!(target: "Client/AppState", "Snapshot for '{name}' external blob; downloading (stream helper)...");
                         match client.download(&blob_ref).await {
                             Ok(data) => data,
                             Err(e) => {
@@ -168,191 +171,58 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                         b.clone()
                     };
 
-                    use base64::Engine as _;
-                    use base64::prelude::BASE64_STANDARD;
-                    use hmac::{Hmac, Mac};
-                    use prost::encoding::{decode_key, decode_varint};
-                    use sha2::Sha256;
-                    use std::io::Cursor;
-                    use wacore::appstate::lthash::WA_PATCH_INTEGRITY;
+                    use wacore::appstate::snapshot_stream::process_snapshot_stream;
 
-                    let mut cursor = Cursor::new(raw.as_slice());
-                    let total_len = raw.len();
-                    let mut version_u64: u64 = 0;
-                    let mut keys_opt: Option<wacore::appstate::keys::ExpandedAppStateKeys> = None;
-                    let mut snapshot_mac_server: Option<Vec<u8>> = None; // raw mac bytes from snapshot field
-                    let mut buffered_records: Vec<Vec<u8>> = Vec::new(); // records seen before key_id
-                    let mut mutations: Vec<Mutation> = Vec::new();
-
-                    while (cursor.position() as usize) < total_len {
-                        let Ok((field_number, wire_type)) = decode_key(&mut cursor) else {
-                            break;
+                    // Collect records (can't decode until keys known)
+                    let mut collected_records: Vec<wa::SyncdRecord> = Vec::new();
+                    let (version_opt, key_id_opt, mac_opt) =
+                        match process_snapshot_stream(&raw, |rec| {
+                            collected_records.push(rec);
+                            async {}
+                        })
+                        .await
+                        {
+                            Ok(t) => t,
+                            Err(e) => {
+                                error!("Failed streaming snapshot parse for '{name}': {e}");
+                                has_more = false;
+                                continue;
+                            }
                         };
-                        match field_number {
-                            1 => {
-                                // version
-                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
-                                let pos = cursor.position() as usize;
-                                if pos + len > total_len {
-                                    break;
-                                }
-                                if let Ok(ver) = wa::SyncdVersion::decode(&raw[pos..pos + len]) {
-                                    version_u64 = ver.version.unwrap_or(0);
-                                }
-                                cursor.set_position((pos + len) as u64);
-                            }
-                            2 => {
-                                // record
-                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
-                                let pos = cursor.position() as usize;
-                                if pos + len > total_len {
-                                    break;
-                                }
-                                let slice = &raw[pos..pos + len];
-                                if let Some(keys) = &keys_opt {
-                                    if let Ok(rec) = wa::SyncdRecord::decode(slice) {
-                                        let fake = wa::SyncdMutation {
-                                            operation: Some(
-                                                wa::syncd_mutation::SyncdOperation::Set as i32,
-                                            ),
-                                            record: Some(rec),
-                                        };
-                                        let mut local_out = Vec::new();
-                                        match ProcessorUtils::decode_mutation(
-                                            keys,
-                                            &fake,
-                                            &mut local_out,
-                                        ) {
-                                            Ok(_) => {
-                                                if !local_out.is_empty() {
-                                                    mutations.extend(local_out);
-                                                }
-                                            }
-                                            Err(e) => log::warn!(
-                                                "Failed to decode snapshot record: {e:?}"
-                                            ),
-                                        }
-                                    }
-                                } else {
-                                    buffered_records.push(slice.to_vec());
-                                }
-                                cursor.set_position((pos + len) as u64);
-                            }
-                            3 => {
-                                // mac
-                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
-                                let pos = cursor.position() as usize;
-                                if pos + len > total_len {
-                                    break;
-                                }
-                                snapshot_mac_server = Some(raw[pos..pos + len].to_vec());
-                                cursor.set_position((pos + len) as u64);
-                            }
-                            4 => {
-                                // key_id
-                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
-                                let pos = cursor.position() as usize;
-                                if pos + len > total_len {
-                                    break;
-                                }
-                                if let Ok(kid) = wa::KeyId::decode(&raw[pos..pos + len])
-                                    && let Some(id_bytes) = kid.id.as_deref()
-                                {
-                                    match processor.get_expanded_keys(id_bytes).await {
-                                        Ok(k) => keys_opt = Some(k),
-                                        Err(e) => {
-                                            error!("Missing app state key for snapshot: {e:?}");
-                                            has_more = false;
-                                            break;
-                                        }
-                                    }
-                                }
-                                cursor.set_position((pos + len) as u64);
-                            }
-                            _ => {
-                                // skip unknown
-                                use prost::encoding::WireType;
-                                match wire_type {
-                                    WireType::Varint => {
-                                        let _ = decode_varint(&mut cursor);
-                                    }
-                                    WireType::LengthDelimited => {
-                                        let l = decode_varint(&mut cursor).unwrap_or(0) as usize;
-                                        let pos = cursor.position() as usize;
-                                        cursor.set_position((pos + l) as u64);
-                                    }
-                                    WireType::ThirtyTwoBit => {
-                                        let pos = cursor.position() as usize;
-                                        cursor.set_position((pos + 4) as u64);
-                                    }
-                                    WireType::SixtyFourBit => {
-                                        let pos = cursor.position() as usize;
-                                        cursor.set_position((pos + 8) as u64);
-                                    }
-                                    _ => break,
-                                }
-                            }
-                        }
-                    }
 
-                    // Initialize state (full snapshot semantics)
-                    current_state.version = version_u64;
-                    current_state.hash = [0; 128];
-                    current_state.index_value_map.clear();
+                    let version_u64 = version_opt.as_ref().and_then(|v| v.version).unwrap_or(0);
+                    current_state.version = version_u64; // hash/index reset will happen when applying mutations
 
-                    // Decode any buffered records now that we (should) have keys
-                    if let Some(keys) = &keys_opt {
-                        for slice in buffered_records {
-                            if let Ok(rec) = wa::SyncdRecord::decode(slice.as_slice()) {
-                                let fake = wa::SyncdMutation {
-                                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
-                                    record: Some(rec),
-                                };
-                                let mut local_out = Vec::new();
-                                if ProcessorUtils::decode_mutation(keys, &fake, &mut local_out)
-                                    .is_ok()
-                                {
-                                    mutations.extend(local_out);
-                                }
-                            }
-                        }
-                    } else {
-                        error!("Snapshot ended without key_id; aborting collection");
-                        has_more = false;
-                        continue;
-                    }
-
-                    // Verify snapshot MAC if present
-                    if let (Some(keys), Some(server_mac)) = (&keys_opt, &snapshot_mac_server) {
-                        // Snapshot MAC = HMAC-SHA256 over concatenated value_macs of all records in order.
-                        let mut mac =
-                            Hmac::<Sha256>::new_from_slice(&keys.snapshot_mac).expect("HMAC");
-                        for m in &mutations {
-                            mac.update(&m.value_mac);
-                        }
-                        let expected = mac.finalize().into_bytes().to_vec();
-                        if expected != *server_mac {
-                            error!("Mismatching snapshot MAC for '{name}'");
+                    let key_id_bytes =
+                        if let Some(kid) = key_id_opt.as_ref().and_then(|k| k.id.as_deref()) {
+                            kid
+                        } else {
+                            error!("Snapshot missing key_id for '{name}'");
+                            has_more = false;
+                            continue;
+                        };
+                    let keys = match processor.get_expanded_keys(key_id_bytes).await {
+                        Ok(k) => k,
+                        Err(e) => {
+                            error!("Missing app state key for snapshot '{name}': {e:?}");
                             has_more = false;
                             continue;
                         }
-                    }
+                    };
 
-                    // Update hash & index map
-                    let add_refs: Vec<&[u8]> =
-                        mutations.iter().map(|m| m.value_mac.as_slice()).collect();
-                    for m in &mutations {
-                        let index_mac_b64 = BASE64_STANDARD.encode(&m.index_mac);
-                        current_state
-                            .index_value_map
-                            .insert(index_mac_b64, m.value_mac.clone());
+                    let mutations = decode_snapshot_records(&keys, collected_records);
+                    if !verify_snapshot_mac(&keys, mac_opt.as_deref(), &mutations) {
+                        error!("Mismatching snapshot MAC for '{name}'");
+                        has_more = false;
+                        continue;
                     }
-                    WA_PATCH_INTEGRITY.subtract_then_add_in_place(
+                    apply_snapshot_mutations(
+                        version_u64,
+                        &mutations,
                         &mut current_state.hash,
-                        &[],
-                        &add_refs,
+                        &mut current_state.index_value_map,
                     );
-                    info!(target: "Client/AppState", "Single-pass streamed {} snapshot records for '{name}' (version {version_u64})", mutations.len());
+                    info!(target: "Client/AppState", "Stream processed {} snapshot records for '{name}' (version {version_u64})", mutations.len());
                 }
 
                 let patch_list = PatchList {
