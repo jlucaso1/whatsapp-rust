@@ -1749,6 +1749,7 @@ dependencies = [
  "arrayref",
  "async-trait",
  "base64",
+ "bytes",
  "cbc",
  "chrono",
  "cipher",
