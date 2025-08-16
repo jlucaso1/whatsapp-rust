@@ -31,3 +31,4 @@ pub mod usync;
 pub mod test_network;
 
 pub mod bot;
+pub mod sync_task;

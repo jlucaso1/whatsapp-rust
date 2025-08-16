@@ -36,6 +36,7 @@ use wacore::store::traits::AppStateStore;
 use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
+use crate::sync_task::MajorSyncTask;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -103,12 +104,14 @@ pub struct Client {
     // Notifies when first batch of app state sync keys has been stored (to avoid race on initial full sync)
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
-    // Serialize HistorySync processing to avoid SQLite write contention (narrow scope)
-    pub(crate) history_sync_lock: Arc<Mutex<()>>,
+    // Sender for enqueuing major sync tasks processed by a dedicated worker
+    pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
 }
 
 impl Client {
-    pub async fn new(persistence_manager: Arc<PersistenceManager>) -> Self {
+    pub async fn new(
+        persistence_manager: Arc<PersistenceManager>,
+    ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
 
@@ -127,7 +130,9 @@ impl Client {
             Arc::new(Mutex::new(cache))
         };
 
-        Self {
+        let (tx, rx) = mpsc::channel(32);
+
+        let this = Self {
             core,
             persistence_manager: persistence_manager.clone(),
             media_conn: Arc::new(Mutex::new(None)),
@@ -167,8 +172,11 @@ impl Client {
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
-            history_sync_lock: Arc::new(Mutex::new(())),
-        }
+            major_sync_task_sender: tx,
+        };
+
+        let arc = Arc::new(this);
+        (arc, rx)
     }
 
     pub async fn run(self: &Arc<Self>) {
@@ -598,7 +606,7 @@ impl Client {
         let max_attempts = 6u32; // includes initial attempt
         loop {
             attempt += 1;
-            let res = self.fetch_app_state(name, true, false).await;
+            let res = self.process_app_state_sync_task(name, true).await;
             match res {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -630,27 +638,31 @@ impl Client {
         }
     }
 
-    pub async fn fetch_app_state(
+    // Worker-invoked method for performing app state sync tasks.
+    pub(crate) async fn process_app_state_sync_task(
         &self,
         name: WAPatchName,
         full_sync: bool,
-        only_if_not_synced: bool,
     ) -> anyhow::Result<()> {
-        // Avoid holding full_sync_lock across network requests to prevent deadlocks; we'll lock only during mutation persistence.
-        // Simplified subset of whatsmeow logic (no key request retry yet)
+        // Implement whatsmeow-style in-memory state propagation across multiple
+        // batches for a single collection. Fetch initial state once, carry it
+        // through the loop, and persist the final state at the end.
         let backend = self.persistence_manager.sqlite_store().unwrap().clone();
         let mut full_sync = full_sync;
-        let state = backend.get_app_state_version(name.as_str()).await?; // version & hash
+
+        // 1) Fetch initial state once
+        let mut state = backend.get_app_state_version(name.as_str()).await?;
         if state.version == 0 {
             full_sync = true;
-        } else if only_if_not_synced {
-            return Ok(());
         }
 
         let mut has_more = true;
         let mut want_snapshot = full_sync;
+
         while has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
+
+            // Build and send single-batch request using the current in-memory version
             let mut collection_builder = NodeBuilder::new("collection")
                 .attr("name", name.as_str())
                 .attr(
@@ -672,10 +684,12 @@ impl Client {
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
                 timeout: None,
             };
-            let resp = self.send_iq(iq).await?; // IQ response
+
+            let resp = self.send_iq(iq).await?;
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
+
+            // Pre-parse snapshot ref and pre-download if present
             let decode_start = std::time::Instant::now();
-            // Pre-parse to detect snapshot reference so we can download asynchronously.
             let pre_downloaded_snapshot: Option<Vec<u8>> =
                 match wacore::appstate::patch_decode::parse_patch_list(&resp) {
                     Ok(pl) => {
@@ -694,6 +708,7 @@ impl Client {
                     }
                     Err(_) => None,
                 };
+
             let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
                 if let Some(bytes) = &pre_downloaded_snapshot {
                     Ok(bytes.clone())
@@ -701,13 +716,15 @@ impl Client {
                     Err(anyhow::anyhow!("snapshot not pre-downloaded"))
                 }
             };
+
             if let Some(proc) = &self.app_state_processor {
-                let (mutations, _new_state, list) =
+                let (mutations, new_state, list) =
                     proc.decode_patch_list(&resp, download, true).await?;
                 let decode_elapsed = decode_start.elapsed();
                 if decode_elapsed.as_millis() > 500 {
                     debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
                 }
+
                 // Request missing keys (throttled 24h per key)
                 let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
                 if !missing.is_empty() {
@@ -730,18 +747,30 @@ impl Client {
                         self.request_app_state_keys(&to_request).await;
                     }
                 }
+
+                // 3) Apply mutations sequentially and update in-memory state
                 for m in mutations {
                     debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
-                    self.dispatch_app_state_mutation(&m, full_sync);
+                    self.dispatch_app_state_mutation(&m, full_sync).await;
                 }
+
+                // Update in-memory state for next iteration
+                state = new_state;
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
             } else {
                 break;
             }
+
             want_snapshot = false;
         }
-        debug!(target: "Client/AppState", "Completed fetch_app_state for {:?} (full_sync_final={full_sync})", name);
+
+        // 4) Persist final state once
+        backend
+            .set_app_state_version(name.as_str(), state.clone())
+            .await?;
+
+        debug!(target: "Client/AppState", "Completed and saved app state sync for {:?} (final version={})", name, state.version);
         Ok(())
     }
 
@@ -777,7 +806,11 @@ impl Client {
         }
     }
 
-    fn dispatch_app_state_mutation(&self, m: &crate::appstate_sync::Mutation, full_sync: bool) {
+    async fn dispatch_app_state_mutation(
+        &self,
+        m: &crate::appstate_sync::Mutation,
+        full_sync: bool,
+    ) {
         use wacore::types::events::{
             ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate,
         };
@@ -808,24 +841,26 @@ impl Client {
                     let new_name = new_name.clone();
                     let pm = self.persistence_manager.clone();
                     let bus = self.core.event_bus.clone();
-                    tokio::spawn(async move {
-                        let snapshot = pm.get_device_snapshot().await;
-                        let old = snapshot.push_name.clone();
-                        if old != new_name {
-                            info!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
-                            pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
-                                .await;
-                            bus.dispatch(&Event::SelfPushNameUpdated(
-                                crate::types::events::SelfPushNameUpdated {
-                                    from_server: true,
-                                    old_name: old,
-                                    new_name: new_name.clone(),
-                                },
-                            ));
-                        } else {
-                            debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
-                        }
-                    });
+
+                    // Acquire DB write lock while persisting push name change.
+                    let _db_guard = pm.get_write_lock().await;
+                    let snapshot = pm.get_device_snapshot().await;
+                    let old = snapshot.push_name.clone();
+                    if old != new_name {
+                        info!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
+                        pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
+                            .await;
+                        bus.dispatch(&Event::SelfPushNameUpdated(
+                            crate::types::events::SelfPushNameUpdated {
+                                from_server: true,
+                                old_name: old,
+                                new_name: new_name.clone(),
+                            },
+                        ));
+                    } else {
+                        debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
+                    }
+                    // db_guard dropped here
                 }
             }
             "mute" => {
@@ -1069,12 +1104,15 @@ impl Client {
     }
 
     pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        // Acquire global DB write lock to prevent concurrent writers during the push name update.
+        let pm = self.persistence_manager.clone();
+        let _db_guard = pm.get_write_lock().await;
+
+        let device_snapshot = pm.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
 
         if old_name != name {
-            self.persistence_manager
-                .process_command(DeviceCommand::SetPushName(name.clone()))
+            pm.process_command(DeviceCommand::SetPushName(name.clone()))
                 .await;
 
             self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
@@ -1089,7 +1127,11 @@ impl Client {
     }
 
     pub async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        // Acquire DB write lock while reading and updating push name to avoid races.
+        let pm = self.persistence_manager.clone();
+        let _db_guard = pm.get_write_lock().await;
+
+        let device_snapshot = pm.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
 
         if old_name == new_name {
@@ -1097,8 +1139,7 @@ impl Client {
         }
 
         log::info!("Updating push name from '{}' -> '{}'", old_name, new_name);
-        self.persistence_manager
-            .process_command(DeviceCommand::SetPushName(new_name.clone()))
+        pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
             .await;
 
         self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
@@ -1108,6 +1149,9 @@ impl Client {
                 new_name: new_name.clone(),
             },
         ));
+
+        // Drop the DB lock before sending network presence.
+        drop(_db_guard);
 
         let client_clone = self.clone();
         tokio::task::spawn_local(async move {

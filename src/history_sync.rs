@@ -17,6 +17,22 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
+        // Enqueue a MajorSyncTask for the dedicated sync worker to consume.
+        let task = crate::sync_task::MajorSyncTask::HistorySync {
+            message_id,
+            notification: Box::new(notification),
+        };
+        if let Err(e) = self.major_sync_task_sender.send(task).await {
+            log::error!("Failed to enqueue history sync task: {e}");
+        }
+    }
+
+    // Private worker-invoked implementation containing the heavy logic (moved from original handle_history_sync)
+    pub(crate) async fn process_history_sync_task(
+        self: &Arc<Self>,
+        message_id: String,
+        notification: HistorySyncNotification,
+    ) {
         // Do not take the global full_sync_lock here to avoid deadlocks with IQ/presence flows.
         let log_msg_id = message_id.clone();
         log::info!(

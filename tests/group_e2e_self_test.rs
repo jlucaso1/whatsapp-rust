@@ -65,7 +65,7 @@ async fn setup_test_client(
     )>,
 ) {
     let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
-    let client = Arc::new(Client::new(pm.clone()).await);
+    let (client, _rx) = Client::new(pm.clone()).await;
 
     // Enable test mode to route messages through our mock network
     client.enable_test_mode(network_sender).await;

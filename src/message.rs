@@ -347,8 +347,7 @@ impl Client {
                         let history_sync_clone = history_sync.clone();
                         let msg_id = info.id.clone();
                         tokio::task::spawn_local(async move {
-                            // Serialize HistorySync tasks to prevent concurrent write transactions
-                            let _lock = client_clone.history_sync_lock.lock().await;
+                            // Enqueue history sync task to dedicated worker
                             client_clone
                                 .handle_history_sync(msg_id, history_sync_clone)
                                 .await;

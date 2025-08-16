@@ -10,7 +10,7 @@ async fn test_recent_message_cache_insert_and_take() {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
-    let client = Arc::new(Client::new(pm.clone()).await);
+    let (client, _rx) = Client::new(pm.clone()).await;
 
     let chat: Jid = "120363021033254949@g.us".parse().unwrap();
     let msg_id = "ABC123".to_string();
