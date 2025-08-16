@@ -46,7 +46,6 @@ pub struct PersistenceManager {
     backend: Option<StoreBackend>,
     dirty: Arc<Mutex<bool>>,
     save_notify: Arc<Notify>,
-    db_write_lock: Arc<Mutex<()>>,
 }
 
 impl PersistenceManager {
@@ -75,18 +74,11 @@ impl PersistenceManager {
             backend: Some(backend),
             dirty: Arc::new(Mutex::new(false)),
             save_notify: Arc::new(Notify::new()),
-            db_write_lock: Arc::new(Mutex::new(())),
         })
     }
 
     pub async fn get_device_arc(&self) -> Arc<RwLock<Device>> {
         self.device.clone()
-    }
-
-    /// Acquire a global write lock that should be held while performing multi-step
-    /// database mutations (used by the sync worker to create a diagnostic critical section).
-    pub async fn get_write_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.db_write_lock.lock().await
     }
 
     pub fn sqlite_store(&self) -> Option<Arc<SqliteStore>> {

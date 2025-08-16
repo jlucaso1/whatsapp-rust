@@ -82,14 +82,7 @@ impl BotBuilder {
         // SPAWN THE DEDICATED SYNC WORKER
         let worker_client = client.clone();
         tokio::task::spawn_local(async move {
-            info!("Sync worker started.");
             while let Some(task) = sync_task_receiver.recv().await {
-                info!("Sync worker received new task: {:?}", task);
-                // Acquire global DB write lock for the duration of the major sync task.
-                // This creates a diagnostic critical section to eliminate concurrent DB writers
-                // while debugging the deterministic MAC mismatch issue.
-                let pm = worker_client.persistence_manager.clone();
-                let _db_guard = pm.get_write_lock().await;
 
                 match task {
                     crate::sync_task::MajorSyncTask::HistorySync {

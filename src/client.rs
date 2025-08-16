@@ -839,16 +839,14 @@ impl Client {
                     && let Some(new_name) = &act.name
                 {
                     let new_name = new_name.clone();
-                    let pm = self.persistence_manager.clone();
                     let bus = self.core.event_bus.clone();
 
-                    // Acquire DB write lock while persisting push name change.
-                    let _db_guard = pm.get_write_lock().await;
-                    let snapshot = pm.get_device_snapshot().await;
+                    let snapshot = self.persistence_manager.get_device_snapshot().await;
                     let old = snapshot.push_name.clone();
                     if old != new_name {
                         info!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
-                        pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
+                        self.persistence_manager
+                            .process_command(DeviceCommand::SetPushName(new_name.clone()))
                             .await;
                         bus.dispatch(&Event::SelfPushNameUpdated(
                             crate::types::events::SelfPushNameUpdated {
@@ -860,7 +858,6 @@ impl Client {
                     } else {
                         debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
                     }
-                    // db_guard dropped here
                 }
             }
             "mute" => {
@@ -1104,15 +1101,12 @@ impl Client {
     }
 
     pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
-        // Acquire global DB write lock to prevent concurrent writers during the push name update.
-        let pm = self.persistence_manager.clone();
-        let _db_guard = pm.get_write_lock().await;
-
-        let device_snapshot = pm.get_device_snapshot().await;
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
 
         if old_name != name {
-            pm.process_command(DeviceCommand::SetPushName(name.clone()))
+            self.persistence_manager
+                .process_command(DeviceCommand::SetPushName(name.clone()))
                 .await;
 
             self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
@@ -1127,11 +1121,7 @@ impl Client {
     }
 
     pub async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
-        // Acquire DB write lock while reading and updating push name to avoid races.
-        let pm = self.persistence_manager.clone();
-        let _db_guard = pm.get_write_lock().await;
-
-        let device_snapshot = pm.get_device_snapshot().await;
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
 
         if old_name == new_name {
@@ -1139,7 +1129,8 @@ impl Client {
         }
 
         log::info!("Updating push name from '{}' -> '{}'", old_name, new_name);
-        pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
+        self.persistence_manager
+            .process_command(DeviceCommand::SetPushName(new_name.clone()))
             .await;
 
         self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
@@ -1149,9 +1140,6 @@ impl Client {
                 new_name: new_name.clone(),
             },
         ));
-
-        // Drop the DB lock before sending network presence.
-        drop(_db_guard);
 
         let client_clone = self.clone();
         tokio::task::spawn_local(async move {
