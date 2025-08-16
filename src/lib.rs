@@ -26,6 +26,7 @@ pub mod groups;
 pub mod history_sync;
 pub mod presence;
 pub mod usync;
+pub mod appstate_sync;
 
 pub mod test_network;
 
