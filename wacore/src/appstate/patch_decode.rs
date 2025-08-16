@@ -51,7 +51,7 @@ pub struct PatchList {
 /// Node path: sync -> collection (attributes: name, has_more_patches)
 pub fn parse_patch_list(
     node: &Node,
-    downloader: Option<&dyn Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>>>,
+    _downloader: Option<&dyn Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>>>,
 ) -> Result<PatchList> {
     let collection = node
         .get_optional_child_by_tag(&["sync", "collection"]) // naive path descent

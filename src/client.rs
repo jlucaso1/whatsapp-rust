@@ -563,7 +563,7 @@ impl Client {
     }
 
     fn dispatch_app_state_mutation(&self, m: &crate::appstate_sync::Mutation, full_sync: bool) {
-    use wacore::types::events::{Event, MuteUpdate, PinUpdate, ArchiveUpdate};
+    use wacore::types::events::{Event, MuteUpdate, PinUpdate, ArchiveUpdate, MarkChatAsReadUpdate, ContactUpdate};
         if m.operation != wa::syncd_mutation::SyncdOperation::Set { return; }
         if m.index.is_empty() { return; }
         let kind = &m.index[0];
@@ -574,6 +574,8 @@ impl Client {
             "mute" => if let Some(val) = &m.action_value { if let Some(act) = &val.mute_action { self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
             "pin" => if let Some(val) = &m.action_value { if let Some(act) = &val.pin_action { self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
             "archive" => if let Some(val) = &m.action_value { if let Some(act) = &val.archive_chat_action { self.core.event_bus.dispatch(&Event::ArchiveUpdate(ArchiveUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            "contact" => if let Some(val) = &m.action_value { if let Some(act) = &val.contact_action { self.core.event_bus.dispatch(&Event::ContactUpdate(ContactUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            "mark_chat_as_read" => if let Some(val) = &m.action_value { if let Some(act) = &val.mark_chat_as_read_action { self.core.event_bus.dispatch(&Event::MarkChatAsReadUpdate(MarkChatAsReadUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
             _ => {}
         }
     }
