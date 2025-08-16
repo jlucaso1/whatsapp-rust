@@ -168,11 +168,6 @@ impl Client {
         if let Some(new_name) = latest_own_pushname {
             log::info!("Updating own push name from history sync to '{new_name}'");
             self.clone().update_push_name_and_notify(new_name).await;
-        } else {
-            log::warn!(
-                "Did not find own push name in history sync pushnames list ({} entries)",
-                pushnames.len()
-            );
         }
     }
 }
