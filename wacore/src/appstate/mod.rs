@@ -1,6 +1,7 @@
 pub mod errors;
 pub mod hash;
 pub mod keys;
+pub mod patch_decode;
 pub mod lthash;
 
 pub use errors::*;
