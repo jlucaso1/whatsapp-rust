@@ -100,6 +100,11 @@ pub struct Client {
     // App state sync
     app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
     app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    // Notifies when first batch of app state sync keys has been stored (to avoid race on initial full sync)
+    pub(crate) initial_keys_synced_notifier: Arc<Notify>,
+    pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
+    // Serialize HistorySync processing to avoid SQLite write contention
+    pub(crate) history_sync_lock: Arc<Mutex<()>>,
 }
 
 impl Client {
@@ -160,6 +165,9 @@ impl Client {
                 .sqlite_store()
                 .map(AppStateProcessor::new),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
+            initial_keys_synced_notifier: Arc::new(Notify::new()),
+            initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
+            history_sync_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -504,6 +512,28 @@ impl Client {
 
             // Kick off initial app state sync if needed
             if client_clone.needs_initial_full_sync.load(Ordering::Relaxed) {
+                if !client_clone
+                    .initial_app_state_keys_received
+                    .load(Ordering::Relaxed)
+                {
+                    // Wait (with timeout) for initial key share so critical_* collections don't fail due to missing keys
+                    info!(target: "Client/AppState", "Waiting for initial app state keys before starting full sync (15s timeout)...");
+                    match tokio::time::timeout(
+                        Duration::from_secs(15),
+                        client_clone.initial_keys_synced_notifier.notified(),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            info!(target: "Client/AppState", "Initial app state keys received; proceeding with full sync.")
+                        }
+                        Err(_) => {
+                            warn!(target: "Client/AppState", "Timed out waiting for initial app state keys; continuing anyway (may see 'app state key not found' warnings).")
+                        }
+                    }
+                } else {
+                    info!(target: "Client/AppState", "Initial app state keys already present; starting full sync immediately.");
+                }
                 let names = [
                     WAPatchName::CriticalBlock,
                     WAPatchName::CriticalUnblockLow,
@@ -512,9 +542,11 @@ impl Client {
                     WAPatchName::Regular,
                 ];
                 for name in names {
-                    // sequential to reduce load
-                    if let Err(e) = client_clone.fetch_app_state(name, true, false).await {
-                        warn!("Failed to full sync app state {:?}: {e}", name);
+                    if let Err(e) = client_clone.fetch_app_state_with_retry(name).await {
+                        warn!(
+                            "Failed to full sync app state {:?} after retry logic: {e}",
+                            name
+                        );
                     }
                 }
                 client_clone
@@ -522,6 +554,37 @@ impl Client {
                     .store(false, Ordering::Relaxed);
             }
         });
+    }
+
+    async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
+        let first = self.fetch_app_state(name, true, false).await;
+        if first.is_ok() {
+            return Ok(());
+        }
+        let err = first.err().unwrap();
+        let err_str = err.to_string();
+        if err_str.contains("app state key not found") {
+            // Wait for keys if not yet received
+            if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
+                info!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
+                if tokio::time::timeout(
+                    Duration::from_secs(10),
+                    self.initial_keys_synced_notifier.notified(),
+                )
+                .await
+                .is_err()
+                {
+                    warn!(target: "Client/AppState", "Timeout waiting for key share for {:?}; retrying anyway", name);
+                }
+            }
+            // Retry once
+            let second = self.fetch_app_state(name, true, false).await;
+            if second.is_ok() {
+                return Ok(());
+            }
+            return Err(second.err().unwrap());
+        }
+        Err(err)
     }
 
     pub async fn fetch_app_state(

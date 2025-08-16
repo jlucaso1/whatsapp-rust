@@ -52,6 +52,8 @@ impl SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             conn.run_pending_migrations(MIGRATIONS)
                 .map_err(|e| StoreError::Migration(e.to_string()))?;
+            // Reduce 'database is locked' errors during concurrent history/app state sync writes
+            let _ = diesel::sql_query("PRAGMA busy_timeout = 5000;").execute(&mut conn);
         }
 
         Ok(Self { pool })

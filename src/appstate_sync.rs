@@ -157,7 +157,53 @@ impl<B: Backend> AppStateProcessor<B> {
 
         for patch in &pl.patches {
             state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+            // Preload previous value MACs for indices not defined earlier in this patch (DB fallback) to avoid block_on.
+            use std::collections::HashMap as StdHashMap;
+            let mut set_value_macs: StdHashMap<Vec<u8>, Vec<u8>> = StdHashMap::new(); // index_mac -> value_mac from earlier SET
+            let mut need_db: Vec<Vec<u8>> = Vec::new();
+            for (i, m) in patch.mutations.iter().enumerate() {
+                if let Some(rec) = &m.record
+                    && let Some(ind) = &rec.index
+                    && let Some(index_mac) = &ind.blob
+                {
+                    // Track SET value MACs
+                    if m.operation.unwrap_or(0) == wa::syncd_mutation::SyncdOperation::Set as i32 {
+                        if let Some(val) = &rec.value
+                            && let Some(vb) = &val.blob
+                            && vb.len() >= 32
+                        {
+                            set_value_macs
+                                .entry(index_mac.clone())
+                                .or_insert_with(|| vb[vb.len() - 32..].to_vec());
+                        }
+                    } else if m.operation.unwrap_or(0)
+                        == wa::syncd_mutation::SyncdOperation::Remove as i32
+                    {
+                        // If remove and not previously set in this patch, mark for DB lookup
+                        if !set_value_macs.contains_key(index_mac) {
+                            // We'll defer DB fetch until after scan
+                            // Avoid duplicates
+                            if !need_db.iter().any(|v| v == index_mac) {
+                                need_db.push(index_mac.clone());
+                            }
+                        }
+                    }
+                }
+                // slight optimization: break early if patch large? keep simple.
+                let _ = i; // silence unused warning if removed later
+            }
+            let mut db_prev: StdHashMap<Vec<u8>, Vec<u8>> = StdHashMap::new();
+            for index_mac in need_db {
+                if let Some(mac) = self
+                    .backend
+                    .get_app_state_mutation_mac(pl.name.as_str(), &index_mac)
+                    .await?
+                {
+                    db_prev.insert(index_mac, mac);
+                }
+            }
             let (_warn, res) = state.update_hash(&patch.mutations, |index_mac, idx| {
+                // search earlier in patch
                 for prev in patch.mutations[..idx].iter().rev() {
                     if let Some(rec) = &prev.record
                         && let Some(ind) = &rec.index
@@ -169,6 +215,9 @@ impl<B: Backend> AppStateProcessor<B> {
                     {
                         return Ok(Some(vb[vb.len() - 32..].to_vec()));
                     }
+                }
+                if let Some(prev_mac) = db_prev.get(index_mac) {
+                    return Ok(Some(prev_mac.clone()));
                 }
                 Ok(None)
             });
