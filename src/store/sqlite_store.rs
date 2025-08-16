@@ -8,10 +8,10 @@ use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
 use std::collections::VecDeque;
 use wacore::appstate::hash::HashState;
-use wacore::store::traits::AppStateMutationMAC;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::signal;
 use wacore::store::error::{Result, StoreError};
+use wacore::store::traits::AppStateMutationMAC;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
@@ -836,7 +836,10 @@ impl AppStateStore for SqliteStore {
                     app_state_mutation_macs::index_mac.eq(&m.index_mac),
                     app_state_mutation_macs::value_mac.eq(&m.value_mac),
                 ))
-                .on_conflict((app_state_mutation_macs::name, app_state_mutation_macs::index_mac))
+                .on_conflict((
+                    app_state_mutation_macs::name,
+                    app_state_mutation_macs::index_mac,
+                ))
                 .do_update()
                 .set((
                     app_state_mutation_macs::version.eq(version as i64),
@@ -880,7 +883,10 @@ impl AppStateStore for SqliteStore {
         use crate::store::schema::app_state_mutation_macs;
         let mut conn = self.get_connection()?;
         let result: Option<(i64, Vec<u8>)> = app_state_mutation_macs::table
-            .select((app_state_mutation_macs::version, app_state_mutation_macs::value_mac))
+            .select((
+                app_state_mutation_macs::version,
+                app_state_mutation_macs::value_mac,
+            ))
             .filter(
                 app_state_mutation_macs::name
                     .eq(name)

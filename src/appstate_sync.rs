@@ -4,13 +4,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use prost::Message;
 use tokio::sync::Mutex;
-use wacore::appstate::{expand_app_state_keys};
-use wacore::appstate::hash::{generate_content_mac, generate_patch_mac, HashState};
-use wacore::appstate::patch_decode::{parse_patch_list, PatchList, WAPatchName};
+use wacore::appstate::expand_app_state_keys;
+use wacore::appstate::hash::{HashState, generate_content_mac, generate_patch_mac};
+use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list};
 use wacore::libsignal::crypto::aes_256_cbc_decrypt;
 use wacore::store::traits::Backend;
 use wacore_binary::node::Node;
@@ -45,19 +45,22 @@ impl From<wacore::appstate::ExpandedAppStateKeys> for ExpandedKeys {
 
 impl<B: Backend> AppStateProcessor<B> {
     pub fn new(backend: Arc<B>) -> Self {
-        Self { backend, key_cache: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            backend,
+            key_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedKeys> {
-        use base64::engine::general_purpose::STANDARD_NO_PAD;
         use base64::Engine;
+        use base64::engine::general_purpose::STANDARD_NO_PAD;
         let id_b64 = STANDARD_NO_PAD.encode(key_id);
         if let Some(cached) = self.key_cache.lock().await.get(&id_b64).cloned() {
             return Ok(cached);
         }
         let key_opt = self.backend.get_app_state_sync_key(key_id).await?;
         let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
-    let expanded: ExpandedKeys = expand_app_state_keys(&key.key_data).into();
+        let expanded: ExpandedKeys = expand_app_state_keys(&key.key_data).into();
         self.key_cache.lock().await.insert(id_b64, expanded.clone());
         Ok(expanded)
     }
@@ -71,33 +74,54 @@ impl<B: Backend> AppStateProcessor<B> {
     where
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
-        let mut pl = parse_patch_list(stanza_root, Some(&|r| download(r)))?; // may contain snapshot_ref
+        let mut pl = parse_patch_list(stanza_root)?; // may contain snapshot_ref
         // Download snapshot synchronously via provided closure if needed
-        if pl.snapshot.is_none() {
-            if let Some(ext) = &pl.snapshot_ref {
-                if let Ok(data) = download(ext) {
-                    if let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice()) { pl.snapshot = Some(snapshot); }
-                }
-            }
+        if pl.snapshot.is_none()
+            && let Some(ext) = &pl.snapshot_ref
+            && let Ok(data) = download(ext)
+            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+        {
+            pl.snapshot = Some(snapshot);
         }
         self.process_patch_list(pl, validate_macs).await
     }
 
-    pub async fn process_patch_list(&self, mut pl: PatchList, validate_macs: bool) -> Result<(Vec<Mutation>, HashState, PatchList)> {
+    pub async fn process_patch_list(
+        &self,
+        pl: PatchList,
+        validate_macs: bool,
+    ) -> Result<(Vec<Mutation>, HashState, PatchList)> {
         let mut state = self.backend.get_app_state_version(pl.name.as_str()).await?;
         let mut new_mutations: Vec<Mutation> = Vec::new();
         if let Some(snapshot) = &pl.snapshot {
-            let version = snapshot.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
+            let version = snapshot
+                .version
+                .as_ref()
+                .and_then(|v| v.version)
+                .unwrap_or(0);
             state.version = version;
-            let encrypted: Vec<wa::SyncdMutation> = snapshot.records.iter().map(|rec| wa::SyncdMutation { operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32), record: Some(rec.clone()) }).collect();
-            let (_warn, res) = state.update_hash(&encrypted, |_index_mac,_i| Ok(None));
+            let encrypted: Vec<wa::SyncdMutation> = snapshot
+                .records
+                .iter()
+                .map(|rec| wa::SyncdMutation {
+                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                    record: Some(rec.clone()),
+                })
+                .collect();
+            let (_warn, res) = state.update_hash(&encrypted, |_index_mac, _i| Ok(None));
             res?;
             if validate_macs {
                 // Validate snapshot MAC
-                if let (Some(mac_expected), Some(key_id)) = (snapshot.mac.as_ref(), snapshot.key_id.as_ref().and_then(|k| k.id.as_ref())) {
+                if let (Some(mac_expected), Some(key_id)) = (
+                    snapshot.mac.as_ref(),
+                    snapshot.key_id.as_ref().and_then(|k| k.id.as_ref()),
+                ) {
                     let keys = self.get_app_state_key(key_id).await?;
-                    let computed = state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
-                    if computed != *mac_expected { return Err(anyhow!("snapshot MAC mismatch")); }
+                    let computed =
+                        state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
+                    if computed != *mac_expected {
+                        return Err(anyhow!("snapshot MAC mismatch"));
+                    }
                 }
             }
             let mut added = Vec::new();
@@ -109,55 +133,63 @@ impl<B: Backend> AppStateProcessor<B> {
                     rec,
                     &mut out,
                     validate_macs,
-                ).await?;
+                )
+                .await?;
                 // record value_mac/index_mac for persistence
                 if let Some(m) = out.last() {
-                    added.push(wacore::store::traits::AppStateMutationMAC { index_mac: m.index_mac.clone(), value_mac: m.value_mac.clone() });
+                    added.push(wacore::store::traits::AppStateMutationMAC {
+                        index_mac: m.index_mac.clone(),
+                        value_mac: m.value_mac.clone(),
+                    });
                 }
                 new_mutations.extend(out);
             }
             // Persist version + added MACs
-            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
+            self.backend
+                .set_app_state_version(pl.name.as_str(), state.clone())
+                .await?;
             if !added.is_empty() {
-                self.backend.put_app_state_mutation_macs(pl.name.as_str(), state.version, &added).await?;
+                self.backend
+                    .put_app_state_mutation_macs(pl.name.as_str(), state.version, &added)
+                    .await?;
             }
         }
 
-    for patch in &pl.patches {
-            state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
+        for patch in &pl.patches {
+            state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
             let (_warn, res) = state.update_hash(&patch.mutations, |index_mac, idx| {
                 for prev in patch.mutations[..idx].iter().rev() {
-                    if let Some(rec) = &prev.record {
-                        if let Some(ind) = &rec.index {
-                            if let Some(b) = &ind.blob {
-                                if b == index_mac {
-                                    if let Some(val) = &rec.value {
-                                        if let Some(vb) = &val.blob {
-                                            if vb.len() >= 32 {
-                                                return Ok(Some(vb[vb.len() - 32..].to_vec()));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if let Some(rec) = &prev.record
+                        && let Some(ind) = &rec.index
+                        && let Some(b) = &ind.blob
+                        && b == index_mac
+                        && let Some(val) = &rec.value
+                        && let Some(vb) = &val.blob
+                        && vb.len() >= 32
+                    {
+                        return Ok(Some(vb[vb.len() - 32..].to_vec()));
                     }
                 }
                 Ok(None)
             });
             res?;
-            if validate_macs {
-                if let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref()) {
-                    let keys = self.get_app_state_key(key_id).await?;
-                    // Check snapshot MAC for this patch's version
-                    if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
-                        let computed_snap = state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
-                        if computed_snap != *snap_mac { return Err(anyhow!("patch snapshot MAC mismatch")); }
+            if validate_macs && let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref())
+            {
+                let keys = self.get_app_state_key(key_id).await?;
+                // Check snapshot MAC for this patch's version
+                if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
+                    let computed_snap =
+                        state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
+                    if computed_snap != *snap_mac {
+                        return Err(anyhow!("patch snapshot MAC mismatch"));
                     }
-                    if let Some(patch_mac) = patch.patch_mac.as_ref() {
-                        let version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
-                        let computed_patch = generate_patch_mac(patch, pl.name.as_str(), &keys.patch_mac, version);
-                        if computed_patch != *patch_mac { return Err(anyhow!("patch MAC mismatch")); }
+                }
+                if let Some(patch_mac) = patch.patch_mac.as_ref() {
+                    let version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                    let computed_patch =
+                        generate_patch_mac(patch, pl.name.as_str(), &keys.patch_mac, version);
+                    if computed_patch != *patch_mac {
+                        return Err(anyhow!("patch MAC mismatch"));
                     }
                 }
             }
@@ -174,21 +206,40 @@ impl<B: Backend> AppStateProcessor<B> {
                     self.decode_record(op, rec, &mut out, validate_macs).await?;
                     if let Some(mdec) = out.last() {
                         match op {
-                            wa::syncd_mutation::SyncdOperation::Set => added.push(wacore::store::traits::AppStateMutationMAC { index_mac: mdec.index_mac.clone(), value_mac: mdec.value_mac.clone() }),
-                            wa::syncd_mutation::SyncdOperation::Remove => removed.push(mdec.index_mac.clone()),
+                            wa::syncd_mutation::SyncdOperation::Set => {
+                                added.push(wacore::store::traits::AppStateMutationMAC {
+                                    index_mac: mdec.index_mac.clone(),
+                                    value_mac: mdec.value_mac.clone(),
+                                })
+                            }
+                            wa::syncd_mutation::SyncdOperation::Remove => {
+                                removed.push(mdec.index_mac.clone())
+                            }
                         }
                     }
                     new_mutations.extend(out);
                 }
             }
             // Persist after each patch
-            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
-            if !removed.is_empty() { self.backend.delete_app_state_mutation_macs(pl.name.as_str(), &removed).await?; }
-            if !added.is_empty() { self.backend.put_app_state_mutation_macs(pl.name.as_str(), state.version, &added).await?; }
+            self.backend
+                .set_app_state_version(pl.name.as_str(), state.clone())
+                .await?;
+            if !removed.is_empty() {
+                self.backend
+                    .delete_app_state_mutation_macs(pl.name.as_str(), &removed)
+                    .await?;
+            }
+            if !added.is_empty() {
+                self.backend
+                    .put_app_state_mutation_macs(pl.name.as_str(), state.version, &added)
+                    .await?;
+            }
         }
         // Final version already persisted after patches; ensure latest persisted even if no patches
         if pl.patches.is_empty() {
-            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
+            self.backend
+                .set_app_state_version(pl.name.as_str(), state.clone())
+                .await?;
         }
         Ok((new_mutations, state, pl))
     }
@@ -198,16 +249,28 @@ impl<B: Backend> AppStateProcessor<B> {
         let mut seen = HashSet::new();
         let mut missing = Vec::new();
         let mut check = |key_id: Option<&Vec<u8>>| {
-            if let Some(k) = key_id { if seen.insert(k.clone()) { missing.push(k.clone()); } }
+            if let Some(k) = key_id
+                && seen.insert(k.clone())
+            {
+                missing.push(k.clone());
+            }
         };
         if let Some(snapshot) = &pl.snapshot {
             check(snapshot.key_id.as_ref().and_then(|k| k.id.as_ref()));
-            for rec in &snapshot.records { check(rec.key_id.as_ref().and_then(|k| k.id.as_ref())); }
+            for rec in &snapshot.records {
+                check(rec.key_id.as_ref().and_then(|k| k.id.as_ref()));
+            }
         }
-        for patch in &pl.patches { check(patch.key_id.as_ref().and_then(|k| k.id.as_ref())); }
+        for patch in &pl.patches {
+            check(patch.key_id.as_ref().and_then(|k| k.id.as_ref()));
+        }
         // Filter out those that already exist in store
         let mut out = Vec::new();
-        for id in missing { if self.backend.get_app_state_sync_key(&id).await?.is_none() { out.push(id); } }
+        for id in missing {
+            if self.backend.get_app_state_sync_key(&id).await?.is_none() {
+                out.push(id);
+            }
+        }
         Ok(out)
     }
 
@@ -235,7 +298,12 @@ impl<B: Backend> AppStateProcessor<B> {
         let (iv, rest) = value_blob.split_at(16);
         let (ciphertext, value_mac) = rest.split_at(rest.len() - 32);
         if validate_macs {
-            let expected = generate_content_mac(operation, &value_blob[..value_blob.len() - 32], key_id, &keys.value_mac);
+            let expected = generate_content_mac(
+                operation,
+                &value_blob[..value_blob.len() - 32],
+                key_id,
+                &keys.value_mac,
+            );
             if expected != value_mac {
                 return Err(anyhow!("content MAC mismatch"));
             }
@@ -251,14 +319,26 @@ impl<B: Backend> AppStateProcessor<B> {
                 let mut h = Hmac::<Sha256>::new_from_slice(&keys.index).expect("hmac key");
                 h.update(idx_bytes);
                 let expected_index_mac = h.finalize().into_bytes();
-                let stored = record.index.as_ref().and_then(|i| i.blob.as_ref()).ok_or_else(|| anyhow!("missing index mac"))?;
-                if expected_index_mac.as_slice() != stored { return Err(anyhow!("index MAC mismatch")); }
+                let stored = record
+                    .index
+                    .as_ref()
+                    .and_then(|i| i.blob.as_ref())
+                    .ok_or_else(|| anyhow!("missing index mac"))?;
+                if expected_index_mac.as_slice() != stored {
+                    return Err(anyhow!("index MAC mismatch"));
+                }
             }
-            if let Ok(parsed) = serde_json::from_slice::<Vec<String>>(idx_bytes) { index_list = parsed; }
+            if let Ok(parsed) = serde_json::from_slice::<Vec<String>>(idx_bytes) {
+                index_list = parsed;
+            }
         }
         out.push(Mutation {
             action_value: action.value.clone(),
-            index_mac: record.index.as_ref().and_then(|i| i.blob.clone()).unwrap_or_default(),
+            index_mac: record
+                .index
+                .as_ref()
+                .and_then(|i| i.blob.clone())
+                .unwrap_or_default(),
             value_mac: value_mac.to_vec(),
             index: index_list,
             operation,
@@ -281,13 +361,16 @@ impl<B: Backend> AppStateProcessor<B> {
         loop {
             let state = self.backend.get_app_state_version(name.as_str()).await?;
             let node = driver.fetch_collection(name, state.version).await?;
-            let (mut muts, _new_state, list) = self.decode_patch_list(&node, &download, validate_macs).await?;
+            let (mut muts, _new_state, list) = self
+                .decode_patch_list(&node, &download, validate_macs)
+                .await?;
             all.append(&mut muts);
-            if !list.has_more_patches { break; }
+            if !list.has_more_patches {
+                break;
+            }
         }
         Ok(all)
     }
-
 }
 
 #[derive(Debug, Clone)]

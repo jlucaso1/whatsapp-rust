@@ -23,17 +23,17 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::SERVER_JID;
 
+use crate::appstate_sync::AppStateProcessor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task;
 use tokio::time::{Duration, sleep};
-use wacore::client::context::GroupInfo;
-use waproto::whatsapp as wa;
-use crate::appstate_sync::AppStateProcessor;
 use wacore::appstate::patch_decode::WAPatchName;
+use wacore::client::context::GroupInfo;
 use wacore::store::traits::AppStateStore;
+use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 
@@ -158,7 +158,7 @@ impl Client {
             test_network_sender: Arc::new(Mutex::new(None)),
             app_state_processor: persistence_manager
                 .sqlite_store()
-                .map(|s| AppStateProcessor::new(s)),
+                .map(AppStateProcessor::new),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -511,33 +511,50 @@ impl Client {
                     WAPatchName::RegularHigh,
                     WAPatchName::Regular,
                 ];
-                for name in names { // sequential to reduce load
-                    if let Err(e) = client_clone.fetch_app_state(name, true, false).await { 
-                        warn!("Failed to full sync app state {:?}: {e}", name); 
+                for name in names {
+                    // sequential to reduce load
+                    if let Err(e) = client_clone.fetch_app_state(name, true, false).await {
+                        warn!("Failed to full sync app state {:?}: {e}", name);
                     }
                 }
-                client_clone.needs_initial_full_sync.store(false, Ordering::Relaxed);
+                client_clone
+                    .needs_initial_full_sync
+                    .store(false, Ordering::Relaxed);
             }
         });
     }
 
-    pub async fn fetch_app_state(&self, name: WAPatchName, full_sync: bool, only_if_not_synced: bool) -> anyhow::Result<()> {
+    pub async fn fetch_app_state(
+        &self,
+        name: WAPatchName,
+        full_sync: bool,
+        only_if_not_synced: bool,
+    ) -> anyhow::Result<()> {
         // Simplified subset of whatsmeow logic (no key request retry yet)
         let backend = self.persistence_manager.sqlite_store().unwrap().clone();
         let mut full_sync = full_sync;
         let state = backend.get_app_state_version(name.as_str()).await?; // version & hash
-        if state.version == 0 { full_sync = true; } else if only_if_not_synced { return Ok(()); }
+        if state.version == 0 {
+            full_sync = true;
+        } else if only_if_not_synced {
+            return Ok(());
+        }
 
         let mut has_more = true;
         let mut want_snapshot = full_sync;
         while has_more {
             let mut collection_builder = NodeBuilder::new("collection")
                 .attr("name", name.as_str())
-                .attr("return_snapshot", if want_snapshot { "true" } else { "false" });
+                .attr(
+                    "return_snapshot",
+                    if want_snapshot { "true" } else { "false" },
+                );
             if !want_snapshot {
                 collection_builder = collection_builder.attr("version", state.version.to_string());
             }
-            let sync_node = NodeBuilder::new("sync").children([collection_builder.build()]).build();
+            let sync_node = NodeBuilder::new("sync")
+                .children([collection_builder.build()])
+                .build();
             let iq = crate::request::InfoQuery {
                 namespace: "w:sync:app:state",
                 query_type: crate::request::InfoQueryType::Set,
@@ -549,22 +566,33 @@ impl Client {
             };
             let resp = self.send_iq(iq).await?; // IQ response
             // Pre-parse to detect snapshot reference so we can download asynchronously.
-            let pre_downloaded_snapshot: Option<Vec<u8>> = match wacore::appstate::patch_decode::parse_patch_list(&resp, None) {
-                Ok(pl) => {
-                    if let Some(ext) = &pl.snapshot_ref {
-                        match self.download(ext).await {
-                            Ok(bytes) => Some(bytes),
-                            Err(e) => { warn!("Failed to download external snapshot: {e}"); None }
+            let pre_downloaded_snapshot: Option<Vec<u8>> =
+                match wacore::appstate::patch_decode::parse_patch_list(&resp) {
+                    Ok(pl) => {
+                        if let Some(ext) = &pl.snapshot_ref {
+                            match self.download(ext).await {
+                                Ok(bytes) => Some(bytes),
+                                Err(e) => {
+                                    warn!("Failed to download external snapshot: {e}");
+                                    None
+                                }
+                            }
+                        } else {
+                            None
                         }
-                    } else { None }
-                }
-                Err(_) => None,
-            };
+                    }
+                    Err(_) => None,
+                };
             let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
-                if let Some(bytes) = &pre_downloaded_snapshot { Ok(bytes.clone()) } else { Err(anyhow::anyhow!("snapshot not pre-downloaded")) }
+                if let Some(bytes) = &pre_downloaded_snapshot {
+                    Ok(bytes.clone())
+                } else {
+                    Err(anyhow::anyhow!("snapshot not pre-downloaded"))
+                }
             };
             if let Some(proc) = &self.app_state_processor {
-                let (mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
+                let (mutations, _new_state, list) =
+                    proc.decode_patch_list(&resp, download, true).await?;
                 // Request missing keys (throttled 24h per key)
                 let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
                 if !missing.is_empty() {
@@ -573,28 +601,48 @@ impl Client {
                     let now = std::time::Instant::now();
                     for key_id in missing {
                         let hex_id = hex::encode(&key_id);
-                        let should = guard.get(&hex_id).map(|t| t.elapsed() > std::time::Duration::from_secs(24*3600)).unwrap_or(true);
-                        if should { guard.insert(hex_id, now); to_request.push(key_id); }
+                        let should = guard
+                            .get(&hex_id)
+                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                            .unwrap_or(true);
+                        if should {
+                            guard.insert(hex_id, now);
+                            to_request.push(key_id);
+                        }
                     }
                     drop(guard);
-                    if !to_request.is_empty() { self.request_app_state_keys(&to_request).await; }
+                    if !to_request.is_empty() {
+                        self.request_app_state_keys(&to_request).await;
+                    }
                 }
                 for m in mutations {
                     self.dispatch_app_state_mutation(&m, full_sync);
                 }
                 has_more = list.has_more_patches;
-            } else { break; }
+            } else {
+                break;
+            }
             want_snapshot = false;
         }
         Ok(())
     }
 
     async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
-        if raw_key_ids.is_empty() { return; }
+        if raw_key_ids.is_empty() {
+            return;
+        }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid = match device_snapshot.id.clone() { Some(j) => j, None => return };
+        let own_jid = match device_snapshot.id.clone() {
+            Some(j) => j,
+            None => return,
+        };
         // Build protocol message
-        let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids.iter().map(|k| wa::message::AppStateSyncKeyId { key_id: Some(k.clone()) }).collect();
+        let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
+            .iter()
+            .map(|k| wa::message::AppStateSyncKeyId {
+                key_id: Some(k.clone()),
+            })
+            .collect();
         let msg = wa::Message {
             protocol_message: Some(Box::new(wa::message::ProtocolMessage {
                 r#type: Some(wa::message::protocol_message::Type::AppStateSyncKeyRequest as i32),
@@ -603,25 +651,103 @@ impl Client {
             })),
             ..Default::default()
         };
-        if let Err(e) = self.send_message_impl(own_jid, msg, self.generate_message_id().await, true, false).await {
+        if let Err(e) = self
+            .send_message_impl(own_jid, msg, self.generate_message_id().await, true, false)
+            .await
+        {
             warn!("Failed to send app state key request: {e}");
         }
     }
 
     fn dispatch_app_state_mutation(&self, m: &crate::appstate_sync::Mutation, full_sync: bool) {
-    use wacore::types::events::{Event, MuteUpdate, PinUpdate, ArchiveUpdate, MarkChatAsReadUpdate, ContactUpdate};
-        if m.operation != wa::syncd_mutation::SyncdOperation::Set { return; }
-        if m.index.is_empty() { return; }
+        use wacore::types::events::{
+            ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate,
+        };
+        if m.operation != wa::syncd_mutation::SyncdOperation::Set {
+            return;
+        }
+        if m.index.is_empty() {
+            return;
+        }
         let kind = &m.index[0];
-        let ts = m.action_value.as_ref().and_then(|v| v.timestamp).unwrap_or(0);
-        let time = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(|| chrono::Utc::now());
-        let jid = if m.index.len() > 1 { m.index[1].parse().unwrap_or_default() } else { Jid::default() };
+        let ts = m
+            .action_value
+            .as_ref()
+            .and_then(|v| v.timestamp)
+            .unwrap_or(0);
+        let time = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+        let jid = if m.index.len() > 1 {
+            m.index[1].parse().unwrap_or_default()
+        } else {
+            Jid::default()
+        };
         match kind.as_str() {
-            "mute" => if let Some(val) = &m.action_value { if let Some(act) = &val.mute_action { self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
-            "pin" => if let Some(val) = &m.action_value { if let Some(act) = &val.pin_action { self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
-            "archive" => if let Some(val) = &m.action_value { if let Some(act) = &val.archive_chat_action { self.core.event_bus.dispatch(&Event::ArchiveUpdate(ArchiveUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
-            "contact" => if let Some(val) = &m.action_value { if let Some(act) = &val.contact_action { self.core.event_bus.dispatch(&Event::ContactUpdate(ContactUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
-            "mark_chat_as_read" => if let Some(val) = &m.action_value { if let Some(act) = &val.mark_chat_as_read_action { self.core.event_bus.dispatch(&Event::MarkChatAsReadUpdate(MarkChatAsReadUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            "mute" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.mute_action
+                {
+                    self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate {
+                        jid,
+                        timestamp: time,
+                        action: Box::new(*act),
+                        from_full_sync: full_sync,
+                    }));
+                }
+            }
+            "pin" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.pin_action
+                {
+                    self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate {
+                        jid,
+                        timestamp: time,
+                        action: Box::new(*act),
+                        from_full_sync: full_sync,
+                    }));
+                }
+            }
+            "archive" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.archive_chat_action
+                {
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::ArchiveUpdate(ArchiveUpdate {
+                            jid,
+                            timestamp: time,
+                            action: Box::new(act.clone()),
+                            from_full_sync: full_sync,
+                        }));
+                }
+            }
+            "contact" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.contact_action
+                {
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::ContactUpdate(ContactUpdate {
+                            jid,
+                            timestamp: time,
+                            action: Box::new(act.clone()),
+                            from_full_sync: full_sync,
+                        }));
+                }
+            }
+            "mark_chat_as_read" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.mark_chat_as_read_action
+                {
+                    self.core.event_bus.dispatch(&Event::MarkChatAsReadUpdate(
+                        MarkChatAsReadUpdate {
+                            jid,
+                            timestamp: time,
+                            action: Box::new(act.clone()),
+                            from_full_sync: full_sync,
+                        },
+                    ));
+                }
+            }
             _ => {}
         }
     }

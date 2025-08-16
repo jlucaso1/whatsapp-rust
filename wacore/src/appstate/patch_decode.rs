@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use prost::Message;
+use std::str::FromStr;
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -26,15 +27,19 @@ impl WAPatchName {
             Self::Unknown => "unknown",
         }
     }
-    pub fn from_str(s: &str) -> Self {
-        match s {
+}
+
+impl FromStr for WAPatchName {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "critical_block" => Self::CriticalBlock,
             "critical_unblock_low" => Self::CriticalUnblockLow,
             "regular_low" => Self::RegularLow,
             "regular_high" => Self::RegularHigh,
             "regular" => Self::Regular,
             _ => Self::Unknown,
-        }
+        })
     }
 }
 
@@ -49,10 +54,7 @@ pub struct PatchList {
 
 /// Parse an incoming app state collection node into a PatchList.
 /// Node path: sync -> collection (attributes: name, has_more_patches)
-pub fn parse_patch_list(
-    node: &Node,
-    _downloader: Option<&dyn Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>>>,
-) -> Result<PatchList> {
+pub fn parse_patch_list(node: &Node) -> Result<PatchList> {
     let collection = node
         .get_optional_child_by_tag(&["sync", "collection"]) // naive path descent
         .ok_or_else(|| anyhow!("missing sync/collection"))?;
@@ -63,12 +65,11 @@ pub fn parse_patch_list(
 
     // snapshot (optional)
     let mut snapshot_ref = None;
-    if let Some(snapshot_node) = collection.get_optional_child("snapshot") {
-        if let Some(wacore_binary::node::NodeContent::Bytes(raw)) = &snapshot_node.content {
-            if let Ok(ext_ref) = wa::ExternalBlobReference::decode(raw.as_slice()) {
-                snapshot_ref = Some(ext_ref);
-            }
-        }
+    if let Some(snapshot_node) = collection.get_optional_child("snapshot")
+        && let Some(wacore_binary::node::NodeContent::Bytes(raw)) = &snapshot_node.content
+        && let Ok(ext_ref) = wa::ExternalBlobReference::decode(raw.as_slice())
+    {
+        snapshot_ref = Some(ext_ref);
     }
     let snapshot = None; // external only currently
 
@@ -90,7 +91,7 @@ pub fn parse_patch_list(
     }
 
     Ok(PatchList {
-        name: WAPatchName::from_str(&name_str),
+        name: WAPatchName::from_str(&name_str).unwrap_or(WAPatchName::Unknown),
         has_more_patches: has_more,
         patches,
         snapshot,

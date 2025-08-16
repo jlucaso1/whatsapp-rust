@@ -18,6 +18,7 @@ waproto = { path = "./waproto" }
 
 anyhow = { version = "1.0", default-features = false }
 async-trait = "0.1.88"
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 bytes = { version = "1.5", default-features = false }
 
@@ -35,21 +36,20 @@ env_logger = { version = "0.11", default-features = false }
 futures-util = { version = "0.3.31", default-features = false }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
+hmac = { version = "0.12.1", features = ["reset"] }
 libsqlite3-sys = { version = "0.35.0", default-features = false, features = [
     "bundled",
 ] }
 log = "0.4.27"
 prost = { version = "0.14.1", default-features = false }
-base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-hmac = { version = "0.12.1", features = ["reset"] }
-sha2 = "0.10.6"
-serde_json = "1.0"
 
 # Cryptography
 rand = { workspace = true }
 rand_core = { workspace = true }
 scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.6"
 thiserror = "2.0.12"
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.27.0", default-features = false, features = [
