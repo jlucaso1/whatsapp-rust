@@ -1,7 +1,7 @@
 use crate::appstate_sync;
 use crate::client::Client;
 use crate::types::events::Event;
-use crate::types::presence::Presence;
+// ...existing code...
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::task;
@@ -50,40 +50,10 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
         "account_sync" => {
             if let Some(push_name_attr) = node.attrs.get("pushname") {
                 let new_push_name = push_name_attr.clone();
-
-                let device_snapshot = client.persistence_manager.get_device_snapshot().await;
-                let old_name = device_snapshot.push_name.clone();
-
-                if old_name != new_push_name {
-                    info!(
-                        "Received push name '{new_push_name}' via account_sync notification, updating store."
-                    );
-                    client
-                        .persistence_manager
-                        .process_command(crate::store::commands::DeviceCommand::SetPushName(
-                            new_push_name.clone(),
-                        ))
-                        .await;
-
-                    client.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
-                        crate::types::events::SelfPushNameUpdated {
-                            from_server: true,
-                            old_name,
-                            new_name: new_push_name,
-                        },
-                    ));
-
-                    let client_clone = client.clone();
-                    tokio::task::spawn_local(async move {
-                        if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                            warn!("Failed to send presence after account_sync update: {e:?}");
-                        } else {
-                            info!(
-                                "✅ Successfully sent presence after receiving push_name via account_sync"
-                            );
-                        }
-                    });
-                }
+                client
+                    .clone()
+                    .update_push_name_and_notify(new_push_name)
+                    .await;
             } else {
                 warn!(target: "Client", "TODO: Implement full handler for <notification type='account_sync'>, for now dispatching generic event.");
                 client

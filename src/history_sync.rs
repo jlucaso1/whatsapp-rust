@@ -1,5 +1,4 @@
-use crate::types::events::{Event, SelfPushNameUpdated};
-use crate::types::presence::Presence;
+use crate::types::events::Event;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::history_sync::HistorySyncType;
@@ -80,35 +79,7 @@ impl Client {
         }
 
         if let Some(new_name) = latest_own_pushname {
-            let old_name = device_snapshot.push_name.clone();
-            if old_name != new_name {
-                log::info!(
-                    "Updating own push name from history sync: '{}' -> '{}'",
-                    old_name,
-                    new_name
-                );
-                self.persistence_manager
-                    .process_command(crate::store::commands::DeviceCommand::SetPushName(
-                        new_name.clone(),
-                    ))
-                    .await;
-                self.core
-                    .event_bus
-                    .dispatch(&Event::SelfPushNameUpdated(SelfPushNameUpdated {
-                        from_server: true,
-                        old_name,
-                        new_name,
-                    }));
-
-                let client_clone = self.clone();
-                tokio::task::spawn_local(async move {
-                    if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                        log::warn!("Failed to send presence after history sync update: {:?}", e);
-                    } else {
-                        log::info!("Sent presence after receiving push name via history sync");
-                    }
-                });
-            }
+            self.clone().update_push_name_and_notify(new_name).await;
         }
     }
 }
