@@ -31,6 +31,9 @@ use tokio::task;
 use tokio::time::{Duration, sleep};
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
+use crate::appstate_sync::AppStateProcessor;
+use wacore::appstate::patch_decode::WAPatchName;
+use wacore::store::traits::AppStateStore;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 
@@ -93,6 +96,9 @@ pub struct Client {
     pub(crate) test_mode: Arc<AtomicBool>,
     pub(crate) test_network_sender:
         Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>>>>,
+
+    // App state sync
+    app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
 }
 
 impl Client {
@@ -117,7 +123,7 @@ impl Client {
 
         Self {
             core,
-            persistence_manager,
+            persistence_manager: persistence_manager.clone(),
             media_conn: Arc::new(Mutex::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
@@ -149,6 +155,9 @@ impl Client {
 
             test_mode: Arc::new(AtomicBool::new(false)),
             test_network_sender: Arc::new(Mutex::new(None)),
+            app_state_processor: persistence_manager
+                .sqlite_store()
+                .map(|s| AppStateProcessor::new(s)),
         }
     }
 
@@ -490,7 +499,64 @@ impl Client {
                 .core
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
+
+            // Kick off initial app state sync if needed
+            if client_clone.needs_initial_full_sync.load(Ordering::Relaxed) {
+                let names = [
+                    WAPatchName::CriticalBlock,
+                    WAPatchName::CriticalUnblockLow,
+                    WAPatchName::RegularLow,
+                    WAPatchName::RegularHigh,
+                    WAPatchName::Regular,
+                ];
+                for name in names { // sequential to reduce load
+                    if let Err(e) = client_clone.fetch_app_state(name, true, false).await { 
+                        warn!("Failed to full sync app state {:?}: {e}", name); 
+                    }
+                }
+                client_clone.needs_initial_full_sync.store(false, Ordering::Relaxed);
+            }
         });
+    }
+
+    pub async fn fetch_app_state(&self, name: WAPatchName, full_sync: bool, only_if_not_synced: bool) -> anyhow::Result<()> {
+        // Simplified subset of whatsmeow logic (no key request retry yet)
+        let backend = self.persistence_manager.sqlite_store().unwrap().clone();
+        let mut full_sync = full_sync;
+        let state = backend.get_app_state_version(name.as_str()).await?; // version & hash
+        if state.version == 0 { full_sync = true; } else if only_if_not_synced { return Ok(()); }
+
+        let mut has_more = true;
+        let mut want_snapshot = full_sync;
+        while has_more {
+            let mut collection_builder = NodeBuilder::new("collection")
+                .attr("name", name.as_str())
+                .attr("return_snapshot", if want_snapshot { "true" } else { "false" });
+            if !want_snapshot {
+                collection_builder = collection_builder.attr("version", state.version.to_string());
+            }
+            let sync_node = NodeBuilder::new("sync").children([collection_builder.build()]).build();
+            let iq = crate::request::InfoQuery {
+                namespace: "w:sync:app:state",
+                query_type: crate::request::InfoQueryType::Set,
+                to: SERVER_JID.parse().unwrap(),
+                target: None,
+                id: None,
+                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                timeout: None,
+            };
+            let resp = self.send_iq(iq).await?; // IQ response
+            // Build driver inline
+            let download = |_ext: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> { 
+                Err(anyhow::anyhow!("external snapshot download not yet implemented"))
+            };
+            if let Some(proc) = &self.app_state_processor {
+                let (_mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
+                has_more = list.has_more_patches;
+            } else { break; }
+            want_snapshot = false;
+        }
+        Ok(())
     }
 
     async fn expect_disconnect(&self) {
