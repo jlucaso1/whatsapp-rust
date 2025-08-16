@@ -379,6 +379,35 @@ impl Client {
             debug!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
+        // Early auto-ACK for message-like stanzas to prevent server resends (simplified whatsmeow maybeDeferredAck)
+        match node.tag.as_str() {
+            "message" | "receipt" | "notification" => {
+                if let (Some(id), Some(from)) = (node.attrs.get("id"), node.attrs.get("from")) {
+                    let mut attrs = std::collections::HashMap::new();
+                    attrs.insert("class".to_string(), node.tag.clone());
+                    attrs.insert("id".to_string(), id.clone());
+                    attrs.insert("to".to_string(), from.clone());
+                    if let Some(participant) = node.attrs.get("participant") {
+                        attrs.insert("participant".to_string(), participant.clone());
+                    }
+                    if node.tag != "message"
+                        && let Some(t) = node.attrs.get("type")
+                    {
+                        attrs.insert("type".to_string(), t.clone());
+                    }
+                    let ack = Node {
+                        tag: "ack".to_string(),
+                        attrs,
+                        content: None,
+                    };
+                    if let Err(e) = self.send_node(ack).await {
+                        warn!(target: "Client", "Failed to send ack for {} {}: {e:?}", node.tag, id);
+                    }
+                }
+            }
+            _ => {}
+        }
+
         if node.tag == "xmlstreamend" {
             warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
             self.shutdown_notifier.notify_one();
@@ -476,6 +505,14 @@ impl Client {
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
+        // Clear processed message cache on new successful session to avoid stale suppression
+        {
+            let mut cache = self.processed_messages_cache.lock().await;
+            if !cache.is_empty() {
+                debug!(target: "Client", "Clearing {} processed message keys on connect", cache.len());
+                cache.clear();
+            }
+        }
 
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<Jid>() {
