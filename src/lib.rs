@@ -2,13 +2,11 @@ pub use wacore::{crypto, proto_helpers, signal, store::traits};
 
 pub mod types {
     pub use wacore::types::*;
-    pub mod events;
 }
 
 pub mod appstate_sync;
 pub mod client;
 pub mod download;
-pub mod error;
 pub mod handlers;
 pub mod handshake;
 pub mod keepalive;
