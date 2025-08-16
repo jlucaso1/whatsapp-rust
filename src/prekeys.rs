@@ -207,66 +207,28 @@ impl Client {
             return Ok(());
         }
 
-        // Step 3: Build upload request nodes
-        let mut pre_key_nodes = Vec::new();
-
-        for (pre_key_id, key_pair) in &key_pairs_to_upload {
-            // The ID is sent as 3 bytes, big-endian.
-            let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
-            let node = NodeBuilder::new("key")
-                .children([
-                    NodeBuilder::new("id").bytes(id_bytes).build(),
-                    NodeBuilder::new("value")
-                        .bytes(key_pair.public_key.public_key_bytes().to_vec())
-                        .build(),
-                ])
-                .build();
-            pre_key_nodes.push(node);
+        // Step 3: Build upload request nodes using the centralized utility
+        let mut pre_key_pairs = Vec::new();
+        for (_id, key_pair) in &key_pairs_to_upload {
+            pre_key_pairs.push((*_id, key_pair.public_key.public_key_bytes().to_vec()));
         }
 
-        let registration_id_bytes = device_snapshot.registration_id.to_be_bytes().to_vec();
-
-        // Construct the signed pre-key node from the device store
-        let signed_pre_key_id_bytes = device_snapshot.signed_pre_key_id.to_be_bytes()[1..].to_vec();
-        let signed_pre_key_node = NodeBuilder::new("skey")
-            .children([
-                NodeBuilder::new("id")
-                    .bytes(signed_pre_key_id_bytes)
-                    .build(),
-                NodeBuilder::new("value")
-                    .bytes(
-                        device_snapshot
-                            .signed_pre_key
-                            .public_key
-                            .public_key_bytes()
-                            .to_vec(),
-                    )
-                    .build(),
-                NodeBuilder::new("signature")
-                    .bytes(device_snapshot.signed_pre_key_signature.to_vec())
-                    .build(),
-            ])
-            .build();
-
-        let type_bytes = vec![5u8];
-
-        let iq_content = vec![
-            NodeBuilder::new("registration")
-                .bytes(registration_id_bytes)
-                .build(),
-            NodeBuilder::new("type").bytes(type_bytes.clone()).build(),
-            NodeBuilder::new("identity")
-                .bytes(
-                    device_snapshot
-                        .identity_key
-                        .public_key
-                        .public_key_bytes()
-                        .to_vec(),
-                )
-                .build(),
-            NodeBuilder::new("list").children(pre_key_nodes).build(),
-            signed_pre_key_node,
-        ];
+        let iq_content = PreKeyUtils::build_upload_prekeys_request(
+            device_snapshot.registration_id,
+            device_snapshot
+                .identity_key
+                .public_key
+                .public_key_bytes()
+                .to_vec(),
+            device_snapshot.signed_pre_key_id,
+            device_snapshot
+                .signed_pre_key
+                .public_key
+                .public_key_bytes()
+                .to_vec(),
+            device_snapshot.signed_pre_key_signature.to_vec(),
+            &pre_key_pairs,
+        );
 
         let iq = InfoQuery {
             namespace: "encrypt",

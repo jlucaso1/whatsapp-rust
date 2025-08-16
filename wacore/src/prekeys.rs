@@ -20,6 +20,59 @@ impl PreKeyUtils {
         NodeBuilder::new("key").children(user_nodes).build()
     }
 
+    pub fn build_upload_prekeys_request(
+        registration_id: u32,
+        identity_key_bytes: Vec<u8>,
+        signed_pre_key_id: u32,
+        signed_pre_key_public_bytes: Vec<u8>,
+        signed_pre_key_signature: Vec<u8>,
+        pre_keys: &[(u32, Vec<u8>)],
+    ) -> Vec<Node> {
+        let mut pre_key_nodes = Vec::new();
+        for (pre_key_id, public_bytes) in pre_keys {
+            let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
+            let node = NodeBuilder::new("key")
+                .children([
+                    NodeBuilder::new("id").bytes(id_bytes).build(),
+                    NodeBuilder::new("value")
+                        .bytes(public_bytes.clone())
+                        .build(),
+                ])
+                .build();
+            pre_key_nodes.push(node);
+        }
+
+        let registration_id_bytes = registration_id.to_be_bytes().to_vec();
+
+        let signed_pre_key_node = NodeBuilder::new("skey")
+            .children([
+                NodeBuilder::new("id")
+                    .bytes(signed_pre_key_id.to_be_bytes()[1..].to_vec())
+                    .build(),
+                NodeBuilder::new("value")
+                    .bytes(signed_pre_key_public_bytes)
+                    .build(),
+                NodeBuilder::new("signature")
+                    .bytes(signed_pre_key_signature)
+                    .build(),
+            ])
+            .build();
+
+        let type_bytes = vec![5u8];
+
+        vec![
+            NodeBuilder::new("registration")
+                .bytes(registration_id_bytes)
+                .build(),
+            NodeBuilder::new("type").bytes(type_bytes.clone()).build(),
+            NodeBuilder::new("identity")
+                .bytes(identity_key_bytes)
+                .build(),
+            NodeBuilder::new("list").children(pre_key_nodes).build(),
+            signed_pre_key_node,
+        ]
+    }
+
     pub fn parse_prekeys_response(
         resp_node: &Node,
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {

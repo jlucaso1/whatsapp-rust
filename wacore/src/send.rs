@@ -76,6 +76,92 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
+async fn encrypt_for_devices<'a, S, I, P, SP>(
+    stores: &mut SignalStores<'a, S, I, P, SP>,
+    resolver: &dyn SendContextResolver,
+    devices: &[Jid],
+    plaintext_to_encrypt: &[u8],
+) -> Result<(Vec<Node>, bool)>
+where
+    S: crate::libsignal::protocol::SessionStore + Send + Sync,
+    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
+{
+    let mut jids_needing_prekeys = Vec::new();
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        if stores
+            .session_store
+            .load_session(&signal_address)
+            .await?
+            .is_none()
+        {
+            jids_needing_prekeys.push(device_jid.clone());
+        }
+    }
+
+    if !jids_needing_prekeys.is_empty() {
+        let prekey_bundles = resolver
+            .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+            .await?;
+
+        for device_jid in &jids_needing_prekeys {
+            let signal_address = device_jid.to_protocol_address();
+            let bundle = prekey_bundles
+                .get(device_jid)
+                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
+            process_prekey_bundle(
+                &signal_address,
+                stores.session_store,
+                stores.identity_store,
+                bundle,
+                SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+                UsePQRatchet::No,
+            )
+            .await?;
+        }
+    }
+
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
+
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        let encrypted_payload = message_encrypt(
+            plaintext_to_encrypt,
+            &signal_address,
+            stores.session_store,
+            stores.identity_store,
+            SystemTime::now(),
+        )
+        .await?;
+
+        let (enc_type, serialized_bytes) = match encrypted_payload {
+            CiphertextMessage::PreKeySignalMessage(msg) => {
+                includes_prekey_message = true;
+                ("pkmsg", msg.serialized().to_vec())
+            }
+            CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+            _ => continue,
+        };
+
+        let enc_node = NodeBuilder::new("enc")
+            .attrs([("v", "2"), ("type", enc_type)])
+            .bytes(serialized_bytes)
+            .build();
+        participant_nodes.push(
+            NodeBuilder::new("to")
+                .attr("jid", device_jid.to_string())
+                .children([enc_node])
+                .build(),
+        );
+    }
+
+    Ok((participant_nodes, includes_prekey_message))
+}
+
 pub async fn prepare_dm_stanza<
     'a,
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -106,68 +192,38 @@ pub async fn prepare_dm_stanza<
     let participants = vec![to_jid.clone(), own_jid.clone()];
     let all_devices = resolver.resolve_devices(&participants).await?;
 
+    let mut recipient_devices = Vec::new();
+    let mut own_other_devices = Vec::new();
+    for device_jid in &all_devices {
+        let is_own_device = device_jid.user == own_jid.user && device_jid.device != own_jid.device;
+        if is_own_device {
+            own_other_devices.push(device_jid.clone());
+        } else {
+            recipient_devices.push(device_jid.clone());
+        }
+    }
+
     let mut participant_nodes = Vec::new();
     let mut includes_prekey_message = false;
 
-    for device_jid in all_devices {
-        let is_own_device = device_jid.user == own_jid.user && device_jid.device != own_jid.device;
-        let plaintext_to_encrypt = if is_own_device {
-            &padded_dsm_plaintext
-        } else {
-            &padded_message_plaintext
-        };
-
-        let signal_address =
-            ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
-        let session_record = stores.session_store.load_session(&signal_address).await?;
-
-        if session_record.is_none() {
-            let prekey_bundles = resolver
-                .fetch_prekeys(std::slice::from_ref(&device_jid))
-                .await?;
-            let bundle = prekey_bundles
-                .get(&device_jid)
-                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
-            process_prekey_bundle(
-                &signal_address,
-                stores.session_store,
-                stores.identity_store,
-                bundle,
-                SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
-                UsePQRatchet::No,
-            )
-            .await?;
-        }
-
-        let encrypted_message = message_encrypt(
-            plaintext_to_encrypt,
-            &signal_address,
-            stores.session_store,
-            stores.identity_store,
-            SystemTime::now(),
+    if !recipient_devices.is_empty() {
+        let (nodes, inc) = encrypt_for_devices(
+            stores,
+            resolver,
+            &recipient_devices,
+            &padded_message_plaintext,
         )
         .await?;
+        participant_nodes.extend(nodes);
+        includes_prekey_message = includes_prekey_message || inc;
+    }
 
-        let (enc_type, serialized_bytes) = match encrypted_message {
-            CiphertextMessage::PreKeySignalMessage(msg) => {
-                includes_prekey_message = true;
-                ("pkmsg", msg.serialized().to_vec())
-            }
-            CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-            _ => return Err(anyhow!("Unexpected encryption message type")),
-        };
-
-        let enc_node = NodeBuilder::new("enc")
-            .attrs([("v", "2"), ("type", enc_type)])
-            .bytes(serialized_bytes)
-            .build();
-        participant_nodes.push(
-            NodeBuilder::new("to")
-                .attr("jid", device_jid.to_string())
-                .children([enc_node])
-                .build(),
-        );
+    if !own_other_devices.is_empty() {
+        let (nodes, inc) =
+            encrypt_for_devices(stores, resolver, &own_other_devices, &padded_dsm_plaintext)
+                .await?;
+        participant_nodes.extend(nodes);
+        includes_prekey_message = includes_prekey_message || inc;
     }
 
     let mut message_content_nodes = vec![
@@ -299,82 +355,15 @@ pub async fn prepare_group_stanza<
         };
         let skdm_plaintext_to_encrypt = skdm_wrapper_msg.encode_to_vec();
 
-        let mut jids_needing_prekeys = Vec::new();
-        for device_jid in &all_devices {
-            let signal_address =
-                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
-            if stores
-                .session_store
-                .load_session(&signal_address)
-                .await?
-                .is_none()
-            {
-                jids_needing_prekeys.push(device_jid.clone());
-            }
-        }
-
-        if !jids_needing_prekeys.is_empty() {
-            let prekey_bundles = resolver
-                .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
-                .await?;
-
-            for device_jid in &jids_needing_prekeys {
-                let signal_address = device_jid.to_protocol_address();
-                let bundle = prekey_bundles.get(device_jid).ok_or_else(|| {
-                    anyhow!("Failed to fetch pre-key bundle for {}", &signal_address)
-                })?;
-                process_prekey_bundle(
-                    &signal_address,
-                    stores.session_store,
-                    stores.identity_store,
-                    bundle,
-                    SystemTime::now(),
-                    &mut rand::rngs::OsRng.unwrap_err(),
-                    UsePQRatchet::No,
-                )
-                .await?;
-            }
-        }
-
-        let mut participant_nodes = Vec::new();
-        for device_jid in &all_devices {
-            let signal_address =
-                ProtocolAddress::new(device_jid.user.clone(), (device_jid.device as u32).into());
-            let encrypted_payload = message_encrypt(
-                &skdm_plaintext_to_encrypt,
-                &signal_address,
-                stores.session_store,
-                stores.identity_store,
-                SystemTime::now(),
-            )
-            .await?;
-            let (enc_type, serialized_bytes) = match encrypted_payload {
-                CiphertextMessage::PreKeySignalMessage(msg) => {
-                    includes_prekey_message = true;
-                    ("pkmsg", msg.serialized().to_vec())
-                }
-                CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-                _ => continue,
-            };
-
-            let enc_node = NodeBuilder::new("enc")
-                .attrs([("v", "2"), ("type", enc_type)])
-                .bytes(serialized_bytes)
-                .build();
-            participant_nodes.push(
-                NodeBuilder::new("to")
-                    .attr("jid", device_jid.to_string())
-                    .children([enc_node])
-                    .build(),
-            );
-        }
+        let (participant_nodes, inc) =
+            encrypt_for_devices(stores, resolver, &all_devices, &skdm_plaintext_to_encrypt).await?;
+        includes_prekey_message = includes_prekey_message || inc;
         message_content_nodes.push(
             NodeBuilder::new("participants")
                 .children(participant_nodes)
                 .build(),
         );
 
-        // Save resolved devices for later phash calculation to avoid resolving twice
         resolved_devices_for_phash = Some(all_devices.clone());
     }
     let sender_address = own_sending_jid.to_protocol_address();

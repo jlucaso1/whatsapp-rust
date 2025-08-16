@@ -3,14 +3,14 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use wacore::libsignal::protocol::{
-    Direction, GenericSignedPreKey, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore,
-    KeyPair, PreKeyId, PreKeyRecord, PreKeyStore, PrivateKey, ProtocolAddress, PublicKey,
-    SenderKeyRecord, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId,
-    SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
+    Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
+    PreKeyRecord, PreKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord, SessionStore,
+    SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
+use wacore::signal::state::record as wacore_record;
 use wacore::signal::store::{
     GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
     SignedPreKeyStore as WacoreSignedPreKeyStore,
@@ -247,58 +247,17 @@ impl GroupSenderKeyStore for SenderKeyAdapter {
 fn prekey_structure_to_record(
     structure: wa::PreKeyRecordStructure,
 ) -> Result<PreKeyRecord, SignalProtocolError> {
-    let id = structure.id.unwrap_or(0).into();
-    let public_key = PublicKey::from_djb_public_key_bytes(
-        structure
-            .public_key
-            .as_ref()
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .as_slice(),
-    )?;
-    let private_key = PrivateKey::deserialize(
-        structure
-            .private_key
-            .as_ref()
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
-    )?;
-    Ok(PreKeyRecord::new(
-        id,
-        &KeyPair::new(public_key, private_key),
-    ))
+    wacore_record::prekey_structure_to_record(structure)
 }
 
 fn prekey_record_to_structure(
     record: &PreKeyRecord,
 ) -> Result<wa::PreKeyRecordStructure, SignalProtocolError> {
-    Ok(wa::PreKeyRecordStructure {
-        id: Some(record.id()?.into()),
-        public_key: Some(record.key_pair()?.public_key.public_key_bytes()[1..].to_vec()),
-        private_key: Some(record.key_pair()?.private_key.serialize()),
-    })
+    wacore_record::prekey_record_to_structure(record)
 }
 
 fn signed_prekey_structure_to_record(
     structure: wa::SignedPreKeyRecordStructure,
 ) -> Result<SignedPreKeyRecord, SignalProtocolError> {
-    let id = structure.id.unwrap_or(0).into();
-    let public_key = PublicKey::from_djb_public_key_bytes(
-        structure
-            .public_key
-            .as_ref()
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .as_slice(),
-    )?;
-    let private_key = PrivateKey::deserialize(
-        structure
-            .private_key
-            .as_ref()
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
-    )?;
-    let key_pair = KeyPair::new(public_key, private_key);
-    let signature = structure
-        .signature
-        .as_ref()
-        .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-    let timestamp = Timestamp::from_epoch_millis(structure.timestamp.unwrap_or(0));
-    Ok(SignedPreKeyRecord::new(id, timestamp, &key_pair, signature))
+    wacore_record::signed_prekey_structure_to_record(structure)
 }
