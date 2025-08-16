@@ -7,10 +7,10 @@ use crate::client::Client;
 use crate::types::events::{ContactUpdate, Event};
 use log::{error, info, warn};
 use processor::PatchList;
-use prost::Message;
+use prost::Message; // still used for decoding patches & mutations
 use std::str::FromStr as _;
 use std::sync::Arc;
-use wacore::appstate::processor::Processor;
+use wacore::appstate::processor::{Mutation, Processor, ProcessorUtils};
 use waproto::whatsapp::{self as wa, ExternalBlobReference};
 
 async fn request_app_state_keys(client: &Arc<Client>, keys: Vec<Vec<u8>>) {
@@ -147,53 +147,212 @@ pub async fn app_state_sync(client: &Arc<Client>, name: &str, full_sync: bool) {
                     }
                 }
 
-                let mut snapshot: Option<wa::SyncdSnapshot> = None;
+                let snapshot: Option<wa::SyncdSnapshot> = None; // streaming path
                 if let Some(snapshot_node) = collection_node.get_optional_child("snapshot")
                     && let Some(wacore_binary::node::NodeContent::Bytes(b)) = &snapshot_node.content
                 {
-                    // First, try to decode as a downloadable reference.
-                    if let Ok(blob_ref) = ExternalBlobReference::decode(b.as_slice()) {
-                        info!(target: "Client/AppState", "Snapshot for '{}' is an external blob, starting download...", name);
+                    // Get raw snapshot bytes (external or inline) then single-pass parse
+                    let raw = if let Ok(blob_ref) = ExternalBlobReference::decode(b.as_slice()) {
+                        info!(target: "Client/AppState", "Snapshot for '{name}' external blob; downloading (single-pass parse)...");
                         match client.download(&blob_ref).await {
-                            Ok(decrypted_blob) => {
-                                match wa::SyncdSnapshot::decode(decrypted_blob.as_slice()) {
-                                    Ok(decoded) => {
-                                        info!(target: "Client/AppState", "Successfully downloaded and parsed snapshot for '{}'.", name);
-                                        snapshot = Some(decoded);
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "Failed to parse downloaded SyncdSnapshot blob: {e}. Aborting sync for this collection."
-                                        );
-                                        has_more = false; // Stop syncing this collection
-                                        continue;
-                                    }
-                                }
-                            }
+                            Ok(data) => data,
                             Err(e) => {
                                 error!(
-                                    "Failed to download snapshot blob: {e}. Aborting sync for this collection."
+                                    "Failed to download snapshot blob: {e}. Aborting collection."
                                 );
-                                has_more = false; // Stop syncing this collection
+                                has_more = false;
                                 continue;
                             }
                         }
                     } else {
-                        // If it's not a reference, try to decode it as a direct snapshot.
-                        match wa::SyncdSnapshot::decode(b.as_slice()) {
-                            Ok(decoded) => {
-                                info!(target: "Client/AppState", "Successfully parsed inline snapshot for '{}'.", name);
-                                snapshot = Some(decoded);
+                        b.clone()
+                    };
+
+                    use base64::Engine as _;
+                    use base64::prelude::BASE64_STANDARD;
+                    use hmac::{Hmac, Mac};
+                    use prost::encoding::{decode_key, decode_varint};
+                    use sha2::Sha256;
+                    use std::io::Cursor;
+                    use wacore::appstate::lthash::WA_PATCH_INTEGRITY;
+
+                    let mut cursor = Cursor::new(raw.as_slice());
+                    let total_len = raw.len();
+                    let mut version_u64: u64 = 0;
+                    let mut keys_opt: Option<wacore::appstate::keys::ExpandedAppStateKeys> = None;
+                    let mut snapshot_mac_server: Option<Vec<u8>> = None; // raw mac bytes from snapshot field
+                    let mut buffered_records: Vec<Vec<u8>> = Vec::new(); // records seen before key_id
+                    let mut mutations: Vec<Mutation> = Vec::new();
+
+                    while (cursor.position() as usize) < total_len {
+                        let Ok((field_number, wire_type)) = decode_key(&mut cursor) else {
+                            break;
+                        };
+                        match field_number {
+                            1 => {
+                                // version
+                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
+                                let pos = cursor.position() as usize;
+                                if pos + len > total_len {
+                                    break;
+                                }
+                                if let Ok(ver) = wa::SyncdVersion::decode(&raw[pos..pos + len]) {
+                                    version_u64 = ver.version.unwrap_or(0);
+                                }
+                                cursor.set_position((pos + len) as u64);
                             }
-                            Err(e) => {
-                                log::error!(
-                                    "Failed to decode inline SyncdSnapshot: {e}. The data might be a blob reference for an older, unsupported format."
-                                );
-                                has_more = false; // Stop syncing this collection
-                                continue;
+                            2 => {
+                                // record
+                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
+                                let pos = cursor.position() as usize;
+                                if pos + len > total_len {
+                                    break;
+                                }
+                                let slice = &raw[pos..pos + len];
+                                if let Some(keys) = &keys_opt {
+                                    if let Ok(rec) = wa::SyncdRecord::decode(slice) {
+                                        let fake = wa::SyncdMutation {
+                                            operation: Some(
+                                                wa::syncd_mutation::SyncdOperation::Set as i32,
+                                            ),
+                                            record: Some(rec),
+                                        };
+                                        let mut local_out = Vec::new();
+                                        match ProcessorUtils::decode_mutation(
+                                            keys,
+                                            &fake,
+                                            &mut local_out,
+                                        ) {
+                                            Ok(_) => {
+                                                if !local_out.is_empty() {
+                                                    mutations.extend(local_out);
+                                                }
+                                            }
+                                            Err(e) => log::warn!(
+                                                "Failed to decode snapshot record: {e:?}"
+                                            ),
+                                        }
+                                    }
+                                } else {
+                                    buffered_records.push(slice.to_vec());
+                                }
+                                cursor.set_position((pos + len) as u64);
+                            }
+                            3 => {
+                                // mac
+                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
+                                let pos = cursor.position() as usize;
+                                if pos + len > total_len {
+                                    break;
+                                }
+                                snapshot_mac_server = Some(raw[pos..pos + len].to_vec());
+                                cursor.set_position((pos + len) as u64);
+                            }
+                            4 => {
+                                // key_id
+                                let len = decode_varint(&mut cursor).unwrap_or(0) as usize;
+                                let pos = cursor.position() as usize;
+                                if pos + len > total_len {
+                                    break;
+                                }
+                                if let Ok(kid) = wa::KeyId::decode(&raw[pos..pos + len])
+                                    && let Some(id_bytes) = kid.id.as_deref()
+                                {
+                                    match processor.get_expanded_keys(id_bytes).await {
+                                        Ok(k) => keys_opt = Some(k),
+                                        Err(e) => {
+                                            error!("Missing app state key for snapshot: {e:?}");
+                                            has_more = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                cursor.set_position((pos + len) as u64);
+                            }
+                            _ => {
+                                // skip unknown
+                                use prost::encoding::WireType;
+                                match wire_type {
+                                    WireType::Varint => {
+                                        let _ = decode_varint(&mut cursor);
+                                    }
+                                    WireType::LengthDelimited => {
+                                        let l = decode_varint(&mut cursor).unwrap_or(0) as usize;
+                                        let pos = cursor.position() as usize;
+                                        cursor.set_position((pos + l) as u64);
+                                    }
+                                    WireType::ThirtyTwoBit => {
+                                        let pos = cursor.position() as usize;
+                                        cursor.set_position((pos + 4) as u64);
+                                    }
+                                    WireType::SixtyFourBit => {
+                                        let pos = cursor.position() as usize;
+                                        cursor.set_position((pos + 8) as u64);
+                                    }
+                                    _ => break,
+                                }
                             }
                         }
                     }
+
+                    // Initialize state (full snapshot semantics)
+                    current_state.version = version_u64;
+                    current_state.hash = [0; 128];
+                    current_state.index_value_map.clear();
+
+                    // Decode any buffered records now that we (should) have keys
+                    if let Some(keys) = &keys_opt {
+                        for slice in buffered_records {
+                            if let Ok(rec) = wa::SyncdRecord::decode(slice.as_slice()) {
+                                let fake = wa::SyncdMutation {
+                                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                                    record: Some(rec),
+                                };
+                                let mut local_out = Vec::new();
+                                if ProcessorUtils::decode_mutation(keys, &fake, &mut local_out)
+                                    .is_ok()
+                                {
+                                    mutations.extend(local_out);
+                                }
+                            }
+                        }
+                    } else {
+                        error!("Snapshot ended without key_id; aborting collection");
+                        has_more = false;
+                        continue;
+                    }
+
+                    // Verify snapshot MAC if present
+                    if let (Some(keys), Some(server_mac)) = (&keys_opt, &snapshot_mac_server) {
+                        // Snapshot MAC = HMAC-SHA256 over concatenated value_macs of all records in order.
+                        let mut mac =
+                            Hmac::<Sha256>::new_from_slice(&keys.snapshot_mac).expect("HMAC");
+                        for m in &mutations {
+                            mac.update(&m.value_mac);
+                        }
+                        let expected = mac.finalize().into_bytes().to_vec();
+                        if expected != *server_mac {
+                            error!("Mismatching snapshot MAC for '{name}'");
+                            has_more = false;
+                            continue;
+                        }
+                    }
+
+                    // Update hash & index map
+                    let add_refs: Vec<&[u8]> =
+                        mutations.iter().map(|m| m.value_mac.as_slice()).collect();
+                    for m in &mutations {
+                        let index_mac_b64 = BASE64_STANDARD.encode(&m.index_mac);
+                        current_state
+                            .index_value_map
+                            .insert(index_mac_b64, m.value_mac.clone());
+                    }
+                    WA_PATCH_INTEGRITY.subtract_then_add_in_place(
+                        &mut current_state.hash,
+                        &[],
+                        &add_refs,
+                    );
+                    info!(target: "Client/AppState", "Single-pass streamed {} snapshot records for '{name}' (version {version_u64})", mutations.len());
                 }
 
                 let patch_list = PatchList {

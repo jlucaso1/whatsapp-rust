@@ -63,7 +63,7 @@ impl Processor {
         Self { key_store }
     }
 
-    async fn get_expanded_keys(&self, key_id: &[u8]) -> Result<keys::ExpandedAppStateKeys> {
+    pub async fn get_expanded_keys(&self, key_id: &[u8]) -> Result<keys::ExpandedAppStateKeys> {
         let key_data = match self.key_store.get_app_state_sync_key(key_id).await {
             Ok(Some(key)) => key.key_data,
             Err(e) => return Err(AppStateError::GetKeyFailed(key_id.to_vec(), Box::new(e))),
