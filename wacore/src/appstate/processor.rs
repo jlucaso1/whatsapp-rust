@@ -2,8 +2,8 @@ use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
 use super::lthash::WA_PATCH_INTEGRITY;
-use crate::crypto::cbc;
 use crate::crypto::hmac_sha512;
+use crate::libsignal::crypto::aes_256_cbc_decrypt;
 use crate::store::traits::AppStateKeyStore;
 use base64::Engine as _;
 use base64::prelude::*;
@@ -313,7 +313,7 @@ impl ProcessorUtils {
         }
         let (iv, ciphertext) = content.split_at(16);
 
-        let plaintext = cbc::decrypt(&keys.value_encryption, iv, ciphertext)?;
+        let plaintext = aes_256_cbc_decrypt(ciphertext, &keys.value_encryption, iv)?;
 
         let mut sync_action =
             wa::SyncActionData::decode(plaintext.as_slice()).map_err(AppStateError::Unmarshal)?;

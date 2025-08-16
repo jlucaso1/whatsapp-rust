@@ -1,4 +1,5 @@
-use crate::crypto::{cbc, hkdf};
+use crate::crypto::hkdf;
+use crate::libsignal::crypto::aes_256_cbc_decrypt;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -150,7 +151,7 @@ impl DownloadUtils {
             return Err(anyhow!("MAC mismatch"));
         }
 
-        let plaintext = cbc::decrypt(&cipher_key, &iv, ciphertext)?;
+        let plaintext = aes_256_cbc_decrypt(ciphertext, &cipher_key, &iv)?;
 
         Ok(plaintext)
     }
