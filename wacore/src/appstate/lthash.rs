@@ -1,4 +1,5 @@
-use crate::crypto::hkdf;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use std::convert::TryInto;
 
 pub struct LtHash {
@@ -24,7 +25,9 @@ impl LtHash {
 
     fn multiple_op(&self, base: &mut [u8; 128], input: &[&[u8]], subtract: bool) {
         for &item in input {
-            let expanded = hkdf::sha256(item, None, self.hkdf_info, self.hkdf_size.into()).unwrap();
+            let hk = Hkdf::<Sha256>::new(None, item);
+            let mut expanded = vec![0u8; self.hkdf_size as usize];
+            hk.expand(self.hkdf_info, &mut expanded).unwrap();
             perform_pointwise_with_overflow(
                 base,
                 expanded.as_slice().try_into().unwrap(),

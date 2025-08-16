@@ -1,9 +1,9 @@
-use aes_gcm::aead::{Aead, Payload};
+use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use hkdf::Hkdf;
+use sha2::Sha256;
+use wacore::handshake::{NoiseHandshake, noise::sha256_slice, utils::generate_iv};
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
-use wacore::{
-    crypto::{gcm, hkdf::sha256},
-    handshake::{NoiseHandshake, noise::sha256_slice, utils::generate_iv},
-};
 use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
@@ -37,7 +37,12 @@ fn test_server_static_key_decryption_with_go_values() {
         .unwrap();
 
     let (rust_salt_after_mix, rust_key_for_decrypt) = {
-        let okm = sha256(&rust_shared_secret, Some(&salt_before_mix), &[], 64).unwrap();
+        let okm = {
+            let hk = Hkdf::<Sha256>::new(Some(&salt_before_mix), &rust_shared_secret);
+            let mut result = vec![0u8; 64];
+            hk.expand(&[], &mut result).unwrap();
+            result
+        };
 
         let mut salt = [0u8; 32];
         let mut key = [0u8; 32];
@@ -53,7 +58,8 @@ fn test_server_static_key_decryption_with_go_values() {
         "Derived SALT does not match Go's value!"
     );
 
-    let cipher = gcm::prepare(&rust_key_for_decrypt).expect("Failed to prepare GCM cipher");
+    let cipher =
+        Aes256Gcm::new_from_slice(&rust_key_for_decrypt).expect("Failed to prepare GCM cipher");
 
     let iv = generate_iv(0);
     let payload = Payload {
@@ -89,7 +95,7 @@ fn test_live_decryption_with_go_values() {
     let ciphertext = hex::decode(go_ciphertext_hex).unwrap();
     let expected_plaintext = hex::decode(go_expected_plaintext_hex).unwrap();
 
-    let cipher = gcm::prepare(&go_derived_key).expect("Failed to prepare GCM cipher");
+    let cipher = Aes256Gcm::new_from_slice(&go_derived_key).expect("Failed to prepare GCM cipher");
 
     let iv = generate_iv(0);
 

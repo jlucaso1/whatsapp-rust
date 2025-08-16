@@ -1,8 +1,9 @@
-use crate::crypto::{cbc, hkdf};
+use crate::libsignal::crypto::aes_256_cbc_decrypt;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::prelude::*;
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use waproto::whatsapp::ExternalBlobReference;
@@ -150,13 +151,16 @@ impl DownloadUtils {
             return Err(anyhow!("MAC mismatch"));
         }
 
-        let plaintext = cbc::decrypt(&cipher_key, &iv, ciphertext)?;
+        let plaintext = aes_256_cbc_decrypt(ciphertext, &cipher_key, &iv)?;
 
         Ok(plaintext)
     }
 
     pub fn get_media_keys(media_key: &[u8], app_info: MediaType) -> ([u8; 16], [u8; 32], [u8; 32]) {
-        let expanded = hkdf::sha256(media_key, None, app_info.app_info().as_bytes(), 112).unwrap();
+        let hk = Hkdf::<Sha256>::new(None, media_key);
+        let mut expanded = vec![0u8; 112];
+        hk.expand(app_info.app_info().as_bytes(), &mut expanded)
+            .unwrap();
         let iv: [u8; 16] = expanded[0..16].try_into().unwrap();
         let cipher_key: [u8; 32] = expanded[16..48].try_into().unwrap();
         let mac_key: [u8; 32] = expanded[48..80].try_into().unwrap();

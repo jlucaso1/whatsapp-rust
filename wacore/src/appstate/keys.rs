@@ -1,4 +1,5 @@
-use crate::crypto::hkdf;
+use hkdf::Hkdf;
+use sha2::Sha256;
 
 pub const WAPATCH_CRITICAL_BLOCK: &str = "critical_block";
 pub const WAPATCH_CRITICAL_UNBLOCK_LOW: &str = "critical_unblock_low";
@@ -24,7 +25,9 @@ pub struct ExpandedAppStateKeys {
 }
 
 pub fn expand_app_state_keys(key_data: &[u8]) -> ExpandedAppStateKeys {
-    let expanded = hkdf::sha256(key_data, None, b"WhatsApp Mutation Keys", 160).unwrap();
+    let hk = Hkdf::<Sha256>::new(None, key_data);
+    let mut expanded = vec![0u8; 160];
+    hk.expand(b"WhatsApp Mutation Keys", &mut expanded).unwrap();
     ExpandedAppStateKeys {
         index: expanded[0..32].try_into().unwrap(),
         value_encryption: expanded[32..64].try_into().unwrap(),

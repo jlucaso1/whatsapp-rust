@@ -1,9 +1,9 @@
-use crate::crypto::{gcm, hkdf};
 use crate::handshake::state::Result;
 use crate::handshake::utils::{HandshakeError, generate_iv};
 use crate::libsignal::protocol::{PrivateKey, PublicKey};
 use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, Payload};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
 pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
@@ -37,7 +37,8 @@ impl NoiseHandshake {
         let mut new_self = Self {
             hash: h,
             salt: h,
-            key: gcm::prepare(&h).map_err(|e| HandshakeError::Crypto(e.to_string()))?,
+            key: Aes256Gcm::new_from_slice(&h)
+                .map_err(|_| HandshakeError::Crypto("Invalid key size".to_string()))?,
             counter: 0,
         };
 
@@ -92,7 +93,8 @@ impl NoiseHandshake {
         self.counter = 0;
         let (write, read) = self.extract_and_expand(Some(data))?;
         self.salt = write;
-        self.key = gcm::prepare(&read).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        self.key = Aes256Gcm::new_from_slice(&read)
+            .map_err(|_| HandshakeError::Crypto("Invalid key size".to_string()))?;
         Ok(())
     }
 
@@ -113,8 +115,13 @@ impl NoiseHandshake {
         let salt = self.salt;
         let ikm = data;
 
-        let okm = hkdf::sha256(ikm.unwrap_or(&[]), Some(&salt), &[], 64)
-            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        let okm = {
+            let hk = Hkdf::<Sha256>::new(Some(&salt), ikm.unwrap_or(&[]));
+            let mut result = vec![0u8; 64];
+            hk.expand(&[], &mut result)
+                .map_err(|_| HandshakeError::Crypto("HKDF expand failed".to_string()))?;
+            result
+        };
 
         let mut write = [0u8; 32];
         let mut read = [0u8; 32];
@@ -127,10 +134,10 @@ impl NoiseHandshake {
 
     pub fn finish(self) -> Result<(Aes256Gcm, Aes256Gcm)> {
         let (write_bytes, read_bytes) = self.extract_and_expand(None)?;
-        let write_key =
-            gcm::prepare(&write_bytes).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
-        let read_key =
-            gcm::prepare(&read_bytes).map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        let write_key = Aes256Gcm::new_from_slice(&write_bytes)
+            .map_err(|_| HandshakeError::Crypto("Invalid key size".to_string()))?;
+        let read_key = Aes256Gcm::new_from_slice(&read_bytes)
+            .map_err(|_| HandshakeError::Crypto("Invalid key size".to_string()))?;
 
         Ok((write_key, read_key))
     }
