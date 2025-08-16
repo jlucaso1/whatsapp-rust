@@ -71,27 +71,33 @@ impl<B: Backend> AppStateProcessor<B> {
     where
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
-        let pl = parse_patch_list(stanza_root, Some(&|r| download(r)))?; // snapshot external fetch TBD
+        let mut pl = parse_patch_list(stanza_root, Some(&|r| download(r)))?; // may contain snapshot_ref
         let mut state = self.backend.get_app_state_version(pl.name.as_str()).await?;
         let mut new_mutations: Vec<Mutation> = Vec::new();
+        // Fetch snapshot if reference present
+        if pl.snapshot.is_none() && pl.snapshot_ref.is_some() {
+            if let Some(ext) = &pl.snapshot_ref {
+                let data = download(ext)?;
+                let snapshot = wa::SyncdSnapshot::decode(data.as_slice())?;
+                pl.snapshot = Some(snapshot);
+            }
+        }
 
         if let Some(snapshot) = &pl.snapshot {
-            state.version = snapshot.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
-            let encrypted: Vec<wa::SyncdMutation> = snapshot
-                .records
-                .iter()
-                .map(|rec| wa::SyncdMutation {
-                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
-                    record: Some(rec.clone()),
-                })
-                .collect();
-            let (_warn, res) = state.update_hash(&encrypted, |_index_mac, _i| Ok(None));
+            let version = snapshot.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
+            state.version = version;
+            let encrypted: Vec<wa::SyncdMutation> = snapshot.records.iter().map(|rec| wa::SyncdMutation { operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32), record: Some(rec.clone()) }).collect();
+            let (_warn, res) = state.update_hash(&encrypted, |_index_mac,_i| Ok(None));
             res?;
-            for rec in &snapshot.records {
-                let mut out = Vec::new();
-                self.decode_record(rec, &mut out, validate_macs).await?;
-                new_mutations.extend(out);
+            if validate_macs {
+                // Validate snapshot MAC
+                if let (Some(mac_expected), Some(key_id)) = (snapshot.mac.as_ref(), snapshot.key_id.as_ref().and_then(|k| k.id.as_ref())) {
+                    let keys = self.get_app_state_key(key_id).await?;
+                    let computed = state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
+                    if computed != *mac_expected { return Err(anyhow!("snapshot MAC mismatch")); }
+                }
             }
+            for rec in &snapshot.records { let mut out = Vec::new(); self.decode_record(rec, &mut out, validate_macs).await?; new_mutations.extend(out); }
         }
 
         for patch in &pl.patches {
@@ -118,7 +124,19 @@ impl<B: Backend> AppStateProcessor<B> {
             });
             res?;
             if validate_macs {
-                // TODO: implement snapshot MAC + patch MAC validation
+                if let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref()) {
+                    let keys = self.get_app_state_key(key_id).await?;
+                    // Check snapshot MAC for this patch's version
+                    if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
+                        let computed_snap = state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
+                        if computed_snap != *snap_mac { return Err(anyhow!("patch snapshot MAC mismatch")); }
+                    }
+                    if let Some(patch_mac) = patch.patch_mac.as_ref() {
+                        let version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
+                        let computed_patch = generate_patch_mac(patch, pl.name.as_str(), &keys.patch_mac, version);
+                        if computed_patch != *patch_mac { return Err(anyhow!("patch MAC mismatch")); }
+                    }
+                }
             }
             for m in &patch.mutations {
                 if let Some(rec) = &m.record {

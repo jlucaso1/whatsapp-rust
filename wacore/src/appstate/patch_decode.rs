@@ -43,7 +43,8 @@ pub struct PatchList {
     pub name: WAPatchName,
     pub has_more_patches: bool,
     pub patches: Vec<wa::SyncdPatch>,
-    pub snapshot: Option<wa::SyncdSnapshot>,
+    pub snapshot: Option<wa::SyncdSnapshot>, // filled only if already present inline (currently never)
+    pub snapshot_ref: Option<wa::ExternalBlobReference>, // external reference to fetch
 }
 
 /// Parse an incoming app state collection node into a PatchList.
@@ -61,19 +62,15 @@ pub fn parse_patch_list(
     ag.finish()?; // propagate attr parse errors
 
     // snapshot (optional)
-    let snapshot = if let Some(snapshot_node) = collection.get_optional_child("snapshot") {
+    let mut snapshot_ref = None;
+    if let Some(snapshot_node) = collection.get_optional_child("snapshot") {
         if let Some(wacore_binary::node::NodeContent::Bytes(raw)) = &snapshot_node.content {
-            match wa::ExternalBlobReference::decode(raw.as_slice()) {
-                Ok(_ext_ref) => {
-                    // TODO: invoke downloader to fetch external snapshot, then decode SyncdSnapshot
-                }
-                Err(_e) => { /* ignore for now */ }
+            if let Ok(ext_ref) = wa::ExternalBlobReference::decode(raw.as_slice()) {
+                snapshot_ref = Some(ext_ref);
             }
         }
-        None
-    } else {
-        None
-    };
+    }
+    let snapshot = None; // external only currently
 
     // patches list
     let mut patches: Vec<wa::SyncdPatch> = Vec::new();
@@ -97,5 +94,6 @@ pub fn parse_patch_list(
         has_more_patches: has_more,
         patches,
         snapshot,
+        snapshot_ref,
     })
 }
