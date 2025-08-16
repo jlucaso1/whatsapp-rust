@@ -83,7 +83,7 @@ impl<B: Backend> AppStateProcessor<B> {
             }
         }
 
-        if let Some(snapshot) = &pl.snapshot {
+    if let Some(snapshot) = &pl.snapshot {
             let version = snapshot.version.as_ref().and_then(|v| v.version).unwrap_or(0) as u64;
             state.version = version;
             let encrypted: Vec<wa::SyncdMutation> = snapshot.records.iter().map(|rec| wa::SyncdMutation { operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32), record: Some(rec.clone()) }).collect();
@@ -97,6 +97,8 @@ impl<B: Backend> AppStateProcessor<B> {
                     if computed != *mac_expected { return Err(anyhow!("snapshot MAC mismatch")); }
                 }
             }
+            let mut added = Vec::new();
+            // Snapshot is all SETs
             for rec in &snapshot.records {
                 let mut out = Vec::new();
                 self.decode_record(
@@ -104,9 +106,17 @@ impl<B: Backend> AppStateProcessor<B> {
                     rec,
                     &mut out,
                     validate_macs,
-                )
-                .await?;
+                ).await?;
+                // record value_mac/index_mac for persistence
+                if let Some(m) = out.last() {
+                    added.push(wacore::store::traits::AppStateMutationMAC { index_mac: m.index_mac.clone(), value_mac: m.value_mac.clone() });
+                }
                 new_mutations.extend(out);
+            }
+            // Persist version + added MACs
+            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
+            if !added.is_empty() {
+                self.backend.put_app_state_mutation_macs(pl.name.as_str(), state.version, &added).await?;
             }
         }
 
@@ -148,6 +158,8 @@ impl<B: Backend> AppStateProcessor<B> {
                     }
                 }
             }
+            let mut added = Vec::new();
+            let mut removed: Vec<Vec<u8>> = Vec::new();
             for m in &patch.mutations {
                 if let Some(rec) = &m.record {
                     let mut out = Vec::new();
@@ -157,14 +169,24 @@ impl<B: Backend> AppStateProcessor<B> {
                         _ => wa::syncd_mutation::SyncdOperation::Set,
                     };
                     self.decode_record(op, rec, &mut out, validate_macs).await?;
+                    if let Some(mdec) = out.last() {
+                        match op {
+                            wa::syncd_mutation::SyncdOperation::Set => added.push(wacore::store::traits::AppStateMutationMAC { index_mac: mdec.index_mac.clone(), value_mac: mdec.value_mac.clone() }),
+                            wa::syncd_mutation::SyncdOperation::Remove => removed.push(mdec.index_mac.clone()),
+                        }
+                    }
                     new_mutations.extend(out);
                 }
             }
+            // Persist after each patch
+            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
+            if !removed.is_empty() { self.backend.delete_app_state_mutation_macs(pl.name.as_str(), &removed).await?; }
+            if !added.is_empty() { self.backend.put_app_state_mutation_macs(pl.name.as_str(), state.version, &added).await?; }
         }
-
-        self.backend
-            .set_app_state_version(pl.name.as_str(), state.clone())
-            .await?;
+        // Final version already persisted after patches; ensure latest persisted even if no patches
+        if pl.patches.is_empty() {
+            self.backend.set_app_state_version(pl.name.as_str(), state.clone()).await?;
+        }
         Ok((new_mutations, state, pl))
     }
 
