@@ -10,6 +10,7 @@ use prost::Message;
 use tokio::sync::Mutex;
 use wacore::appstate::expand_app_state_keys;
 use wacore::appstate::hash::{HashState, generate_content_mac, generate_patch_mac};
+use wacore::appstate::keys::ExpandedAppStateKeys;
 use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list};
 use wacore::libsignal::crypto::aes_256_cbc_decrypt;
 use wacore::store::traits::Backend;
@@ -19,28 +20,7 @@ use waproto::whatsapp as wa;
 #[derive(Clone)]
 pub struct AppStateProcessor<B: Backend> {
     backend: Arc<B>,
-    key_cache: Arc<Mutex<HashMap<String, ExpandedKeys>>>,
-}
-
-#[derive(Debug, Clone)]
-struct ExpandedKeys {
-    index: [u8; 32],
-    value_encryption: [u8; 32],
-    value_mac: [u8; 32],
-    snapshot_mac: [u8; 32],
-    patch_mac: [u8; 32],
-}
-
-impl From<wacore::appstate::ExpandedAppStateKeys> for ExpandedKeys {
-    fn from(v: wacore::appstate::ExpandedAppStateKeys) -> Self {
-        Self {
-            index: v.index,
-            value_encryption: v.value_encryption,
-            value_mac: v.value_mac,
-            snapshot_mac: v.snapshot_mac,
-            patch_mac: v.patch_mac,
-        }
-    }
+    key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
 }
 
 impl<B: Backend> AppStateProcessor<B> {
@@ -51,7 +31,7 @@ impl<B: Backend> AppStateProcessor<B> {
         }
     }
 
-    async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedKeys> {
+    async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
         use base64::Engine;
         use base64::engine::general_purpose::STANDARD_NO_PAD;
         let id_b64 = STANDARD_NO_PAD.encode(key_id);
@@ -60,7 +40,7 @@ impl<B: Backend> AppStateProcessor<B> {
         }
         let key_opt = self.backend.get_app_state_sync_key(key_id).await?;
         let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
-        let expanded: ExpandedKeys = expand_app_state_keys(&key.key_data).into();
+        let expanded: ExpandedAppStateKeys = expand_app_state_keys(&key.key_data);
         self.key_cache.lock().await.insert(id_b64, expanded.clone());
         Ok(expanded)
     }
