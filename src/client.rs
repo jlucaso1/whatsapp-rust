@@ -551,12 +551,31 @@ impl Client {
                 Err(anyhow::anyhow!("external snapshot download not yet implemented"))
             };
             if let Some(proc) = &self.app_state_processor {
-                let (_mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
+                let (mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
+                for m in mutations {
+                    self.dispatch_app_state_mutation(&m, full_sync);
+                }
                 has_more = list.has_more_patches;
             } else { break; }
             want_snapshot = false;
         }
         Ok(())
+    }
+
+    fn dispatch_app_state_mutation(&self, m: &crate::appstate_sync::Mutation, full_sync: bool) {
+    use wacore::types::events::{Event, MuteUpdate, PinUpdate, ArchiveUpdate};
+        if m.operation != wa::syncd_mutation::SyncdOperation::Set { return; }
+        if m.index.is_empty() { return; }
+        let kind = &m.index[0];
+        let ts = m.action_value.as_ref().and_then(|v| v.timestamp).unwrap_or(0);
+        let time = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(|| chrono::Utc::now());
+        let jid = if m.index.len() > 1 { m.index[1].parse().unwrap_or_default() } else { Jid::default() };
+        match kind.as_str() {
+            "mute" => if let Some(val) = &m.action_value { if let Some(act) = &val.mute_action { self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            "pin" => if let Some(val) = &m.action_value { if let Some(act) = &val.pin_action { self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            "archive" => if let Some(val) = &m.action_value { if let Some(act) = &val.archive_chat_action { self.core.event_bus.dispatch(&Event::ArchiveUpdate(ArchiveUpdate { jid, timestamp: time, action: Box::new(act.clone()), from_full_sync: full_sync })); } },
+            _ => {}
+        }
     }
 
     async fn expect_disconnect(&self) {
