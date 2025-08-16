@@ -565,8 +565,8 @@ impl Client {
             };
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
-                // Request missing keys (throttled 24h per key) similar to whatsmeow
-                let missing = proc.get_missing_key_ids(&list).await?;
+                // Request missing keys (throttled 24h per key)
+                let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
                 if !missing.is_empty() {
                     let mut to_request: Vec<Vec<u8>> = Vec::new();
                     let mut guard = self.app_state_key_requests.lock().await;
