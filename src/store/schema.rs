@@ -15,6 +15,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    conversations (id) {
+        id -> Text,
+        data -> Binary,
+    }
+}
+
+diesel::table! {
     device (id) {
         id -> Nullable<Integer>,
         jid -> Nullable<Text>,
@@ -71,6 +78,7 @@ diesel::table! {
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_versions,
+    conversations,
     device,
     identities,
     prekeys,

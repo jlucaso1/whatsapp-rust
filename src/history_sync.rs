@@ -30,20 +30,24 @@ impl Client {
                 let collected_pushnames: Vec<wa::Pushname> = Vec::new();
                 let mut conv_count: usize = 0;
 
-                let conv_handler = |conv: wa::Conversation| {
-                    // For now, simply increment the counter and dispatch a JoinedGroup
-                    // event per conversation so downstream handlers can process them
-                    conv_count += 1;
-                    // Clone minimal data to dispatch as a JoinedGroup event. The event
-                    // type expects a boxed wa::Conversation; allocate and dispatch.
-                    let boxed = Box::new(conv);
-                    self.core.event_bus.dispatch(&Event::JoinedGroup(boxed));
+                let persistence = self.persistence_manager.clone();
+                let core_bus = self.core.event_bus.clone();
+                let conv_handler = move |conv: wa::Conversation| {
+                    let p = persistence.clone();
+                    let bus = core_bus.clone();
+                    async move {
+                        p.save_conversation_proto(&conv).await;
+                        // Dispatch lightweight event (optional)
+                        bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
+                    }
                 };
 
                 match wacore::history_sync::process_history_sync_stream(
                     &compressed_data,
                     conv_handler,
-                ) {
+                )
+                .await
+                {
                     Ok(()) => {
                         log::info!(
                             "Successfully processed HistorySync stream (Conversations streamed: {})",

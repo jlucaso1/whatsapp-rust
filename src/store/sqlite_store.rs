@@ -251,6 +251,18 @@ impl SqliteStore {
             Ok(None)
         }
     }
+
+    pub async fn save_conversation_raw(&self, id: &str, data: &[u8]) -> Result<()> {
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(conversations::table)
+            .values((conversations::id.eq(id), conversations::data.eq(data)))
+            .on_conflict(conversations::id)
+            .do_update()
+            .set(conversations::data.eq(data))
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[async_trait]

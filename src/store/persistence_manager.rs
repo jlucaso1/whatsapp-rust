@@ -3,6 +3,7 @@ use crate::store::Device;
 use crate::store::sqlite_store::SqliteStore;
 use crate::store::traits::Backend;
 use log::{debug, error, info};
+use prost::Message;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Duration, sleep};
@@ -32,6 +33,12 @@ impl StoreBackend {
     pub fn as_backend(&self) -> Arc<dyn Backend> {
         match self {
             StoreBackend::Sqlite(store) => store.clone() as Arc<dyn Backend>,
+        }
+    }
+
+    pub async fn save_conversation_raw(&self, id: &str, data: &[u8]) -> Result<(), StoreError> {
+        match self {
+            StoreBackend::Sqlite(store) => store.save_conversation_raw(id, data).await,
         }
     }
 }
@@ -142,5 +149,15 @@ impl PersistenceManager {
             apply_command_to_device(device, command);
         })
         .await;
+    }
+
+    pub async fn save_conversation_proto(&self, conv: &waproto::whatsapp::Conversation) {
+        if let Some(backend) = &self.backend {
+            let id = conv.id.as_str();
+            let data = conv.encode_to_vec();
+            if let Err(e) = backend.save_conversation_raw(id, &data).await {
+                log::error!("Failed to persist conversation {id}: {e}");
+            }
+        }
     }
 }
