@@ -99,6 +99,7 @@ pub struct Client {
 
     // App state sync
     app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
+    app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
 }
 
 impl Client {
@@ -158,6 +159,7 @@ impl Client {
             app_state_processor: persistence_manager
                 .sqlite_store()
                 .map(|s| AppStateProcessor::new(s)),
+            app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -546,12 +548,37 @@ impl Client {
                 timeout: None,
             };
             let resp = self.send_iq(iq).await?; // IQ response
-            // Build driver inline
-            let download = |_ext: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> { 
-                Err(anyhow::anyhow!("external snapshot download not yet implemented"))
+            // Pre-parse to detect snapshot reference so we can download asynchronously.
+            let pre_downloaded_snapshot: Option<Vec<u8>> = match wacore::appstate::patch_decode::parse_patch_list(&resp, None) {
+                Ok(pl) => {
+                    if let Some(ext) = &pl.snapshot_ref {
+                        match self.download(ext).await {
+                            Ok(bytes) => Some(bytes),
+                            Err(e) => { warn!("Failed to download external snapshot: {e}"); None }
+                        }
+                    } else { None }
+                }
+                Err(_) => None,
+            };
+            let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
+                if let Some(bytes) = &pre_downloaded_snapshot { Ok(bytes.clone()) } else { Err(anyhow::anyhow!("snapshot not pre-downloaded")) }
             };
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, _new_state, list) = proc.decode_patch_list(&resp, download, true).await?;
+                // Request missing keys (throttled 24h per key) similar to whatsmeow
+                let missing = proc.get_missing_key_ids(&list).await?;
+                if !missing.is_empty() {
+                    let mut to_request: Vec<Vec<u8>> = Vec::new();
+                    let mut guard = self.app_state_key_requests.lock().await;
+                    let now = std::time::Instant::now();
+                    for key_id in missing {
+                        let hex_id = hex::encode(&key_id);
+                        let should = guard.get(&hex_id).map(|t| t.elapsed() > std::time::Duration::from_secs(24*3600)).unwrap_or(true);
+                        if should { guard.insert(hex_id, now); to_request.push(key_id); }
+                    }
+                    drop(guard);
+                    if !to_request.is_empty() { self.request_app_state_keys(&to_request).await; }
+                }
                 for m in mutations {
                     self.dispatch_app_state_mutation(&m, full_sync);
                 }
@@ -560,6 +587,25 @@ impl Client {
             want_snapshot = false;
         }
         Ok(())
+    }
+
+    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
+        if raw_key_ids.is_empty() { return; }
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_jid = match device_snapshot.id.clone() { Some(j) => j, None => return };
+        // Build protocol message
+        let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids.iter().map(|k| wa::message::AppStateSyncKeyId { key_id: Some(k.clone()) }).collect();
+        let msg = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                r#type: Some(wa::message::protocol_message::Type::AppStateSyncKeyRequest as i32),
+                app_state_sync_key_request: Some(wa::message::AppStateSyncKeyRequest { key_ids }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_message_impl(own_jid, msg, self.generate_message_id().await, true, false).await {
+            warn!("Failed to send app state key request: {e}");
+        }
     }
 
     fn dispatch_app_state_mutation(&self, m: &crate::appstate_sync::Mutation, full_sync: bool) {

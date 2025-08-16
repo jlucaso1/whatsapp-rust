@@ -266,6 +266,37 @@ impl<B: Backend> AppStateProcessor<B> {
         }
         Ok(all)
     }
+
+    // Collect key IDs referenced in snapshot and patches that are missing locally.
+    pub async fn get_missing_key_ids(&self, pl: &PatchList) -> Result<Vec<Vec<u8>>> {
+        use base64::engine::general_purpose::STANDARD_NO_PAD;
+        use base64::Engine;
+        let mut cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+        let mut missing: Vec<Vec<u8>> = Vec::new();
+        let mut check = |key_id: Option<&[u8]>| {
+            if let Some(k) = key_id {
+                let id_b64 = STANDARD_NO_PAD.encode(k);
+                if !cache.contains_key(&id_b64) {
+                    cache.insert(id_b64.clone(), false);
+                    // We'll mark missing later after async fetch
+                }
+            }
+        };
+        if let Some(snap) = &pl.snapshot {
+            check(snap.key_id.as_ref().and_then(|k| k.id.as_deref()));
+            for rec in &snap.records { check(rec.key_id.as_ref().and_then(|k| k.id.as_deref())); }
+        }
+        for patch in &pl.patches { check(patch.key_id.as_ref().and_then(|k| k.id.as_deref())); }
+        // Now evaluate each key asynchronously
+        for (id_b64, _) in cache.clone() {
+            if let Ok(raw) = base64::engine::general_purpose::STANDARD_NO_PAD.decode(&id_b64) {
+                if self.backend.get_app_state_sync_key(&raw).await?.is_none() {
+                    missing.push(raw);
+                }
+            }
+        }
+        Ok(missing)
+    }
 }
 
 #[derive(Debug, Clone)]
