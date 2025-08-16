@@ -11,6 +11,7 @@ use wacore::appstate::hash::HashState;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::signal;
 use wacore::store::error::{Result, StoreError};
+use wacore::store::traits::AppStateMutationMAC;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
@@ -51,6 +52,10 @@ impl SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             conn.run_pending_migrations(MIGRATIONS)
                 .map_err(|e| StoreError::Migration(e.to_string()))?;
+            // Concurrency / performance pragmas
+            let _ = diesel::sql_query("PRAGMA journal_mode=WAL;").execute(&mut conn);
+            let _ = diesel::sql_query("PRAGMA synchronous=NORMAL;").execute(&mut conn);
+            let _ = diesel::sql_query("PRAGMA busy_timeout = 15000;").execute(&mut conn);
         }
 
         Ok(Self { pool })
@@ -60,7 +65,7 @@ impl SqliteStore {
         &self,
     ) -> Result<diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>> {
         let mut conn = self.get_connection()?;
-        diesel::sql_query("BEGIN IMMEDIATE TRANSACTION;")
+        diesel::sql_query("BEGIN DEFERRED TRANSACTION;")
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(conn)
@@ -84,7 +89,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn get_connection(
+    pub(crate) fn get_connection(
         &self,
     ) -> std::result::Result<
         diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>,
@@ -392,6 +397,11 @@ impl SqliteStore {
         conv: &wa::Conversation,
     ) -> Result<()> {
         self.upsert_conversation_normalized(conn, conv)
+    }
+
+    pub async fn save_conversation_normalized(&self, conv: &wa::Conversation) -> Result<()> {
+        let mut conn = self.get_connection()?;
+        self.upsert_conversation_normalized(&mut conn, conv)
     }
 }
 
@@ -814,5 +824,87 @@ impl AppStateStore for SqliteStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(())
+    }
+
+    async fn put_app_state_mutation_macs(
+        &self,
+        name: &str,
+        version: u64,
+        mutations: &[AppStateMutationMAC],
+    ) -> Result<()> {
+        use crate::store::schema::app_state_mutation_macs;
+        if mutations.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection()?;
+        for m in mutations {
+            diesel::insert_into(app_state_mutation_macs::table)
+                .values((
+                    app_state_mutation_macs::name.eq(name),
+                    app_state_mutation_macs::version.eq(version as i64),
+                    app_state_mutation_macs::index_mac.eq(&m.index_mac),
+                    app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                ))
+                .on_conflict((
+                    app_state_mutation_macs::name,
+                    app_state_mutation_macs::index_mac,
+                ))
+                .do_update()
+                .set((
+                    app_state_mutation_macs::version.eq(version as i64),
+                    app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn delete_app_state_mutation_macs(
+        &self,
+        name: &str,
+        index_macs: &[Vec<u8>],
+    ) -> Result<()> {
+        use crate::store::schema::app_state_mutation_macs;
+        if index_macs.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection()?;
+        for idx in index_macs {
+            diesel::delete(
+                app_state_mutation_macs::table.filter(
+                    app_state_mutation_macs::name
+                        .eq(name)
+                        .and(app_state_mutation_macs::index_mac.eq(idx)),
+                ),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn get_app_state_mutation_mac(
+        &self,
+        name: &str,
+        index_mac: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        use crate::store::schema::app_state_mutation_macs;
+        let mut conn = self.get_connection()?;
+        let result: Option<(i64, Vec<u8>)> = app_state_mutation_macs::table
+            .select((
+                app_state_mutation_macs::version,
+                app_state_mutation_macs::value_mac,
+            ))
+            .filter(
+                app_state_mutation_macs::name
+                    .eq(name)
+                    .and(app_state_mutation_macs::index_mac.eq(index_mac)),
+            )
+            .order(app_state_mutation_macs::version.desc())
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(result.map(|r| r.1))
     }
 }

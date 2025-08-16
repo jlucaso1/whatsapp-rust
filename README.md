@@ -50,9 +50,8 @@ This is the primary orchestrator that brings all other modules together.
 - `✅` **Client Struct & Main Loop (`client.rs`)**
 - `✅` **IQ (Info/Query) Handling (`request.rs`)**
 - `✅` **Keepalive Loop (`keepalive.rs`)**
-- `⏳` **App State Synchronization (`appstate/`)**:
-  - `✅` Logic to fetch app state patches from the server.
-  - `⏳` **Current Status:** The client can receive and decrypt app state patches. The next step is to process these patches to populate contacts, chats, and other client state.
+- `✅` **App State Synchronization (`appstate/`)**
+- `✅` **History Sync (`history_sync.rs`)**
 
 ---
 
@@ -108,12 +107,7 @@ The current focus is on completing and stabilizing group messaging functionality
 
 ### Phase 2: App State and Media
 
-1.  **Process App State Mutations**:
-
-    - **Task**: Implement the logic in `appstate/processor.rs` to take the decrypted `Mutation` objects and apply them to the client's store. This includes updating contacts, chat settings (mute, archive), and more.
-    - **Why**: This will give the client awareness of the user's account state and is essential for a fully-featured bot or client.
-
-2.  **Implement Media Uploads/Downloads**:
+1.  **Implement Media Uploads/Downloads**:
     - **Task**: Add support for encrypting/uploading and downloading/decrypting media files (images, videos, documents). This involves handling media connection details (`mediaconn.rs`).
     - **Why**: Essential for any client that needs to handle more than just text.
 

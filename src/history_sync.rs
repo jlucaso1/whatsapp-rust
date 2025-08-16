@@ -4,6 +4,7 @@ use diesel::sql_query;
 use diesel::sql_types::{Binary as SqlBinary, Text as SqlText};
 use prost::Message;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::HistorySyncNotification;
@@ -16,6 +17,24 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
+        // Enqueue a MajorSyncTask for the dedicated sync worker to consume.
+        let task = crate::sync_task::MajorSyncTask::HistorySync {
+            message_id,
+            notification: Box::new(notification),
+        };
+        if let Err(e) = self.major_sync_task_sender.send(task).await {
+            log::error!("Failed to enqueue history sync task: {e}");
+        }
+    }
+
+    // Private worker-invoked implementation containing the heavy logic (moved from original handle_history_sync)
+    pub(crate) async fn process_history_sync_task(
+        self: &Arc<Self>,
+        message_id: String,
+        notification: HistorySyncNotification,
+    ) {
+        // Do not take the global full_sync_lock here to avoid deadlocks with IQ/presence flows.
+        let log_msg_id = message_id.clone();
         log::info!(
             "Downloading history sync blob for message {} (Size: {}, Type: {:?})",
             message_id,
@@ -23,9 +42,12 @@ impl Client {
             notification.sync_type()
         );
 
-        self.send_protocol_receipt(message_id, crate::types::presence::ReceiptType::HistorySync)
-            .await;
-
+        self.send_protocol_receipt(
+            message_id.clone(),
+            crate::types::presence::ReceiptType::HistorySync,
+        )
+        .await;
+        let msg_id_for_log = log_msg_id;
         match self.download(&notification).await {
             Ok(compressed_data) => {
                 log::info!("Successfully downloaded history sync blob.");
@@ -39,33 +61,41 @@ impl Client {
                 let core_bus = self.core.event_bus.clone();
                 let sqlite_store = persistence_manager.sqlite_store();
                 let sqlite_store_for_handler = sqlite_store.clone();
-                // Transaction-scoped connection (optional)
-                let tx_conn_holder = sqlite_store
-                    .as_ref()
-                    .and_then(|s| s.begin_transaction().ok());
-                let tx_conn_arc_for_commit = Arc::new(Mutex::new(tx_conn_holder));
-                let tx_conn_arc_handler = tx_conn_arc_for_commit.clone();
+                // Per-conversation writes; track progress
+                let processed_count = Arc::new(AtomicUsize::new(0));
+                let processed_count_for_final = processed_count.clone();
 
                 let conv_handler = move |conv: wa::Conversation| {
                     let bus = core_bus.clone();
-                    let tx_conn_arc = tx_conn_arc_handler.clone();
                     let store_opt = sqlite_store_for_handler.clone();
                     let pm_clone = persistence_manager.clone();
+                    let processed = processed_count.clone();
                     async move {
+                        let conv_id = conv.id.clone();
                         if let Some(store) = &store_opt {
-                            if let Some(ref mut pooled) = *tx_conn_arc.lock().await {
-                                // normalized
-                                let _ = store.save_conversation_normalized_in_conn(pooled, &conv);
-                                // raw blob (optional)
-                                let data = conv.encode_to_vec();
-                                let _ = sql_query("INSERT INTO conversations(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data;")
-                                    .bind::<SqlText,_>(conv.id.as_str())
-                                    .bind::<SqlBinary,_>(&data)
-                                    .execute(pooled);
+                            // Heavy blocking DB work offloaded
+                            let conv_clone = conv.clone();
+                            let store_clone = store.clone();
+                            if let Err(e) = tokio::task::spawn_blocking(move || {
+                                if let Ok(mut c) = store_clone.get_connection() {
+                                    // normalized + messages
+                                    let _ = store_clone.save_conversation_normalized_in_conn(&mut c, &conv_clone);
+                                    // raw blob
+                                    let data = conv_clone.encode_to_vec();
+                                    let _ = sql_query("INSERT INTO conversations(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data;")
+                                        .bind::<SqlText,_>(conv_clone.id.as_str())
+                                        .bind::<SqlBinary,_>(&data)
+                                        .execute(&mut c);
+                                }
+                            }).await {
+                                log::warn!("History sync: spawn_blocking join error for conversation {conv_id}: {e:?}");
                             }
                         } else {
-                            // Fallback: per-conversation persistence (no global tx)
                             pm_clone.save_conversation_proto(&conv).await;
+                        }
+                        let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                        if new % 25 == 0 {
+                            log::info!("History sync progress: {new} conversations processed...");
                         }
                         bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
                     }
@@ -85,20 +115,12 @@ impl Client {
                     pushname_handler,
                 )
                 .await;
+                let total = processed_count_for_final.load(Ordering::Relaxed);
+                log::debug!(
+                    "History sync stream finished processing (message {msg_id_for_log}); total conversations processed={total}"
+                );
 
-                // Commit or rollback transaction
-                if let Some(store) = sqlite_store.as_ref()
-                    && let Some(ref mut pooled) = *tx_conn_arc_for_commit.lock().await
-                {
-                    match &stream_result {
-                        Ok(_) => {
-                            let _ = store.commit_transaction(pooled);
-                        }
-                        Err(_) => {
-                            let _ = store.rollback_transaction(pooled);
-                        }
-                    }
-                }
+                // No transaction commit step
 
                 match stream_result {
                     Ok(()) => {
@@ -107,6 +129,10 @@ impl Client {
                         // If pushnames were collected (not implemented in-stream yet), handle them
                         let push_vec = collected_pushnames.lock().await;
                         if !push_vec.is_empty() {
+                            log::debug!(
+                                "Collected {} push names from history sync; invoking handler",
+                                push_vec.len()
+                            );
                             self.clone().handle_historical_pushnames(&push_vec).await;
                         }
                     }
@@ -133,18 +159,30 @@ impl Client {
 
         let mut latest_own_pushname = None;
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid_user = device_snapshot.id.as_ref().map(|j| j.user.as_str());
+        // Compare against the non-AD (base) user so 5599xxxx:58 matches pushname id 5599xxxx
+        let own_base_user = device_snapshot.id.as_ref().map(|j| j.to_non_ad().user);
 
-        for pn in pushnames {
-            if let Some(id) = &pn.id
-                && Some(id.as_str()) == own_jid_user
-                && let Some(name) = &pn.pushname
-            {
-                latest_own_pushname = Some(name.clone());
+        if let Some(own_user) = own_base_user {
+            log::debug!(
+                "Looking for own push name among {} entries (own_user={})",
+                pushnames.len(),
+                own_user
+            );
+            for pn in pushnames {
+                if let Some(id) = &pn.id
+                    && *id == own_user
+                    && let Some(name) = &pn.pushname
+                {
+                    log::debug!("Matched own push name candidate id={} name={}", id, name);
+                    latest_own_pushname = Some(name.clone());
+                }
             }
+        } else {
+            log::warn!("Could not determine own JID user to extract push name from history sync.");
         }
 
         if let Some(new_name) = latest_own_pushname {
+            log::info!("Updating own push name from history sync to '{new_name}'");
             self.clone().update_push_name_and_notify(new_name).await;
         }
     }

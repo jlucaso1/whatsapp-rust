@@ -77,7 +77,33 @@ impl BotBuilder {
             .run_background_saver(std::time::Duration::from_secs(30));
 
         info!("Creating client...");
-        let client = Arc::new(Client::new(persistence_manager.clone()).await);
+        let (client, mut sync_task_receiver) = Client::new(persistence_manager.clone()).await;
+
+        // SPAWN THE DEDICATED SYNC WORKER
+        let worker_client = client.clone();
+        tokio::task::spawn_local(async move {
+            while let Some(task) = sync_task_receiver.recv().await {
+                match task {
+                    crate::sync_task::MajorSyncTask::HistorySync {
+                        message_id,
+                        notification,
+                    } => {
+                        worker_client
+                            .process_history_sync_task(message_id, *notification)
+                            .await;
+                    }
+                    crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
+                        if let Err(e) = worker_client
+                            .process_app_state_sync_task(name, full_sync)
+                            .await
+                        {
+                            warn!("App state sync task for {:?} failed: {}", name, e);
+                        }
+                    }
+                }
+            }
+            info!("Sync worker shutting down.");
+        });
 
         let handler = Arc::new(BotEventHandler {
             client: client.clone(),

@@ -8,6 +8,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    app_state_mutation_macs (name, index_mac) {
+        name -> Text,
+        version -> BigInt,
+        index_mac -> Binary,
+        value_mac -> Binary,
+    }
+}
+
+diesel::table! {
     app_state_versions (name) {
         name -> Text,
         state_data -> Binary,
@@ -111,6 +120,7 @@ diesel::joinable!(chat_participants -> chat_conversations (conversation_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
+    app_state_mutation_macs,
     app_state_versions,
     chat_conversations,
     chat_messages,

@@ -22,6 +22,7 @@ pub mod prekeys;
 pub mod receipt;
 pub mod retry;
 
+pub mod appstate_sync;
 pub mod groups;
 pub mod history_sync;
 pub mod presence;
@@ -30,3 +31,4 @@ pub mod usync;
 pub mod test_network;
 
 pub mod bot;
+pub mod sync_task;

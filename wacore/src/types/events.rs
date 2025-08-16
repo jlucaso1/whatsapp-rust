@@ -74,6 +74,7 @@ pub enum Event {
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
+    MarkChatAsReadUpdate(MarkChatAsReadUpdate),
 
     HistorySync(HistorySync),
     OfflineSyncPreview(OfflineSyncPreview),
