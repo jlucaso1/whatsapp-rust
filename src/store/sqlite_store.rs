@@ -52,8 +52,10 @@ impl SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             conn.run_pending_migrations(MIGRATIONS)
                 .map_err(|e| StoreError::Migration(e.to_string()))?;
-            // Reduce 'database is locked' errors during concurrent history/app state sync writes
-            let _ = diesel::sql_query("PRAGMA busy_timeout = 5000;").execute(&mut conn);
+            // Concurrency / performance pragmas
+            let _ = diesel::sql_query("PRAGMA journal_mode=WAL;").execute(&mut conn);
+            let _ = diesel::sql_query("PRAGMA synchronous=NORMAL;").execute(&mut conn);
+            let _ = diesel::sql_query("PRAGMA busy_timeout = 15000;").execute(&mut conn);
         }
 
         Ok(Self { pool })
@@ -63,7 +65,7 @@ impl SqliteStore {
         &self,
     ) -> Result<diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>> {
         let mut conn = self.get_connection()?;
-        diesel::sql_query("BEGIN IMMEDIATE TRANSACTION;")
+        diesel::sql_query("BEGIN DEFERRED TRANSACTION;")
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(conn)
@@ -87,7 +89,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn get_connection(
+    pub(crate) fn get_connection(
         &self,
     ) -> std::result::Result<
         diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>,
@@ -395,6 +397,11 @@ impl SqliteStore {
         conv: &wa::Conversation,
     ) -> Result<()> {
         self.upsert_conversation_normalized(conn, conv)
+    }
+
+    pub async fn save_conversation_normalized(&self, conv: &wa::Conversation) -> Result<()> {
+        let mut conn = self.get_connection()?;
+        self.upsert_conversation_normalized(&mut conn, conv)
     }
 }
 

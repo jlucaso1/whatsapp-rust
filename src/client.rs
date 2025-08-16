@@ -103,7 +103,7 @@ pub struct Client {
     // Notifies when first batch of app state sync keys has been stored (to avoid race on initial full sync)
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
-    // Serialize HistorySync processing to avoid SQLite write contention
+    // Serialize HistorySync processing to avoid SQLite write contention (narrow scope)
     pub(crate) history_sync_lock: Arc<Mutex<()>>,
 }
 
@@ -557,34 +557,40 @@ impl Client {
     }
 
     async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
-        let first = self.fetch_app_state(name, true, false).await;
-        if first.is_ok() {
-            return Ok(());
-        }
-        let err = first.err().unwrap();
-        let err_str = err.to_string();
-        if err_str.contains("app state key not found") {
-            // Wait for keys if not yet received
-            if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
-                info!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
-                if tokio::time::timeout(
-                    Duration::from_secs(10),
-                    self.initial_keys_synced_notifier.notified(),
-                )
-                .await
-                .is_err()
-                {
-                    warn!(target: "Client/AppState", "Timeout waiting for key share for {:?}; retrying anyway", name);
+        let mut attempt = 0u32;
+        let max_attempts = 6u32; // includes initial attempt
+        loop {
+            attempt += 1;
+            let res = self.fetch_app_state(name, true, false).await;
+            match res {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let es = e.to_string();
+                    if es.contains("app state key not found") && attempt == 1 {
+                        if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
+                            info!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
+                            if tokio::time::timeout(
+                                Duration::from_secs(10),
+                                self.initial_keys_synced_notifier.notified(),
+                            )
+                            .await
+                            .is_err()
+                            {
+                                warn!(target: "Client/AppState", "Timeout waiting for key share for {:?}; retrying anyway", name);
+                            }
+                        }
+                        continue;
+                    }
+                    if es.contains("database is locked") && attempt < max_attempts {
+                        let backoff = Duration::from_millis(200 * attempt as u64 + 150);
+                        warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Err(e);
                 }
             }
-            // Retry once
-            let second = self.fetch_app_state(name, true, false).await;
-            if second.is_ok() {
-                return Ok(());
-            }
-            return Err(second.err().unwrap());
         }
-        Err(err)
     }
 
     pub async fn fetch_app_state(
@@ -593,6 +599,7 @@ impl Client {
         full_sync: bool,
         only_if_not_synced: bool,
     ) -> anyhow::Result<()> {
+        // Avoid holding full_sync_lock across network requests to prevent deadlocks; we'll lock only during mutation persistence.
         // Simplified subset of whatsmeow logic (no key request retry yet)
         let backend = self.persistence_manager.sqlite_store().unwrap().clone();
         let mut full_sync = full_sync;
@@ -606,6 +613,7 @@ impl Client {
         let mut has_more = true;
         let mut want_snapshot = full_sync;
         while has_more {
+            debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
             let mut collection_builder = NodeBuilder::new("collection")
                 .attr("name", name.as_str())
                 .attr(
@@ -628,10 +636,13 @@ impl Client {
                 timeout: None,
             };
             let resp = self.send_iq(iq).await?; // IQ response
+            debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
+            let decode_start = std::time::Instant::now();
             // Pre-parse to detect snapshot reference so we can download asynchronously.
             let pre_downloaded_snapshot: Option<Vec<u8>> =
                 match wacore::appstate::patch_decode::parse_patch_list(&resp) {
                     Ok(pl) => {
+                        debug!(target: "Client/AppState", "Parsed patch list for {:?}: has_snapshot_ref={} has_more_patches={}", name, pl.snapshot_ref.is_some(), pl.has_more_patches);
                         if let Some(ext) = &pl.snapshot_ref {
                             match self.download(ext).await {
                                 Ok(bytes) => Some(bytes),
@@ -656,6 +667,10 @@ impl Client {
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, _new_state, list) =
                     proc.decode_patch_list(&resp, download, true).await?;
+                let decode_elapsed = decode_start.elapsed();
+                if decode_elapsed.as_millis() > 500 {
+                    debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
+                }
                 // Request missing keys (throttled 24h per key)
                 let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
                 if !missing.is_empty() {
@@ -679,14 +694,17 @@ impl Client {
                     }
                 }
                 for m in mutations {
+                    debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
                     self.dispatch_app_state_mutation(&m, full_sync);
                 }
                 has_more = list.has_more_patches;
+                debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
             } else {
                 break;
             }
             want_snapshot = false;
         }
+        debug!(target: "Client/AppState", "Completed fetch_app_state for {:?} (full_sync_final={full_sync})", name);
         Ok(())
     }
 
@@ -745,6 +763,34 @@ impl Client {
             Jid::default()
         };
         match kind.as_str() {
+            "setting_pushName" => {
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.push_name_setting
+                    && let Some(new_name) = &act.name
+                {
+                    let new_name = new_name.clone();
+                    let pm = self.persistence_manager.clone();
+                    let bus = self.core.event_bus.clone();
+                    tokio::spawn(async move {
+                        let snapshot = pm.get_device_snapshot().await;
+                        let old = snapshot.push_name.clone();
+                        if old != new_name {
+                            info!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
+                            pm.process_command(DeviceCommand::SetPushName(new_name.clone()))
+                                .await;
+                            bus.dispatch(&Event::SelfPushNameUpdated(
+                                crate::types::events::SelfPushNameUpdated {
+                                    from_server: true,
+                                    old_name: old,
+                                    new_name: new_name.clone(),
+                                },
+                            ));
+                        } else {
+                            debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
+                        }
+                    });
+                }
+            }
             "mute" => {
                 if let Some(val) = &m.action_value
                     && let Some(act) = &val.mute_action
@@ -757,7 +803,7 @@ impl Client {
                     }));
                 }
             }
-            "pin" => {
+            "pin" | "pin_v1" => {
                 if let Some(val) = &m.action_value
                     && let Some(act) = &val.pin_action
                 {
@@ -797,7 +843,7 @@ impl Client {
                         }));
                 }
             }
-            "mark_chat_as_read" => {
+            "mark_chat_as_read" | "markChatAsRead" => {
                 if let Some(val) = &m.action_value
                     && let Some(act) = &val.mark_chat_as_read_action
                 {

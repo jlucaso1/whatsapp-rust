@@ -54,6 +54,10 @@ pub async fn handle_ib(client: Arc<Client>, node: &Node) {
                     .event_bus
                     .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
             }
+            "thread_metadata" => {
+                // Present in some sessions; safe to ignore for now until feature implemented.
+                info!(target: "Client", "Received thread metadata, ignoring for now.");
+            }
             _ => {
                 warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
             }
