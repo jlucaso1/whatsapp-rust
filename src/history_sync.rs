@@ -1,5 +1,6 @@
 use crate::types::events::Event;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::HistorySyncNotification;
 
@@ -27,8 +28,7 @@ impl Client {
 
                 // Use streaming parser to avoid decoding the full HistorySync into memory
                 // Collect small top-level fields (like pushnames) and stream conversations
-                let collected_pushnames: Vec<wa::Pushname> = Vec::new();
-                let mut conv_count: usize = 0;
+                let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> = Arc::new(Mutex::new(Vec::new()));
 
                 let persistence = self.persistence_manager.clone();
                 let core_bus = self.core.event_bus.clone();
@@ -42,23 +42,28 @@ impl Client {
                     }
                 };
 
+                let push_collector = collected_pushnames.clone();
+                let pushname_handler = move |pn: wa::Pushname| {
+                    let pc = push_collector.clone();
+                    async move {
+                        pc.lock().await.push(pn);
+                    }
+                };
+
                 match wacore::history_sync::process_history_sync_stream(
                     &compressed_data,
                     conv_handler,
+                    pushname_handler,
                 )
                 .await
                 {
                     Ok(()) => {
-                        log::info!(
-                            "Successfully processed HistorySync stream (Conversations streamed: {})",
-                            conv_count
-                        );
+                        log::info!("Successfully processed HistorySync stream.");
 
                         // If pushnames were collected (not implemented in-stream yet), handle them
-                        if !collected_pushnames.is_empty() {
-                            self.clone()
-                                .handle_historical_pushnames(&collected_pushnames)
-                                .await;
+                        let push_vec = collected_pushnames.lock().await;
+                        if !push_vec.is_empty() {
+                            self.clone().handle_historical_pushnames(&push_vec).await;
                         }
                     }
                     Err(e) => {
