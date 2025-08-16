@@ -4,7 +4,6 @@ pub mod types {
     pub use wacore::types::*;
 }
 
-pub mod appstate_sync;
 pub mod client;
 pub mod download;
 pub mod handlers;
