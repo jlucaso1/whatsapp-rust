@@ -49,3 +49,39 @@ CREATE TABLE signed_prekeys (
     id INTEGER PRIMARY KEY NOT NULL,
     record BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    data BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT,
+    display_name TEXT,
+    last_msg_timestamp INTEGER,
+    unread_count INTEGER,
+    archived INTEGER,
+    pinned INTEGER,
+    created_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS chat_participants (
+    conversation_id TEXT NOT NULL,
+    jid TEXT NOT NULL,
+    is_admin INTEGER,
+    PRIMARY KEY(conversation_id, jid),
+    FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    conversation_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    server_timestamp INTEGER,
+    sender_jid TEXT,
+    message_blob BLOB NOT NULL,
+    PRIMARY KEY(conversation_id, message_id),
+    FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_unread ON chat_conversations(unread_count);

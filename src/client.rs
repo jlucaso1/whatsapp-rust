@@ -480,19 +480,6 @@ impl Client {
                 warn!("Failed to send post-connect passive IQ: {e:?}");
             }
 
-            if client_clone
-                .needs_initial_full_sync
-                .swap(false, Ordering::Relaxed)
-            {
-                info!("Performing initial full app state sync after pairing.");
-                for name in wacore::appstate::keys::ALL_PATCH_NAMES {
-                    let client_for_sync = client_clone.clone();
-                    task::spawn_local(async move {
-                        crate::appstate_sync::app_state_sync(&client_for_sync, name, true).await;
-                    });
-                }
-            }
-
             if let Err(e) = client_clone.send_presence(Presence::Available).await {
                 warn!(
                     "Could not send initial presence: {e:?}. This is expected if push_name is not yet known."

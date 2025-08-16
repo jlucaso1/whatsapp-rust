@@ -15,6 +15,44 @@ diesel::table! {
 }
 
 diesel::table! {
+    chat_conversations (id) {
+        id -> Text,
+        name -> Nullable<Text>,
+        display_name -> Nullable<Text>,
+        last_msg_timestamp -> Nullable<Integer>,
+        unread_count -> Nullable<Integer>,
+        archived -> Nullable<Integer>,
+        pinned -> Nullable<Integer>,
+        created_at -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    chat_messages (conversation_id, message_id) {
+        conversation_id -> Text,
+        message_id -> Text,
+        server_timestamp -> Nullable<Integer>,
+        sender_jid -> Nullable<Text>,
+        message_blob -> Binary,
+    }
+}
+
+diesel::table! {
+    chat_participants (conversation_id, jid) {
+        conversation_id -> Text,
+        jid -> Text,
+        is_admin -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    conversations (id) {
+        id -> Text,
+        data -> Binary,
+    }
+}
+
+diesel::table! {
     device (id) {
         id -> Nullable<Integer>,
         jid -> Nullable<Text>,
@@ -68,9 +106,16 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(chat_messages -> chat_conversations (conversation_id));
+diesel::joinable!(chat_participants -> chat_conversations (conversation_id));
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_versions,
+    chat_conversations,
+    chat_messages,
+    chat_participants,
+    conversations,
     device,
     identities,
     prekeys,
