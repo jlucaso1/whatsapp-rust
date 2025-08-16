@@ -1,4 +1,0 @@
-CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY NOT NULL,
-    data BLOB NOT NULL
-);

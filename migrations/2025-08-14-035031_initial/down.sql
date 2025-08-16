@@ -6,3 +6,7 @@ DROP TABLE sender_keys;
 DROP TABLE prekeys;
 DROP TABLE sessions;
 DROP TABLE identities;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS chat_messages;
+DROP TABLE IF EXISTS chat_participants;
+DROP TABLE IF EXISTS chat_conversations;

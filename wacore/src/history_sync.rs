@@ -87,10 +87,14 @@ where
             }
             // field 7 = pushnames (length-delimited, repeated)
             7 => {
-                let len = decode_varint(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)? as usize;
+                let len = decode_varint(&mut cursor)
+                    .map_err(HistorySyncError::ProtobufDecodeError)?
+                    as usize;
                 let pos = cursor.position() as usize;
                 if pos + len > total_len {
-                    return Err(HistorySyncError::ProtobufDecodeError(prost::DecodeError::new("pushname length out of bounds")));
+                    return Err(HistorySyncError::ProtobufDecodeError(
+                        prost::DecodeError::new("pushname length out of bounds"),
+                    ));
                 }
                 let slice = &uncompressed[pos..pos + len];
                 match wa::Pushname::decode(slice) {

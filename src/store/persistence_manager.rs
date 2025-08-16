@@ -83,6 +83,13 @@ impl PersistenceManager {
         self.device.clone()
     }
 
+    pub fn sqlite_store(&self) -> Option<Arc<SqliteStore>> {
+        match &self.backend {
+            Some(StoreBackend::Sqlite(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
     pub async fn get_device_snapshot(&self) -> Device {
         self.device.read().await.clone()
     }

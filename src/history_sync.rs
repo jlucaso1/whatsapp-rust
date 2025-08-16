@@ -1,4 +1,8 @@
 use crate::types::events::Event;
+use diesel::prelude::*;
+use diesel::sql_query;
+use diesel::sql_types::{Binary as SqlBinary, Text as SqlText};
+use prost::Message;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use waproto::whatsapp as wa;
@@ -28,16 +32,41 @@ impl Client {
 
                 // Use streaming parser to avoid decoding the full HistorySync into memory
                 // Collect small top-level fields (like pushnames) and stream conversations
-                let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> = Arc::new(Mutex::new(Vec::new()));
+                let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> =
+                    Arc::new(Mutex::new(Vec::new()));
 
-                let persistence = self.persistence_manager.clone();
+                let persistence_manager = self.persistence_manager.clone();
                 let core_bus = self.core.event_bus.clone();
+                let sqlite_store = persistence_manager.sqlite_store();
+                let sqlite_store_for_handler = sqlite_store.clone();
+                // Transaction-scoped connection (optional)
+                let tx_conn_holder = sqlite_store
+                    .as_ref()
+                    .and_then(|s| s.begin_transaction().ok());
+                let tx_conn_arc_for_commit = Arc::new(Mutex::new(tx_conn_holder));
+                let tx_conn_arc_handler = tx_conn_arc_for_commit.clone();
+
                 let conv_handler = move |conv: wa::Conversation| {
-                    let p = persistence.clone();
                     let bus = core_bus.clone();
+                    let tx_conn_arc = tx_conn_arc_handler.clone();
+                    let store_opt = sqlite_store_for_handler.clone();
+                    let pm_clone = persistence_manager.clone();
                     async move {
-                        p.save_conversation_proto(&conv).await;
-                        // Dispatch lightweight event (optional)
+                        if let Some(store) = &store_opt {
+                            if let Some(ref mut pooled) = *tx_conn_arc.lock().await {
+                                // normalized
+                                let _ = store.save_conversation_normalized_in_conn(pooled, &conv);
+                                // raw blob (optional)
+                                let data = conv.encode_to_vec();
+                                let _ = sql_query("INSERT INTO conversations(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data;")
+                                    .bind::<SqlText,_>(conv.id.as_str())
+                                    .bind::<SqlBinary,_>(&data)
+                                    .execute(pooled);
+                            }
+                        } else {
+                            // Fallback: per-conversation persistence (no global tx)
+                            pm_clone.save_conversation_proto(&conv).await;
+                        }
                         bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
                     }
                 };
@@ -50,13 +79,28 @@ impl Client {
                     }
                 };
 
-                match wacore::history_sync::process_history_sync_stream(
+                let stream_result = wacore::history_sync::process_history_sync_stream(
                     &compressed_data,
                     conv_handler,
                     pushname_handler,
                 )
-                .await
+                .await;
+
+                // Commit or rollback transaction
+                if let Some(store) = sqlite_store.as_ref()
+                    && let Some(ref mut pooled) = *tx_conn_arc_for_commit.lock().await
                 {
+                    match &stream_result {
+                        Ok(_) => {
+                            let _ = store.commit_transaction(pooled);
+                        }
+                        Err(_) => {
+                            let _ = store.rollback_transaction(pooled);
+                        }
+                    }
+                }
+
+                match stream_result {
                     Ok(()) => {
                         log::info!("Successfully processed HistorySync stream.");
 
