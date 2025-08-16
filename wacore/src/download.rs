@@ -1,4 +1,3 @@
-use crate::libsignal::crypto::aes_256_cbc_decrypt;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -130,28 +129,103 @@ impl DownloadUtils {
         Ok(requests)
     }
 
-    pub fn decrypt_downloaded_media(
-        encrypted_data: &[u8],
+    pub fn decrypt_stream<R: std::io::Read>(
+        mut reader: R,
         media_key: &[u8],
         app_info: MediaType,
     ) -> Result<Vec<u8>> {
-        if encrypted_data.len() < 10 {
-            return Err(anyhow!("Downloaded data too short"));
-        }
-        let (ciphertext, mac) = encrypted_data.split_at(encrypted_data.len() - 10);
+        use aes::Aes256;
+        use aes::cipher::generic_array::GenericArray;
+        use aes::cipher::{BlockDecrypt, KeyInit};
+
+        const MAC_SIZE: usize = 10;
+        const BLOCK: usize = 16;
+        const CHUNK: usize = 8 * 1024;
 
         let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, app_info);
 
-        let mut hmac = <Hmac<Sha256>>::new_from_slice(&mac_key).unwrap();
+        let mut hmac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(&mac_key)
+            .map_err(|_| anyhow!("Failed to init HMAC"))?;
         hmac.update(&iv);
-        hmac.update(ciphertext);
-        let expected_mac = &hmac.finalize().into_bytes()[..10];
 
-        if mac != expected_mac {
+        let cipher =
+            Aes256::new_from_slice(&cipher_key).map_err(|_| anyhow!("Bad AES key length"))?;
+
+        let mut plaintext: Vec<u8> = Vec::new();
+        let mut tail: Vec<u8> = Vec::with_capacity(BLOCK + MAC_SIZE);
+        let mut prev_block = iv;
+
+        let mut read_buf = [0u8; CHUNK];
+
+        loop {
+            let n = reader.read(&mut read_buf)?;
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&read_buf[..n]);
+
+            if tail.len() > MAC_SIZE + BLOCK {
+                let mut processable_len = tail.len() - (MAC_SIZE + BLOCK);
+                processable_len -= processable_len % BLOCK;
+                if processable_len >= BLOCK {
+                    let (to_process, rest) = tail.split_at(processable_len);
+                    hmac.update(to_process);
+                    for cblock in to_process.chunks_exact(BLOCK) {
+                        let mut block = GenericArray::clone_from_slice(cblock);
+                        cipher.decrypt_block(&mut block);
+                        for (b, p) in block.iter_mut().zip(prev_block.iter()) {
+                            *b ^= *p;
+                        }
+                        plaintext.extend_from_slice(&block);
+                        prev_block = match <[u8; BLOCK]>::try_from(cblock) {
+                            Ok(arr) => arr,
+                            Err(_) => return Err(anyhow!("Failed to convert block to array")),
+                        };
+                    }
+                    tail = rest.to_vec();
+                }
+            }
+        }
+
+        if tail.len() < MAC_SIZE + BLOCK || (tail.len() - MAC_SIZE) % BLOCK != 0 {
+            return Err(anyhow!("Invalid final media size"));
+        }
+        let mac_index = tail.len() - MAC_SIZE;
+        let (final_ciphertext, mac_bytes) = tail.split_at(mac_index);
+        hmac.update(final_ciphertext);
+        let expected_mac_full = hmac.finalize().into_bytes();
+        let expected_mac = &expected_mac_full[..MAC_SIZE];
+        if mac_bytes != expected_mac {
             return Err(anyhow!("MAC mismatch"));
         }
 
-        let plaintext = aes_256_cbc_decrypt(ciphertext, &cipher_key, &iv)?;
+        let mut final_plain = Vec::with_capacity(final_ciphertext.len());
+        for cblock in final_ciphertext.chunks_exact(BLOCK) {
+            let mut block = GenericArray::clone_from_slice(cblock);
+            cipher.decrypt_block(&mut block);
+            for (b, p) in block.iter_mut().zip(prev_block.iter()) {
+                *b ^= *p;
+            }
+            final_plain.extend_from_slice(&block);
+        }
+        if final_plain.is_empty() {
+            return Err(anyhow!("Empty plaintext after decrypt"));
+        }
+        let pad_len = match final_plain.last() {
+            Some(&v) => v as usize,
+            None => return Err(anyhow!("Empty plaintext after decrypt")),
+        };
+        if pad_len == 0 || pad_len > BLOCK || pad_len > final_plain.len() {
+            return Err(anyhow!("Invalid PKCS7 padding"));
+        }
+        if !final_plain[final_plain.len() - pad_len..]
+            .iter()
+            .all(|&b| b as usize == pad_len)
+        {
+            return Err(anyhow!("Bad PKCS7 padding bytes"));
+        }
+        final_plain.truncate(final_plain.len() - pad_len);
+        plaintext.extend_from_slice(&final_plain);
 
         Ok(plaintext)
     }
