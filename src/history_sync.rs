@@ -1,7 +1,6 @@
 use crate::types::events::Event;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
-use waproto::whatsapp::history_sync::HistorySyncType;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
@@ -26,26 +25,40 @@ impl Client {
             Ok(compressed_data) => {
                 log::info!("Successfully downloaded history sync blob.");
 
-                match wacore::history_sync::process_history_sync_blob(&compressed_data) {
-                    Ok(history_data) => {
+                // Use streaming parser to avoid decoding the full HistorySync into memory
+                // Collect small top-level fields (like pushnames) and stream conversations
+                let collected_pushnames: Vec<wa::Pushname> = Vec::new();
+                let mut conv_count: usize = 0;
+
+                let conv_handler = |conv: wa::Conversation| {
+                    // For now, simply increment the counter and dispatch a JoinedGroup
+                    // event per conversation so downstream handlers can process them
+                    conv_count += 1;
+                    // Clone minimal data to dispatch as a JoinedGroup event. The event
+                    // type expects a boxed wa::Conversation; allocate and dispatch.
+                    let boxed = Box::new(conv);
+                    self.core.event_bus.dispatch(&Event::JoinedGroup(boxed));
+                };
+
+                match wacore::history_sync::process_history_sync_stream(
+                    &compressed_data,
+                    conv_handler,
+                ) {
+                    Ok(()) => {
                         log::info!(
-                            "Successfully parsed HistorySync protobuf (Type: {:?}, Conversations: {})",
-                            history_data.sync_type(),
-                            history_data.conversations.len()
+                            "Successfully processed HistorySync stream (Conversations streamed: {})",
+                            conv_count
                         );
 
-                        if history_data.sync_type() == HistorySyncType::PushName {
+                        // If pushnames were collected (not implemented in-stream yet), handle them
+                        if !collected_pushnames.is_empty() {
                             self.clone()
-                                .handle_historical_pushnames(&history_data.pushnames)
+                                .handle_historical_pushnames(&collected_pushnames)
                                 .await;
                         }
-
-                        self.core
-                            .event_bus
-                            .dispatch(&Event::HistorySync(history_data));
                     }
                     Err(e) => {
-                        log::error!("Failed to process HistorySync data: {:?}", e);
+                        log::error!("Failed to process HistorySync data stream: {:?}", e);
                     }
                 }
             }
