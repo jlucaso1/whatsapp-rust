@@ -15,16 +15,14 @@ pub enum StoreBackend {
 impl StoreBackend {
     pub async fn save_device_data(
         &self,
-        device_data: &crate::store::SerializableDevice,
+        device_data: &wacore::store::Device,
     ) -> Result<(), StoreError> {
         match self {
             StoreBackend::Sqlite(store) => store.save_device_data(device_data).await,
         }
     }
 
-    pub async fn load_device_data(
-        &self,
-    ) -> Result<Option<crate::store::SerializableDevice>, StoreError> {
+    pub async fn load_device_data(&self) -> Result<Option<wacore::store::Device>, StoreError> {
         match self {
             StoreBackend::Sqlite(store) => store.load_device_data().await,
         }
