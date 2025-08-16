@@ -97,7 +97,17 @@ impl<B: Backend> AppStateProcessor<B> {
                     if computed != *mac_expected { return Err(anyhow!("snapshot MAC mismatch")); }
                 }
             }
-            for rec in &snapshot.records { let mut out = Vec::new(); self.decode_record(rec, &mut out, validate_macs).await?; new_mutations.extend(out); }
+            for rec in &snapshot.records {
+                let mut out = Vec::new();
+                self.decode_record(
+                    wa::syncd_mutation::SyncdOperation::Set,
+                    rec,
+                    &mut out,
+                    validate_macs,
+                )
+                .await?;
+                new_mutations.extend(out);
+            }
         }
 
         for patch in &pl.patches {
@@ -141,7 +151,12 @@ impl<B: Backend> AppStateProcessor<B> {
             for m in &patch.mutations {
                 if let Some(rec) = &m.record {
                     let mut out = Vec::new();
-                    self.decode_record(rec, &mut out, validate_macs).await?;
+                    let op = match m.operation.unwrap_or(0) {
+                        0 => wa::syncd_mutation::SyncdOperation::Set,
+                        1 => wa::syncd_mutation::SyncdOperation::Remove,
+                        _ => wa::syncd_mutation::SyncdOperation::Set,
+                    };
+                    self.decode_record(op, rec, &mut out, validate_macs).await?;
                     new_mutations.extend(out);
                 }
             }
@@ -155,6 +170,7 @@ impl<B: Backend> AppStateProcessor<B> {
 
     async fn decode_record(
         &self,
+        operation: wa::syncd_mutation::SyncdOperation,
         record: &wa::SyncdRecord,
         out: &mut Vec<Mutation>,
         validate_macs: bool,
@@ -176,28 +192,57 @@ impl<B: Backend> AppStateProcessor<B> {
         let (iv, rest) = value_blob.split_at(16);
         let (ciphertext, value_mac) = rest.split_at(rest.len() - 32);
         if validate_macs {
-            let expected = generate_content_mac(
-                wa::syncd_mutation::SyncdOperation::Set,
-                &value_blob[..value_blob.len() - 32],
-                key_id,
-                &keys.value_mac,
-            );
+            let expected = generate_content_mac(operation, &value_blob[..value_blob.len() - 32], key_id, &keys.value_mac);
             if expected != value_mac {
                 return Err(anyhow!("content MAC mismatch"));
             }
         }
         let plaintext = aes_256_cbc_decrypt(ciphertext, &keys.value_encryption, iv)?;
         let action = wa::SyncActionData::decode(plaintext.as_slice())?;
+        // Index MAC validation + JSON parse
+        let mut index_list: Vec<String> = Vec::new();
+        if let Some(idx_bytes) = action.index.as_ref() {
+            if validate_macs {
+                use hmac::{Hmac, Mac};
+                use sha2::Sha256;
+                let mut h = Hmac::<Sha256>::new_from_slice(&keys.index).expect("hmac key");
+                h.update(idx_bytes);
+                let expected_index_mac = h.finalize().into_bytes();
+                let stored = record.index.as_ref().and_then(|i| i.blob.as_ref()).ok_or_else(|| anyhow!("missing index mac"))?;
+                if expected_index_mac.as_slice() != stored { return Err(anyhow!("index MAC mismatch")); }
+            }
+            if let Ok(parsed) = serde_json::from_slice::<Vec<String>>(idx_bytes) { index_list = parsed; }
+        }
         out.push(Mutation {
             action_value: action.value.clone(),
-            index_mac: record
-                .index
-                .as_ref()
-                .and_then(|i| i.blob.clone())
-                .unwrap_or_default(),
+            index_mac: record.index.as_ref().and_then(|i| i.blob.clone()).unwrap_or_default(),
             value_mac: value_mac.to_vec(),
+            index: index_list,
+            operation,
         });
         Ok(())
+    }
+
+    pub async fn sync_collection<D, FDownload>(
+        &self,
+        driver: &D,
+        name: WAPatchName,
+        validate_macs: bool,
+        download: FDownload,
+    ) -> Result<Vec<Mutation>>
+    where
+        D: AppStateSyncDriver + Sync,
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
+        let mut all = Vec::new();
+        loop {
+            let state = self.backend.get_app_state_version(name.as_str()).await?;
+            let node = driver.fetch_collection(name, state.version).await?;
+            let (mut muts, _new_state, list) = self.decode_patch_list(&node, &download, validate_macs).await?;
+            all.append(&mut muts);
+            if !list.has_more_patches { break; }
+        }
+        Ok(all)
     }
 }
 
@@ -206,6 +251,8 @@ pub struct Mutation {
     pub action_value: Option<wa::SyncActionValue>,
     pub index_mac: Vec<u8>,
     pub value_mac: Vec<u8>,
+    pub index: Vec<String>,
+    pub operation: wa::syncd_mutation::SyncdOperation,
 }
 
 #[async_trait]
