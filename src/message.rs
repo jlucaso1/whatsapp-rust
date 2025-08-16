@@ -347,6 +347,7 @@ impl Client {
                         let history_sync_clone = history_sync.clone();
                         let msg_id = info.id.clone();
                         tokio::task::spawn_local(async move {
+                            // Enqueue history sync task to dedicated worker
                             client_clone
                                 .handle_history_sync(msg_id, history_sync_clone)
                                 .await;
@@ -456,6 +457,16 @@ impl Client {
                 stored_count,
                 failed_count
             );
+        }
+
+        // Notify any waiters (initial full sync) that at least one key share was processed.
+        if stored_count > 0
+            && !self
+                .initial_app_state_keys_received
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            // First time setting; notify any waiters
+            self.initial_keys_synced_notifier.notify_waiters();
         }
     }
 

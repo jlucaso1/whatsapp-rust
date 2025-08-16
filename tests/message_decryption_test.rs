@@ -307,7 +307,7 @@ async fn setup_test_client(capture_dir: &str, is_group: bool) -> (Arc<Client>, N
     })
     .await;
 
-    let client = Arc::new(Client::new(pm.clone()).await);
+    let (client, _rx) = Client::new(pm.clone()).await;
 
     client
         .persistence_manager

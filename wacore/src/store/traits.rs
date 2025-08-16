@@ -50,6 +50,28 @@ pub trait AppStateKeyStore: Send + Sync {
 pub trait AppStateStore: Send + Sync {
     async fn get_app_state_version(&self, name: &str) -> Result<HashState>;
     async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()>;
+    async fn put_app_state_mutation_macs(
+        &self,
+        name: &str,
+        version: u64,
+        mutations: &[AppStateMutationMAC],
+    ) -> Result<()>;
+    async fn delete_app_state_mutation_macs(
+        &self,
+        name: &str,
+        index_macs: &[Vec<u8>],
+    ) -> Result<()>;
+    async fn get_app_state_mutation_mac(
+        &self,
+        name: &str,
+        index_mac: &[u8],
+    ) -> Result<Option<Vec<u8>>>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppStateMutationMAC {
+    pub index_mac: Vec<u8>,
+    pub value_mac: Vec<u8>,
 }
 
 pub trait Backend:

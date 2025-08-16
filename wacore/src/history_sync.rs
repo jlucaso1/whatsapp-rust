@@ -144,3 +144,51 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use prost::Message;
+    use std::io::Write;
+
+    #[test]
+    fn test_sync_blob_parser() {
+        let original_sync = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::Full as i32,
+            conversations: vec![
+                wa::Conversation {
+                    id: "123@g.us".to_string(),
+                    name: Some("Test Group".to_string()),
+                    ..Default::default()
+                },
+                wa::Conversation {
+                    id: "456@s.whatsapp.net".to_string(),
+                    ..Default::default()
+                },
+            ],
+            pushnames: vec![wa::Pushname {
+                id: Some("111".to_string()),
+                pushname: Some("Alice".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let encoded = original_sync.encode_to_vec();
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&encoded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let history_sync = process_history_sync_blob(&compressed).unwrap();
+        let conversations = history_sync.conversations;
+        let pushnames = history_sync.pushnames;
+        assert_eq!(conversations.len(), 2);
+        assert_eq!(conversations[0].id, "123@g.us");
+        assert_eq!(conversations[0].name.as_deref(), Some("Test Group"));
+        assert_eq!(pushnames.len(), 1);
+        assert_eq!(pushnames[0].id.as_deref(), Some("111"));
+        assert_eq!(pushnames[0].pushname.as_deref(), Some("Alice"));
+    }
+}
