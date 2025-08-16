@@ -2,15 +2,14 @@ use super::errors::{AppStateError, Result};
 use super::hash::HashState;
 use super::keys;
 use super::lthash::WA_PATCH_INTEGRITY;
-use crate::crypto::cbc;
-use crate::crypto::hmac_sha512;
+use crate::libsignal::crypto::aes_256_cbc_decrypt;
 use crate::store::traits::AppStateKeyStore;
 use base64::Engine as _;
 use base64::prelude::*;
 use hmac::{Hmac, Mac};
 use log;
 use prost::Message;
-use sha2::Sha256;
+use sha2::{Sha256, Sha512};
 use std::collections::HashMap;
 use std::sync::Arc;
 use waproto::whatsapp as wa;
@@ -294,12 +293,27 @@ impl ProcessorUtils {
         }
         let (content, value_mac) = value_blob.split_at(value_blob.len() - 32);
 
-        let expected_value_mac = hmac_sha512::generate_content_mac(
-            mutation.operation(),
-            content,
-            key_id_bytes,
-            &keys.value_mac,
-        );
+        let expected_value_mac = {
+            let mut mac = Hmac::<Sha512>::new_from_slice(&keys.value_mac)
+                .expect("HMAC can take key of any size");
+
+            // 1. Hash the operation byte, which is its enum value + 1.
+            let operation_byte = (mutation.operation() as i32 + 1) as u8;
+            mac.update(&[operation_byte]);
+
+            // 2. Hash the key ID itself.
+            mac.update(key_id_bytes);
+
+            // 3. Hash the main encrypted payload.
+            mac.update(content);
+
+            // 4. Hash the 8-byte, big-endian length of (keyID + operation_byte).
+            let total_len = (key_id_bytes.len() + 1) as u64;
+            mac.update(&total_len.to_be_bytes());
+
+            let final_mac: [u8; 32] = mac.finalize().into_bytes()[..32].try_into().unwrap();
+            final_mac
+        };
 
         if expected_value_mac != value_mac {
             return Err(AppStateError::MismatchingContentMAC(format!(
@@ -313,7 +327,7 @@ impl ProcessorUtils {
         }
         let (iv, ciphertext) = content.split_at(16);
 
-        let plaintext = cbc::decrypt(&keys.value_encryption, iv, ciphertext)?;
+        let plaintext = aes_256_cbc_decrypt(ciphertext, &keys.value_encryption, iv)?;
 
         let mut sync_action =
             wa::SyncActionData::decode(plaintext.as_slice()).map_err(AppStateError::Unmarshal)?;
