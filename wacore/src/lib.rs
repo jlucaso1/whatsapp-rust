@@ -1,3 +1,4 @@
+pub use aes_gcm;
 pub mod appstate;
 pub mod client;
 pub mod download;
