@@ -15,6 +15,19 @@ use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStr
 
 use super::SerializableDevice;
 
+#[derive(Insertable, AsChangeset)]
+#[diesel(table_name = chat_conversations)]
+struct ChatConversationChanges<'a> {
+    pub id: &'a str,
+    pub name: Option<&'a str>,
+    pub display_name: Option<&'a str>,
+    pub last_msg_timestamp: Option<i32>,
+    pub unread_count: Option<i32>,
+    pub archived: Option<i32>,
+    pub pinned: Option<i32>,
+    pub created_at: Option<i32>,
+}
+
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
@@ -41,6 +54,34 @@ impl SqliteStore {
         }
 
         Ok(Self { pool })
+    }
+
+    pub fn begin_transaction(
+        &self,
+    ) -> Result<diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>> {
+        let mut conn = self.get_connection()?;
+        diesel::sql_query("BEGIN IMMEDIATE TRANSACTION;")
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(conn)
+    }
+    pub fn commit_transaction(
+        &self,
+        conn: &mut diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>,
+    ) -> Result<()> {
+        diesel::sql_query("COMMIT;")
+            .execute(conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+    pub fn rollback_transaction(
+        &self,
+        conn: &mut diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>,
+    ) -> Result<()> {
+        diesel::sql_query("ROLLBACK;")
+            .execute(conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
     }
 
     fn get_connection(
@@ -250,6 +291,107 @@ impl SqliteStore {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn save_conversation_raw(&self, id: &str, data: &[u8]) -> Result<()> {
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(conversations::table)
+            .values((conversations::id.eq(id), conversations::data.eq(data)))
+            .on_conflict(conversations::id)
+            .do_update()
+            .set(conversations::data.eq(data))
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    fn upsert_conversation_normalized(
+        &self,
+        conn: &mut SqliteConnection,
+        conv: &wa::Conversation,
+    ) -> Result<()> {
+        // Basic metadata extraction
+        let last_ts_i32 = conv.last_msg_timestamp.map(|v| v as i32);
+        let unread = conv.unread_count.map(|v| v as i32);
+        let archived = conv.archived.unwrap_or(false) as i32;
+        let pinned = conv.pinned.map(|v| v as i32);
+        let created_at_i32 = conv.created_at.map(|v| v as i32);
+        let meta = ChatConversationChanges {
+            id: conv.id.as_str(),
+            name: conv.name.as_deref(),
+            display_name: conv.display_name.as_deref(),
+            last_msg_timestamp: last_ts_i32,
+            unread_count: unread,
+            archived: Some(archived),
+            pinned,
+            created_at: created_at_i32,
+        };
+        diesel::insert_into(chat_conversations::table)
+            .values(&meta)
+            .on_conflict(chat_conversations::id)
+            .do_update()
+            .set(&meta)
+            .execute(conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Participants
+        if !conv.participant.is_empty() {
+            // For simplicity, delete existing participants then insert new
+            diesel::delete(
+                chat_participants::table
+                    .filter(chat_participants::conversation_id.eq(conv.id.as_str())),
+            )
+            .execute(conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            for part in &conv.participant {
+                let jid = part.user_jid.as_str();
+                let is_admin = part.rank.map(|r| if r > 0 { 1 } else { 0 });
+                diesel::insert_into(chat_participants::table)
+                    .values((
+                        chat_participants::conversation_id.eq(conv.id.as_str()),
+                        chat_participants::jid.eq(jid),
+                        chat_participants::is_admin.eq(is_admin),
+                    ))
+                    .execute(conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+        }
+
+        // Messages: we only persist message metadata and blob for HistorySyncMsg.message if present
+        if !conv.messages.is_empty() {
+            for msg in &conv.messages {
+                if let Some(wmi) = &msg.message {
+                    let key = &wmi.key; // required field
+                    let message_id = key.id.as_deref().unwrap_or("");
+                    if message_id.is_empty() {
+                        continue;
+                    }
+                    let server_ts_i32 = wmi.message_timestamp.map(|v| v as i32);
+                    let sender = key.remote_jid.as_deref();
+                    let blob = wmi.encode_to_vec();
+                    use diesel::sql_types::{
+                        Binary as SqlBinType, Integer as SqlIntType, Nullable, Text as SqlTextType,
+                    };
+                    diesel::sql_query("INSERT INTO chat_messages (conversation_id,message_id,server_timestamp,sender_jid,message_blob) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(conversation_id,message_id) DO UPDATE SET server_timestamp=excluded.server_timestamp,sender_jid=excluded.sender_jid,message_blob=excluded.message_blob;")
+                        .bind::<SqlTextType,_>(conv.id.as_str())
+                        .bind::<SqlTextType,_>(message_id)
+                        .bind::<Nullable<SqlIntType>,_>(server_ts_i32)
+                        .bind::<Nullable<SqlTextType>,_>(sender)
+                        .bind::<SqlBinType,_>(&blob)
+                        .execute(conn)
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn save_conversation_normalized_in_conn(
+        &self,
+        conn: &mut SqliteConnection,
+        conv: &wa::Conversation,
+    ) -> Result<()> {
+        self.upsert_conversation_normalized(conn, conv)
     }
 }
 

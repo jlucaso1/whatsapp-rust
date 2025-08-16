@@ -1,4 +1,3 @@
-use crate::appstate_sync;
 use crate::client::Client;
 use crate::types::events::Event;
 // ...existing code...
@@ -40,11 +39,6 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                     target: "Client/AppState",
                     "scheduling sync for collection '{name}' from version {version}."
                 );
-
-                let client_clone = client.clone();
-                task::spawn_local(async move {
-                    appstate_sync::app_state_sync(&client_clone, &name, false).await;
-                });
             }
         }
         "account_sync" => {
