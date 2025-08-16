@@ -16,8 +16,6 @@ pub enum AppStateError {
     KeysNotFound(Vec<Vec<u8>>),
     #[error("failed to get app state key {0:?}: {1}")]
     GetKeyFailed(Vec<u8>, Box<dyn std::error::Error + Send + Sync>),
-    #[error("failed to decrypt mutation: {0}")]
-    Decrypt(#[from] crate::crypto::cbc::CbcError),
     #[error("failed to decrypt mutation with libsignal: {0}")]
     DecryptLibsignal(#[from] crate::libsignal::crypto::DecryptionError),
     #[error("failed to unmarshal mutation protobuf: {0}")]

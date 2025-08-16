@@ -1,6 +1,9 @@
 use crate::libsignal::protocol::{KeyPair, PublicKey};
+use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use base64::Engine as _;
 use base64::prelude::*;
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
 use rand::TryRngCore;
@@ -111,7 +114,7 @@ impl PairUtils {
         let is_hosted_account = hmac_container.account_type.is_some()
             && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
-        let mut mac = HmacSha256::new_from_slice(&device_state.adv_secret_key).unwrap();
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(&device_state.adv_secret_key).unwrap();
         // Get details and hmac as slices, handling potential None values
         let details_bytes = hmac_container
             .details
@@ -285,7 +288,7 @@ impl PairUtils {
         let adv_key = &device_state.adv_secret_key;
         let identity_key = &device_state.identity_key;
 
-        let mut mac = HmacSha256::new_from_slice(adv_key).unwrap();
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(adv_key).unwrap();
         mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
         mac.update(dut_identity_pub);
         mac.update(master_ephemeral.public_key.public_key_bytes());
@@ -302,13 +305,23 @@ impl PairUtils {
         final_message.extend_from_slice(identity_key.public_key.public_key_bytes());
 
         // Encrypt the final message
-        let encryption_key = crate::crypto::hkdf::sha256(&shared_secret, None, b"WA-Ads-Key", 32)?;
-        let encrypted = crate::crypto::gcm::encrypt(
-            &encryption_key,
-            &[0; 12],
-            &final_message,
-            pairing_ref.as_bytes(),
-        )?;
+        let encryption_key = {
+            let hk = Hkdf::<Sha256>::new(None, &shared_secret);
+            let mut result = vec![0u8; 32];
+            hk.expand(b"WA-Ads-Key", &mut result)
+                .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
+            result
+        };
+        let cipher = Aes256Gcm::new_from_slice(&encryption_key)
+            .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
+        let nonce = aes_gcm::Nonce::from_slice(&[0; 12]);
+        let payload = Payload {
+            msg: &final_message,
+            aad: pairing_ref.as_bytes(),
+        };
+        let encrypted = cipher
+            .encrypt(nonce, payload)
+            .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
 
         Ok(encrypted)
     }
