@@ -83,7 +83,6 @@ impl BotBuilder {
         let worker_client = client.clone();
         tokio::task::spawn_local(async move {
             while let Some(task) = sync_task_receiver.recv().await {
-
                 match task {
                     crate::sync_task::MajorSyncTask::HistorySync {
                         message_id,

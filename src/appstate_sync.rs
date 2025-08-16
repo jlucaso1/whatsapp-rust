@@ -343,19 +343,12 @@ impl<B: Backend> AppStateProcessor<B> {
         let mut index_list: Vec<String> = Vec::new();
         if let Some(idx_bytes) = action.index.as_ref() {
             if validate_macs {
-                use hmac::{Hmac, Mac};
-                use sha2::Sha256;
-                let mut h = Hmac::<Sha256>::new_from_slice(&keys.index).expect("hmac key");
-                h.update(idx_bytes);
-                let expected_index_mac = h.finalize().into_bytes();
                 let stored = record
                     .index
                     .as_ref()
                     .and_then(|i| i.blob.as_ref())
                     .ok_or_else(|| anyhow!("missing index mac"))?;
-                if expected_index_mac.as_slice() != stored {
-                    return Err(anyhow!("index MAC mismatch"));
-                }
+                wacore::appstate::hash::validate_index_mac(idx_bytes, stored, &keys.index)?;
             }
             if let Ok(parsed) = serde_json::from_slice::<Vec<String>>(idx_bytes) {
                 index_list = parsed;

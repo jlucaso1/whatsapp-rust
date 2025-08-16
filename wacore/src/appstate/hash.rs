@@ -143,3 +143,18 @@ fn concat_and_hmac_sha512(key: &[u8], data: &[&[u8]]) -> Vec<u8> {
     }
     mac.finalize().into_bytes().to_vec()
 }
+
+pub fn validate_index_mac(
+    index_json_bytes: &[u8],
+    expected_mac: &[u8],
+    key: &[u8; 32],
+) -> Result<(), AppStateError> {
+    let mut h = HmacSha256::new_from_slice(key).expect("hmac key");
+    h.update(index_json_bytes);
+    let computed = h.finalize().into_bytes();
+    if computed.as_slice() != expected_mac {
+        Err(AppStateError::MismatchingIndexMAC)
+    } else {
+        Ok(())
+    }
+}
