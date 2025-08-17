@@ -63,8 +63,7 @@ The core of the end-to-end encryption implementation.
   - `✅` Decryption of both `PreKeySignalMessage` and `SignalMessage` is working correctly.
   - `✅` Encryption for 1-on-1 chats is implemented, correctly handling multi-device `DeviceSentMessage` payloads.
 - `⏳` **Group Messaging (`signal/groups/`)**:
-  - `✅` Decryption of group messages (`skmsg`) is functional. The client can correctly receive and process messages sent to groups it is a part of.
-  - `⏳` Encryption of group messages is partially implemented but contains a bug causing sent messages to be malformed or undecryptable by recipients. The core cryptographic logic passes local tests, suggesting a subtle issue in message construction or key distribution when interacting with the live server. Appears for the others like: "Waiting for the message"
+  - `✅` Decryption and Encryption of group messages (`skmsg`) is functional. The client can correctly receive and process messages sent to groups it is a part of.
 - `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported and are in use.
 - `✅` **Store Traits & Implementations (`store/`, `signal/store.rs`)**: The necessary traits and backend implementations for the protocol are defined and functional.
 
@@ -97,21 +96,13 @@ If you make changes to `waproto/src/whatsapp.proto`, you will need to regenerate
 
 The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection for one-on-one chats. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
 
-The current focus is on completing and stabilizing group messaging functionality.
-
-### Phase 1: Complete Group Messaging (Highest Priority)
-
-1.  **Debug Group Message Sending**:
-    - **Task**: Investigate and fix the issue with sending group messages. While the client can successfully decrypt incoming group messages, outgoing messages are currently corrupted and cannot be decrypted by other participants. The problem likely lies in the final stanza construction or the pairwise encryption of the `SenderKeyDistributionMessage`.
-    - **Why**: This is the final and most critical step to achieving full E2E messaging feature parity.
-
-### Phase 2: App State and Media
+### Phase 1: App State and Media
 
 1.  **Implement Media Uploads/Downloads**:
     - **Task**: Add support for encrypting/uploading and downloading/decrypting media files (images, videos, documents). This involves handling media connection details (`mediaconn.rs`).
     - **Why**: Essential for any client that needs to handle more than just text.
 
-### Phase 3: Robustness and Feature Parity
+### Phase 2: Robustness and Feature Parity
 
 1.  **Full `usync` Implementation**: Implement a robust `get_user_devices` function using `usync` IQs to ensure device lists are always up-to-date.
 2.  **Expand Event Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
