@@ -353,7 +353,7 @@ impl Client {
 
         // Early auto-ACK for message-like stanzas to prevent server resends (simplified whatsmeow maybeDeferredAck)
         match node.tag.as_str() {
-            "message" | "receipt" | "notification" => {
+            "message" | "receipt" | "notification" | "call" => {
                 if let (Some(id), Some(from)) = (node.attrs.get("id"), node.attrs.get("from")) {
                     let mut attrs = std::collections::HashMap::new();
                     attrs.insert("class".to_string(), node.tag.clone());
