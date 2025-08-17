@@ -648,12 +648,6 @@ impl PlaintextContent {
     /// PlaintextContent; only messages that are okay to send as plaintext should be allowed.
     const PLAINTEXT_CONTEXT_IDENTIFIER_BYTE: u8 = 0xC0;
 
-    /// Marks the end of a message and the start of any padding.
-    ///
-    /// Usually messages are padded to avoid exposing patterns,
-    /// but PlaintextContent messages are all fixed-length anyway, so there won't be any padding.
-    const PADDING_BOUNDARY_BYTE: u8 = 0x80;
-
     #[inline]
     pub fn body(&self) -> &[u8] {
         &self.serialized[1..]
@@ -666,26 +660,6 @@ impl PlaintextContent {
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Content {
-    #[prost(bytes = "vec", optional, tag = "1")]
-    pub data_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "2")]
-    pub sync_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "3")]
-    pub call_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "4")]
-    pub null_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "5")]
-    pub receipt_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "6")]
-    pub typing_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "7")]
-    pub sender_key_distribution_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "8")]
-    pub decryption_error_message: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DecryptionErrorMessageProto {
     /// set to the public ratchet key from the SignalMessage if a 1-1 payload fails to decrypt
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -694,23 +668,6 @@ pub struct DecryptionErrorMessageProto {
     pub timestamp: ::core::option::Option<u64>,
     #[prost(uint32, optional, tag = "3")]
     pub device_id: ::core::option::Option<u32>,
-}
-
-impl From<DecryptionErrorMessage> for PlaintextContent {
-    fn from(message: DecryptionErrorMessage) -> Self {
-        let proto_structure = Content {
-            decryption_error_message: Some(message.serialized().to_vec()),
-            ..Default::default()
-        };
-        let mut serialized = vec![Self::PLAINTEXT_CONTEXT_IDENTIFIER_BYTE];
-        proto_structure
-            .encode(&mut serialized)
-            .expect("can always encode to a Vec");
-        serialized.push(Self::PADDING_BOUNDARY_BYTE);
-        Self {
-            serialized: Box::from(serialized),
-        }
-    }
 }
 
 impl TryFrom<&[u8]> for PlaintextContent {
@@ -821,24 +778,4 @@ impl TryFrom<&[u8]> for DecryptionErrorMessage {
             serialized: Box::from(value),
         })
     }
-}
-
-/// For testing
-pub fn extract_decryption_error_message_from_serialized_content(
-    bytes: &[u8],
-) -> Result<DecryptionErrorMessage> {
-    if bytes.last() != Some(&PlaintextContent::PADDING_BOUNDARY_BYTE) {
-        return Err(SignalProtocolError::InvalidProtobufEncoding);
-    }
-    let content = Content::decode(bytes.split_last().expect("checked above").1)
-        .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-    content
-        .decryption_error_message
-        .as_deref()
-        .ok_or_else(|| {
-            SignalProtocolError::InvalidArgument(
-                "Content does not contain DecryptionErrorMessage".to_owned(),
-            )
-        })
-        .and_then(DecryptionErrorMessage::try_from)
 }
