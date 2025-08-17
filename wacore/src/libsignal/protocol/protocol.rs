@@ -399,14 +399,20 @@ impl SenderKeyMessage {
 
         let proto_bytes = proto_message.encode_to_vec();
 
+        // The signature must cover the version byte concatenated with the protobuf
+        // payload. Other clients (e.g. baileys, libsignal-go) compute the signature
+        // over [shifted_version || proto_bytes]. Signing only the proto bytes causes
+        // verification to fail on recipients.
+        let shifted_version = (message_version << 4) | 3u8;
+        let mut data_to_sign = Vec::with_capacity(1 + proto_bytes.len());
+        data_to_sign.push(shifted_version);
+        data_to_sign.extend_from_slice(&proto_bytes);
+
         let signature = signature_key
-            .calculate_signature(&proto_bytes, csprng)
+            .calculate_signature(&data_to_sign, csprng)
             .map_err(|_| SignalProtocolError::SignatureValidationFailed)?;
 
-        let shifted_version = (message_version << 4) | 3u8;
-
         let mut serialized = vec![shifted_version];
-
         serialized.extend_from_slice(&proto_bytes);
         serialized.extend_from_slice(&signature);
 

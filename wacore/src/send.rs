@@ -364,7 +364,7 @@ pub async fn prepare_group_stanza<
         resolved_devices_for_phash = Some(all_devices.clone());
     }
     let sender_address = own_sending_jid.to_protocol_address();
-    let plaintext = message.encode_to_vec();
+    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
