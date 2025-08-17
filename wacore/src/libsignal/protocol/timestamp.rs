@@ -18,14 +18,6 @@ impl Timestamp {
     pub const fn epoch_millis(&self) -> u64 {
         self.0
     }
-
-    pub fn add_millis(&self, milliseconds: u64) -> Self {
-        Self(self.0 + milliseconds)
-    }
-
-    pub fn sub_millis(&self, milliseconds: u64) -> Timestamp {
-        Self(self.0 - milliseconds)
-    }
 }
 
 impl From<Timestamp> for std::time::SystemTime {

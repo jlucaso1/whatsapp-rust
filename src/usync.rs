@@ -1,16 +1,10 @@
 use crate::client::Client;
 use log::debug;
-use std::sync::atomic::Ordering;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::NodeContent;
 
 impl Client {
     pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
-        if self.test_mode.load(Ordering::Relaxed) {
-            debug!("get_user_devices: Using test mode, returning mock devices for {jids:?}");
-            return Ok(jids.to_vec());
-        }
-
         debug!("get_user_devices: Using normal mode for {jids:?}");
 
         let sid = self.generate_request_id();

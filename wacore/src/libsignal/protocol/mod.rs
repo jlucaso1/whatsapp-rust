@@ -65,8 +65,7 @@ pub use state::{
     SessionState, SignedPreKeyId, SignedPreKeyRecord,
 };
 pub use storage::{
-    Direction, IdentityChange, IdentityKeyStore, InMemIdentityKeyStore, InMemPreKeyStore,
-    InMemSenderKeyStore, InMemSessionStore, InMemSignalProtocolStore, InMemSignedPreKeyStore,
-    PreKeyStore, ProtocolStore, SenderKeyStore, SessionStore, SignedPreKeyStore,
+    Direction, IdentityChange, IdentityKeyStore, PreKeyStore, ProtocolStore, SenderKeyStore,
+    SessionStore, SignedPreKeyStore,
 };
 pub use timestamp::Timestamp;

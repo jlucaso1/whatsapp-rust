@@ -7,13 +7,8 @@
 
 #![warn(missing_docs)]
 
-mod inmem;
 mod traits;
 
-pub use inmem::{
-    InMemIdentityKeyStore, InMemPreKeyStore, InMemSenderKeyStore, InMemSessionStore,
-    InMemSignalProtocolStore, InMemSignedPreKeyStore,
-};
 pub use traits::{
     Direction, IdentityChange, IdentityKeyStore, PreKeyStore, ProtocolStore, SenderKeyStore,
     SessionStore, SignedPreKeyStore,
