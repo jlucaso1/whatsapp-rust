@@ -44,7 +44,7 @@ serde-big-array = "0.5"
 sha1 = "0.10.6"
 sha2 = "0.10.6"
 subtle = "2.6.1"
-thiserror = "2.0.12"
+thiserror = { workspace = true }
 uuid = { version = "1.18.0", default-features = false, features = ["v4"] }
 wacore-binary = { workspace = true, features = ["serde"] }
 waproto = { workspace = true }

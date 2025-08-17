@@ -10,6 +10,7 @@ members = [".", "wacore", "waproto"]
 flate2 = { version = "1.1.2", default-features = false, features = ["zlib-rs"] }
 rand = "0.9"
 rand_core = "0.9"
+thiserror = "2.0.15"
 tokio = { version = "1.4.1" }
 wacore-binary = { path = "./wacore/binary" }
 waproto = { path = "./waproto" }
@@ -48,14 +49,14 @@ rand_core = { workspace = true }
 scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.12"
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.27.0", default-features = false, features = [
     "connect",
     "tokio-rustls",
     "rustls-tls-webpki-roots",
 ] }
-ureq = { version = "3.0.12", default-features = false, features = ["rustls"] }
+ureq = { version = "3.1.0", default-features = false, features = ["rustls"] }
 urlencoding = "2.1"
 wacore = { path = "./wacore" }
 wacore-binary = { workspace = true }
