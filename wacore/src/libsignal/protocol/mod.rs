@@ -49,7 +49,6 @@ pub use identity_key::{IdentityKey, IdentityKeyPair};
 pub use protocol::{
     CiphertextMessage, CiphertextMessageType, DecryptionErrorMessage, PlaintextContent,
     PreKeySignalMessage, SenderKeyDistributionMessage, SenderKeyMessage, SignalMessage,
-    extract_decryption_error_message_from_serialized_content,
 };
 pub use ratchet::{
     AliceSignalProtocolParameters, BobSignalProtocolParameters, ChainKey, RootKey, UsePQRatchet,
