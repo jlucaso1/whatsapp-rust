@@ -93,8 +93,6 @@ pub struct Client {
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 
-    pub(crate) processed_messages_cache: Arc<Mutex<HashSet<RecentMessageKey>>>,
-
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
     pub(crate) test_mode: Arc<AtomicBool>,
@@ -120,18 +118,6 @@ impl Client {
 
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
-
-        let processed_messages_cache = {
-            let mut cache = HashSet::new();
-            for processed_msg in &device_snapshot.core.processed_messages {
-                let key = RecentMessageKey {
-                    to: processed_msg.to.clone(),
-                    id: processed_msg.id.clone(),
-                };
-                cache.insert(key);
-            }
-            Arc::new(Mutex::new(cache))
-        };
 
         let (tx, rx) = mpsc::channel(32);
 
@@ -163,7 +149,6 @@ impl Client {
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
-            processed_messages_cache,
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
@@ -314,11 +299,6 @@ impl Client {
         }
     }
 
-    pub async fn has_message_been_processed(&self, key: &RecentMessageKey) -> bool {
-        let cache = self.processed_messages_cache.lock().await;
-        cache.contains(key)
-    }
-
     pub async fn take_recent_message(&self, to: Jid, id: String) -> Option<Arc<wa::Message>> {
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
@@ -329,19 +309,6 @@ impl Client {
         } else {
             None
         }
-    }
-
-    pub async fn mark_message_as_processed(&self, key: RecentMessageKey) {
-        let wacore_key = wacore::store::device::ProcessedMessageKey {
-            to: key.to.clone(),
-            id: key.id.clone(),
-        };
-
-        self.persistence_manager
-            .process_command(wacore::store::commands::DeviceCommand::AddProcessedMessage(
-                wacore_key,
-            ))
-            .await;
     }
 
     pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
@@ -516,14 +483,6 @@ impl Client {
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
-        // Clear processed message cache on new successful session to avoid stale suppression
-        {
-            let mut cache = self.processed_messages_cache.lock().await;
-            if !cache.is_empty() {
-                debug!(target: "Client", "Clearing {} processed message keys on connect", cache.len());
-                cache.clear();
-            }
-        }
 
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<Jid>() {
@@ -781,7 +740,7 @@ impl Client {
             return;
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid = match device_snapshot.id.clone() {
+        let own_jid = match device_snapshot.pn.clone() {
             Some(j) => j,
             None => return,
         };
@@ -1167,17 +1126,17 @@ impl Client {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         format!(
             "Device Debug Info:\n  - JID: {:?}\n  - LID: {:?}\n  - Push Name: '{}'\n  - Has Account: {}\n  - Ready for Presence: {}",
-            device_snapshot.id,
+            device_snapshot.pn,
             device_snapshot.lid,
             device_snapshot.push_name,
             device_snapshot.account.is_some(),
-            device_snapshot.id.is_some() && !device_snapshot.push_name.is_empty()
+            device_snapshot.pn.is_some() && !device_snapshot.push_name.is_empty()
         )
     }
 
     pub async fn get_jid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
-        snapshot.id.clone()
+        snapshot.pn.clone()
     }
 
     pub async fn enable_test_mode(
@@ -1228,7 +1187,7 @@ impl Client {
             return;
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        if let Some(own_jid) = &device_snapshot.id {
+        if let Some(own_jid) = &device_snapshot.pn {
             let node = NodeBuilder::new("receipt")
                 .attrs([
                     ("id", id),

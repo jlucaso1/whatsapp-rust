@@ -47,7 +47,7 @@ impl Client {
     pub async fn generate_message_id(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         self.get_request_utils()
-            .generate_message_id(device_snapshot.id.as_ref())
+            .generate_message_id(device_snapshot.pn.as_ref())
     }
 
     fn get_request_utils(&self) -> RequestUtils {

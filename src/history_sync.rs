@@ -1,8 +1,4 @@
 use crate::types::events::Event;
-use diesel::prelude::*;
-use diesel::sql_query;
-use diesel::sql_types::{Binary as SqlBinary, Text as SqlText};
-use prost::Message;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
@@ -57,42 +53,15 @@ impl Client {
                 let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> =
                     Arc::new(Mutex::new(Vec::new()));
 
-                let persistence_manager = self.persistence_manager.clone();
                 let core_bus = self.core.event_bus.clone();
-                let sqlite_store = persistence_manager.sqlite_store();
-                let sqlite_store_for_handler = sqlite_store.clone();
                 // Per-conversation writes; track progress
                 let processed_count = Arc::new(AtomicUsize::new(0));
                 let processed_count_for_final = processed_count.clone();
 
                 let conv_handler = move |conv: wa::Conversation| {
                     let bus = core_bus.clone();
-                    let store_opt = sqlite_store_for_handler.clone();
-                    let pm_clone = persistence_manager.clone();
                     let processed = processed_count.clone();
                     async move {
-                        let conv_id = conv.id.clone();
-                        if let Some(store) = &store_opt {
-                            // Heavy blocking DB work offloaded
-                            let conv_clone = conv.clone();
-                            let store_clone = store.clone();
-                            if let Err(e) = tokio::task::spawn_blocking(move || {
-                                if let Ok(mut c) = store_clone.get_connection() {
-                                    // normalized + messages
-                                    let _ = store_clone.save_conversation_normalized_in_conn(&mut c, &conv_clone);
-                                    // raw blob
-                                    let data = conv_clone.encode_to_vec();
-                                    let _ = sql_query("INSERT INTO conversations(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data;")
-                                        .bind::<SqlText,_>(conv_clone.id.as_str())
-                                        .bind::<SqlBinary,_>(&data)
-                                        .execute(&mut c);
-                                }
-                            }).await {
-                                log::warn!("History sync: spawn_blocking join error for conversation {conv_id}: {e:?}");
-                            }
-                        } else {
-                            pm_clone.save_conversation_proto(&conv).await;
-                        }
                         let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
                         if new % 25 == 0 {
                             log::info!("History sync progress: {new} conversations processed...");
@@ -160,7 +129,7 @@ impl Client {
         let mut latest_own_pushname = None;
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         // Compare against the non-AD (base) user so 5599xxxx:58 matches pushname id 5599xxxx
-        let own_base_user = device_snapshot.id.as_ref().map(|j| j.to_non_ad().user);
+        let own_base_user = device_snapshot.pn.as_ref().map(|j| j.to_non_ad().user);
 
         if let Some(own_user) = own_base_user {
             log::debug!(

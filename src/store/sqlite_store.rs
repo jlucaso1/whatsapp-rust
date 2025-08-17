@@ -6,7 +6,6 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
-use std::collections::VecDeque;
 use wacore::appstate::hash::HashState;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::signal;
@@ -15,19 +14,6 @@ use wacore::store::traits::AppStateMutationMAC;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
-
-#[derive(Insertable, AsChangeset)]
-#[diesel(table_name = chat_conversations)]
-struct ChatConversationChanges<'a> {
-    pub id: &'a str,
-    pub name: Option<&'a str>,
-    pub display_name: Option<&'a str>,
-    pub last_msg_timestamp: Option<i32>,
-    pub unread_count: Option<i32>,
-    pub archived: Option<i32>,
-    pub pinned: Option<i32>,
-    pub created_at: Option<i32>,
-}
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -135,23 +121,10 @@ impl SqliteStore {
             .as_ref()
             .map(|account| account.encode_to_vec());
 
-        let processed_messages_data = if !device_data.processed_messages.is_empty() {
-            Some(
-                bincode::serde::encode_to_vec(
-                    &device_data.processed_messages,
-                    bincode::config::standard(),
-                )
-                .map_err(|e| StoreError::Serialization(e.to_string()))?,
-            )
-        } else {
-            None
-        };
-
         diesel::insert_into(device::table)
             .values((
-                device::id.eq(1),
-                device::jid.eq(device_data.id.as_ref().map(|j| j.to_string())),
-                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string())),
+                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string()).unwrap_or_default()),
+                device::pn.eq(device_data.pn.as_ref().map(|j| j.to_string()).unwrap_or_default()),
                 device::registration_id.eq(device_data.registration_id as i32),
                 device::noise_key.eq(&noise_key_data),
                 device::identity_key.eq(&identity_key_data),
@@ -159,15 +132,14 @@ impl SqliteStore {
                 device::signed_pre_key_id.eq(device_data.signed_pre_key_id as i32),
                 device::signed_pre_key_signature.eq(&device_data.signed_pre_key_signature[..]),
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
-                device::account.eq(account_data.as_deref()),
+                device::account.eq(account_data.clone()),
                 device::push_name.eq(&device_data.push_name),
-                device::processed_messages.eq(processed_messages_data.as_deref()),
             ))
-            .on_conflict(device::id)
+            .on_conflict(device::lid)
             .do_update()
             .set((
-                device::jid.eq(device_data.id.as_ref().map(|j| j.to_string())),
-                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string())),
+                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string()).unwrap_or_default()),
+                device::pn.eq(device_data.pn.as_ref().map(|j| j.to_string()).unwrap_or_default()),
                 device::registration_id.eq(device_data.registration_id as i32),
                 device::noise_key.eq(&noise_key_data),
                 device::identity_key.eq(&identity_key_data),
@@ -175,9 +147,8 @@ impl SqliteStore {
                 device::signed_pre_key_id.eq(device_data.signed_pre_key_id as i32),
                 device::signed_pre_key_signature.eq(&device_data.signed_pre_key_signature[..]),
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
-                device::account.eq(account_data.as_deref()),
+                device::account.eq(account_data.clone()),
                 device::push_name.eq(&device_data.push_name),
-                device::processed_messages.eq(processed_messages_data.as_deref()),
             ))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -189,11 +160,9 @@ impl SqliteStore {
         let mut conn = self.get_connection()?;
 
         let result = device::table
-            .filter(device::id.eq(1))
             .first::<(
-                Option<i32>,
-                Option<String>,
-                Option<String>,
+                String,
+                String,
                 i32,
                 Vec<u8>,
                 Vec<u8>,
@@ -203,15 +172,13 @@ impl SqliteStore {
                 Vec<u8>,
                 Option<Vec<u8>>,
                 String,
-                Option<Vec<u8>>,
             )>(&mut conn)
             .optional()
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         if let Some((
-            _id,
-            jid_str,
             lid_str,
+            pn_str,
             registration_id,
             noise_key_data,
             identity_key_data,
@@ -221,20 +188,11 @@ impl SqliteStore {
             adv_secret_key_data,
             account_data,
             push_name,
-            processed_messages_data,
         )) = result
         {
-            let id = if let Some(jid_str) = jid_str {
-                jid_str.parse().ok()
-            } else {
-                None
-            };
+            let id = if !pn_str.is_empty() { pn_str.parse().ok() } else { None };
 
-            let lid = if let Some(lid_str) = lid_str {
-                lid_str.parse().ok()
-            } else {
-                None
-            };
+            let lid = if !lid_str.is_empty() { lid_str.parse().ok() } else { None };
 
             let noise_key = self.deserialize_keypair(&noise_key_data)?;
             let identity_key = self.deserialize_keypair(&identity_key_data)?;
@@ -267,20 +225,8 @@ impl SqliteStore {
                 None
             };
 
-            let processed_messages = if let Some(processed_messages_data) = processed_messages_data
-            {
-                let (messages, _) = bincode::serde::decode_from_slice(
-                    &processed_messages_data,
-                    bincode::config::standard(),
-                )
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-                messages
-            } else {
-                VecDeque::new()
-            };
-
             Ok(Some(CoreDevice {
-                id,
+                pn: id,
                 lid,
                 registration_id: registration_id as u32,
                 noise_key,
@@ -291,117 +237,10 @@ impl SqliteStore {
                 adv_secret_key,
                 account,
                 push_name,
-                processed_messages,
             }))
         } else {
             Ok(None)
         }
-    }
-
-    pub async fn save_conversation_raw(&self, id: &str, data: &[u8]) -> Result<()> {
-        let mut conn = self.get_connection()?;
-        diesel::insert_into(conversations::table)
-            .values((conversations::id.eq(id), conversations::data.eq(data)))
-            .on_conflict(conversations::id)
-            .do_update()
-            .set(conversations::data.eq(data))
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    fn upsert_conversation_normalized(
-        &self,
-        conn: &mut SqliteConnection,
-        conv: &wa::Conversation,
-    ) -> Result<()> {
-        // Basic metadata extraction
-        let last_ts_i32 = conv.last_msg_timestamp.map(|v| v as i32);
-        let unread = conv.unread_count.map(|v| v as i32);
-        let archived = conv.archived.unwrap_or(false) as i32;
-        let pinned = conv.pinned.map(|v| v as i32);
-        let created_at_i32 = conv.created_at.map(|v| v as i32);
-        let meta = ChatConversationChanges {
-            id: conv.id.as_str(),
-            name: conv.name.as_deref(),
-            display_name: conv.display_name.as_deref(),
-            last_msg_timestamp: last_ts_i32,
-            unread_count: unread,
-            archived: Some(archived),
-            pinned,
-            created_at: created_at_i32,
-        };
-        diesel::insert_into(chat_conversations::table)
-            .values(&meta)
-            .on_conflict(chat_conversations::id)
-            .do_update()
-            .set(&meta)
-            .execute(conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-
-        // Participants
-        if !conv.participant.is_empty() {
-            // For simplicity, delete existing participants then insert new
-            diesel::delete(
-                chat_participants::table
-                    .filter(chat_participants::conversation_id.eq(conv.id.as_str())),
-            )
-            .execute(conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            for part in &conv.participant {
-                let jid = part.user_jid.as_str();
-                let is_admin = part.rank.map(|r| if r > 0 { 1 } else { 0 });
-                diesel::insert_into(chat_participants::table)
-                    .values((
-                        chat_participants::conversation_id.eq(conv.id.as_str()),
-                        chat_participants::jid.eq(jid),
-                        chat_participants::is_admin.eq(is_admin),
-                    ))
-                    .execute(conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-        }
-
-        // Messages: we only persist message metadata and blob for HistorySyncMsg.message if present
-        if !conv.messages.is_empty() {
-            for msg in &conv.messages {
-                if let Some(wmi) = &msg.message {
-                    let key = &wmi.key; // required field
-                    let message_id = key.id.as_deref().unwrap_or("");
-                    if message_id.is_empty() {
-                        continue;
-                    }
-                    let server_ts_i32 = wmi.message_timestamp.map(|v| v as i32);
-                    let sender = key.remote_jid.as_deref();
-                    let blob = wmi.encode_to_vec();
-                    use diesel::sql_types::{
-                        Binary as SqlBinType, Integer as SqlIntType, Nullable, Text as SqlTextType,
-                    };
-                    diesel::sql_query("INSERT INTO chat_messages (conversation_id,message_id,server_timestamp,sender_jid,message_blob) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(conversation_id,message_id) DO UPDATE SET server_timestamp=excluded.server_timestamp,sender_jid=excluded.sender_jid,message_blob=excluded.message_blob;")
-                        .bind::<SqlTextType,_>(conv.id.as_str())
-                        .bind::<SqlTextType,_>(message_id)
-                        .bind::<Nullable<SqlIntType>,_>(server_ts_i32)
-                        .bind::<Nullable<SqlTextType>,_>(sender)
-                        .bind::<SqlBinType,_>(&blob)
-                        .execute(conn)
-                        .map_err(|e| StoreError::Database(e.to_string()))?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn save_conversation_normalized_in_conn(
-        &self,
-        conn: &mut SqliteConnection,
-        conv: &wa::Conversation,
-    ) -> Result<()> {
-        self.upsert_conversation_normalized(conn, conv)
-    }
-
-    pub async fn save_conversation_normalized(&self, conv: &wa::Conversation) -> Result<()> {
-        let mut conn = self.get_connection()?;
-        self.upsert_conversation_normalized(&mut conn, conv)
     }
 }
 

@@ -112,7 +112,7 @@ impl BotBuilder {
         client.core.event_bus.add_handler(handler);
 
         let device_snapshot = persistence_manager.get_device_snapshot().await;
-        if device_snapshot.id.is_none() {
+        if device_snapshot.pn.is_none() {
             info!("Client is not logged in. Starting QR code pairing process...");
 
             let client_clone = client.clone();
