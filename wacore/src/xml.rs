@@ -48,7 +48,7 @@ fn format_content_lines(content: &Option<NodeContent>, indent: bool) -> Vec<Stri
                     vec![s.replace('\n', "\\n")]
                 }
             } else {
-                vec![String::new()]
+                vec![format!("<!-- {} bytes -->", bytes.len())]
             }
         }
         None => vec![],
