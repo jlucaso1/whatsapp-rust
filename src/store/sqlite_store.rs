@@ -123,8 +123,16 @@ impl SqliteStore {
 
         diesel::insert_into(device::table)
             .values((
-                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string()).unwrap_or_default()),
-                device::pn.eq(device_data.pn.as_ref().map(|j| j.to_string()).unwrap_or_default()),
+                device::lid.eq(device_data
+                    .lid
+                    .as_ref()
+                    .map(|j| j.to_string())
+                    .unwrap_or_default()),
+                device::pn.eq(device_data
+                    .pn
+                    .as_ref()
+                    .map(|j| j.to_string())
+                    .unwrap_or_default()),
                 device::registration_id.eq(device_data.registration_id as i32),
                 device::noise_key.eq(&noise_key_data),
                 device::identity_key.eq(&identity_key_data),
@@ -138,8 +146,16 @@ impl SqliteStore {
             .on_conflict(device::lid)
             .do_update()
             .set((
-                device::lid.eq(device_data.lid.as_ref().map(|j| j.to_string()).unwrap_or_default()),
-                device::pn.eq(device_data.pn.as_ref().map(|j| j.to_string()).unwrap_or_default()),
+                device::lid.eq(device_data
+                    .lid
+                    .as_ref()
+                    .map(|j| j.to_string())
+                    .unwrap_or_default()),
+                device::pn.eq(device_data
+                    .pn
+                    .as_ref()
+                    .map(|j| j.to_string())
+                    .unwrap_or_default()),
                 device::registration_id.eq(device_data.registration_id as i32),
                 device::noise_key.eq(&noise_key_data),
                 device::identity_key.eq(&identity_key_data),
@@ -190,9 +206,17 @@ impl SqliteStore {
             push_name,
         )) = result
         {
-            let id = if !pn_str.is_empty() { pn_str.parse().ok() } else { None };
+            let id = if !pn_str.is_empty() {
+                pn_str.parse().ok()
+            } else {
+                None
+            };
 
-            let lid = if !lid_str.is_empty() { lid_str.parse().ok() } else { None };
+            let lid = if !lid_str.is_empty() {
+                lid_str.parse().ok()
+            } else {
+                None
+            };
 
             let noise_key = self.deserialize_keypair(&noise_key_data)?;
             let identity_key = self.deserialize_keypair(&identity_key_data)?;
