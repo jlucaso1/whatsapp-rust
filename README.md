@@ -64,7 +64,7 @@ The core of the end-to-end encryption implementation.
   - `✅` Encryption for 1-on-1 chats is implemented, correctly handling multi-device `DeviceSentMessage` payloads.
 - `⏳` **Group Messaging (`signal/groups/`)**:
   - `✅` Decryption of group messages (`skmsg`) is functional. The client can correctly receive and process messages sent to groups it is a part of.
-  - `⏳` Encryption of group messages is partially implemented but contains a bug causing sent messages to be malformed or undecryptable by recipients. The core cryptographic logic passes local tests, suggesting a subtle issue in message construction or key distribution when interacting with the live server.
+  - `⏳` Encryption of group messages is partially implemented but contains a bug causing sent messages to be malformed or undecryptable by recipients. The core cryptographic logic passes local tests, suggesting a subtle issue in message construction or key distribution when interacting with the live server. Appears for the others like: "Waiting for the message"
 - `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported and are in use.
 - `✅` **Store Traits & Implementations (`store/`, `signal/store.rs`)**: The necessary traits and backend implementations for the protocol are defined and functional.
 

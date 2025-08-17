@@ -177,7 +177,7 @@ pub async fn prepare_dm_stanza<
     message: wa::Message,
     request_id: String,
 ) -> Result<Node> {
-    let padded_message_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let recipient_plaintext = message.encode_to_vec();
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
@@ -187,7 +187,8 @@ pub async fn prepare_dm_stanza<
         })),
         ..Default::default()
     };
-    let padded_dsm_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
+
+    let own_devices_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
 
     let participants = vec![to_jid.clone(), own_jid.clone()];
     let all_devices = resolver.resolve_devices(&participants).await?;
@@ -207,20 +208,15 @@ pub async fn prepare_dm_stanza<
     let mut includes_prekey_message = false;
 
     if !recipient_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
-            stores,
-            resolver,
-            &recipient_devices,
-            &padded_message_plaintext,
-        )
-        .await?;
+        let (nodes, inc) =
+            encrypt_for_devices(stores, resolver, &recipient_devices, &recipient_plaintext).await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
 
     if !own_other_devices.is_empty() {
         let (nodes, inc) =
-            encrypt_for_devices(stores, resolver, &own_other_devices, &padded_dsm_plaintext)
+            encrypt_for_devices(stores, resolver, &own_other_devices, &own_devices_plaintext)
                 .await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
@@ -353,7 +349,8 @@ pub async fn prepare_group_stanza<
             }),
             ..Default::default()
         };
-        let skdm_plaintext_to_encrypt = skdm_wrapper_msg.encode_to_vec();
+        let skdm_plaintext_to_encrypt =
+            MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
         let (participant_nodes, inc) =
             encrypt_for_devices(stores, resolver, &all_devices, &skdm_plaintext_to_encrypt).await?;
