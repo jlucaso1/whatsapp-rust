@@ -5,6 +5,7 @@ pub mod download;
 pub mod handshake;
 pub mod history_sync;
 pub mod libsignal;
+pub mod messages;
 pub mod pair;
 pub mod prekeys;
 pub mod proto_helpers;

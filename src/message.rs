@@ -18,6 +18,7 @@ use wacore::libsignal::protocol::{
 use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
 };
+use wacore::messages::MessageUtils;
 use wacore::signal::SkdmFields;
 use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::types::jid::JidExt;
@@ -25,26 +26,6 @@ use wacore_binary::jid::Jid;
 use wacore_binary::jid::JidExt as _;
 use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa};
-
-fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
-    if version == 3 {
-        return Ok(plaintext);
-    }
-    if plaintext.is_empty() {
-        return Err(anyhow::anyhow!("plaintext is empty, cannot unpad"));
-    }
-    let pad_len = plaintext[plaintext.len() - 1] as usize;
-    if pad_len == 0 || pad_len > plaintext.len() {
-        return Err(anyhow::anyhow!("invalid padding length: {}", pad_len));
-    }
-    let (data, padding) = plaintext.split_at(plaintext.len() - pad_len);
-    for &byte in padding {
-        if byte != pad_len as u8 {
-            return Err(anyhow::anyhow!("invalid padding bytes"));
-        }
-    }
-    Ok(data)
-}
 
 impl Client {
     pub async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
@@ -281,7 +262,7 @@ impl Client {
         padding_version: u8,
         info: &MessageInfo,
     ) -> Result<(), anyhow::Error> {
-        let plaintext_slice = unpad_message_ref(padded_plaintext, padding_version)?;
+        let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
             "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
             info.source.sender,

@@ -95,10 +95,6 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    pub(crate) test_mode: Arc<AtomicBool>,
-    pub(crate) test_network_sender:
-        Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>>>>,
-
     // App state sync
     app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
     app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
@@ -152,8 +148,6 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            test_mode: Arc::new(AtomicBool::new(false)),
-            test_network_sender: Arc::new(Mutex::new(None)),
             app_state_processor: persistence_manager
                 .sqlite_store()
                 .map(AppStateProcessor::new),
@@ -352,9 +346,9 @@ impl Client {
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
             let name = collection_node.attrs().string("name");
-            debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
+            info!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            debug!(target: "Client/Recv","{}", DisplayableNode(node));
+            info!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
         // Early auto-ACK for message-like stanzas to prevent server resends (simplified whatsmeow maybeDeferredAck)
@@ -1040,18 +1034,13 @@ impl Client {
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
-        if self.test_mode.load(Ordering::Relaxed) {
-            debug!(target: "Client/Send", "Using test mode for node: {}", DisplayableNode(&node));
-            return self.send_node_test_mode(node).await;
-        }
-
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
             Some(socket) => socket,
             None => return Err(ClientError::NotConnected),
         };
 
-        debug!(target: "Client/Send", "--> {}", DisplayableNode(&node));
+        info!(target: "Client/Send", "--> {}", DisplayableNode(&node));
 
         let payload = wacore_binary::marshal::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
@@ -1137,45 +1126,6 @@ impl Client {
     pub async fn get_jid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.pn.clone()
-    }
-
-    pub async fn enable_test_mode(
-        &self,
-        network_sender: tokio::sync::mpsc::UnboundedSender<crate::test_network::TestMessage>,
-    ) {
-        info!("Enabling test mode for client");
-        self.test_mode.store(true, Ordering::Relaxed);
-        *self.test_network_sender.lock().await = Some(network_sender);
-    }
-
-    async fn send_node_test_mode(&self, node: Node) -> Result<(), ClientError> {
-        use crate::test_network::TestMessage;
-
-        debug!(target: "Client/TestSend", "Sending node in test mode: {}", DisplayableNode(&node));
-
-        let sender_guard = self.test_network_sender.lock().await;
-        let sender = match sender_guard.as_ref() {
-            Some(s) => s,
-            None => return Err(ClientError::NotConnected),
-        };
-
-        let to_jid = node.attrs.get("to").and_then(|to_str| to_str.parse().ok());
-
-        let from_jid = match self.get_jid().await {
-            Some(jid) => jid,
-            None => return Err(ClientError::NotLoggedIn),
-        };
-
-        let test_message = TestMessage {
-            node,
-            from: from_jid,
-            to: to_jid,
-        };
-
-        sender
-            .send(test_message)
-            .map_err(|_| ClientError::NotConnected)?;
-        Ok(())
     }
 
     pub async fn send_protocol_receipt(

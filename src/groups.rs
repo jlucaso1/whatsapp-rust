@@ -9,15 +9,6 @@ impl Client {
             return Ok(cached.value().clone());
         }
 
-        if self.test_mode.load(std::sync::atomic::Ordering::Relaxed) {
-            let info = GroupInfo {
-                participants: vec!["559984726662@s.whatsapp.net".parse()?],
-                addressing_mode: crate::types::message::AddressingMode::Pn,
-            };
-            self.group_cache.insert(jid.clone(), info.clone());
-            return Ok(info);
-        }
-
         use wacore_binary::node::NodeContent;
         let query_node = NodeBuilder::new("query")
             .attr("request", "interactive")

@@ -1,10 +1,10 @@
-use crate::client::MessageUtils;
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
     SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SignalProtocolError,
     UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
+use crate::messages::MessageUtils;
 use crate::signal::store::GroupSenderKeyStore;
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
