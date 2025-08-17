@@ -10,3 +10,4 @@ DROP TABLE IF EXISTS conversations;
 DROP TABLE IF EXISTS chat_messages;
 DROP TABLE IF EXISTS chat_participants;
 DROP TABLE IF EXISTS chat_conversations;
+DROP TABLE IF EXISTS app_state_mutation_macs;

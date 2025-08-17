@@ -1,5 +1,3 @@
-use wacore_binary::jid::Jid;
-// use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -7,7 +5,7 @@ use rand::TryRngCore;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
-use std::collections::VecDeque;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 pub mod key_pair_serde {
@@ -44,14 +42,12 @@ pub mod key_pair_serde {
     }
 }
 
-/// Represents a processed message key for deduplication
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProcessedMessageKey {
     pub to: Jid,
     pub id: String,
 }
 
-// A static, lazily-initialized base payload
 static BASE_CLIENT_PAYLOAD: Lazy<wa::ClientPayload> = Lazy::new(|| wa::ClientPayload {
     user_agent: Some(wa::client_payload::UserAgent {
         platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
@@ -94,10 +90,9 @@ static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
     ..Default::default()
 });
 
-/// Core device data structure containing only platform-independent information
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Device {
-    pub id: Option<Jid>,
+    pub pn: Option<Jid>,
     pub lid: Option<Jid>,
     pub registration_id: u32,
     #[serde(with = "key_pair_serde")]
@@ -112,8 +107,6 @@ pub struct Device {
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
-    #[serde(default)]
-    pub processed_messages: VecDeque<ProcessedMessageKey>,
 }
 
 impl Default for Device {
@@ -123,7 +116,6 @@ impl Default for Device {
 }
 
 impl Device {
-    /// Creates a new, unregistered device with fresh keys
     pub fn new() -> Self {
         use rand::RngCore;
 
@@ -146,7 +138,7 @@ impl Device {
         rand::rng().fill_bytes(&mut adv_secret_key);
 
         Self {
-            id: None,
+            pn: None,
             lid: None,
             registration_id: 3718719151,
             noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
@@ -157,23 +149,20 @@ impl Device {
             adv_secret_key,
             account: None,
             push_name: String::new(),
-            processed_messages: VecDeque::new(),
         }
     }
 
     pub fn is_ready_for_presence(&self) -> bool {
-        self.id.is_some() && !self.push_name.is_empty()
+        self.pn.is_some() && !self.push_name.is_empty()
     }
 
-    /// Gets client payload for handshake
     pub fn get_client_payload(&self) -> wa::ClientPayload {
-        match &self.id {
+        match &self.pn {
             Some(jid) => self.get_login_payload(jid),
             None => self.get_registration_payload(),
         }
     }
 
-    /// Helper function to get the login payload for a connected client
     fn get_login_payload(&self, jid: &Jid) -> wa::ClientPayload {
         let mut payload = BASE_CLIENT_PAYLOAD.clone();
         payload.username = jid.user.parse::<u64>().ok();
@@ -182,13 +171,11 @@ impl Device {
         payload
     }
 
-    /// Helper function to get the registration payload for a new client
     fn get_registration_payload(&self) -> wa::ClientPayload {
         let mut payload = BASE_CLIENT_PAYLOAD.clone();
 
         let device_props_bytes = DEVICE_PROPS.encode_to_vec();
 
-        // Dynamically calculate the version hash
         let version = payload
             .user_agent
             .as_ref()

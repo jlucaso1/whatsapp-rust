@@ -50,7 +50,7 @@ impl Client {
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
-                .id
+                .pn
                 .clone()
                 .ok_or_else(|| anyhow!("Not logged in"))?;
             let own_lid = device_snapshot
@@ -146,7 +146,7 @@ impl Client {
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
-                .id
+                .pn
                 .clone()
                 .ok_or_else(|| anyhow!("Not logged in"))?;
             let account_info = device_snapshot.account.clone();

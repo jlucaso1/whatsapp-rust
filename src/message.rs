@@ -1,5 +1,4 @@
 use crate::client::Client;
-use crate::client::RecentMessageKey;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
@@ -57,16 +56,6 @@ impl Client {
             }
         };
 
-        let message_key = RecentMessageKey {
-            to: info.source.chat.clone(),
-            id: info.id.clone(),
-        };
-
-        if self.has_message_been_processed(&message_key).await {
-            log::debug!(target: "Client/Recv", "Ignoring message: already processed (to: {}, id: {})", message_key.to, message_key.id);
-            return;
-        }
-
         let mut all_enc_nodes = Vec::new();
 
         let direct_enc_nodes = node.get_children_by_tag("enc");
@@ -111,7 +100,7 @@ impl Client {
         );
         if let Err(e) = self
             .clone()
-            .process_session_enc_batch(&session_enc_nodes, &info, &message_key)
+            .process_session_enc_batch(&session_enc_nodes, &info)
             .await
         {
             log::warn!("Batch session decrypt encountered error (continuing): {e:?}");
@@ -123,7 +112,7 @@ impl Client {
         );
         if let Err(e) = self
             .clone()
-            .process_group_enc_batch(&group_content_enc_nodes, &info, &message_key)
+            .process_group_enc_batch(&group_content_enc_nodes, &info)
             .await
         {
             log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
@@ -134,7 +123,6 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
-        message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
@@ -197,7 +185,6 @@ impl Client {
                             &padded_plaintext,
                             padding_version,
                             info,
-                            message_key,
                         )
                         .await
                     {
@@ -206,7 +193,6 @@ impl Client {
                 }
                 Err(e) => {
                     log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
-                    self.mark_message_as_processed(message_key.clone()).await;
                 }
             }
         }
@@ -217,7 +203,6 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
-        message_key: &RecentMessageKey,
     ) -> Result<(), DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(());
@@ -258,7 +243,6 @@ impl Client {
                             &padded_plaintext,
                             padding_version,
                             info,
-                            message_key,
                         )
                         .await
                     {
@@ -277,7 +261,6 @@ impl Client {
                             log::error!("Failed to send retry receipt (batch): {:?}", e);
                         }
                     });
-                    self.mark_message_as_processed(message_key.clone()).await;
                 }
                 Err(e) => {
                     log::error!(
@@ -285,7 +268,6 @@ impl Client {
                         group_sender_address,
                         e
                     );
-                    self.mark_message_as_processed(message_key.clone()).await;
                 }
             }
         }
@@ -298,7 +280,6 @@ impl Client {
         padded_plaintext: &[u8],
         padding_version: u8,
         info: &MessageInfo,
-        message_key: &RecentMessageKey,
     ) -> Result<(), anyhow::Error> {
         let plaintext_slice = unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
@@ -361,14 +342,13 @@ impl Client {
                 Err(e) => log::warn!("Failed to unmarshal decrypted pkmsg/msg plaintext: {e}"),
             }
         }
-        self.mark_message_as_processed(message_key.clone()).await;
         Ok(())
     }
 
     pub async fn parse_message_info(&self, node: &Node) -> Result<MessageInfo, anyhow::Error> {
         let mut attrs = node.attrs();
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid = device_snapshot.id.clone().unwrap_or_default();
+        let own_jid = device_snapshot.pn.clone().unwrap_or_default();
         let from = attrs.jid("from");
 
         let mut source = if from.is_group() {
