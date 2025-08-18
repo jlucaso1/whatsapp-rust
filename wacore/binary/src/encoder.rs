@@ -73,9 +73,13 @@ impl Encoder {
         if value.len() > token::PACKED_MAX as usize {
             return false;
         }
-        value
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
+        for c in value.chars() {
+            if c.is_ascii_digit() || c == '-' || c == '.' {
+                continue;
+            }
+            return false;
+        }
+        true
     }
 
     fn pack_nibble(value: char) -> u8 {
@@ -92,9 +96,13 @@ impl Encoder {
         if value.len() > token::PACKED_MAX as usize {
             return false;
         }
-        value
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && (c.is_ascii_uppercase() || c.is_ascii_digit()))
+        for c in value.chars() {
+            if c.is_ascii_digit() || ('A'..='F').contains(&c) {
+                continue;
+            }
+            return false;
+        }
+        true
     }
 
     fn pack_hex(value: char) -> u8 {
@@ -117,8 +125,10 @@ impl Encoder {
 
         self.write_u8(data_type);
 
-        let mut rounded_len = ((value.len() as f64) / 2.0).ceil() as u8;
-        if !value.len().is_multiple_of(2) {
+        // number of bytes required to pack the chars (pairs), round up
+        let mut rounded_len = value.len().div_ceil(2) as u8;
+        // set MSB if odd number of chars
+        if (value.len() & 1) != 0 {
             rounded_len |= 0x80;
         }
         self.write_u8(rounded_len);

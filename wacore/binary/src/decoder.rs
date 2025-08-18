@@ -365,7 +365,7 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
 
         let attr_count = (list_size - 1) / 2;
-        let has_content = list_size.is_multiple_of(2);
+        let has_content = list_size % 2 == 0;
 
         let attrs = self.read_attributes(attr_count)?;
         let content = if has_content {
