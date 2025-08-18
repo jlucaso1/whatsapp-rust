@@ -174,7 +174,7 @@ pub async fn prepare_dm_stanza<
     own_jid: &Jid,
     account: Option<&wa::AdvSignedDeviceIdentity>,
     to_jid: Jid,
-    message: wa::Message,
+    message: &wa::Message,
     request_id: String,
 ) -> Result<Node> {
     let recipient_plaintext = message.encode_to_vec();
@@ -182,7 +182,7 @@ pub async fn prepare_dm_stanza<
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
-            message: Some(Box::new(message)),
+            message: Some(Box::new(message.clone())),
             phash: Some("".to_string()),
         })),
         ..Default::default()
@@ -253,7 +253,7 @@ pub async fn prepare_peer_stanza<S, I>(
     session_store: &mut S,
     identity_store: &mut I,
     to_jid: Jid,
-    message: wa::Message,
+    message: &wa::Message,
     request_id: String,
 ) -> Result<Node>
 where
@@ -311,7 +311,7 @@ pub async fn prepare_group_stanza<
     own_lid: &Jid,
     account: Option<&wa::AdvSignedDeviceIdentity>,
     to_jid: Jid,
-    message: wa::Message,
+    message: &wa::Message,
     request_id: String,
     force_skdm_distribution: bool,
 ) -> Result<Node> {
