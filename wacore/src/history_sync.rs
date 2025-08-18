@@ -2,7 +2,7 @@ use core::future::Future;
 use flate2::read::ZlibDecoder;
 use prost::Message;
 use prost::encoding::{decode_key, decode_varint};
-use std::io::Read;
+use std::io::{Cursor, Read};
 use thiserror::Error;
 use waproto::whatsapp as wa;
 
@@ -28,21 +28,23 @@ where
     let mut uncompressed = Vec::new();
     decoder.read_to_end(&mut uncompressed)?;
 
-    let mut buf: &[u8] = uncompressed.as_slice();
-    let total_len = buf.len();
+    let mut cursor = Cursor::new(uncompressed.as_slice());
+    let total_len = uncompressed.len();
 
-    while !buf.is_empty() {
+    while (cursor.position() as usize) < total_len {
         let (field_number, wire_type) =
-            decode_key(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
+            decode_key(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
 
         match field_number {
             1 => {
-                let _ = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
+                let _ =
+                    decode_varint(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
             }
             2 => {
-                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
+                let len = decode_varint(&mut cursor)
+                    .map_err(HistorySyncError::ProtobufDecodeError)?
                     as usize;
-                let pos = total_len - buf.len();
+                let pos = cursor.position() as usize;
 
                 if pos + len > total_len {
                     return Err(HistorySyncError::ProtobufDecodeError(
@@ -56,13 +58,13 @@ where
                     Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                 }
 
-                // advance the buf by len bytes
-                buf = &buf[len..];
+                cursor.set_position((pos + len) as u64);
             }
             7 => {
-                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
+                let len = decode_varint(&mut cursor)
+                    .map_err(HistorySyncError::ProtobufDecodeError)?
                     as usize;
-                let pos = total_len - buf.len();
+                let pos = cursor.position() as usize;
                 if pos + len > total_len {
                     return Err(HistorySyncError::ProtobufDecodeError(
                         prost::DecodeError::new("pushname length out of bounds"),
@@ -73,40 +75,32 @@ where
                     Ok(pn) => pushname_handler(pn).await,
                     Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                 }
-                buf = &buf[len..];
+                cursor.set_position((pos + len) as u64);
             }
             _ => match wire_type {
                 prost::encoding::WireType::Varint => {
-                    let _ =
-                        decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
+                    let _ = decode_varint(&mut cursor)
+                        .map_err(HistorySyncError::ProtobufDecodeError)?;
                 }
                 prost::encoding::WireType::LengthDelimited => {
-                    let l = decode_varint(&mut buf)
+                    let l = decode_varint(&mut cursor)
                         .map_err(HistorySyncError::ProtobufDecodeError)?
                         as usize;
-                    let pos = total_len - buf.len();
+                    let pos = cursor.position() as usize;
                     if pos + l > total_len {
                         return Err(HistorySyncError::ProtobufDecodeError(
                             prost::DecodeError::new("length-delimited skip out of bounds"),
                         ));
                     }
-                    buf = &buf[l..];
+                    cursor.set_position((pos + l) as u64);
                 }
                 prost::encoding::WireType::ThirtyTwoBit => {
-                    if buf.len() < 4 {
-                        return Err(HistorySyncError::ProtobufDecodeError(
-                            prost::DecodeError::new("insufficient bytes for 32-bit field"),
-                        ));
-                    }
-                    buf = &buf[4..];
+                    let pos = cursor.position() as usize;
+                    cursor.set_position((pos + 4) as u64);
                 }
                 prost::encoding::WireType::SixtyFourBit => {
-                    if buf.len() < 8 {
-                        return Err(HistorySyncError::ProtobufDecodeError(
-                            prost::DecodeError::new("insufficient bytes for 64-bit field"),
-                        ));
-                    }
-                    buf = &buf[8..];
+                    let pos = cursor.position() as usize;
+                    cursor.set_position((pos + 8) as u64);
                 }
                 _ => {
                     return Err(HistorySyncError::ProtobufDecodeError(
