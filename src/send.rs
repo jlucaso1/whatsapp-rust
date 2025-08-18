@@ -14,14 +14,14 @@ impl Client {
             ..Default::default()
         };
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, content, request_id, false, false)
+        self.send_message_impl(to, Arc::new(content), request_id, false, false)
             .await
     }
 
     pub async fn send_message_impl(
         &self,
         to: Jid,
-        message: wa::Message,
+        message: Arc<wa::Message>,
         request_id: String,
         peer: bool,
         force_key_distribution: bool,
@@ -41,7 +41,7 @@ impl Client {
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
                 to,
-                message,
+                message.as_ref(),
                 request_id,
             )
             .await?
@@ -59,7 +59,7 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
             let account_info = device_snapshot.account.clone();
 
-            self.add_recent_message(to.clone(), request_id.clone(), Arc::new(message.clone()))
+            self.add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
                 .await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -99,7 +99,7 @@ impl Client {
                 &own_lid,
                 account_info.as_ref(),
                 to.clone(),
-                message.clone(),
+                message.as_ref(),
                 request_id.clone(),
                 force_skdm,
             )
@@ -130,7 +130,7 @@ impl Client {
                             &own_lid,
                             account_info.as_ref(),
                             to,
-                            message,
+                            message.as_ref(),
                             request_id,
                             true, // Force distribution on retry
                         )
@@ -141,7 +141,7 @@ impl Client {
                 }
             }
         } else {
-            self.add_recent_message(to.clone(), request_id.clone(), Arc::new(message.clone()))
+            self.add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
                 .await;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -168,7 +168,7 @@ impl Client {
                 &own_jid,
                 account_info.as_ref(),
                 to,
-                message,
+                message.as_ref(),
                 request_id,
             )
             .await?

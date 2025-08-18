@@ -769,7 +769,13 @@ impl Client {
             ..Default::default()
         };
         if let Err(e) = self
-            .send_message_impl(own_jid, msg, self.generate_message_id().await, true, false)
+            .send_message_impl(
+                own_jid,
+                Arc::new(msg),
+                self.generate_message_id().await,
+                true,
+                false,
+            )
             .await
         {
             warn!("Failed to send app state key request: {e}");

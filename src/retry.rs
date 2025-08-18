@@ -66,7 +66,6 @@ impl Client {
                 return Ok(());
             }
         };
-        let original_msg = (*original_msg_arc).clone();
 
         let participant_jid = receipt.source.sender.clone();
 
@@ -134,7 +133,7 @@ impl Client {
 
             self.send_message_impl(
                 receipt.source.chat.clone(),
-                original_msg,
+                Arc::clone(&original_msg_arc),
                 message_id,
                 false,
                 true,
@@ -143,7 +142,7 @@ impl Client {
         } else {
             self.send_message_impl(
                 receipt.source.chat.clone(),
-                original_msg,
+                Arc::clone(&original_msg_arc),
                 message_id,
                 false,
                 true,
