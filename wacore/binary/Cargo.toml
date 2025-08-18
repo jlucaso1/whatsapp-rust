@@ -14,7 +14,6 @@ serde = ["dep:serde"]
 flate2 = { workspace = true }
 phf = { version = "0.12.1", features = ["macros"] }
 serde = { version = "1.0", features = ["derive"], optional = true }
-arrayvec = { version = "0.7", default-features = false }
 
 [build-dependencies]
 phf_codegen = "0.12.1"
