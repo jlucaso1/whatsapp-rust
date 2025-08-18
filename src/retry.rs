@@ -87,9 +87,16 @@ impl Client {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
 
+            // The store saves group sender keys under the composite key "{group}:{sender}".
+            let unique_key_to_delete = format!(
+                "{}:{}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            );
+
             if let Err(e) = device_guard
                 .backend
-                .delete_sender_key(sender_key_name.group_id())
+                .delete_sender_key(&unique_key_to_delete)
                 .await
             {
                 log::warn!(
