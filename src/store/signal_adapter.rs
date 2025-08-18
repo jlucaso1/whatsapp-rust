@@ -8,7 +8,6 @@ use wacore::libsignal::protocol::{
     SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
 use wacore_binary::jid::Jid;
-use waproto::whatsapp as wa;
 
 use wacore::signal::state::record as wacore_record;
 use wacore::signal::store::{
@@ -156,7 +155,7 @@ impl PreKeyStore for PreKeyAdapter {
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
             .ok_or(SignalProtocolError::InvalidPreKeyId)
-            .and_then(prekey_structure_to_record)
+            .and_then(wacore_record::prekey_structure_to_record)
     }
     async fn save_pre_key(
         &mut self,
@@ -164,7 +163,7 @@ impl PreKeyStore for PreKeyAdapter {
         record: &PreKeyRecord,
     ) -> Result<(), SignalProtocolError> {
         let device = self.0.device.read().await;
-        let structure = prekey_record_to_structure(record)?;
+        let structure = wacore_record::prekey_record_to_structure(record)?;
         WacorePreKeyStore::store_prekey(&*device, prekey_id.into(), structure, false)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
@@ -188,7 +187,7 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
             .ok_or(SignalProtocolError::InvalidSignedPreKeyId)
-            .and_then(signed_prekey_structure_to_record)
+            .and_then(wacore_record::signed_prekey_structure_to_record)
     }
     async fn save_signed_pre_key(
         &mut self,
@@ -242,22 +241,4 @@ impl GroupSenderKeyStore for SenderKeyAdapter {
         let device = self.0.device.read().await;
         device.load_sender_key(group_id, sender).await
     }
-}
-
-fn prekey_structure_to_record(
-    structure: wa::PreKeyRecordStructure,
-) -> Result<PreKeyRecord, SignalProtocolError> {
-    wacore_record::prekey_structure_to_record(structure)
-}
-
-fn prekey_record_to_structure(
-    record: &PreKeyRecord,
-) -> Result<wa::PreKeyRecordStructure, SignalProtocolError> {
-    wacore_record::prekey_record_to_structure(record)
-}
-
-fn signed_prekey_structure_to_record(
-    structure: wa::SignedPreKeyRecordStructure,
-) -> Result<SignedPreKeyRecord, SignalProtocolError> {
-    wacore_record::signed_prekey_structure_to_record(structure)
 }

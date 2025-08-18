@@ -13,24 +13,6 @@ pub enum HistorySyncError {
     #[error("Failed to decode HistorySync protobuf: {0}")]
     ProtobufDecodeError(#[from] prost::DecodeError),
 }
-
-/// Original convenience API: decode the whole HistorySync message into memory.
-/// Keep for backwards compatibility but prefer `process_history_sync_stream`.
-pub fn process_history_sync_blob(
-    compressed_data: &[u8],
-) -> Result<wa::HistorySync, HistorySyncError> {
-    let mut decoder = ZlibDecoder::new(compressed_data);
-    let mut uncompressed = Vec::new();
-    decoder.read_to_end(&mut uncompressed)?;
-
-    let history_sync = wa::HistorySync::decode(uncompressed.as_slice())?;
-
-    Ok(history_sync)
-}
-
-/// Stream-parse a HistorySync blob and invoke `conversation_handler` for each
-/// `wa::Conversation` found. This avoids allocating the full `wa::HistorySync`
-/// with a large `Vec<Conversation>`.
 pub async fn process_history_sync_stream<FConv, FConvFut, FPn, FPnFut>(
     compressed_data: &[u8],
     mut conversation_handler: FConv,
@@ -50,42 +32,34 @@ where
     let total_len = uncompressed.len();
 
     while (cursor.position() as usize) < total_len {
-        // Read key (field number + wire type)
         let (field_number, wire_type) =
             decode_key(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
 
         match field_number {
-            // field 1 = sync_type (varint)
             1 => {
-                // consume varint
                 let _ =
                     decode_varint(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
             }
-            // field 2 = conversations (length-delimited, repeated)
             2 => {
                 let len = decode_varint(&mut cursor)
                     .map_err(HistorySyncError::ProtobufDecodeError)?
                     as usize;
                 let pos = cursor.position() as usize;
 
-                // bounds check
                 if pos + len > total_len {
                     return Err(HistorySyncError::ProtobufDecodeError(
                         prost::DecodeError::new("message length out of bounds"),
                     ));
                 }
 
-                // Decode just this single Conversation from the slice
                 let conv_slice = &uncompressed[pos..pos + len];
                 match wa::Conversation::decode(conv_slice) {
                     Ok(conv) => conversation_handler(conv).await,
                     Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                 }
 
-                // advance cursor
                 cursor.set_position((pos + len) as u64);
             }
-            // field 7 = pushnames (length-delimited, repeated)
             7 => {
                 let len = decode_varint(&mut cursor)
                     .map_err(HistorySyncError::ProtobufDecodeError)?
@@ -103,92 +77,39 @@ where
                 }
                 cursor.set_position((pos + len) as u64);
             }
-            // unknown/other fields: skip based on wire type
-            _ => {
-                match wire_type {
-                    prost::encoding::WireType::Varint => {
-                        let _ = decode_varint(&mut cursor)
-                            .map_err(HistorySyncError::ProtobufDecodeError)?;
-                    }
-                    prost::encoding::WireType::LengthDelimited => {
-                        let l = decode_varint(&mut cursor)
-                            .map_err(HistorySyncError::ProtobufDecodeError)?
-                            as usize;
-                        let pos = cursor.position() as usize;
-                        if pos + l > total_len {
-                            return Err(HistorySyncError::ProtobufDecodeError(
-                                prost::DecodeError::new("length-delimited skip out of bounds"),
-                            ));
-                        }
-                        cursor.set_position((pos + l) as u64);
-                    }
-                    prost::encoding::WireType::ThirtyTwoBit => {
-                        // 4 bytes
-                        let pos = cursor.position() as usize;
-                        cursor.set_position((pos + 4) as u64);
-                    }
-                    prost::encoding::WireType::SixtyFourBit => {
-                        // 8 bytes
-                        let pos = cursor.position() as usize;
-                        cursor.set_position((pos + 8) as u64);
-                    }
-                    _ => {
+            _ => match wire_type {
+                prost::encoding::WireType::Varint => {
+                    let _ = decode_varint(&mut cursor)
+                        .map_err(HistorySyncError::ProtobufDecodeError)?;
+                }
+                prost::encoding::WireType::LengthDelimited => {
+                    let l = decode_varint(&mut cursor)
+                        .map_err(HistorySyncError::ProtobufDecodeError)?
+                        as usize;
+                    let pos = cursor.position() as usize;
+                    if pos + l > total_len {
                         return Err(HistorySyncError::ProtobufDecodeError(
-                            prost::DecodeError::new("unsupported wire type"),
+                            prost::DecodeError::new("length-delimited skip out of bounds"),
                         ));
                     }
+                    cursor.set_position((pos + l) as u64);
                 }
-            }
+                prost::encoding::WireType::ThirtyTwoBit => {
+                    let pos = cursor.position() as usize;
+                    cursor.set_position((pos + 4) as u64);
+                }
+                prost::encoding::WireType::SixtyFourBit => {
+                    let pos = cursor.position() as usize;
+                    cursor.set_position((pos + 8) as u64);
+                }
+                _ => {
+                    return Err(HistorySyncError::ProtobufDecodeError(
+                        prost::DecodeError::new("unsupported wire type"),
+                    ));
+                }
+            },
         }
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flate2::Compression;
-    use flate2::write::ZlibEncoder;
-    use prost::Message;
-    use std::io::Write;
-
-    #[test]
-    fn test_sync_blob_parser() {
-        let original_sync = wa::HistorySync {
-            sync_type: wa::history_sync::HistorySyncType::Full as i32,
-            conversations: vec![
-                wa::Conversation {
-                    id: "123@g.us".to_string(),
-                    name: Some("Test Group".to_string()),
-                    ..Default::default()
-                },
-                wa::Conversation {
-                    id: "456@s.whatsapp.net".to_string(),
-                    ..Default::default()
-                },
-            ],
-            pushnames: vec![wa::Pushname {
-                id: Some("111".to_string()),
-                pushname: Some("Alice".to_string()),
-            }],
-            ..Default::default()
-        };
-
-        let encoded = original_sync.encode_to_vec();
-
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&encoded).unwrap();
-        let compressed = encoder.finish().unwrap();
-
-        let history_sync = process_history_sync_blob(&compressed).unwrap();
-        let conversations = history_sync.conversations;
-        let pushnames = history_sync.pushnames;
-        assert_eq!(conversations.len(), 2);
-        assert_eq!(conversations[0].id, "123@g.us");
-        assert_eq!(conversations[0].name.as_deref(), Some("Test Group"));
-        assert_eq!(pushnames.len(), 1);
-        assert_eq!(pushnames[0].id.as_deref(), Some("111"));
-        assert_eq!(pushnames[0].pushname.as_deref(), Some("Alice"));
-    }
 }
