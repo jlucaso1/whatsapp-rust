@@ -2,6 +2,7 @@ use crate::error::{BinaryError, Result};
 use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
 use crate::token;
+use arrayvec::ArrayString;
 use std::borrow::Cow;
 
 pub(crate) struct Decoder<'a> {
@@ -78,12 +79,9 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(len)?;
         match std::str::from_utf8(bytes) {
             Ok(s) => Ok(Cow::Borrowed(s)),
-            Err(_) => {
-                // Fallback to owned string if not valid UTF-8
-                String::from_utf8(bytes.to_vec())
-                    .map(Cow::Owned)
-                    .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
-            }
+            Err(_) => String::from_utf8(bytes.to_vec())
+                .map(Cow::Owned)
+                .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error())),
         }
     }
 
@@ -168,7 +166,6 @@ impl<'a> Decoder<'a> {
         })
     }
 
-    // Zero-copy string parsing that returns Cow
     fn read_value_as_string(&mut self) -> Result<Option<Cow<'a, str>>> {
         let tag = self.read_u8()?;
         match tag {
@@ -185,14 +182,22 @@ impl<'a> Decoder<'a> {
                 let size = self.read_u32_be()? as usize;
                 self.read_string(size).map(Some)
             }
-            token::JID_PAIR => self
-                .read_jid_pair()
-                .map(|j| Some(Cow::Owned(j.to_string()))),
-            token::AD_JID => self.read_ad_jid().map(|j| Some(Cow::Owned(j.to_string()))),
-            token::INTEROP_JID => self
-                .read_interop_jid()
-                .map(|j| Some(Cow::Owned(j.to_string()))),
-            token::FB_JID => self.read_fb_jid().map(|j| Some(Cow::Owned(j.to_string()))),
+            token::JID_PAIR => {
+                let j = self.read_jid_pair()?;
+                Ok(Some(Self::jid_ref_to_cow_string(j)))
+            }
+            token::AD_JID => {
+                let j = self.read_ad_jid()?;
+                Ok(Some(Self::jid_ref_to_cow_string(j)))
+            }
+            token::INTEROP_JID => {
+                let j = self.read_interop_jid()?;
+                Ok(Some(Self::jid_ref_to_cow_string(j)))
+            }
+            token::FB_JID => {
+                let j = self.read_fb_jid()?;
+                Ok(Some(Self::jid_ref_to_cow_string(j)))
+            }
             token::NIBBLE_8 | token::HEX_8 => self.read_packed(tag).map(|s| Some(Cow::Owned(s))),
             tag @ token::DICTIONARY_0..=token::DICTIONARY_3 => {
                 let index = self.read_u8()?;
@@ -200,7 +205,6 @@ impl<'a> Decoder<'a> {
                     .map(|s| Some(Cow::Borrowed(s)))
                     .ok_or(BinaryError::InvalidToken(tag))
             }
-            // All other single-byte tokens - these are from static dictionaries
             _ => token::get_single_token(tag)
                 .map(|s| Some(Cow::Borrowed(s)))
                 .ok_or(BinaryError::InvalidToken(tag)),
@@ -213,23 +217,82 @@ impl<'a> Decoder<'a> {
         let len = (packed_len_byte & 0x7F) as usize;
         let raw_len = if is_half_byte { len * 2 - 1 } else { len * 2 };
 
-        let mut result = String::with_capacity(raw_len);
+        const SMALL: usize = 64;
         let packed_data = self.read_bytes(len)?;
 
+        if raw_len <= SMALL {
+            let mut s: ArrayString<SMALL> = ArrayString::new();
+            for &byte in packed_data {
+                let high = (byte & 0xF0) >> 4;
+                let low = byte & 0x0F;
+                s.push(Self::unpack_byte(tag, high)?);
+                s.push(Self::unpack_byte(tag, low)?);
+            }
+            if is_half_byte {
+                s.pop();
+            }
+            return Ok(s.to_string());
+        }
+
+        let mut result = String::with_capacity(raw_len);
         for &byte in packed_data {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
             result.push(Self::unpack_byte(tag, high)?);
             result.push(Self::unpack_byte(tag, low)?);
         }
-
         if is_half_byte {
             result.pop();
         }
-
         Ok(result)
     }
 
+    #[inline]
+    fn jid_ref_to_cow_string(j: JidRef<'a>) -> Cow<'a, str> {
+        if j.user.is_empty() && j.agent == 0 && j.device == 0 && j.integrator == 0 {
+            return j.server;
+        }
+        Cow::Owned(Self::jid_ref_to_string_internal(&j))
+    }
+
+    fn jid_ref_to_string_internal(j: &JidRef<'a>) -> String {
+        let mut len = 0;
+        if j.user.is_empty() {
+            len = j.server.len();
+        } else {
+            len += j.user.len() + 1 + j.server.len();
+            if j.agent > 0 {
+                len += 1 + decimal_len_u8(j.agent);
+            }
+            if j.device > 0 {
+                len += 1 + decimal_len_u16(j.device);
+            }
+            if j.integrator > 0 {
+                len += 1 + decimal_len_u16(j.integrator);
+            }
+        }
+        let mut s = String::with_capacity(len);
+        if j.user.is_empty() {
+            s.push_str(&j.server);
+            return s;
+        }
+        s.push_str(&j.user);
+        if j.agent > 0 {
+            s.push('.');
+            push_decimal_u8(&mut s, j.agent);
+        }
+        if j.device > 0 {
+            s.push(':');
+            push_decimal_u16(&mut s, j.device);
+        }
+        if j.integrator > 0 {
+            s.push(':');
+            push_decimal_u16(&mut s, j.integrator);
+        }
+        s.push('@');
+        s.push_str(&j.server);
+        s
+    }
     fn unpack_byte(tag: u8, value: u8) -> Result<char> {
         match tag {
             token::NIBBLE_8 => match value {
@@ -279,7 +342,6 @@ impl<'a> Decoder<'a> {
                 let bytes = self.read_bytes(len)?;
                 Ok(Some(NodeContentRef::Bytes(Cow::Borrowed(bytes))))
             }
-            // It's a list of child nodes
             _ => {
                 let size = self.read_list_size(tag)?;
                 let mut nodes = NodeVec::with_capacity(size);
@@ -317,5 +379,62 @@ impl<'a> Decoder<'a> {
             attrs,
             content,
         })
+    }
+}
+
+#[inline]
+fn decimal_len_u8(mut n: u8) -> usize {
+    if n == 0 {
+        return 1;
+    }
+    let mut l = 0;
+    while n > 0 {
+        l += 1;
+        n /= 10;
+    }
+    l
+}
+#[inline]
+fn decimal_len_u16(mut n: u16) -> usize {
+    if n == 0 {
+        return 1;
+    }
+    let mut l = 0;
+    while n > 0 {
+        l += 1;
+        n /= 10;
+    }
+    l
+}
+
+#[inline]
+fn push_decimal_u8(out: &mut String, n: u8) {
+    let mut tmp: ArrayString<3> = ArrayString::new();
+    let mut v = n;
+    loop {
+        tmp.push(char::from(b'0' + (v % 10)));
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    for ch in tmp.chars().rev() {
+        out.push(ch);
+    }
+}
+
+#[inline]
+fn push_decimal_u16(out: &mut String, n: u16) {
+    let mut tmp: ArrayString<5> = ArrayString::new();
+    let mut v = n;
+    loop {
+        tmp.push(char::from(b'0' + (v % 10) as u8));
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    for ch in tmp.chars().rev() {
+        out.push(ch);
     }
 }
