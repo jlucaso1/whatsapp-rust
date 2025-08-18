@@ -149,10 +149,7 @@ impl Encoder {
     }
 
     fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
-        let mut sorted_attrs: Vec<_> = attrs.iter().collect();
-        sorted_attrs.sort_by_key(|(k, _)| *k);
-
-        for (key, value) in sorted_attrs {
+        for (key, value) in attrs {
             self.write_string(key);
             self.write_string(value);
         }
