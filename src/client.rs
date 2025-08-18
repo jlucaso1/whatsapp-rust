@@ -351,34 +351,42 @@ impl Client {
             info!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
+        let self_clone = self.clone();
+        let node_clone = node.clone();
+
         // Early auto-ACK for message-like stanzas to prevent server resends (simplified whatsmeow maybeDeferredAck)
-        match node.tag.as_str() {
-            "message" | "receipt" | "notification" | "call" => {
-                if let (Some(id), Some(from)) = (node.attrs.get("id"), node.attrs.get("from")) {
-                    let mut attrs = std::collections::HashMap::new();
-                    attrs.insert("class".to_string(), node.tag.clone());
-                    attrs.insert("id".to_string(), id.clone());
-                    attrs.insert("to".to_string(), from.clone());
-                    if let Some(participant) = node.attrs.get("participant") {
-                        attrs.insert("participant".to_string(), participant.clone());
-                    }
-                    if node.tag != "message"
-                        && let Some(t) = node.attrs.get("type")
+        task::spawn(async move {
+            match node_clone.tag.as_str() {
+                "message" | "receipt" | "notification" | "call" => {
+                    if let (Some(id), Some(from)) =
+                        (node_clone.attrs.get("id"), node_clone.attrs.get("from"))
                     {
-                        attrs.insert("type".to_string(), t.clone());
-                    }
-                    let ack = Node {
-                        tag: "ack".to_string(),
-                        attrs,
-                        content: None,
-                    };
-                    if let Err(e) = self.send_node(ack).await {
-                        warn!(target: "Client", "Failed to send ack for {} {}: {e:?}", node.tag, id);
+                        let mut attrs = std::collections::HashMap::new();
+                        attrs.insert("class".to_string(), node_clone.tag.clone());
+                        attrs.insert("id".to_string(), id.clone());
+                        attrs.insert("to".to_string(), from.clone());
+                        if let Some(participant) = node_clone.attrs.get("participant") {
+                            attrs.insert("participant".to_string(), participant.clone());
+                        }
+                        if node_clone.tag != "message"
+                            && let Some(t) = node_clone.attrs.get("type")
+                        {
+                            attrs.insert("type".to_string(), t.clone());
+                        }
+                        let ack = Node {
+                            tag: "ack".to_string(),
+                            attrs,
+                            content: None,
+                        };
+                        // Now we can .await inside the new async task!
+                        if let Err(e) = self_clone.send_node(ack).await {
+                            warn!(target: "Client", "Failed to send ack for {} {}: {e:?}", node_clone.tag, id);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
+        });
 
         if node.tag == "xmlstreamend" {
             warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
@@ -1040,7 +1048,7 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        info!(target: "Client/Send", "--> {}", DisplayableNode(&node));
+        info!(target: "Client/Send", "{}", DisplayableNode(&node));
 
         let payload = wacore_binary::marshal::marshal(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
