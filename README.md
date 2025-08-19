@@ -7,7 +7,7 @@ This document outlines the migration progress and the current state of the proje
 ## Project Goals
 
 - **Type Safety:** Leverage Rust's strong type system to eliminate entire classes of bugs.
-- **Performance:** Utilize Rust's performance for efficient handling of binary protocols and cryptography.
+- **Performance:** Utilize Rust's performance for efficient handling of binary protocols and cryptography. (Currently single threaded, but with margin to improve)
 - **Concurrency:** Build a modern asynchronous architecture using Tokio for high-throughput event processing.
 - **Modularity:** Maintain a clean, modular architecture similar to `whatsmeow` to ensure the codebase is maintainable and extensible.
 
@@ -15,10 +15,10 @@ This document outlines the migration progress and the current state of the proje
 
 ### Legend
 
-- `✅` **Completed**: The feature is fully implemented and considered stable.
-- `⏳` **In Progress / Partially Implemented**: The feature is under active development or has a partial implementation.
-- `📋` **Planned**: The feature has not yet been started but is the next priority.
-- `[ ]` **Not Started**: The feature has not yet been implemented.
+- `✅` **Completed**
+- `⏳` **In Progress / Partially Implemented**
+- `📋` **Planned**
+- `[ ]` **Not Started**
 
 ---
 
@@ -106,3 +106,24 @@ The project has achieved a major milestone: a stable, authenticated, and end-to-
 
 1.  **Full `usync` Implementation**: Implement a robust `get_user_devices` function using `usync` IQs to ensure device lists are always up-to-date.
 2.  **Expand Event Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
+
+## Disclaimer
+
+This project is an unofficial, open-source reimplementation of a WhatsApp client. Using custom or third-party clients can violate WhatsApp/Meta's Terms of Service and may result in temporary or permanent account suspension or bans. Use this software at your own risk.
+
+Recommendations:
+
+- Prefer using official WhatsApp/Meta APIs for production use.
+- Test with secondary accounts or non-critical numbers.
+- Avoid automated, bulk, or abusive behavior that could trigger rate limits or enforcement.
+
+If you need help making your usage safer (rate-limiting, retries, or migrating to official APIs), open an issue or discussion.
+
+## Acknowledgements
+
+Thanks to the following projects for their inspiration and reference implementations:
+
+- whatsmeow (Go) — https://github.com/tulir/whatsmeow
+- Baileys (NodeJS) — https://github.com/WhiskeySockets/Baileys
+
+Their work has been invaluable for understanding the WhatsApp protocol and multi-device sync details used throughout this project.
