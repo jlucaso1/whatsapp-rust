@@ -1,14 +1,14 @@
 use crate::socket::consts::{FRAME_LENGTH_SIZE, FRAME_MAX_SIZE, URL};
 use crate::socket::error::{Result, SocketError};
 use bytes::{Buf, BytesMut};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio_websockets::{ClientBuilder, Message, WebSocketStream, MaybeTlsStream};
-use futures_util::stream::{SplitSink, SplitStream};
-use tokio::net::TcpStream;
+use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
 type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<RawWs, Message>;
 type WsStream = SplitStream<RawWs>;
@@ -26,6 +26,10 @@ pub struct FrameSocket {
 
 impl FrameSocket {
     pub fn new() -> (Self, Receiver<bytes::Bytes>) {
+        if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
+            debug!("rustls crypto provider install: {:?}", e);
+        }
+
         let (tx, rx) = mpsc::channel(100);
         let socket = Self {
             ws_sink: Arc::new(Mutex::new(None)),
@@ -51,8 +55,14 @@ impl FrameSocket {
         }
 
         info!("Dialing {URL}");
-    let uri: http::Uri = URL.parse().expect("Failed to parse URL");
-    let (client, _response) = ClientBuilder::from_uri(uri).connect().await?;
+        let uri: http::Uri = URL.parse().expect("Failed to parse URL");
+        let (client, _response) = match ClientBuilder::from_uri(uri).connect().await {
+            Ok(ok) => ok,
+            Err(e) => {
+                error!("WebSocket connect failed: {e:?}");
+                return Err(SocketError::WebSocket(e));
+            }
+        };
 
         let (sink, stream) = client.split();
         *self.ws_sink.lock().await = Some(sink);
