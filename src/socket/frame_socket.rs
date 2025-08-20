@@ -1,22 +1,18 @@
 use crate::socket::consts::{FRAME_LENGTH_SIZE, FRAME_MAX_SIZE, URL};
 use crate::socket::error::{Result, SocketError};
 use bytes::{Buf, BytesMut};
-use futures_util::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
-};
+use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
-};
+use tokio_websockets::{ClientBuilder, Message, WebSocketStream, MaybeTlsStream};
+use futures_util::stream::{SplitSink, SplitStream};
+use tokio::net::TcpStream;
+type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type WsSink = SplitSink<RawWs, Message>;
+type WsStream = SplitStream<RawWs>;
 use wacore_binary::consts::WA_CONN_HEADER;
-
-type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-type WsStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 type OnDisconnectCallback = Box<dyn Fn(bool) + Send>;
 
@@ -55,9 +51,10 @@ impl FrameSocket {
         }
 
         info!("Dialing {URL}");
-        let (ws_stream, _response) = connect_async(URL).await?;
+    let uri: http::Uri = URL.parse().expect("Failed to parse URL");
+    let (client, _response) = ClientBuilder::from_uri(uri).connect().await?;
 
-        let (sink, stream) = ws_stream.split();
+        let (sink, stream) = client.split();
         *self.ws_sink.lock().await = Some(sink);
         *self.is_connected.lock().await = true;
 
@@ -65,7 +62,7 @@ impl FrameSocket {
         let is_connected_clone = self.is_connected.clone();
         let on_disconnect_clone = self.on_disconnect.clone();
 
-        tokio::task::spawn_local(Self::read_pump(
+        tokio::task::spawn(Self::read_pump(
             stream,
             frames_tx_clone,
             is_connected_clone,
@@ -99,7 +96,7 @@ impl FrameSocket {
             data_len,
             whole_frame.len()
         );
-        sink.send(Message::Binary(bytes::Bytes::from(whole_frame)))
+        sink.send(Message::binary(bytes::Bytes::from(whole_frame)))
             .await?;
         Ok(())
     }
@@ -115,9 +112,10 @@ impl FrameSocket {
         loop {
             match stream.next().await {
                 Some(Ok(msg)) => {
-                    if let Message::Binary(data) = msg {
+                    if msg.is_binary() {
+                        let data = msg.as_payload();
                         debug!("<-- Received WebSocket message: {} bytes", data.len());
-                        buffer.extend_from_slice(&data);
+                        buffer.extend_from_slice(data);
 
                         while buffer.len() >= FRAME_LENGTH_SIZE {
                             let frame_len = ((buffer[0] as usize) << 16)
@@ -136,7 +134,7 @@ impl FrameSocket {
                                 break;
                             }
                         }
-                    } else if let Message::Close(_) = msg {
+                    } else if msg.is_close() {
                         trace!("Received close frame");
                         break;
                     }
