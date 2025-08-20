@@ -202,9 +202,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "1.0.1"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
+checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
 name = "chrono"
@@ -355,12 +355,6 @@ dependencies = [
  "once_cell",
  "parking_lot_core",
 ]
-
-[[package]]
-name = "data-encoding"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
 name = "deranged"
@@ -1141,12 +1135,33 @@ dependencies = [
 
 [[package]]
 name = "rand"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+dependencies = [
+ "libc",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.3",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -1164,6 +1179,9 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.16",
+]
 
 [[package]]
 name = "rand_core"
@@ -1462,31 +1480,31 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.20.0"
+version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
+checksum = "15b61f8f20e3a6f7e0649d825294eaf317edce30f82cf6026e7e4cb9222a7d1e"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "thiserror"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80d76d3f064b981389ecb4b6b7f45a0bf9fdac1d5b9204c7bd6714fecc302850"
+checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44d29feb33e986b6ea906bd9c3559a856983f92371b3eaa5e83782a351623de0"
+checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1564,18 +1582,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-tungstenite"
-version = "0.27.0"
+name = "tokio-util"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
+checksum = "14307c986784f72ef81c89db7d9e28d6ac26d16213b109ea501696195e6e3ce5"
 dependencies = [
- "futures-util",
- "log",
- "rustls",
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-websockets"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "842e11addde61da7c37ef205cd625ebcd7b607076ea62e4698f06bfd5fd01a03"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "httparse",
+ "rand 0.8.5",
+ "ring",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite",
+ "tokio-util",
  "webpki-roots 0.26.11",
 ]
 
@@ -1617,25 +1653,6 @@ name = "toml_writer"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcc842091f2def52017664b53082ecbbeb5c7731092bad69d2c63050401dfd64"
-
-[[package]]
-name = "tungstenite"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand",
- "rustls",
- "rustls-pki-types",
- "sha1",
- "thiserror",
- "utf-8",
-]
 
 [[package]]
 name = "typenum"
@@ -1765,7 +1782,7 @@ dependencies = [
  "md5",
  "once_cell",
  "prost",
- "rand",
+ "rand 0.9.2",
  "rand_core 0.9.3",
  "serde",
  "serde-big-array",
@@ -1906,17 +1923,18 @@ dependencies = [
  "env_logger",
  "futures-util",
  "hex",
+ "http",
  "libsqlite3-sys",
  "log",
  "prost",
- "rand",
+ "rand 0.9.2",
  "rand_core 0.9.3",
  "scopeguard",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-tungstenite",
+ "tokio-websockets",
  "ureq",
  "urlencoding",
  "wacore",

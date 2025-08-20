@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio_websockets::Error as WsError;
 
 #[derive(Debug, Error)]
 pub enum SocketError {
@@ -11,7 +12,7 @@ pub enum SocketError {
     #[error("Noise handshake failed: {0}")]
     NoiseHandshake(String),
     #[error("WebSocket error: {0}")]
-    WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
+    WebSocket(#[from] WsError),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Crypto error: {0}")]
@@ -19,9 +20,3 @@ pub enum SocketError {
 }
 
 pub type Result<T> = std::result::Result<T, SocketError>;
-
-impl From<tokio_tungstenite::tungstenite::Error> for SocketError {
-    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
-        SocketError::WebSocket(Box::new(err))
-    }
-}
