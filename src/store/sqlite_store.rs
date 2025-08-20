@@ -142,6 +142,10 @@ impl SqliteStore {
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
                 device::account.eq(account_data.clone()),
                 device::push_name.eq(&device_data.push_name),
+                device::app_version_primary.eq(device_data.app_version_primary as i32),
+                device::app_version_secondary.eq(device_data.app_version_secondary as i32),
+                device::app_version_tertiary.eq(device_data.app_version_tertiary as i64),
+                device::app_version_last_fetched_ms.eq(device_data.app_version_last_fetched_ms),
             ))
             .on_conflict(device::lid)
             .do_update()
@@ -165,6 +169,10 @@ impl SqliteStore {
                 device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
                 device::account.eq(account_data.clone()),
                 device::push_name.eq(&device_data.push_name),
+                device::app_version_primary.eq(device_data.app_version_primary as i32),
+                device::app_version_secondary.eq(device_data.app_version_secondary as i32),
+                device::app_version_tertiary.eq(device_data.app_version_tertiary as i64),
+                device::app_version_last_fetched_ms.eq(device_data.app_version_last_fetched_ms),
             ))
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -188,6 +196,10 @@ impl SqliteStore {
                 Vec<u8>,
                 Option<Vec<u8>>,
                 String,
+                i32,
+                i32,
+                i64,
+                i64,
             )>(&mut conn)
             .optional()
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -204,6 +216,10 @@ impl SqliteStore {
             adv_secret_key_data,
             account_data,
             push_name,
+            app_version_primary,
+            app_version_secondary,
+            app_version_tertiary,
+            app_version_last_fetched_ms,
         )) = result
         {
             let id = if !pn_str.is_empty() {
@@ -261,6 +277,10 @@ impl SqliteStore {
                 adv_secret_key,
                 account,
                 push_name,
+                app_version_primary: app_version_primary as u32,
+                app_version_secondary: app_version_secondary as u32,
+                app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
+                app_version_last_fetched_ms,
             }))
         } else {
             Ok(None)

@@ -30,3 +30,4 @@ pub mod usync;
 
 pub mod bot;
 pub mod sync_task;
+pub mod version;

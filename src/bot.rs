@@ -37,6 +37,7 @@ impl Bot {
 pub struct BotBuilder {
     message_handler: Option<MessageHandler>,
     db_path: String,
+    override_app_version: Option<(u32, u32, u32)>,
 }
 
 impl BotBuilder {
@@ -44,7 +45,13 @@ impl BotBuilder {
         Self {
             message_handler: None,
             db_path: "whatsapp.db".to_string(),
+            override_app_version: None,
         }
+    }
+
+    pub fn with_app_version(mut self, primary: u32, secondary: u32, tertiary: u32) -> Self {
+        self.override_app_version = Some((primary, secondary, tertiary));
+        self
     }
 
     pub fn on_message<F, Fut>(mut self, handler: F) -> Self
@@ -76,10 +83,12 @@ impl BotBuilder {
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
 
+        crate::version::resolve_and_update_version(&persistence_manager, self.override_app_version)
+            .await;
+
         info!("Creating client...");
         let (client, mut sync_task_receiver) = Client::new(persistence_manager.clone()).await;
 
-        // SPAWN THE DEDICATED SYNC WORKER
         let worker_client = client.clone();
         tokio::task::spawn_local(async move {
             while let Some(task) = sync_task_receiver.recv().await {
