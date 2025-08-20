@@ -6,13 +6,11 @@
 mod address;
 // Not exporting the members because they have overly-generic names.
 pub mod curve;
-mod version;
 
 pub use address::{
     Aci, DeviceId, Pni, ProtocolAddress, ServiceId, ServiceIdFixedWidthBinaryBytes, ServiceIdKind,
     WrongKindOfServiceIdError,
 };
-pub use version::VERSION;
 
 /// Simple wrapper that invokes a lambda.
 ///

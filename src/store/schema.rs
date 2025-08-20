@@ -36,6 +36,10 @@ diesel::table! {
         adv_secret_key -> Binary,
         account -> Nullable<Binary>,
         push_name -> Text,
+        app_version_primary -> Integer,
+        app_version_secondary -> Integer,
+        app_version_tertiary -> BigInt,
+        app_version_last_fetched_ms -> BigInt,
     }
 }
 

@@ -48,7 +48,11 @@ CREATE TABLE device (
     signed_pre_key_signature BLOB NOT NULL,
     adv_secret_key BLOB NOT NULL,
     account BLOB,
-    push_name TEXT NOT NULL DEFAULT ''
+    push_name TEXT NOT NULL DEFAULT '',
+    app_version_primary INTEGER NOT NULL DEFAULT 0,
+    app_version_secondary INTEGER NOT NULL DEFAULT 0,
+    app_version_tertiary BIGINT NOT NULL DEFAULT 0,
+    app_version_last_fetched_ms BIGINT NOT NULL DEFAULT 0
 );
 
 CREATE TABLE signed_prekeys (

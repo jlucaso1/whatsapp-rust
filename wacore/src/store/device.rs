@@ -48,34 +48,33 @@ pub struct ProcessedMessageKey {
     pub id: String,
 }
 
-static BASE_CLIENT_PAYLOAD: Lazy<wa::ClientPayload> = Lazy::new(|| wa::ClientPayload {
-    user_agent: Some(wa::client_payload::UserAgent {
-        platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
-        release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::Release as i32),
-        app_version: Some(wa::client_payload::user_agent::AppVersion {
-            primary: Some(2),
-            secondary: Some(3000),
-            tertiary: Some(1023868176),
+fn build_base_client_payload(
+    app_version: wa::client_payload::user_agent::AppVersion,
+) -> wa::ClientPayload {
+    wa::ClientPayload {
+        user_agent: Some(wa::client_payload::UserAgent {
+            platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
+            release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::Release as i32),
+            app_version: Some(app_version),
+            mcc: Some("000".to_string()),
+            mnc: Some("000".to_string()),
+            os_version: Some("0.1.0".to_string()),
+            manufacturer: Some("".to_string()),
+            device: Some("Desktop".to_string()),
+            os_build_number: Some("0.1.0".to_string()),
+            locale_language_iso6391: Some("en".to_string()),
+            locale_country_iso31661_alpha2: Some("en".to_string()),
             ..Default::default()
         }),
-        mcc: Some("000".to_string()),
-        mnc: Some("000".to_string()),
-        os_version: Some("0.1.0".to_string()),
-        manufacturer: Some("".to_string()),
-        device: Some("Desktop".to_string()),
-        os_build_number: Some("0.1.0".to_string()),
-        locale_language_iso6391: Some("en".to_string()),
-        locale_country_iso31661_alpha2: Some("en".to_string()),
+        web_info: Some(wa::client_payload::WebInfo {
+            web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32),
+            ..Default::default()
+        }),
+        connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
+        connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
         ..Default::default()
-    }),
-    web_info: Some(wa::client_payload::WebInfo {
-        web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32),
-        ..Default::default()
-    }),
-    connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
-    connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
-    ..Default::default()
-});
+    }
+}
 
 static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
@@ -107,6 +106,10 @@ pub struct Device {
     pub adv_secret_key: [u8; 32],
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
+    pub app_version_primary: u32,
+    pub app_version_secondary: u32,
+    pub app_version_tertiary: u32,
+    pub app_version_last_fetched_ms: i64,
 }
 
 impl Default for Device {
@@ -149,6 +152,10 @@ impl Device {
             adv_secret_key,
             account: None,
             push_name: String::new(),
+            app_version_primary: 2,
+            app_version_secondary: 3000,
+            app_version_tertiary: 1023868176,
+            app_version_last_fetched_ms: 0,
         }
     }
 
@@ -164,7 +171,13 @@ impl Device {
     }
 
     fn get_login_payload(&self, jid: &Jid) -> wa::ClientPayload {
-        let mut payload = BASE_CLIENT_PAYLOAD.clone();
+        let app_version = wa::client_payload::user_agent::AppVersion {
+            primary: Some(self.app_version_primary),
+            secondary: Some(self.app_version_secondary),
+            tertiary: Some(self.app_version_tertiary),
+            ..Default::default()
+        };
+        let mut payload = build_base_client_payload(app_version);
         payload.username = jid.user.parse::<u64>().ok();
         payload.device = Some(jid.device as u32);
         payload.passive = Some(true);
@@ -172,7 +185,13 @@ impl Device {
     }
 
     fn get_registration_payload(&self) -> wa::ClientPayload {
-        let mut payload = BASE_CLIENT_PAYLOAD.clone();
+        let app_version = wa::client_payload::user_agent::AppVersion {
+            primary: Some(self.app_version_primary),
+            secondary: Some(self.app_version_secondary),
+            tertiary: Some(self.app_version_tertiary),
+            ..Default::default()
+        };
+        let mut payload = build_base_client_payload(app_version);
 
         let device_props_bytes = DEVICE_PROPS.encode_to_vec();
 
