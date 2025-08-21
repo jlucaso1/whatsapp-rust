@@ -121,6 +121,44 @@ impl SqliteStore {
             .as_ref()
             .map(|account| account.encode_to_vec());
 
+        let new_lid = device_data
+            .lid
+            .as_ref()
+            .map(|j| j.to_string())
+            .unwrap_or_default();
+        let new_pn = device_data
+            .pn
+            .as_ref()
+            .map(|j| j.to_string())
+            .unwrap_or_default();
+
+        if !new_lid.is_empty() {
+            let rows_affected = diesel::update(device::table.filter(device::lid.eq("")))
+                .set((
+                    device::lid.eq(&new_lid),
+                    device::pn.eq(&new_pn),
+                    device::registration_id.eq(device_data.registration_id as i32),
+                    device::noise_key.eq(&noise_key_data),
+                    device::identity_key.eq(&identity_key_data),
+                    device::signed_pre_key.eq(&signed_pre_key_data),
+                    device::signed_pre_key_id.eq(device_data.signed_pre_key_id as i32),
+                    device::signed_pre_key_signature.eq(&device_data.signed_pre_key_signature[..]),
+                    device::adv_secret_key.eq(&device_data.adv_secret_key[..]),
+                    device::account.eq(account_data.clone()),
+                    device::push_name.eq(&device_data.push_name),
+                    device::app_version_primary.eq(device_data.app_version_primary as i32),
+                    device::app_version_secondary.eq(device_data.app_version_secondary as i32),
+                    device::app_version_tertiary.eq(device_data.app_version_tertiary as i64),
+                    device::app_version_last_fetched_ms.eq(device_data.app_version_last_fetched_ms),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if rows_affected > 0 {
+                return Ok(());
+            }
+        }
+
         diesel::insert_into(device::table)
             .values((
                 device::lid.eq(device_data
