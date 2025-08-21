@@ -382,3 +382,377 @@ pub struct Mutation {
 pub trait AppStateSyncDriver {
     async fn fetch_collection(&self, name: WAPatchName, after_version: u64) -> Result<Node>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::traits::{AppStateMutationMAC, AppStateStore};
+    use prost::Message;
+    use std::collections::HashMap;
+    use wacore::appstate::WAPATCH_INTEGRITY;
+    use wacore::appstate::hash::HashState;
+    use wacore::appstate::hash::generate_content_mac;
+    use wacore::appstate::keys::expand_app_state_keys;
+    use wacore::crypto::aes_256_cbc_encrypt;
+    use wacore::store::error::Result as StoreResult;
+    use wacore::store::traits::AppStateKeyStore as _;
+    use wacore::store::traits::AppStateSyncKey;
+
+    type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
+
+    #[derive(Default, Clone)]
+    struct MockBackend {
+        versions: Arc<Mutex<HashMap<String, HashState>>>,
+        macs: MockMacMap,
+        keys: Arc<Mutex<HashMap<Vec<u8>, AppStateSyncKey>>>,
+    }
+
+    #[async_trait]
+    impl AppStateStore for MockBackend {
+        async fn get_app_state_version(&self, name: &str) -> StoreResult<HashState> {
+            Ok(self
+                .versions
+                .lock()
+                .await
+                .get(name)
+                .cloned()
+                .unwrap_or_default())
+        }
+        async fn set_app_state_version(&self, name: &str, state: HashState) -> StoreResult<()> {
+            self.versions.lock().await.insert(name.to_string(), state);
+            Ok(())
+        }
+        async fn get_app_state_mutation_mac(
+            &self,
+            name: &str,
+            index_mac: &[u8],
+        ) -> StoreResult<Option<Vec<u8>>> {
+            Ok(self
+                .macs
+                .lock()
+                .await
+                .get(&(name.to_string(), index_mac.to_vec()))
+                .cloned())
+        }
+        async fn put_app_state_mutation_macs(
+            &self,
+            name: &str,
+            _version: u64,
+            mutations: &[AppStateMutationMAC],
+        ) -> StoreResult<()> {
+            let mut macs = self.macs.lock().await;
+            for m in mutations {
+                macs.insert((name.to_string(), m.index_mac.clone()), m.value_mac.clone());
+            }
+            Ok(())
+        }
+        async fn delete_app_state_mutation_macs(
+            &self,
+            _name: &str,
+            _index_macs: &[Vec<u8>],
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl crate::store::traits::AppStateKeyStore for MockBackend {
+        async fn get_app_state_sync_key(
+            &self,
+            key_id: &[u8],
+        ) -> StoreResult<Option<AppStateSyncKey>> {
+            Ok(self.keys.lock().await.get(key_id).cloned())
+        }
+        async fn set_app_state_sync_key(
+            &self,
+            key_id: &[u8],
+            key: AppStateSyncKey,
+        ) -> StoreResult<()> {
+            self.keys.lock().await.insert(key_id.to_vec(), key);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl crate::store::traits::IdentityStore for MockBackend {
+        async fn put_identity(&self, _: &str, _: [u8; 32]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn delete_identity(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn is_trusted_identity(
+            &self,
+            _: &str,
+            _: &[u8; 32],
+            _: wacore::libsignal::protocol::Direction,
+        ) -> StoreResult<bool> {
+            Ok(true)
+        }
+        async fn load_identity(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+    #[async_trait]
+    impl crate::store::traits::SessionStore for MockBackend {
+        async fn get_session(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn put_session(&self, _: &str, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn delete_session(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn has_session(&self, _: &str) -> StoreResult<bool> {
+            Ok(false)
+        }
+    }
+    #[async_trait(?Send)]
+    impl wacore::signal::store::PreKeyStore for MockBackend {
+        async fn load_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<
+            Option<wa::PreKeyRecordStructure>,
+            Box<dyn std::error::Error + Send + Sync>,
+        > {
+            Ok(None)
+        }
+        async fn store_prekey(
+            &self,
+            _: u32,
+            _: wa::PreKeyRecordStructure,
+            _: bool,
+        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+        async fn contains_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(false)
+        }
+        async fn remove_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+    }
+    #[async_trait(?Send)]
+    impl wacore::signal::store::SignedPreKeyStore for MockBackend {
+        async fn load_signed_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<
+            Option<wa::SignedPreKeyRecordStructure>,
+            Box<dyn std::error::Error + Send + Sync>,
+        > {
+            Ok(None)
+        }
+        async fn load_signed_prekeys(
+            &self,
+        ) -> std::result::Result<
+            Vec<wa::SignedPreKeyRecordStructure>,
+            Box<dyn std::error::Error + Send + Sync>,
+        > {
+            Ok(vec![])
+        }
+        async fn store_signed_prekey(
+            &self,
+            _: u32,
+            _: wa::SignedPreKeyRecordStructure,
+        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+        async fn contains_signed_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(false)
+        }
+        async fn remove_signed_prekey(
+            &self,
+            _: u32,
+        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+    }
+    #[async_trait]
+    impl crate::store::traits::SenderKeyStoreHelper for MockBackend {
+        async fn put_sender_key(&self, _: &str, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_sender_key(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn delete_sender_key(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+    }
+
+    fn create_encrypted_mutation(
+        op: wa::syncd_mutation::SyncdOperation,
+        index_mac: &[u8],
+        plaintext: &[u8],
+        keys: &wacore::appstate::keys::ExpandedAppStateKeys,
+        key_id_bytes: &[u8],
+    ) -> wa::SyncdMutation {
+        let iv = vec![0u8; 16];
+        let ciphertext = aes_256_cbc_encrypt(plaintext, &keys.value_encryption, &iv).unwrap();
+        let mut value_with_iv = iv;
+        value_with_iv.extend_from_slice(&ciphertext);
+        let value_mac = generate_content_mac(op, &value_with_iv, key_id_bytes, &keys.value_mac);
+        let mut value_blob = value_with_iv;
+        value_blob.extend_from_slice(&value_mac);
+
+        wa::SyncdMutation {
+            operation: Some(op as i32),
+            record: Some(wa::SyncdRecord {
+                index: Some(wa::SyncdIndex {
+                    blob: Some(index_mac.to_vec()),
+                }),
+                value: Some(wa::SyncdValue {
+                    blob: Some(value_blob),
+                }),
+                key_id: Some(wa::KeyId {
+                    id: Some(key_id_bytes.to_vec()),
+                }),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_patch_list_handles_set_overwrite_correctly() {
+        let backend = Arc::new(MockBackend::default());
+        let processor = AppStateProcessor::new(backend.clone());
+        let collection_name = WAPatchName::Regular;
+        let index_mac = vec![1; 32];
+        let key_id_bytes = b"test_key_id".to_vec();
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+
+        let sync_key = AppStateSyncKey {
+            key_data: master_key.to_vec(),
+            ..Default::default()
+        };
+        backend
+            .set_app_state_sync_key(&key_id_bytes, sync_key)
+            .await
+            .unwrap();
+
+        let original_plaintext = wa::SyncActionData {
+            value: Some(wa::SyncActionValue {
+                timestamp: Some(1000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let original_mutation = create_encrypted_mutation(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &original_plaintext,
+            &keys,
+            &key_id_bytes,
+        );
+
+        let mut initial_state = HashState {
+            version: 1,
+            ..Default::default()
+        };
+        let (warnings, res) =
+            initial_state.update_hash(std::slice::from_ref(&original_mutation), |_, _| Ok(None));
+        assert!(res.is_ok() && warnings.is_empty());
+        backend
+            .set_app_state_version(collection_name.as_str(), initial_state.clone())
+            .await
+            .unwrap();
+
+        let original_value_blob = original_mutation
+            .record
+            .unwrap()
+            .value
+            .unwrap()
+            .blob
+            .unwrap();
+        let original_value_mac = original_value_blob[original_value_blob.len() - 32..].to_vec();
+        backend
+            .put_app_state_mutation_macs(
+                collection_name.as_str(),
+                1,
+                &[AppStateMutationMAC {
+                    index_mac: index_mac.clone(),
+                    value_mac: original_value_mac.clone(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let new_plaintext = wa::SyncActionData {
+            value: Some(wa::SyncActionValue {
+                timestamp: Some(2000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let overwrite_mutation = create_encrypted_mutation(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &new_plaintext,
+            &keys,
+            &key_id_bytes,
+        );
+
+        let patch_list = PatchList {
+            name: collection_name,
+            has_more_patches: false,
+            patches: vec![wa::SyncdPatch {
+                mutations: vec![overwrite_mutation.clone()],
+                version: Some(wa::SyncdVersion { version: Some(2) }),
+                key_id: Some(wa::KeyId {
+                    id: Some(key_id_bytes),
+                }),
+                ..Default::default()
+            }],
+            snapshot: None,
+            snapshot_ref: None,
+        };
+
+        let result = processor.process_patch_list(patch_list, false).await;
+
+        assert!(
+            result.is_ok(),
+            "Processing the patch should succeed, but it failed: {:?}",
+            result.err()
+        );
+        let (_, final_state, _) = result.unwrap();
+
+        let mut expected_state = initial_state.clone();
+        let new_value_blob = overwrite_mutation
+            .record
+            .unwrap()
+            .value
+            .unwrap()
+            .blob
+            .unwrap();
+        let new_value_mac = new_value_blob[new_value_blob.len() - 32..].to_vec();
+
+        WAPATCH_INTEGRITY.subtract_then_add_in_place(
+            &mut expected_state.hash,
+            &[original_value_mac],
+            &[new_value_mac],
+        );
+
+        assert_eq!(
+            final_state.hash, expected_state.hash,
+            "The final LTHash is incorrect, meaning the overwrite was not handled properly."
+        );
+        assert_eq!(
+            final_state.version, 2,
+            "The version should be updated to that of the patch."
+        );
+    }
+}
