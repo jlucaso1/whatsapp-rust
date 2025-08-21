@@ -95,13 +95,10 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    // App state sync
     app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
     app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
-    // Notifies when first batch of app state sync keys has been stored (to avoid race on initial full sync)
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
-    // Sender for enqueuing major sync tasks processed by a dedicated worker
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
 }
 
@@ -351,7 +348,6 @@ impl Client {
             info!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
-        // Early auto-ACK for message-like stanzas to prevent server resends (simplified whatsmeow maybeDeferredAck)
         match node.tag.as_str() {
             "message" | "receipt" | "notification" | "call" => {
                 if let (Some(id), Some(from)) = (node.attrs.get("id"), node.attrs.get("from")) {
@@ -526,13 +522,11 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
 
-            // Kick off initial app state sync if needed
             if client_clone.needs_initial_full_sync.load(Ordering::Relaxed) {
                 if !client_clone
                     .initial_app_state_keys_received
                     .load(Ordering::Relaxed)
                 {
-                    // Wait (with timeout) for initial key share so critical_* collections don't fail due to missing keys
                     info!(target: "Client/AppState", "Waiting for initial app state keys before starting full sync (15s timeout)...");
                     match tokio::time::timeout(
                         APP_STATE_KEY_WAIT_TIMEOUT,
@@ -608,19 +602,14 @@ impl Client {
         }
     }
 
-    // Worker-invoked method for performing app state sync tasks.
     pub(crate) async fn process_app_state_sync_task(
         &self,
         name: WAPatchName,
         full_sync: bool,
     ) -> anyhow::Result<()> {
-        // Implement whatsmeow-style in-memory state propagation across multiple
-        // batches for a single collection. Fetch initial state once, carry it
-        // through the loop, and persist the final state at the end.
         let backend = self.persistence_manager.sqlite_store().unwrap().clone();
         let mut full_sync = full_sync;
 
-        // 1) Fetch initial state once
         let mut state = backend.get_app_state_version(name.as_str()).await?;
         if state.version == 0 {
             full_sync = true;
@@ -632,7 +621,6 @@ impl Client {
         while has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
 
-            // Build and send single-batch request using the current in-memory version
             let mut collection_builder = NodeBuilder::new("collection")
                 .attr("name", name.as_str())
                 .attr(
@@ -658,7 +646,6 @@ impl Client {
             let resp = self.send_iq(iq).await?;
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
-            // Pre-parse snapshot ref and pre-download if present
             let decode_start = std::time::Instant::now();
             let pre_downloaded_snapshot: Option<Vec<u8>> =
                 match wacore::appstate::patch_decode::parse_patch_list(&resp) {
@@ -695,7 +682,6 @@ impl Client {
                     debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
                 }
 
-                // Request missing keys (throttled 24h per key)
                 let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
                 if !missing.is_empty() {
                     let mut to_request: Vec<Vec<u8>> = Vec::new();
@@ -718,13 +704,11 @@ impl Client {
                     }
                 }
 
-                // 3) Apply mutations sequentially and update in-memory state
                 for m in mutations {
                     debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
                     self.dispatch_app_state_mutation(&m, full_sync).await;
                 }
 
-                // Update in-memory state for next iteration
                 state = new_state;
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
@@ -735,7 +719,6 @@ impl Client {
             want_snapshot = false;
         }
 
-        // 4) Persist final state once
         backend
             .set_app_state_version(name.as_str(), state.clone())
             .await?;
@@ -753,7 +736,6 @@ impl Client {
             Some(j) => j,
             None => return,
         };
-        // Build protocol message
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
             .map(|k| wa::message::AppStateSyncKeyId {

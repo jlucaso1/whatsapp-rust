@@ -3,10 +3,12 @@ use crate::qrcode::QrCodeEvent;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
-use log::{error, info, warn};
+use http::Uri;
+use log::{debug, error, info, warn};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use waproto::whatsapp as wa;
 
 pub struct MessageContext {
@@ -82,6 +84,8 @@ impl BotBuilder {
         persistence_manager
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
+
+        spawn_preconnect_task().await;
 
         crate::version::resolve_and_update_version(&persistence_manager, self.override_app_version)
             .await;
@@ -207,5 +211,23 @@ impl EventHandler for BotEventHandler {
                 handler_clone(context).await;
             });
         }
+    }
+}
+
+async fn spawn_preconnect_task() {
+    if let Ok(uri) = crate::socket::consts::URL.parse::<Uri>() {
+        if let Some(host) = uri.host() {
+            let port = uri.port_u16().unwrap_or(443);
+            let address = format!("{}:{}", host, port);
+
+            debug!(target: "Client/Preconnect", "Starting pre-connect to {}", address);
+            if let Err(e) = TcpStream::connect(&address).await {
+                warn!(target: "Client/Preconnect", "Pre-connection to {} failed: {}", address, e);
+            } else {
+                debug!(target: "Client/Preconnect", "Pre-connection to {} successful.", address);
+            }
+        }
+    } else {
+        warn!(target: "Client/Preconnect", "Could not parse WA_URL for pre-connect task.");
     }
 }
