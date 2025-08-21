@@ -2,7 +2,7 @@ use super::error::StoreError;
 use crate::store::Device;
 use crate::store::sqlite_store::SqliteStore;
 use crate::store::traits::Backend;
-use log::{debug, error, info};
+use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Duration, sleep};
@@ -46,11 +46,11 @@ impl PersistenceManager {
         let sqlite_store = Arc::new(SqliteStore::new(database_url).await?);
         let backend = StoreBackend::Sqlite(sqlite_store);
 
-        info!("PersistenceManager: Attempting to load device data via SqliteStore.");
+        debug!("PersistenceManager: Attempting to load device data via SqliteStore.");
         let device_data_opt = backend.load_device_data().await?;
 
         let device = if let Some(serializable_device) = device_data_opt {
-            info!(
+            debug!(
                 "PersistenceManager: Loaded existing device data (PushName: '{}'). Initializing Device.",
                 serializable_device.push_name
             );
@@ -58,7 +58,7 @@ impl PersistenceManager {
             dev.load_from_serializable(serializable_device);
             dev
         } else {
-            info!("PersistenceManager: No existing device data found. Creating a new Device.");
+            debug!("PersistenceManager: No existing device data found. Creating a new Device.");
             Device::new(backend.as_backend())
         };
 
@@ -132,9 +132,9 @@ impl PersistenceManager {
                     }
                 }
             });
-            info!("Background saver task started with interval {interval:?}");
+            debug!("Background saver task started with interval {interval:?}");
         } else {
-            info!("PersistenceManager is in-memory; background saver is disabled.");
+            debug!("PersistenceManager is in-memory; background saver is disabled.");
         }
     }
 }
