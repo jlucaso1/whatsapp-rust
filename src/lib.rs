@@ -17,6 +17,7 @@ pub mod request;
 pub mod send;
 pub mod socket;
 pub mod store;
+pub mod upload;
 
 pub mod prekeys;
 pub mod receipt;

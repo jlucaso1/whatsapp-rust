@@ -54,7 +54,7 @@ serde_json = "1.0"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-websockets = { version = "0.12.0", features = ["client", "rustls-webpki-roots", "rand", "ring"] }
-ureq = { version = "3.1.0", default-features = false, features = ["rustls"] }
+ureq = { version = "3.1.0", default-features = false, features = ["rustls", "json"] }
 urlencoding = "2.1"
 wacore = { path = "./wacore" }
 wacore-binary = { workspace = true }
