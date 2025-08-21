@@ -2,7 +2,7 @@ use core::future::Future;
 use flate2::read::ZlibDecoder;
 use prost::Message;
 use prost::encoding::{decode_key, decode_varint};
-use std::io::{Cursor, Read};
+use std::io::Read;
 use thiserror::Error;
 use waproto::whatsapp as wa;
 
@@ -28,43 +28,39 @@ where
     let mut uncompressed = Vec::new();
     decoder.read_to_end(&mut uncompressed)?;
 
-    let mut cursor = Cursor::new(uncompressed.as_slice());
+    let mut buf = uncompressed.as_slice();
     let total_len = uncompressed.len();
 
-    while (cursor.position() as usize) < total_len {
+    while !buf.is_empty() {
         let (field_number, wire_type) =
-            decode_key(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
+            decode_key(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
 
         match field_number {
             1 => {
-                let _ =
-                    decode_varint(&mut cursor).map_err(HistorySyncError::ProtobufDecodeError)?;
+                let _ = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
             }
             2 => {
-                let len = decode_varint(&mut cursor)
-                    .map_err(HistorySyncError::ProtobufDecodeError)?
+                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
                     as usize;
-                let pos = cursor.position() as usize;
+                let pos = total_len - buf.len();
 
                 if pos + len > total_len {
                     return Err(HistorySyncError::ProtobufDecodeError(
                         prost::DecodeError::new("message length out of bounds"),
                     ));
                 }
-
                 let conv_slice = &uncompressed[pos..pos + len];
                 match wa::Conversation::decode(conv_slice) {
                     Ok(conv) => conversation_handler(conv).await,
                     Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                 }
 
-                cursor.set_position((pos + len) as u64);
+                buf = &uncompressed[(pos + len)..];
             }
             7 => {
-                let len = decode_varint(&mut cursor)
-                    .map_err(HistorySyncError::ProtobufDecodeError)?
+                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
                     as usize;
-                let pos = cursor.position() as usize;
+                let pos = total_len - buf.len();
                 if pos + len > total_len {
                     return Err(HistorySyncError::ProtobufDecodeError(
                         prost::DecodeError::new("pushname length out of bounds"),
@@ -75,32 +71,32 @@ where
                     Ok(pn) => pushname_handler(pn).await,
                     Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                 }
-                cursor.set_position((pos + len) as u64);
+                buf = &uncompressed[(pos + len)..];
             }
             _ => match wire_type {
                 prost::encoding::WireType::Varint => {
-                    let _ = decode_varint(&mut cursor)
-                        .map_err(HistorySyncError::ProtobufDecodeError)?;
+                    let _ =
+                        decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
                 }
                 prost::encoding::WireType::LengthDelimited => {
-                    let l = decode_varint(&mut cursor)
+                    let l = decode_varint(&mut buf)
                         .map_err(HistorySyncError::ProtobufDecodeError)?
                         as usize;
-                    let pos = cursor.position() as usize;
+                    let pos = total_len - buf.len();
                     if pos + l > total_len {
                         return Err(HistorySyncError::ProtobufDecodeError(
                             prost::DecodeError::new("length-delimited skip out of bounds"),
                         ));
                     }
-                    cursor.set_position((pos + l) as u64);
+                    buf = &uncompressed[(pos + l)..];
                 }
                 prost::encoding::WireType::ThirtyTwoBit => {
-                    let pos = cursor.position() as usize;
-                    cursor.set_position((pos + 4) as u64);
+                    let pos = total_len - buf.len();
+                    buf = &uncompressed[(pos + 4)..];
                 }
                 prost::encoding::WireType::SixtyFourBit => {
-                    let pos = cursor.position() as usize;
-                    cursor.set_position((pos + 8) as u64);
+                    let pos = total_len - buf.len();
+                    buf = &uncompressed[(pos + 8)..];
                 }
                 _ => {
                     return Err(HistorySyncError::ProtobufDecodeError(

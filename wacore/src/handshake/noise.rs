@@ -1,16 +1,11 @@
+use crate::crypto::sha256;
 use crate::handshake::state::Result;
 use crate::handshake::utils::{HandshakeError, generate_iv};
 use crate::libsignal::protocol::{PrivateKey, PublicKey};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
-use sha2::{Digest, Sha256};
-
-pub fn sha256_slice(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().into()
-}
+use sha2::Sha256;
 
 pub struct NoiseHandshake {
     pub hash: [u8; 32],
@@ -31,7 +26,7 @@ impl NoiseHandshake {
         let h: [u8; 32] = if pattern.len() == 32 {
             pattern.as_bytes().try_into().unwrap()
         } else {
-            sha256_slice(pattern.as_bytes())
+            sha256(pattern.as_bytes())
         };
 
         let mut new_self = Self {
@@ -47,10 +42,10 @@ impl NoiseHandshake {
     }
 
     pub fn authenticate(&mut self, data: &[u8]) {
-        let mut hasher = Sha256::new();
-        hasher.update(self.hash);
-        hasher.update(data);
-        self.hash = hasher.finalize().into();
+        let mut concat = Vec::with_capacity(self.hash.len() + data.len());
+        concat.extend_from_slice(&self.hash);
+        concat.extend_from_slice(data);
+        self.hash = sha256(&concat);
     }
 
     fn post_increment_counter(&mut self) -> u32 {
