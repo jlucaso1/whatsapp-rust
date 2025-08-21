@@ -1,123 +1,44 @@
-# Whatsapp-Rust (whatsmeow Port)
+# Whatsapp-Rust
 
-This project is a Rust port of the core functionalities of the Go-based `whatsmeow` library. The goal is to create a robust, type-safe, and performant Rust library for interacting with the WhatsApp platform using modern and idiomatic async Rust.
+A high-performance, asynchronous Rust library for interacting with the WhatsApp platform, inspired by the Go-based `whatsmeow` library and the Typescript-based `Baileys`. This project leverages Rust's safety, performance, and modern async ecosystem (Tokio) to provide a robust and type-safe client.
 
-This document outlines the migration progress and the current state of the project.
+## Core Features
 
-## Project Goals
+- ✅ **Secure Connection & Pairing:** Full implementation of the Noise Protocol handshake and QR code pairing for secure, multi-device sessions.
+- ✅ **End-to-End Encrypted Messaging:** Robust support for the Signal Protocol, enabling E2E encrypted communication for both one-on-one and group chats.
+- ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
+- ✅ **Persistent State:** Uses Diesel and SQLite for durable session state, ensuring the client can resume sessions after a restart.
+- ✅ **Asynchronous by Design:** Built on `tokio` for efficient, non-blocking I/O and concurrent task handling.
 
-- **Type Safety:** Leverage Rust's strong type system to eliminate entire classes of bugs.
-- **Performance:** Utilize Rust's performance for efficient handling of binary protocols and cryptography. (Currently single threaded, but with margin to improve)
-- **Concurrency:** Build a modern asynchronous architecture using Tokio for high-throughput event processing.
-- **Modularity:** Maintain a clean, modular architecture similar to `whatsmeow` to ensure the codebase is maintainable and extensible.
+## Quick Start: A Universal Ping-Pong Bot
 
-## Migration Status
+The following example demonstrates a simple bot that can "pong" back text, images, and videos.
 
-### Legend
+Check the file `src/main.rs` and run it with `cargo run`.
 
-- `✅` **Completed**
-- `⏳` **In Progress / Partially Implemented**
-- `📋` **Planned**
-- `[ ]` **Not Started**
+## Roadmap
 
----
+With the core messaging and media functionality now stable, the project can focus on expanding feature parity and improving robustness.
 
-### 1. Foundation & Core Primitives
+1.  **Phase 2: Robustness and Event Handling**
 
-These modules form the bedrock of the library and are prerequisites for any higher-level functionality.
+    - [ ] Implement handlers for all receipt types (read, played, etc.).
+    - [ ] Implement presence handling (`<presence>`).
+    - [ ] Expand `usync` implementation for robust contact and profile synchronization.
 
-- `✅` **Protocol Buffers (`proto/`)**
-- `✅` **Cryptography Utilities (`crypto/`)**
-- `✅` **Binary Protocol (`binary/`)**
-- `✅` **Core Types (`types/`)**
+2.  **Phase 3: Expanded Message Types**
 
----
+    - [ ] Add support for sending and receiving reactions.
+    - [ ] Implement support for polls and other interactive messages.
+    - [ ] Handle message edits and revokes.
 
-### 2. Connection & Authentication
-
-This section covers establishing and securing the connection to WhatsApp's servers.
-
-- `✅` **Socket Layer (`socket/`)**
-- `✅` **Authentication Handshake (`handshake.rs`)**
-- `✅` **Pairing Logic (QR Code, `pair.rs`, `qrcode.rs`)**
-
----
-
-### 3. Main Client & Event Loop
-
-This is the primary orchestrator that brings all other modules together.
-
-- `✅` **Client Struct & Main Loop (`client.rs`)**
-- `✅` **IQ (Info/Query) Handling (`request.rs`)**
-- `✅` **Keepalive Loop (`keepalive.rs`)**
-- `✅` **App State Synchronization (`appstate/`)**
-- `✅` **History Sync (`history_sync.rs`)**
-
----
-
-### 4. End-to-End Encryption (Signal Protocol)
-
-The core of the end-to-end encryption implementation.
-
-- `✅` **Session Management (`signal/session.rs`)**:
-  - `✅` Decryption of both `PreKeySignalMessage` and `SignalMessage` is working correctly.
-  - `✅` Encryption for 1-on-1 chats is implemented, correctly handling multi-device `DeviceSentMessage` payloads.
-- `✅` **Group Messaging (`signal/groups/`)**:
-  - `✅` Decryption and Encryption of group messages (`skmsg`) is functional. The client can correctly receive and process messages sent to groups it is a part of.
-- `✅` **Core Protocol Structs (`signal/`)**: Identity, Keys, Ratchet, etc., have been ported and are in use.
-- `✅` **Store Traits & Implementations (`store/`, `signal/store.rs`)**: The necessary traits and backend implementations for the protocol are defined and functional.
-
----
-
-## Build Process
-
-This project pre-compiles the Protocol Buffer definitions into Rust code to simplify the build process for developers and CI/CD environments. You do not need to have the `protobuf-compiler` (`protoc`) installed to build and run this project.
-
-### Regenerating Protobuf Code
-
-If you make changes to `waproto/src/whatsapp.proto`, you will need to regenerate the corresponding Rust code.
-
-**Prerequisites:**
-
-- You must have the protobuf compiler installed. On Debian/Ubuntu, you can install it with:
-  ```sh
-  sudo apt-get update && sudo apt-get install -y protobuf-compiler
-  ```
-
-**Command:**
-
-- To regenerate the files, run the following command from the root of the repository:
-  ```sh
-  GENERATE_PROTO=1 cargo build -p waproto
-  ```
-  This command will execute the `waproto/build.rs` script, which regenerates `waproto/src/whatsapp.rs`. Remember to commit the updated generated file to the repository.
-
-## Roadmap & Next Steps
-
-The project has achieved a major milestone: a stable, authenticated, and end-to-end encrypted connection for one-on-one chats. The client can successfully pair, connect, and exchange messages with other WhatsApp clients, including handling the multi-device synchronization protocol correctly.
-
-### Phase 1: App State and Media
-
-1.  **Implement Media Uploads/Downloads**:
-    - **Task**: Add support for encrypting/uploading and downloading/decrypting media files (images, videos, documents). This involves handling media connection details (`mediaconn.rs`).
-    - **Why**: Essential for any client that needs to handle more than just text.
-
-### Phase 2: Robustness and Feature Parity
-
-1.  **Full `usync` Implementation**: Implement a robust `get_user_devices` function using `usync` IQs to ensure device lists are always up-to-date.
-2.  **Expand Event Handlers**: Implement handlers for receipts, presence, and other notification types to achieve closer feature parity with `whatsmeow`.
+3.  **Future Goals**
+    - [ ] Profile management (setting status, profile pictures).
+    - [ ] Explore newsletter and channel support.
 
 ## Disclaimer
 
 This project is an unofficial, open-source reimplementation of a WhatsApp client. Using custom or third-party clients can violate WhatsApp/Meta's Terms of Service and may result in temporary or permanent account suspension or bans. Use this software at your own risk.
-
-Recommendations:
-
-- Prefer using official WhatsApp/Meta APIs for production use.
-- Test with secondary accounts or non-critical numbers.
-- Avoid automated, bulk, or abusive behavior that could trigger rate limits or enforcement.
-
-If you need help making your usage safer (rate-limiting, retries, or migrating to official APIs), open an issue or discussion.
 
 ## Acknowledgements
 

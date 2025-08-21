@@ -93,6 +93,14 @@ macro_rules! impl_downloadable {
 }
 
 impl_downloadable!(wa::message::ImageMessage, MediaType::Image, file_length);
+impl_downloadable!(wa::message::VideoMessage, MediaType::Video, file_length);
+impl_downloadable!(
+    wa::message::DocumentMessage,
+    MediaType::Document,
+    file_length
+);
+impl_downloadable!(wa::message::AudioMessage, MediaType::Audio, file_length);
+impl_downloadable!(wa::message::StickerMessage, MediaType::Sticker, file_length);
 impl_downloadable!(ExternalBlobReference, MediaType::AppState, file_size_bytes);
 impl_downloadable!(HistorySyncNotification, MediaType::History, file_length);
 
