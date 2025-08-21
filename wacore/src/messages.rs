@@ -1,6 +1,5 @@
+use crate::crypto::sha256;
 use base64::Engine as _;
-use sha1::Digest as _;
-use sha2::Sha256;
 
 pub struct MessageUtils;
 
@@ -25,9 +24,7 @@ impl MessageUtils {
 
         let concatenated_jids = jids.join("");
 
-        let mut hasher = Sha256::new();
-        hasher.update(concatenated_jids.as_bytes());
-        let full_hash = hasher.finalize();
+        let full_hash = sha256(concatenated_jids.as_bytes());
 
         let truncated_hash = &full_hash[..6];
 

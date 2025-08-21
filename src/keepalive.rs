@@ -9,15 +9,12 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::SERVER_JID;
 use wacore_binary::node::NodeContent;
 
-// Constants ported from whatsmeow/keepalive.go
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
 const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
-const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180); // 3 minutes
+const KEEP_ALIVE_MAX_FAIL_TIME: Duration = Duration::from_secs(180);
 const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
 
 impl Client {
-    /// Sends a single keepalive ping and waits for a pong.
-    /// Returns true on success, false on failure.
     async fn send_keepalive(&self) -> bool {
         if !self.is_connected() {
             return false;
@@ -47,7 +44,6 @@ impl Client {
         }
     }
 
-    /// The main keepalive loop. This should be spawned as a background task.
     pub(crate) async fn keepalive_loop(self: Arc<Self>) {
         let mut last_success = chrono::Utc::now();
         let mut error_count = 0u32;
@@ -77,15 +73,12 @@ impl Client {
                         error_count += 1;
                         warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {error_count}");
 
-                        // If auto-reconnect is enabled and we haven't had a successful ping in a while,
-                        // force a disconnect so the main `run` loop can handle reconnecting.
                         if self.enable_auto_reconnect.load(Ordering::Relaxed)
                             && chrono::Utc::now().signed_duration_since(last_success)
                                 > chrono::Duration::from_std(KEEP_ALIVE_MAX_FAIL_TIME).unwrap()
                         {
                             warn!(target: "Client/Keepalive", "Forcing reconnect due to keepalive failure for over {} seconds.", KEEP_ALIVE_MAX_FAIL_TIME.as_secs());
                             self.disconnect().await;
-                            // The main run loop will handle the reconnect logic.
                             return;
                         }
                     }
