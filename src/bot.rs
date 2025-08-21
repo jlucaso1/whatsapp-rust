@@ -14,13 +14,26 @@ use waproto::whatsapp as wa;
 pub struct MessageContext {
     pub message: Box<wa::Message>,
     pub info: MessageInfo,
-    client: Arc<Client>,
+    pub client: Arc<Client>,
 }
 
 impl MessageContext {
     pub async fn reply(&self, text: &str) -> Result<(), anyhow::Error> {
         self.client
             .send_text_message(self.info.source.chat.clone(), text)
+            .await
+    }
+
+    pub async fn send_message(&self, message: wa::Message) -> Result<(), anyhow::Error> {
+        let message_id = self.client.generate_message_id().await;
+        self.client
+            .send_message_impl(
+                self.info.source.chat.clone(),
+                Arc::new(message),
+                message_id,
+                false,
+                false,
+            )
             .await
     }
 }
