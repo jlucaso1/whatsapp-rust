@@ -126,3 +126,107 @@ pub fn validate_index_mac(
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_mutation(
+        operation: wa::syncd_mutation::SyncdOperation,
+        index_mac: Vec<u8>,
+        value_mac: Option<Vec<u8>>,
+    ) -> wa::SyncdMutation {
+        let value_blob = value_mac.map(|mac| {
+            let mut blob = vec![0u8; 16];
+            blob.extend_from_slice(&mac);
+            blob
+        });
+
+        wa::SyncdMutation {
+            operation: Some(operation as i32),
+            record: Some(wa::SyncdRecord {
+                index: Some(wa::SyncdIndex {
+                    blob: Some(index_mac),
+                }),
+                value: value_blob.map(|b| wa::SyncdValue { blob: Some(b) }),
+                key_id: Some(wa::KeyId {
+                    id: Some(b"test_key_id".to_vec()),
+                }),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_update_hash_with_set_overwrite_and_remove() {
+        const INDEX_MAC_1: &[u8] = &[1; 32];
+        const VALUE_MAC_1: &[u8] = &[10; 32];
+
+        const INDEX_MAC_2: &[u8] = &[2; 32];
+        const VALUE_MAC_2: &[u8] = &[20; 32];
+
+        const VALUE_MAC_3_OVERWRITE: &[u8] = &[30; 32];
+
+        let mut prev_macs = HashMap::<Vec<u8>, Vec<u8>>::new();
+
+        let mut state = HashState::default();
+        let initial_mutations = vec![
+            create_mutation(
+                wa::syncd_mutation::SyncdOperation::Set,
+                INDEX_MAC_1.to_vec(),
+                Some(VALUE_MAC_1.to_vec()),
+            ),
+            create_mutation(
+                wa::syncd_mutation::SyncdOperation::Set,
+                INDEX_MAC_2.to_vec(),
+                Some(VALUE_MAC_2.to_vec()),
+            ),
+        ];
+
+        let get_prev_mac_closure = |_: &[u8], _: usize| Ok(None);
+        let (warnings, result) = state.update_hash(&initial_mutations, get_prev_mac_closure);
+        assert!(result.is_ok());
+        assert!(warnings.is_empty());
+
+        let expected_hash_after_add = WAPATCH_INTEGRITY.subtract_then_add(
+            &[0; 128],
+            &[],
+            &[VALUE_MAC_1.to_vec(), VALUE_MAC_2.to_vec()],
+        );
+        assert_eq!(state.hash.as_slice(), expected_hash_after_add.as_slice());
+
+        prev_macs.insert(INDEX_MAC_1.to_vec(), VALUE_MAC_1.to_vec());
+        prev_macs.insert(INDEX_MAC_2.to_vec(), VALUE_MAC_2.to_vec());
+
+        let update_and_remove_mutations = vec![
+            create_mutation(
+                wa::syncd_mutation::SyncdOperation::Set,
+                INDEX_MAC_1.to_vec(),
+                Some(VALUE_MAC_3_OVERWRITE.to_vec()),
+            ),
+            create_mutation(
+                wa::syncd_mutation::SyncdOperation::Remove,
+                INDEX_MAC_2.to_vec(),
+                None,
+            ),
+        ];
+
+        let get_prev_mac_closure_phase2 =
+            |index_mac: &[u8], _: usize| Ok(prev_macs.get(index_mac).cloned());
+        let (warnings, result) =
+            state.update_hash(&update_and_remove_mutations, get_prev_mac_closure_phase2);
+        assert!(result.is_ok());
+        assert!(warnings.is_empty());
+
+        let expected_final_hash = WAPATCH_INTEGRITY.subtract_then_add(
+            &expected_hash_after_add,
+            &[VALUE_MAC_1.to_vec(), VALUE_MAC_2.to_vec()],
+            &[VALUE_MAC_3_OVERWRITE.to_vec()],
+        );
+
+        assert_eq!(
+            state.hash.as_slice(),
+            expected_final_hash.as_slice(),
+            "The final hash state after overwrite and remove is incorrect."
+        );
+    }
+}
