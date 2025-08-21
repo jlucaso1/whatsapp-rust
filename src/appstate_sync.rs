@@ -1,6 +1,3 @@
-//! App state synchronization orchestrator (port of whatsmeow appstate logic)
-//! High-level (runtime + I/O) portion lives in root crate; cryptographic primitives in wacore.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -54,8 +51,7 @@ impl<B: Backend> AppStateProcessor<B> {
     where
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
-        let mut pl = parse_patch_list(stanza_root)?; // may contain snapshot_ref
-        // Download snapshot synchronously via provided closure if needed
+        let mut pl = parse_patch_list(stanza_root)?;
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
             && let Ok(data) = download(ext)
@@ -73,6 +69,7 @@ impl<B: Backend> AppStateProcessor<B> {
     ) -> Result<(Vec<Mutation>, HashState, PatchList)> {
         let mut state = self.backend.get_app_state_version(pl.name.as_str()).await?;
         let mut new_mutations: Vec<Mutation> = Vec::new();
+
         if let Some(snapshot) = &pl.snapshot {
             let version = snapshot
                 .version
@@ -80,6 +77,7 @@ impl<B: Backend> AppStateProcessor<B> {
                 .and_then(|v| v.version)
                 .unwrap_or(0);
             state.version = version;
+
             let encrypted: Vec<wa::SyncdMutation> = snapshot
                 .records
                 .iter()
@@ -88,24 +86,24 @@ impl<B: Backend> AppStateProcessor<B> {
                     record: Some(rec.clone()),
                 })
                 .collect();
+
             let (_warn, res) = state.update_hash(&encrypted, |_index_mac, _i| Ok(None));
             res?;
-            if validate_macs {
-                // Validate snapshot MAC
-                if let (Some(mac_expected), Some(key_id)) = (
+
+            if validate_macs
+                && let (Some(mac_expected), Some(key_id)) = (
                     snapshot.mac.as_ref(),
                     snapshot.key_id.as_ref().and_then(|k| k.id.as_ref()),
-                ) {
-                    let keys = self.get_app_state_key(key_id).await?;
-                    let computed =
-                        state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
-                    if computed != *mac_expected {
-                        return Err(anyhow!("snapshot MAC mismatch"));
-                    }
+                )
+            {
+                let keys = self.get_app_state_key(key_id).await?;
+                let computed = state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
+                if computed != *mac_expected {
+                    return Err(anyhow!("snapshot MAC mismatch"));
                 }
             }
+
             let mut added = Vec::new();
-            // Snapshot is all SETs
             for rec in &snapshot.records {
                 let mut out = Vec::new();
                 self.decode_record(
@@ -115,7 +113,6 @@ impl<B: Backend> AppStateProcessor<B> {
                     validate_macs,
                 )
                 .await?;
-                // record value_mac/index_mac for persistence
                 if let Some(m) = out.last() {
                     added.push(wacore::store::traits::AppStateMutationMAC {
                         index_mac: m.index_mac.clone(),
@@ -124,7 +121,7 @@ impl<B: Backend> AppStateProcessor<B> {
                 }
                 new_mutations.extend(out);
             }
-            // Persist version + added MACs
+
             self.backend
                 .set_app_state_version(pl.name.as_str(), state.clone())
                 .await?;
@@ -137,43 +134,21 @@ impl<B: Backend> AppStateProcessor<B> {
 
         for patch in &pl.patches {
             state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
-            // Preload previous value MACs for indices not defined earlier in this patch (DB fallback) to avoid block_on.
+
             use std::collections::HashMap as StdHashMap;
-            let mut set_value_macs: StdHashMap<Vec<u8>, Vec<u8>> = StdHashMap::new(); // index_mac -> value_mac from earlier SET
-            let mut need_db: Vec<Vec<u8>> = Vec::new();
-            for (i, m) in patch.mutations.iter().enumerate() {
+            let mut need_db_lookup: Vec<Vec<u8>> = Vec::new();
+            for m in &patch.mutations {
                 if let Some(rec) = &m.record
                     && let Some(ind) = &rec.index
                     && let Some(index_mac) = &ind.blob
+                    && !need_db_lookup.iter().any(|v| v == index_mac)
                 {
-                    // Track SET value MACs
-                    if m.operation.unwrap_or(0) == wa::syncd_mutation::SyncdOperation::Set as i32 {
-                        if let Some(val) = &rec.value
-                            && let Some(vb) = &val.blob
-                            && vb.len() >= 32
-                        {
-                            set_value_macs
-                                .entry(index_mac.clone())
-                                .or_insert_with(|| vb[vb.len() - 32..].to_vec());
-                        }
-                    } else if m.operation.unwrap_or(0)
-                        == wa::syncd_mutation::SyncdOperation::Remove as i32
-                    {
-                        // If remove and not previously set in this patch, mark for DB lookup
-                        if !set_value_macs.contains_key(index_mac) {
-                            // We'll defer DB fetch until after scan
-                            // Avoid duplicates
-                            if !need_db.iter().any(|v| v == index_mac) {
-                                need_db.push(index_mac.clone());
-                            }
-                        }
-                    }
+                    need_db_lookup.push(index_mac.clone());
                 }
-                // slight optimization: break early if patch large? keep simple.
-                let _ = i; // silence unused warning if removed later
             }
+
             let mut db_prev: StdHashMap<Vec<u8>, Vec<u8>> = StdHashMap::new();
-            for index_mac in need_db {
+            for index_mac in need_db_lookup {
                 if let Some(mac) = self
                     .backend
                     .get_app_state_mutation_mac(pl.name.as_str(), &index_mac)
@@ -182,8 +157,8 @@ impl<B: Backend> AppStateProcessor<B> {
                     db_prev.insert(index_mac, mac);
                 }
             }
+
             let (_warn, res) = state.update_hash(&patch.mutations, |index_mac, idx| {
-                // search earlier in patch
                 for prev in patch.mutations[..idx].iter().rev() {
                     if let Some(rec) = &prev.record
                         && let Some(ind) = &rec.index
@@ -199,13 +174,14 @@ impl<B: Backend> AppStateProcessor<B> {
                 if let Some(prev_mac) = db_prev.get(index_mac) {
                     return Ok(Some(prev_mac.clone()));
                 }
+
                 Ok(None)
             });
             res?;
+
             if validate_macs && let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref())
             {
                 let keys = self.get_app_state_key(key_id).await?;
-                // Check snapshot MAC for this patch's version
                 if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
                     let computed_snap =
                         state.generate_snapshot_mac(pl.name.as_str(), &keys.snapshot_mac);
@@ -222,16 +198,15 @@ impl<B: Backend> AppStateProcessor<B> {
                     }
                 }
             }
+
             let mut added = Vec::new();
             let mut removed: Vec<Vec<u8>> = Vec::new();
             for m in &patch.mutations {
                 if let Some(rec) = &m.record {
                     let mut out = Vec::new();
-                    let op = match m.operation.unwrap_or(0) {
-                        0 => wa::syncd_mutation::SyncdOperation::Set,
-                        1 => wa::syncd_mutation::SyncdOperation::Remove,
-                        _ => wa::syncd_mutation::SyncdOperation::Set,
-                    };
+                    let op = wa::syncd_mutation::SyncdOperation::try_from(m.operation.unwrap_or(0))
+                        .unwrap_or(wa::syncd_mutation::SyncdOperation::Set);
+
                     self.decode_record(op, rec, &mut out, validate_macs).await?;
                     if let Some(mdec) = out.last() {
                         match op {
@@ -249,7 +224,7 @@ impl<B: Backend> AppStateProcessor<B> {
                     new_mutations.extend(out);
                 }
             }
-            // Persist after each patch
+
             self.backend
                 .set_app_state_version(pl.name.as_str(), state.clone())
                 .await?;
@@ -264,12 +239,13 @@ impl<B: Backend> AppStateProcessor<B> {
                     .await?;
             }
         }
-        // Final version already persisted after patches; ensure latest persisted even if no patches
-        if pl.patches.is_empty() {
+
+        if pl.patches.is_empty() && pl.snapshot.is_some() {
             self.backend
                 .set_app_state_version(pl.name.as_str(), state.clone())
                 .await?;
         }
+
         Ok((new_mutations, state, pl))
     }
 
@@ -293,7 +269,6 @@ impl<B: Backend> AppStateProcessor<B> {
         for patch in &pl.patches {
             check(patch.key_id.as_ref().and_then(|k| k.id.as_ref()));
         }
-        // Filter out those that already exist in store
         let mut out = Vec::new();
         for id in missing {
             if self.backend.get_app_state_sync_key(&id).await?.is_none() {
@@ -339,7 +314,6 @@ impl<B: Backend> AppStateProcessor<B> {
         }
         let plaintext = aes_256_cbc_decrypt(ciphertext, &keys.value_encryption, iv)?;
         let action = wa::SyncActionData::decode(plaintext.as_slice())?;
-        // Index MAC validation + JSON parse
         let mut index_list: Vec<String> = Vec::new();
         if let Some(idx_bytes) = action.index.as_ref() {
             if validate_macs {
