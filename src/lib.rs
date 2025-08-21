@@ -11,17 +11,17 @@ pub mod handshake;
 pub mod keepalive;
 pub mod mediaconn;
 pub mod message;
+pub mod mex;
 pub mod pair;
+pub mod prekeys;
 pub mod qrcode;
+pub mod receipt;
 pub mod request;
+pub mod retry;
 pub mod send;
 pub mod socket;
 pub mod store;
 pub mod upload;
-
-pub mod prekeys;
-pub mod receipt;
-pub mod retry;
 
 pub mod appstate_sync;
 pub mod groups;
