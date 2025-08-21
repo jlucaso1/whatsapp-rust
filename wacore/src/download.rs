@@ -1,9 +1,11 @@
+use crate::crypto::{aes_256_cbc_decrypt, hmac_sha256};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::prelude::*;
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::Hmac;
+use hmac::Mac;
 use sha2::Sha256;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::ExternalBlobReference;
@@ -271,37 +273,7 @@ impl DownloadUtils {
     }
 
     pub fn decrypt_cbc(cipher_key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
-        use aes::Aes256;
-        use aes::cipher::generic_array::GenericArray;
-        use aes::cipher::{BlockDecrypt, KeyInit};
-        if ciphertext.len() % 16 != 0 {
-            return Err(anyhow!("Ciphertext not multiple of block"));
-        }
-        let cipher = Aes256::new_from_slice(cipher_key).map_err(|_| anyhow!("Bad AES key"))?;
-        let mut prev: [u8; 16] = iv.try_into().map_err(|_| anyhow!("IV length"))?;
-        let mut out = Vec::with_capacity(ciphertext.len());
-        for block_bytes in ciphertext.chunks(16) {
-            let mut block = GenericArray::clone_from_slice(block_bytes);
-            let saved = block;
-            cipher.decrypt_block(&mut block);
-            for (b, p) in block.iter_mut().zip(prev.iter()) {
-                *b ^= *p;
-            }
-            out.extend_from_slice(&block);
-            prev.copy_from_slice(&saved);
-        }
-        if out.is_empty() {
-            return Err(anyhow!("Empty plaintext"));
-        }
-        let pad = *out.last().unwrap() as usize;
-        if pad == 0 || pad > 16 || pad > out.len() {
-            return Err(anyhow!("Bad padding size"));
-        }
-        if !out[out.len() - pad..].iter().all(|b| *b as usize == pad) {
-            return Err(anyhow!("Bad padding bytes"));
-        }
-        out.truncate(out.len() - pad);
-        Ok(out)
+        aes_256_cbc_decrypt(ciphertext, cipher_key, iv).map_err(|e| anyhow!(e.to_string()))
     }
 
     pub fn verify_and_decrypt(
@@ -319,16 +291,11 @@ impl DownloadUtils {
 
         let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, media_type);
 
-        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&mac_key)
-            .map_err(|_| anyhow!("Failed to initialize HMAC for verification"))?;
-
-        mac.update(&iv);
-        mac.update(ciphertext);
-        let computed_mac_full = mac.finalize().into_bytes();
+        let computed_mac_full = hmac_sha256(&mac_key, &[&iv, ciphertext]);
         if &computed_mac_full[..MAC_SIZE] != received_mac {
             return Err(anyhow!("Invalid MAC signature"));
         }
 
-        Self::decrypt_cbc(&cipher_key, &iv, ciphertext)
+        aes_256_cbc_decrypt(ciphertext, &cipher_key, &iv).map_err(|e| anyhow!(e.to_string()))
     }
 }
