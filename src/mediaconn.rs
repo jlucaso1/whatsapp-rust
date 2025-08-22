@@ -25,7 +25,7 @@ impl MediaConn {
 }
 
 impl Client {
-    pub async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
+    pub(crate) async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
         {
             let guard = self.media_conn.lock().await;
             if !force

@@ -40,11 +40,11 @@ impl From<wacore::request::IqError> for IqError {
 }
 
 impl Client {
-    pub fn generate_request_id(&self) -> String {
+    pub(crate) fn generate_request_id(&self) -> String {
         self.get_request_utils().generate_request_id()
     }
 
-    pub async fn generate_message_id(&self) -> String {
+    pub(crate) async fn generate_message_id(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         self.get_request_utils()
             .generate_message_id(device_snapshot.pn.as_ref())
@@ -54,7 +54,7 @@ impl Client {
         RequestUtils::with_counter(self.unique_id.clone(), self.id_counter.clone())
     }
 
-    pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
+    pub(crate) async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
         let req_id = query
             .id
             .clone()
@@ -92,7 +92,7 @@ impl Client {
         }
     }
 
-    pub async fn handle_iq_response(&self, node: Node) -> bool {
+    pub(crate) async fn handle_iq_response(&self, node: Node) -> bool {
         let id_opt = node.attrs.get("id").cloned();
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)

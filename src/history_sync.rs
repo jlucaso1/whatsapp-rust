@@ -8,7 +8,7 @@ use waproto::whatsapp::message::HistorySyncNotification;
 use crate::client::Client;
 
 impl Client {
-    pub async fn handle_history_sync(
+    pub(crate) async fn handle_history_sync(
         self: &Arc<Self>,
         message_id: String,
         notification: HistorySyncNotification,
@@ -116,7 +116,7 @@ impl Client {
         }
     }
 
-    pub async fn handle_historical_pushnames(self: Arc<Self>, pushnames: &[wa::Pushname]) {
+    pub(crate) async fn handle_historical_pushnames(self: Arc<Self>, pushnames: &[wa::Pushname]) {
         if pushnames.is_empty() {
             return;
         }

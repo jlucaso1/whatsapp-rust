@@ -290,7 +290,11 @@ impl Client {
         }
     }
 
-    pub async fn take_recent_message(&self, to: Jid, id: String) -> Option<Arc<wa::Message>> {
+    pub(crate) async fn take_recent_message(
+        &self,
+        to: Jid,
+        id: String,
+    ) -> Option<Arc<wa::Message>> {
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;
         if let Some(msg) = map_guard.remove(&key) {
@@ -337,7 +341,7 @@ impl Client {
         };
     }
 
-    pub async fn process_node(self: &Arc<Self>, node: &Node) {
+    pub(crate) async fn process_node(self: &Arc<Self>, node: &Node) {
         if node.tag == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
@@ -1020,7 +1024,7 @@ impl Client {
         false
     }
 
-    pub async fn get_qr_channel(
+    pub(crate) async fn get_qr_channel(
         &self,
     ) -> Result<mpsc::Receiver<qrcode::QrCodeEvent>, qrcode::QrError> {
         qrcode::get_qr_channel_logic(self).await
@@ -1053,27 +1057,7 @@ impl Client {
         noise_socket.send_frame(&payload).await.map_err(Into::into)
     }
 
-    pub async fn set_push_name(&self, name: String) -> Result<(), anyhow::Error> {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let old_name = device_snapshot.push_name.clone();
-
-        if old_name != name {
-            self.persistence_manager
-                .process_command(DeviceCommand::SetPushName(name.clone()))
-                .await;
-
-            self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
-                crate::types::events::SelfPushNameUpdated {
-                    from_server: false,
-                    old_name,
-                    new_name: name,
-                },
-            ));
-        }
-        Ok(())
-    }
-
-    pub async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
+    pub(crate) async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();
 
@@ -1109,29 +1093,17 @@ impl Client {
         device_snapshot.push_name.clone()
     }
 
-    pub async fn is_ready_for_presence(&self) -> bool {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        device_snapshot.is_ready_for_presence()
-    }
-
-    pub async fn get_device_debug_info(&self) -> String {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        format!(
-            "Device Debug Info:\n  - JID: {:?}\n  - LID: {:?}\n  - Push Name: '{}'\n  - Has Account: {}\n  - Ready for Presence: {}",
-            device_snapshot.pn,
-            device_snapshot.lid,
-            device_snapshot.push_name,
-            device_snapshot.account.is_some(),
-            device_snapshot.pn.is_some() && !device_snapshot.push_name.is_empty()
-        )
-    }
-
-    pub async fn get_jid(&self) -> Option<Jid> {
+    pub async fn get_pn(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.pn.clone()
     }
 
-    pub async fn send_protocol_receipt(
+    pub async fn get_lid(&self) -> Option<Jid> {
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        snapshot.lid.clone()
+    }
+
+    pub(crate) async fn send_protocol_receipt(
         &self,
         id: String,
         receipt_type: crate::types::presence::ReceiptType,

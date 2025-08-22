@@ -4,6 +4,7 @@ use std::io::Cursor;
 use tokio::task;
 use wacore::download::{Downloadable, MediaType};
 use wacore::proto_helpers::MessageExt;
+use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::upload::UploadResponse;
@@ -32,23 +33,70 @@ fn main() {
 
     let local = task::LocalSet::new();
     local.block_on(&rt, async {
-        Bot::builder()
-            .on_message(|ctx| async move {
-                if let Some(media_ping_request) = get_pingable_media(&ctx.message) {
-                    handle_media_ping(&ctx, media_ping_request).await;
-                }
+        let mut bot = Bot::builder()
+            .on_event(move |event, client| {
+                async move {
+                    match event {
+                        Event::Message(msg, info) => {
+                            let ctx = MessageContext {
+                                message: msg,
+                                info,
+                                client,
+                            };
 
-                if let Some(text) = ctx.message.text_content()
-                    && text == "ping"
-                {
-                    debug!("Received text ping, sending pong...");
-                    if let Err(e) = ctx.reply("pong").await {
-                        error!("Failed to send text reply: {}", e);
+                            if let Some(media_ping_request) = get_pingable_media(&ctx.message) {
+                                handle_media_ping(&ctx, media_ping_request).await;
+                            }
+
+                            if let Some(text) = ctx.message.text_content()
+                                && text == "ping"
+                            {
+                                debug!("Received text ping, sending pong...");
+                                if let Err(e) = ctx
+                                    .send_message(wa::Message {
+                                        conversation: Some("pong".to_string()),
+                                        ..Default::default()
+                                    })
+                                    .await
+                                {
+                                    error!("Failed to send text reply: {}", e);
+                                }
+                            }
+                        }
+                        Event::Connected(_) => {
+                            info!("✅ Bot connected successfully!");
+                        }
+                        Event::Receipt(receipt) => {
+                            info!(
+                                "Got receipt for message(s) {:?}, type: {:?}",
+                                receipt.message_ids, receipt.r#type
+                            );
+                        }
+                        Event::LoggedOut(_) => {
+                            error!("❌ Bot was logged out!");
+                        }
+                        _ => {
+                            // debug!("Received unhandled event: {:?}", event);
+                        }
                     }
                 }
             })
-            .run()
-            .await;
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        // If you want and need, you can get the client:
+        // let client = bot.client();
+
+        let bot_handle = match bot.run().await {
+            Ok(handle) => handle,
+            Err(e) => {
+                error!("Bot failed to start: {}", e);
+                return;
+            }
+        };
+
+        bot_handle.await.unwrap();
     });
 }
 
@@ -136,7 +184,12 @@ async fn handle_media_ping(ctx: &MessageContext, media: &(dyn MediaPing + '_)) {
     let mut data_buffer = Cursor::new(Vec::new());
     if let Err(e) = ctx.client.download_to_file(media, &mut data_buffer).await {
         error!("Failed to download media: {}", e);
-        let _ = ctx.reply("Failed to download your media.").await;
+        let _ = ctx
+            .send_message(wa::Message {
+                conversation: Some("Failed to download your media.".to_string()),
+                ..Default::default()
+            })
+            .await;
         return;
     }
 
@@ -149,7 +202,12 @@ async fn handle_media_ping(ctx: &MessageContext, media: &(dyn MediaPing + '_)) {
         Ok(resp) => resp,
         Err(e) => {
             error!("Failed to upload media: {}", e);
-            let _ = ctx.reply("Failed to re-upload the media.").await;
+            let _ = ctx
+                .send_message(wa::Message {
+                    conversation: Some("Failed to re-upload the media.".to_string()),
+                    ..Default::default()
+                })
+                .await;
             return;
         }
     };
