@@ -1,14 +1,18 @@
 use crate::client::Client;
+use crate::config::ClientConfig;
 use crate::qrcode::QrCodeEvent;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
+use anyhow::Result;
 use http::Uri;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::task;
 use waproto::whatsapp as wa;
 
 pub struct MessageContext {
@@ -18,12 +22,6 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
-    pub async fn reply(&self, text: &str) -> Result<(), anyhow::Error> {
-        self.client
-            .send_text_message(self.info.source.chat.clone(), text)
-            .await
-    }
-
     pub async fn send_message(&self, message: wa::Message) -> Result<(), anyhow::Error> {
         let message_id = self.client.generate_message_id().await;
         self.client
@@ -38,60 +36,172 @@ impl MessageContext {
     }
 }
 
-type MessageHandler =
-    Arc<dyn Fn(MessageContext) -> Pin<Box<dyn Future<Output = ()>>> + Send + Sync>;
+type EventHandlerCallback =
+    Arc<dyn Fn(Event, Arc<Client>) -> Pin<Box<dyn Future<Output = ()>>> + Send + Sync>;
 
-pub struct Bot;
+struct BotEventHandler {
+    client: Arc<Client>,
+    event_handler: Option<EventHandlerCallback>,
+}
+
+impl EventHandler for BotEventHandler {
+    fn handle_event(&self, event: &Event) {
+        if let Some(handler) = &self.event_handler {
+            let handler_clone = handler.clone();
+            let event_clone = event.clone();
+            let client_clone = self.client.clone();
+
+            tokio::task::spawn_local(async move {
+                handler_clone(event_clone, client_clone).await;
+            });
+        }
+    }
+}
+
+pub struct Bot {
+    client: Arc<Client>,
+    sync_task_receiver: Option<mpsc::Receiver<crate::sync_task::MajorSyncTask>>,
+    event_handler: Option<EventHandlerCallback>,
+}
 
 impl Bot {
     pub fn builder() -> BotBuilder {
         BotBuilder::new()
     }
+
+    pub fn client(&self) -> Arc<Client> {
+        self.client.clone()
+    }
+
+    pub async fn run(&mut self) -> Result<task::JoinHandle<()>> {
+        if let Some(mut receiver) = self.sync_task_receiver.take() {
+            let worker_client = self.client.clone();
+            tokio::task::spawn_local(async move {
+                while let Some(task) = receiver.recv().await {
+                    match task {
+                        crate::sync_task::MajorSyncTask::HistorySync {
+                            message_id,
+                            notification,
+                        } => {
+                            worker_client
+                                .process_history_sync_task(message_id, *notification)
+                                .await;
+                        }
+                        crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
+                            if let Err(e) = worker_client
+                                .process_app_state_sync_task(name, full_sync)
+                                .await
+                            {
+                                warn!("App state sync task for {:?} failed: {}", name, e);
+                            }
+                        }
+                    }
+                }
+                info!("Sync worker shutting down.");
+            });
+        }
+
+        let handler = Arc::new(BotEventHandler {
+            client: self.client.clone(),
+            event_handler: self.event_handler.take(),
+        });
+        self.client.core.event_bus.add_handler(handler);
+
+        let client_for_run = self.client.clone();
+        let client_handle = tokio::task::spawn_local(async move {
+            client_for_run.run().await;
+        });
+
+        let device_snapshot = self.client.persistence_manager.get_device_snapshot().await;
+        if device_snapshot.pn.is_none() {
+            info!("Client is not logged in. Starting QR code pairing process...");
+            match self.client.get_qr_channel().await {
+                Ok(mut qr_rx) => {
+                    while let Some(event) = qr_rx.recv().await {
+                        match event {
+                            QrCodeEvent::Code { code, .. } => {
+                                info!("----------------------------------------");
+                                info!(
+                                    "A new QR code has been generated. To log in, use a QR code generator and input the following text:"
+                                );
+                                info!("\n{}\n", code);
+                                info!("----------------------------------------");
+                            }
+                            QrCodeEvent::Success => {
+                                info!(
+                                    "✅ Pairing successful! The client will now continue running."
+                                );
+                                break;
+                            }
+                            QrCodeEvent::Error(e) => {
+                                self.client.disconnect().await;
+                                return Err(anyhow::anyhow!("Pairing failed: {:?}", e));
+                            }
+                            QrCodeEvent::Timeout => {
+                                self.client.disconnect().await;
+                                return Err(anyhow::anyhow!("Pairing timed out."));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.client.disconnect().await;
+                    return Err(e.into());
+                }
+            }
+        } else {
+            info!("Client is already logged in. Starting main event loop.");
+        }
+
+        Ok(client_handle)
+    }
 }
 
+#[derive(Default)]
 pub struct BotBuilder {
-    message_handler: Option<MessageHandler>,
-    db_path: String,
+    event_handler: Option<EventHandlerCallback>,
+    db_path: Option<String>,
     override_app_version: Option<(u32, u32, u32)>,
 }
 
 impl BotBuilder {
     fn new() -> Self {
-        Self {
-            message_handler: None,
-            db_path: "whatsapp.db".to_string(),
-            override_app_version: None,
-        }
+        Self::default()
     }
 
-    pub fn with_app_version(mut self, primary: u32, secondary: u32, tertiary: u32) -> Self {
-        self.override_app_version = Some((primary, secondary, tertiary));
-        self
-    }
-
-    pub fn on_message<F, Fut>(mut self, handler: F) -> Self
+    pub fn on_event<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(Event, Arc<Client>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + 'static,
     {
-        self.message_handler = Some(Arc::new(move |ctx| Box::pin(handler(ctx))));
+        self.event_handler = Some(Arc::new(move |event, client| {
+            Box::pin(handler(event, client))
+        }));
         self
     }
 
-    pub fn with_db_path(mut self, db_path: &str) -> Self {
-        self.db_path = db_path.to_string();
+    pub fn with_config(mut self, config: ClientConfig) -> Self {
+        let db_path = if config.db_path.is_empty() {
+            "whatsapp.db".to_string()
+        } else {
+            config.db_path
+        };
+        self.db_path = Some(db_path);
+        self.override_app_version = config.app_version_override;
         self
     }
 
-    pub async fn run(self) {
+    pub async fn build(self) -> Result<Bot> {
+        let db_path = self.db_path.unwrap_or_else(|| "whatsapp.db".to_string());
         info!(
             "Initializing PersistenceManager with SQLite at '{}'...",
-            self.db_path
+            &db_path
         );
         let persistence_manager = Arc::new(
-            PersistenceManager::new(&self.db_path)
+            PersistenceManager::new(&db_path)
                 .await
-                .expect("Failed to initialize PersistenceManager with SQLite"),
+                .map_err(|e| anyhow::anyhow!("Failed to init persistence manager: {}", e))?,
         );
 
         persistence_manager
@@ -104,126 +214,13 @@ impl BotBuilder {
             .await;
 
         info!("Creating client...");
-        let (client, mut sync_task_receiver) = Client::new(persistence_manager.clone()).await;
+        let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
 
-        let worker_client = client.clone();
-        tokio::task::spawn_local(async move {
-            while let Some(task) = sync_task_receiver.recv().await {
-                match task {
-                    crate::sync_task::MajorSyncTask::HistorySync {
-                        message_id,
-                        notification,
-                    } => {
-                        worker_client
-                            .process_history_sync_task(message_id, *notification)
-                            .await;
-                    }
-                    crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
-                        if let Err(e) = worker_client
-                            .process_app_state_sync_task(name, full_sync)
-                            .await
-                        {
-                            warn!("App state sync task for {:?} failed: {}", name, e);
-                        }
-                    }
-                }
-            }
-            info!("Sync worker shutting down.");
-        });
-
-        let handler = Arc::new(BotEventHandler {
-            client: client.clone(),
-            message_handler: self.message_handler,
-        });
-        client.core.event_bus.add_handler(handler);
-
-        let device_snapshot = persistence_manager.get_device_snapshot().await;
-        if device_snapshot.pn.is_none() {
-            info!("Client is not logged in. Starting QR code pairing process...");
-
-            let client_clone = client.clone();
-            let client_handle = tokio::task::spawn_local(async move {
-                client_clone.run().await;
-            });
-
-            match client.get_qr_channel().await {
-                Ok(mut qr_rx) => {
-                    while let Some(event) = qr_rx.recv().await {
-                        match event {
-                            QrCodeEvent::Code { code, .. } => {
-                                let qr_url = format!(
-                                    "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={}",
-                                    urlencoding::encode(&code)
-                                );
-                                info!("----------------------------------------");
-                                info!(
-                                    "Scan this URL in a browser to see the QR code:\n  {}",
-                                    qr_url
-                                );
-                                info!("----------------------------------------");
-                            }
-                            QrCodeEvent::Success => {
-                                info!(
-                                    "✅ Pairing successful! The client will now continue running."
-                                );
-                                break;
-                            }
-                            QrCodeEvent::Error(e) => {
-                                error!("❌ Pairing failed: {:?}", e);
-                                client.disconnect().await;
-                                break;
-                            }
-                            QrCodeEvent::Timeout => {
-                                warn!("⌛ Pairing timed out. Please restart the application.");
-                                client.disconnect().await;
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to get QR channel: {}", e);
-                    client.disconnect().await;
-                }
-            }
-            if let Err(e) = client_handle.await {
-                error!("Client task panicked or was cancelled: {}", e);
-            }
-        } else {
-            info!("Client is already logged in. Starting main event loop.");
-            client.run().await;
-        }
-
-        info!("Bot has shut down.");
-    }
-}
-
-struct BotEventHandler {
-    client: Arc<Client>,
-    message_handler: Option<MessageHandler>,
-}
-
-impl EventHandler for BotEventHandler {
-    fn handle_event(&self, event: &Event) {
-        if let Event::Message(msg, info) = event
-            && let Some(handler) = &self.message_handler
-        {
-            let handler_clone = handler.clone();
-            let client_clone = self.client.clone();
-            let msg_clone = msg.clone();
-            let info_clone = info.clone();
-
-            let context = MessageContext {
-                message: msg_clone,
-                info: info_clone,
-                client: client_clone,
-            };
-
-            tokio::task::spawn_local(async move {
-                handler_clone(context).await;
-            });
-        }
+        Ok(Bot {
+            client,
+            sync_task_receiver: Some(sync_task_receiver),
+            event_handler: self.event_handler,
+        })
     }
 }
 

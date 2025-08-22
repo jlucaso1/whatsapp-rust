@@ -14,7 +14,7 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
 impl Client {
-    pub async fn add_recent_message(&self, to: Jid, id: String, msg: Arc<wa::Message>) {
+    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: Arc<wa::Message>) {
         const RECENT_MESSAGES_SIZE: usize = 256;
         let key = RecentMessageKey { to, id };
         let mut map_guard = self.recent_messages_map.lock().await;

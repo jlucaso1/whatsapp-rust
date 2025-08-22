@@ -4,7 +4,7 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::NodeContent;
 
 impl Client {
-    pub async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
+    pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         debug!("get_user_devices: Using normal mode for {jids:?}");
 
         let sid = self.generate_request_id();
@@ -22,7 +22,6 @@ impl Client {
 
         let resp_node = self.send_iq(iq).await?;
 
-        // Delegate parsing to wacore helper
         let devices = wacore::usync::parse_get_user_devices_response(&resp_node)?;
 
         Ok(devices)
