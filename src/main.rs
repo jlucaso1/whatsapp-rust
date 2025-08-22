@@ -37,6 +37,16 @@ fn main() {
             .on_event(move |event, client| {
                 async move {
                     match event {
+                        Event::PairingQrCode { code, timeout } => {
+                            info!("----------------------------------------");
+                            info!(
+                                "New pairing code received (valid for {} seconds):",
+                                timeout.as_secs()
+                            );
+                            info!("\n{}\n", code);
+                            info!("----------------------------------------");
+                        }
+
                         Event::Message(msg, info) => {
                             let ctx = MessageContext {
                                 message: msg,

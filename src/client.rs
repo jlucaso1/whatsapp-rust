@@ -2,7 +2,7 @@ mod context_impl;
 
 use crate::handshake;
 use crate::pair;
-use crate::qrcode;
+use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::node::Node;
@@ -60,12 +60,12 @@ pub struct RecentMessageKey {
 }
 
 pub struct Client {
-    pub core: wacore::client::CoreClient,
+    pub(crate) core: wacore::client::CoreClient,
 
-    pub persistence_manager: Arc<PersistenceManager>,
-    pub media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
+    pub(crate) persistence_manager: Arc<PersistenceManager>,
+    pub(crate) media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
 
-    pub is_logged_in: Arc<AtomicBool>,
+    pub(crate) is_logged_in: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
@@ -100,6 +100,7 @@ pub struct Client {
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
+    pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 }
 
 impl Client {
@@ -152,6 +153,7 @@ impl Client {
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             major_sync_task_sender: tx,
+            pairing_cancellation_tx: Arc::new(Mutex::new(None)),
         };
 
         let arc = Arc::new(this);
@@ -1022,12 +1024,6 @@ impl Client {
         }
 
         false
-    }
-
-    pub(crate) async fn get_qr_channel(
-        &self,
-    ) -> Result<mpsc::Receiver<qrcode::QrCodeEvent>, qrcode::QrError> {
-        qrcode::get_qr_channel_logic(self).await
     }
 
     pub fn is_connected(&self) -> bool {

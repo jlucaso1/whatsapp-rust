@@ -1,6 +1,5 @@
 use crate::client::Client;
 use crate::config::ClientConfig;
-use crate::qrcode::QrCodeEvent;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
@@ -111,48 +110,6 @@ impl Bot {
         let client_handle = tokio::task::spawn_local(async move {
             client_for_run.run().await;
         });
-
-        let device_snapshot = self.client.persistence_manager.get_device_snapshot().await;
-        if device_snapshot.pn.is_none() {
-            info!("Client is not logged in. Starting QR code pairing process...");
-            match self.client.get_qr_channel().await {
-                Ok(mut qr_rx) => {
-                    while let Some(event) = qr_rx.recv().await {
-                        match event {
-                            QrCodeEvent::Code { code, .. } => {
-                                info!("----------------------------------------");
-                                info!(
-                                    "A new QR code has been generated. To log in, use a QR code generator and input the following text:"
-                                );
-                                info!("\n{}\n", code);
-                                info!("----------------------------------------");
-                            }
-                            QrCodeEvent::Success => {
-                                info!(
-                                    "✅ Pairing successful! The client will now continue running."
-                                );
-                                break;
-                            }
-                            QrCodeEvent::Error(e) => {
-                                self.client.disconnect().await;
-                                return Err(anyhow::anyhow!("Pairing failed: {:?}", e));
-                            }
-                            QrCodeEvent::Timeout => {
-                                self.client.disconnect().await;
-                                return Err(anyhow::anyhow!("Pairing timed out."));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    self.client.disconnect().await;
-                    return Err(e.into());
-                }
-            }
-        } else {
-            info!("Client is already logged in. Starting main event loop.");
-        }
 
         Ok(client_handle)
     }

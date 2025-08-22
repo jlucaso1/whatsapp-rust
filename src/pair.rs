@@ -1,6 +1,6 @@
 use crate::client::Client;
-use crate::types::events::{Event, PairError, PairSuccess, Qr};
-use log::{debug, error, info, warn};
+use crate::types::events::{Event, PairError, PairSuccess};
+use log::{error, info, warn};
 use prost::Message;
 use rand::TryRngCore;
 use rand_core::OsRng;
@@ -54,8 +54,45 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                         }
                     }
 
-                    debug!(target: "Client/Pair", "Dispatching QR event with {} codes", codes.len());
-                    client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
+                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+                    let codes_clone = codes.clone();
+                    let client_clone = client.clone();
+
+                    tokio::task::spawn_local(async move {
+                        // The rotation logic is now inside the library
+                        let mut is_first = true;
+                        let mut stop_rx_clone = stop_rx.clone();
+
+                        for code in codes_clone {
+                            let timeout = if is_first {
+                                is_first = false;
+                                std::time::Duration::from_secs(60)
+                            } else {
+                                std::time::Duration::from_secs(20)
+                            };
+
+                            // Dispatch the new, simple event for each code
+                            client_clone
+                                .core
+                                .event_bus
+                                .dispatch(&Event::PairingQrCode { code, timeout });
+
+                            // Wait for the timeout OR a stop signal
+                            tokio::select! {
+                                _ = tokio::time::sleep(timeout) => {}
+                                _ = stop_rx_clone.changed() => {
+                                    info!("Pairing complete. Stopping QR code rotation.");
+                                    return;
+                                }
+                            }
+                        }
+                        info!("All QR codes for this session have expired.");
+                    });
+
+                    *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
+
+                    // We no longer dispatch the raw Event::Qr
+                    // client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {
@@ -74,6 +111,10 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 }
 
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
+    if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
+        let _ = tx.send(());
+    }
+
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
         None => {
