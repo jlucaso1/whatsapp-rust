@@ -87,6 +87,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                             }
                         }
                         info!("All QR codes for this session have expired.");
+                        client_clone.disconnect().await;
                     });
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
