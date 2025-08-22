@@ -48,7 +48,10 @@ pub enum Event {
     PairSuccess(PairSuccess),
     PairError(PairError),
     LoggedOut(LoggedOut),
-    Qr(Qr),
+    PairingQrCode {
+        code: String,
+        timeout: std::time::Duration,
+    },
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
@@ -84,11 +87,6 @@ pub enum Event {
     TemporaryBan(TemporaryBan),
     ConnectFailure(ConnectFailure),
     StreamError(StreamError),
-}
-
-#[derive(Debug, Clone)]
-pub struct Qr {
-    pub codes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
