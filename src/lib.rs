@@ -5,6 +5,7 @@ pub mod types {
 }
 
 pub mod client;
+pub mod config;
 pub mod download;
 pub mod handlers;
 pub mod handshake;

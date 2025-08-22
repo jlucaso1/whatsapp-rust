@@ -28,7 +28,7 @@ use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa};
 
 impl Client {
-    pub async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
+    pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
             Err(e) => {
@@ -47,7 +47,7 @@ impl Client {
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
                 let to_jid = to_node.attrs().string("jid");
-                let own_jid = self.get_jid().await;
+                let own_jid = self.get_pn().await;
 
                 if let Some(our_jid) = own_jid
                     && to_jid == our_jid.to_string()
@@ -326,7 +326,10 @@ impl Client {
         Ok(())
     }
 
-    pub async fn parse_message_info(&self, node: &Node) -> Result<MessageInfo, anyhow::Error> {
+    pub(crate) async fn parse_message_info(
+        &self,
+        node: &Node,
+    ) -> Result<MessageInfo, anyhow::Error> {
         let mut attrs = node.attrs();
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
@@ -377,7 +380,10 @@ impl Client {
         })
     }
 
-    pub async fn handle_app_state_sync_key_share(&self, keys: &wa::message::AppStateSyncKeyShare) {
+    pub(crate) async fn handle_app_state_sync_key_share(
+        &self,
+        keys: &wa::message::AppStateSyncKeyShare,
+    ) {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let key_store = device_snapshot.backend.clone();
 

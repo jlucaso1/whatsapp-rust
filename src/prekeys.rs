@@ -19,7 +19,7 @@ const WANTED_PRE_KEY_COUNT: usize = 50;
 const MIN_PRE_KEY_COUNT: usize = 5;
 
 impl Client {
-    pub async fn fetch_pre_keys(
+    pub(crate) async fn fetch_pre_keys(
         &self,
         jids: &[Jid],
         reason: Option<&str>,
@@ -48,7 +48,7 @@ impl Client {
     }
 
     /// Query the WhatsApp server for how many pre-keys it currently has for this device.
-    pub async fn get_server_pre_key_count(&self) -> Result<usize, crate::request::IqError> {
+    pub(crate) async fn get_server_pre_key_count(&self) -> Result<usize, crate::request::IqError> {
         let count_node = NodeBuilder::new("count").build();
         let iq = InfoQuery {
             namespace: "encrypt",
@@ -79,7 +79,7 @@ impl Client {
     /// Ensure the server has at least MIN_PRE_KEY_COUNT pre-keys, and upload a batch of
     /// WANTED_PRE_KEY_COUNT pre-keys when it is below the threshold.
     /// Uses intelligent pre-key management to reuse existing unuploaded keys before generating new ones.
-    pub async fn upload_pre_keys(&self) -> Result<(), anyhow::Error> {
+    pub(crate) async fn upload_pre_keys(&self) -> Result<(), anyhow::Error> {
         let server_count = match self.get_server_pre_key_count().await {
             Ok(c) => c,
             Err(e) => return Err(anyhow::anyhow!(e)),

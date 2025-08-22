@@ -8,17 +8,13 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
 impl Client {
-    pub async fn send_text_message(&self, to: Jid, text: &str) -> Result<(), anyhow::Error> {
-        let content = wa::Message {
-            conversation: Some(text.to_string()),
-            ..Default::default()
-        };
+    pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, Arc::new(content), request_id, false, false)
+        self.send_message_impl(to, Arc::new(message), request_id, false, false)
             .await
     }
 
-    pub async fn send_message_impl(
+    pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
         message: Arc<wa::Message>,
