@@ -1,5 +1,7 @@
 use chrono::Local;
 use log::{debug, error, info};
+use qrcode::QrCode;
+use qrcode::render::unicode::Dense1x2;
 use std::io::Cursor;
 use tokio::task;
 use wacore::download::{Downloadable, MediaType};
@@ -43,7 +45,21 @@ fn main() {
                                 "New pairing code received (valid for {} seconds):",
                                 timeout.as_secs()
                             );
-                            info!("\n{}\n", code);
+                            info!("Scan the QR code below with your WhatsApp:");
+                            info!("----------------------------------------");
+
+                            match QrCode::new(code.clone()) {
+                                Ok(code) => {
+                                    let string = code.render::<Dense1x2>().build();
+
+                                    info!("{}", string);
+                                }
+                                Err(e) => {
+                                    error!("Failed to generate QR code: {}", e);
+                                    info!("QR Code data: {}", code);
+                                }
+                            }
+
                             info!("----------------------------------------");
                         }
 
