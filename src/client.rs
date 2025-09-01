@@ -101,6 +101,8 @@ pub struct Client {
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
+
+    pub(crate) send_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl Client {
@@ -154,6 +156,7 @@ impl Client {
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
+            send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
         };
 
         let arc = Arc::new(this);
@@ -1045,12 +1048,25 @@ impl Client {
 
         info!(target: "Client/Send", "{}", DisplayableNode(&node));
 
-        let payload = wacore_binary::marshal::marshal(&node).map_err(|e| {
-            error!("Failed to marshal node: {e:?}");
-            SocketError::Crypto("Marshal error".to_string())
-        })?;
+        let mut payload = self
+            .send_buffer_pool
+            .lock()
+            .await
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(1024));
+        payload.clear();
 
-        noise_socket.send_frame(&payload).await.map_err(Into::into)
+        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut payload) {
+            error!("Failed to marshal node: {e:?}");
+            self.send_buffer_pool.lock().await.push(payload);
+            return Err(SocketError::Crypto("Marshal error".to_string()).into());
+        }
+
+        let result = noise_socket.send_frame(&payload).await;
+
+        self.send_buffer_pool.lock().await.push(payload);
+
+        result.map_err(Into::into)
     }
 
     pub(crate) async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {

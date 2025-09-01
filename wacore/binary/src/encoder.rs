@@ -1,42 +1,38 @@
+use std::io::Write;
+
 use crate::error::Result;
 use crate::node::{Attrs, Node, NodeContent};
 use crate::token;
 
-pub(crate) struct Encoder {
-    writer: Vec<u8>,
+pub(crate) struct Encoder<W: Write> {
+    writer: W,
 }
 
-impl Encoder {
-    pub(crate) fn new() -> Self {
-        Self {
-            writer: Vec::with_capacity(1024),
-        }
-    }
-
-    pub(crate) fn into_data(self) -> Vec<u8> {
-        self.writer
+impl<W: Write> Encoder<W> {
+    pub(crate) fn new(writer: W) -> Self {
+        Self { writer }
     }
 
     fn write_u8(&mut self, val: u8) {
-        self.writer.push(val);
+        self.writer.write_all(&[val]).unwrap();
     }
 
     fn write_u16_be(&mut self, val: u16) {
-        self.writer.extend_from_slice(&val.to_be_bytes());
+        self.writer.write_all(&val.to_be_bytes()).unwrap();
     }
 
     fn write_u32_be(&mut self, val: u32) {
-        self.writer.extend_from_slice(&val.to_be_bytes());
+        self.writer.write_all(&val.to_be_bytes()).unwrap();
     }
 
     fn write_u20_be(&mut self, value: u32) {
-        self.writer.push(((value >> 16) & 0x0F) as u8);
-        self.writer.push(((value >> 8) & 0xFF) as u8);
-        self.writer.push((value & 0xFF) as u8);
+        let _ = self.writer.write_all(&[((value >> 16) & 0x0F) as u8]);
+        let _ = self.writer.write_all(&[((value >> 8) & 0xFF) as u8]);
+        let _ = self.writer.write_all(&[(value & 0xFF) as u8]);
     }
 
     fn write_raw_bytes(&mut self, bytes: &[u8]) {
-        self.writer.extend_from_slice(bytes);
+        let _ = self.writer.write_all(bytes);
     }
 
     fn write_bytes_with_len(&mut self, bytes: &[u8]) {
@@ -149,10 +145,7 @@ impl Encoder {
     }
 
     fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
-        let mut sorted_attrs: Vec<_> = attrs.iter().collect();
-        sorted_attrs.sort_by_key(|(k, _)| *k);
-
-        for (key, value) in sorted_attrs {
+        for (key, value) in attrs {
             self.write_string(key);
             self.write_string(value);
         }
