@@ -16,12 +16,6 @@ pub struct NoiseSocket {
 }
 
 impl NoiseSocket {
-    /// Marshals a Node and sends it as a frame (for compatibility with request.rs).
-    pub async fn send_node(&self, node: &wacore_binary::node::Node) -> Result<()> {
-        let payload = wacore_binary::marshal::marshal(node)
-            .map_err(|e| SocketError::Crypto(format!("Marshal error: {e:?}")))?;
-        self.send_frame(&payload).await
-    }
     pub fn new(
         frame_socket: Arc<Mutex<FrameSocket>>,
         write_key: Aes256Gcm,

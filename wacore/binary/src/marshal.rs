@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use crate::{BinaryError, Node, NodeRef, Result, decoder::Decoder, encoder::Encoder};
 
 pub fn unmarshal_ref(data: &[u8]) -> Result<NodeRef<'_>> {
@@ -11,14 +13,15 @@ pub fn unmarshal_ref(data: &[u8]) -> Result<NodeRef<'_>> {
     }
 }
 
-pub fn marshal(node: &Node) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new();
+pub fn marshal_to(node: &Node, writer: &mut impl Write) -> Result<()> {
+    writer.write_all(&[0])?;
+    let mut encoder = Encoder::new(writer);
     encoder.write_node(node)?;
-    let node_data = encoder.into_data();
+    Ok(())
+}
 
-    let mut payload = Vec::with_capacity(node_data.len() + 1);
-    payload.push(0);
-    payload.extend_from_slice(&node_data);
-
+pub fn marshal(node: &Node) -> Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(1024);
+    marshal_to(node, &mut payload)?;
     Ok(payload)
 }
