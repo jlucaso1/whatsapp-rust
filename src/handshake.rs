@@ -28,7 +28,7 @@ pub async fn do_handshake(
 
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
-    let _ = frame_socket.send_frame_owned(client_hello_bytes).await?;
+    frame_socket.send_frame(client_hello_bytes).await?;
 
     let resp_frame = timeout(NOISE_HANDSHAKE_RESPONSE_TIMEOUT, frames_rx.recv())
         .await
@@ -40,7 +40,7 @@ pub async fn do_handshake(
         handshake_state.read_server_hello_and_build_client_finish(&resp_frame)?;
 
     debug!("--> Sending ClientFinish");
-    let _ = frame_socket.send_frame_owned(client_finish_bytes).await?;
+    frame_socket.send_frame(client_finish_bytes).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
     info!(target: "Client", "Handshake complete, switching to encrypted communication");
