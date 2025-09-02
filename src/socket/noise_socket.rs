@@ -30,18 +30,30 @@ impl NoiseSocket {
         }
     }
 
-    /// Encrypts the payload and sends it via FrameSocket.
-    pub async fn send_frame(&self, plaintext: &[u8]) -> Result<()> {
+    /// Encrypts `plaintext` into the provided `out` buffer (which is cleared first) and
+    /// returns a slice view of the ciphertext.
+    pub fn encrypt_into<'a>(&self, plaintext: &[u8], out: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+        out.clear();
         let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
         let iv = generate_iv(counter);
         let ciphertext = self
             .write_key
             .encrypt(iv.as_ref().into(), plaintext)
             .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        out.extend_from_slice(&ciphertext);
+        Ok(out.as_slice())
+    }
 
+    pub async fn encrypt_and_send_owned(
+        &self,
+        mut plaintext_buf: Vec<u8>,
+        mut out_buf: Vec<u8>,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.encrypt_into(&plaintext_buf, &mut out_buf)?;
+        plaintext_buf.clear();
         let fs = self.frame_socket.clone();
-        let guard = fs.lock().await;
-        guard.send_frame(&ciphertext).await
+        let returned = fs.lock().await.send_frame_owned(out_buf).await?;
+        Ok((plaintext_buf, returned))
     }
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {

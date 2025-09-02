@@ -82,7 +82,7 @@ impl FrameSocket {
         Ok(())
     }
 
-    pub async fn send_frame(&self, data: &[u8]) -> Result<()> {
+    pub async fn send_frame_owned(&self, mut data: Vec<u8>) -> Result<Vec<u8>> {
         let mut sink_guard = self.ws_sink.lock().await;
         let sink = sink_guard.as_mut().ok_or(SocketError::SocketClosed)?;
 
@@ -94,21 +94,33 @@ impl FrameSocket {
             });
         }
 
-        let mut frame_header = self.header.lock().await.take().unwrap_or_default();
-        let mut whole_frame = Vec::with_capacity(frame_header.len() + FRAME_LENGTH_SIZE + data_len);
+        // Take (or empty) the header (conn header only needed once; subsequent calls will get empty vec)
+        let frame_header = self.header.lock().await.take().unwrap_or_default();
+        let header_len = frame_header.len();
+        let prefix_len = header_len + FRAME_LENGTH_SIZE;
 
-        whole_frame.append(&mut frame_header);
-        whole_frame.extend_from_slice(&u32::to_be_bytes(data_len as u32)[1..]);
-        whole_frame.extend_from_slice(data);
+        data.reserve(prefix_len);
+        let original_len = data.len();
+        data.resize(original_len + prefix_len, 0);
+        data.copy_within(0..original_len, prefix_len);
+
+        // Write header (if any) and 3-byte length (big-endian, 24-bit like existing logic).
+        if header_len > 0 {
+            data[0..header_len].copy_from_slice(&frame_header);
+        }
+        let len_bytes = u32::to_be_bytes(data_len as u32);
+        data[header_len..prefix_len].copy_from_slice(&len_bytes[1..]);
 
         debug!(
             "--> Sending frame: payload {} bytes, total {} bytes",
             data_len,
-            whole_frame.len()
+            data.len()
         );
-        sink.send(Message::binary(bytes::Bytes::from(whole_frame)))
+        sink.send(Message::binary(bytes::Bytes::from(data.clone()))) // clone needed by websocket API
             .await?;
-        Ok(())
+
+        data.clear();
+        Ok(data)
     }
 
     async fn read_pump(
@@ -175,5 +187,35 @@ impl FrameSocket {
                 (cb)(false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefix_shift_algorithm() {
+        let header = WA_CONN_HEADER.to_vec();
+        let header_len = header.len();
+        let payload: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let mut data = payload.clone();
+        let prefix_len = header_len + FRAME_LENGTH_SIZE;
+        let original_len = data.len();
+        data.reserve(prefix_len);
+        data.resize(original_len + prefix_len, 0);
+        data.copy_within(0..original_len, prefix_len);
+        if header_len > 0 {
+            data[0..header_len].copy_from_slice(&header);
+        }
+        let len_bytes = u32::to_be_bytes(original_len as u32);
+        data[header_len..prefix_len].copy_from_slice(&len_bytes[1..]);
+
+        assert_eq!(&data[0..header_len], &header[..]);
+        let reported_len = ((data[header_len] as usize) << 16)
+            | ((data[header_len + 1] as usize) << 8)
+            | (data[header_len + 2] as usize);
+        assert_eq!(reported_len, original_len);
+        assert_eq!(&data[prefix_len..prefix_len + original_len], &payload[..]);
     }
 }
