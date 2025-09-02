@@ -41,6 +41,8 @@ use crate::sync_task::MajorSyncTask;
 const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
+const MAX_POOLED_BUFFER_CAP: usize = 512 * 1024;
+
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("client is not connected")]
@@ -1047,26 +1049,41 @@ impl Client {
         };
 
         info!(target: "Client/Send", "{}", DisplayableNode(&node));
+        let mut pool_guard = self.send_buffer_pool.lock().await;
+        let mut plaintext_buf = pool_guard.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+        let mut encrypted_buf = pool_guard.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+        drop(pool_guard);
 
-        let mut payload = self
-            .send_buffer_pool
-            .lock()
-            .await
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(1024));
-        payload.clear();
+        plaintext_buf.clear();
+        encrypted_buf.clear();
 
-        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut payload) {
+        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
-            self.send_buffer_pool.lock().await.push(payload);
+            let mut g = self.send_buffer_pool.lock().await;
+            g.push(plaintext_buf);
+            g.push(encrypted_buf);
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
-        let result = noise_socket.send_frame(&payload).await;
+        let send_res = noise_socket
+            .encrypt_and_send_owned(plaintext_buf, encrypted_buf)
+            .await;
 
-        self.send_buffer_pool.lock().await.push(payload);
+        let (plaintext_buf, encrypted_buf) = match send_res {
+            Ok(tuple) => tuple,
+            Err(e) => {
+                return Err(e.into());
+            }
+        };
 
-        result.map_err(Into::into)
+        let mut g = self.send_buffer_pool.lock().await;
+        if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+            g.push(plaintext_buf);
+        }
+        if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+            g.push(encrypted_buf);
+        }
+        Ok(())
     }
 
     pub(crate) async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
