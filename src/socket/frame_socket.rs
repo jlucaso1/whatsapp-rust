@@ -82,7 +82,7 @@ impl FrameSocket {
         Ok(())
     }
 
-    pub async fn send_frame_owned(&self, mut data: Vec<u8>) -> Result<Vec<u8>> {
+    pub async fn send_frame(&self, mut data: Vec<u8>) -> Result<()> {
         let mut sink_guard = self.ws_sink.lock().await;
         let sink = sink_guard.as_mut().ok_or(SocketError::SocketClosed)?;
 
@@ -116,11 +116,8 @@ impl FrameSocket {
             data_len,
             data.len()
         );
-        sink.send(Message::binary(bytes::Bytes::from(data.clone()))) // clone needed by websocket API
-            .await?;
-
-        data.clear();
-        Ok(data)
+        sink.send(Message::binary(data)).await?;
+        Ok(())
     }
 
     async fn read_pump(

@@ -1066,11 +1066,11 @@ impl Client {
         }
 
         let send_res = noise_socket
-            .encrypt_and_send_owned(plaintext_buf, encrypted_buf)
+            .encrypt_and_send(plaintext_buf, encrypted_buf)
             .await;
 
-        let (plaintext_buf, encrypted_buf) = match send_res {
-            Ok(tuple) => tuple,
+        let plaintext_buf = match send_res {
+            Ok(buf) => buf,
             Err(e) => {
                 return Err(e.into());
             }
@@ -1080,9 +1080,7 @@ impl Client {
         if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
             g.push(plaintext_buf);
         }
-        if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-            g.push(encrypted_buf);
-        }
+        g.push(Vec::new());
         Ok(())
     }
 
