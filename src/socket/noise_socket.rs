@@ -44,16 +44,16 @@ impl NoiseSocket {
         Ok(out.as_slice())
     }
 
-    pub async fn encrypt_and_send_owned(
+    pub async fn encrypt_and_send(
         &self,
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> Result<Vec<u8>> {
         self.encrypt_into(&plaintext_buf, &mut out_buf)?;
         plaintext_buf.clear();
         let fs = self.frame_socket.clone();
-        let returned = fs.lock().await.send_frame_owned(out_buf).await?;
-        Ok((plaintext_buf, returned))
+        fs.lock().await.send_frame(out_buf).await?;
+        Ok(plaintext_buf)
     }
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
