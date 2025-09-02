@@ -4,8 +4,8 @@ use crate::libsignal::protocol::{
     SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SignalProtocolError,
     UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
+use crate::libsignal::store::GroupSenderKeyStore;
 use crate::messages::MessageUtils;
-use crate::signal::store::GroupSenderKeyStore;
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;

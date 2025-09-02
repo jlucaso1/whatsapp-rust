@@ -3,7 +3,7 @@ use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
 use std::sync::Arc;
 use wacore::libsignal::protocol::SignalProtocolError;
-use wacore::{signal::store::GroupSenderKeyStore, types::jid::JidExt};
+use wacore::{libsignal::store::GroupSenderKeyStore, types::jid::JidExt};
 use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 

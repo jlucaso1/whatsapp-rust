@@ -1,5 +1,5 @@
+use crate::appstate::hash::HashState;
 use crate::store::error::Result;
-use crate::{appstate::hash::HashState, signal};
 use async_trait::async_trait;
 
 use crate::libsignal::protocol::Direction;
@@ -79,8 +79,8 @@ pub trait Backend:
     + SessionStore
     + AppStateKeyStore
     + AppStateStore
-    + signal::store::PreKeyStore
-    + signal::store::SignedPreKeyStore
+    + crate::libsignal::store::PreKeyStore
+    + crate::libsignal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
     + Send
     + Sync
@@ -92,8 +92,8 @@ impl<T> Backend for T where
         + SessionStore
         + AppStateKeyStore
         + AppStateStore
-        + signal::store::PreKeyStore
-        + signal::store::SignedPreKeyStore
+        + crate::libsignal::store::PreKeyStore
+        + crate::libsignal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
         + Send
         + Sync

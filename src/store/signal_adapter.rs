@@ -9,8 +9,8 @@ use wacore::libsignal::protocol::{
 };
 use wacore_binary::jid::Jid;
 
-use wacore::signal::state::record as wacore_record;
-use wacore::signal::store::{
+use wacore::libsignal::store::record_helpers as wacore_record;
+use wacore::libsignal::store::{
     GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
     SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
