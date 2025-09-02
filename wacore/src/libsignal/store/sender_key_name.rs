@@ -17,7 +17,6 @@ impl SenderKeyName {
     pub fn group_id(&self) -> &str {
         &self.group_id
     }
-
     pub fn sender_id(&self) -> &str {
         &self.sender_id
     }

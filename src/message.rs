@@ -18,8 +18,8 @@ use wacore::libsignal::protocol::{
 use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
 };
+use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::messages::MessageUtils;
-use wacore::signal::sender_key_name::SenderKeyName;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::JidExt as _;

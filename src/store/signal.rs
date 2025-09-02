@@ -8,7 +8,7 @@ use wacore::libsignal::protocol::{
     ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
     SignalProtocolError,
 };
-use wacore::signal::store::*;
+use wacore::libsignal::store::*;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
@@ -311,7 +311,7 @@ impl SignedPreKeyStore for Device {
                 .map_err(|e| Box::new(e) as StoreError)?;
             let key_pair = KeyPair::new(public_key, private_key);
 
-            let record = wacore::signal::state::record::new_signed_pre_key_record(
+            let record = wacore::libsignal::store::record_helpers::new_signed_pre_key_record(
                 self.signed_pre_key_id,
                 &key_pair,
                 self.signed_pre_key_signature,

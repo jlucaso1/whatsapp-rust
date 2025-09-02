@@ -1,3 +1,6 @@
+pub mod record_helpers;
+pub mod sender_key_name;
+
 use crate::libsignal::protocol::{
     IdentityKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord,
 };

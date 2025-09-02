@@ -1,5 +1,4 @@
 use crate::client::{Client, RecentMessageKey};
-use crate::signal::store::PreKeyStore;
 use crate::types::events::Receipt;
 use log::{info, warn};
 use prost::Message;
@@ -7,7 +6,8 @@ use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
 use wacore::libsignal::protocol::{KeyPair, ProtocolAddress};
-use wacore::signal::store::SessionStore;
+use wacore::libsignal::store::PreKeyStore;
+use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -78,7 +78,7 @@ impl Client {
 
             let sender_address =
                 ProtocolAddress::new(own_lid.user.clone(), u32::from(own_lid.device).into());
-            let sender_key_name = crate::signal::sender_key_name::SenderKeyName::new(
+            let sender_key_name = wacore::libsignal::store::sender_key_name::SenderKeyName::new(
                 receipt.source.chat.to_string(),
                 sender_address.to_string(),
             );
@@ -168,8 +168,10 @@ impl Client {
 
         let new_prekey_id = (rand::random::<u32>() % 16777215) + 1;
         let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-        let new_prekey_record =
-            wacore::signal::state::record::new_pre_key_record(new_prekey_id, &new_prekey_keypair);
+        let new_prekey_record = wacore::libsignal::store::record_helpers::new_pre_key_record(
+            new_prekey_id,
+            &new_prekey_keypair,
+        );
         // This key is not uploaded to the server pool, so mark as false
         if let Err(e) = device_guard
             .store_prekey(new_prekey_id, new_prekey_record, false)

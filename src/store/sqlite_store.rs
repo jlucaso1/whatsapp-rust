@@ -7,8 +7,8 @@ use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
 use wacore::appstate::hash::HashState;
+use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
-use wacore::signal;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::AppStateMutationMAC;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
@@ -443,7 +443,7 @@ impl SessionStore for SqliteStore {
 }
 
 #[async_trait(?Send)]
-impl signal::store::PreKeyStore for SqliteStore {
+impl libsignal::store::PreKeyStore for SqliteStore {
     async fn load_prekey(
         &self,
         prekey_id: u32,
@@ -461,8 +461,9 @@ impl signal::store::PreKeyStore for SqliteStore {
             if let Ok(private_key) = PrivateKey::deserialize(&key_data) {
                 if let Ok(public_key) = private_key.public_key() {
                     let key_pair = KeyPair::new(public_key, private_key);
-                    let record =
-                        wacore::signal::state::record::new_pre_key_record(prekey_id, &key_pair);
+                    let record = wacore::libsignal::store::record_helpers::new_pre_key_record(
+                        prekey_id, &key_pair,
+                    );
                     Ok(Some(record))
                 } else {
                     Ok(None)
@@ -570,7 +571,7 @@ impl SenderKeyStoreHelper for SqliteStore {
 }
 
 #[async_trait(?Send)]
-impl signal::store::SignedPreKeyStore for SqliteStore {
+impl libsignal::store::SignedPreKeyStore for SqliteStore {
     async fn load_signed_prekey(
         &self,
         signed_prekey_id: u32,

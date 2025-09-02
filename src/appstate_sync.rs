@@ -509,7 +509,7 @@ mod tests {
         }
     }
     #[async_trait(?Send)]
-    impl wacore::signal::store::PreKeyStore for MockBackend {
+    impl wacore::libsignal::store::PreKeyStore for MockBackend {
         async fn load_prekey(
             &self,
             _: u32,
@@ -541,7 +541,7 @@ mod tests {
         }
     }
     #[async_trait(?Send)]
-    impl wacore::signal::store::SignedPreKeyStore for MockBackend {
+    impl wacore::libsignal::store::SignedPreKeyStore for MockBackend {
         async fn load_signed_prekey(
             &self,
             _: u32,

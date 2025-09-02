@@ -11,7 +11,7 @@ use anyhow;
 use rand::TryRngCore;
 use rand_core::OsRng;
 use wacore::libsignal::protocol::KeyPair;
-use wacore::signal::state::record::new_pre_key_record;
+use wacore::libsignal::store::record_helpers::new_pre_key_record;
 
 pub use wacore::prekeys::PreKeyUtils;
 
