@@ -52,7 +52,8 @@ pub use protocol::{
 };
 pub use ratchet::{
     AliceSignalProtocolParameters, BobSignalProtocolParameters, ChainKey, RootKey, UsePQRatchet,
-    derive_keys, initialize_alice_session_record, initialize_bob_session_record,
+    derive_keys, initialize_alice_session_record, initialize_bob_session,
+    initialize_bob_session_record,
 };
 pub use sender_keys::{SenderKeyRecord, SenderKeyState};
 pub use session::{process_prekey, process_prekey_bundle};
