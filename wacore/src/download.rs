@@ -218,7 +218,7 @@ impl DownloadUtils {
             }
         }
 
-        if tail.len() < MAC_SIZE + BLOCK || (tail.len() - MAC_SIZE) % BLOCK != 0 {
+        if tail.len() < MAC_SIZE + BLOCK || !(tail.len() - MAC_SIZE).is_multiple_of(BLOCK) {
             return Err(anyhow!("Invalid final media size"));
         }
         let mac_index = tail.len() - MAC_SIZE;
