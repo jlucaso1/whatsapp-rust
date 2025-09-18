@@ -63,7 +63,7 @@ impl Client {
                     let processed = processed_count.clone();
                     async move {
                         let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                        if new % 25 == 0 {
+                        if new.is_multiple_of(25) {
                             log::info!("History sync progress: {new} conversations processed...");
                         }
                         bus.dispatch(&Event::JoinedGroup(Box::new(conv)));

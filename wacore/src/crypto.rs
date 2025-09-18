@@ -34,7 +34,7 @@ pub fn aes_256_cbc_encrypt(plaintext: &[u8], key: &[u8], iv: &[u8]) -> Result<Ve
 }
 
 pub fn aes_256_cbc_decrypt(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, Error> {
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return Err(anyhow::anyhow!(
             "Ciphertext length must be a non-zero multiple of 16"
         ));
