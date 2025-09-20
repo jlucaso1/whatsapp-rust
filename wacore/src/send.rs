@@ -81,6 +81,7 @@ async fn encrypt_for_devices<'a, S, I, P, SP>(
     resolver: &dyn SendContextResolver,
     devices: &[Jid],
     plaintext_to_encrypt: &[u8],
+    enc_extra_attrs: &Attrs,
 ) -> Result<(Vec<Node>, bool)>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -147,8 +148,15 @@ where
             _ => continue,
         };
 
+        let mut enc_attrs = Attrs::new();
+        enc_attrs.insert("v".to_string(), "2".to_string());
+        enc_attrs.insert("type".to_string(), enc_type.to_string());
+        for (k, v) in enc_extra_attrs.iter() {
+            enc_attrs.insert(k.clone(), v.clone());
+        }
+
         let enc_node = NodeBuilder::new("enc")
-            .attrs([("v", "2"), ("type", enc_type)])
+            .attrs(enc_attrs)
             .bytes(serialized_bytes)
             .build();
         participant_nodes.push(
@@ -209,17 +217,36 @@ pub async fn prepare_dm_stanza<
     let mut participant_nodes = Vec::new();
     let mut includes_prekey_message = false;
 
+    // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
+    let mut enc_extra_attrs = Attrs::new();
+    if let Some(edit_attr) = &edit
+        && *edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        enc_extra_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+    }
+
     if !recipient_devices.is_empty() {
-        let (nodes, inc) =
-            encrypt_for_devices(stores, resolver, &recipient_devices, &recipient_plaintext).await?;
+        let (nodes, inc) = encrypt_for_devices(
+            stores,
+            resolver,
+            &recipient_devices,
+            &recipient_plaintext,
+            &enc_extra_attrs,
+        )
+        .await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
 
     if !own_other_devices.is_empty() {
-        let (nodes, inc) =
-            encrypt_for_devices(stores, resolver, &own_other_devices, &own_devices_plaintext)
-                .await?;
+        let (nodes, inc) = encrypt_for_devices(
+            stores,
+            resolver,
+            &own_other_devices,
+            &own_devices_plaintext,
+            &enc_extra_attrs,
+        )
+        .await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
@@ -362,8 +389,16 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        let (participant_nodes, inc) =
-            encrypt_for_devices(stores, resolver, &all_devices, &skdm_plaintext_to_encrypt).await?;
+        // For SKDM distribution we don't set decrypt-fail; use empty attrs
+        let empty_attrs = Attrs::new();
+        let (participant_nodes, inc) = encrypt_for_devices(
+            stores,
+            resolver,
+            &all_devices,
+            &skdm_plaintext_to_encrypt,
+            &empty_attrs,
+        )
+        .await?;
         includes_prekey_message = includes_prekey_message || inc;
         message_content_nodes.push(
             NodeBuilder::new("participants")
@@ -394,9 +429,19 @@ pub async fn prepare_group_stanza<
         );
     }
 
+    // Add decrypt-fail="hide" for edited group messages too
+    let mut sk_enc_attrs = Attrs::new();
+    sk_enc_attrs.insert("v".to_string(), "2".to_string());
+    sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
+    if let Some(edit_attr) = &edit
+        && *edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+    }
+
     message_content_nodes.push(
         NodeBuilder::new("enc")
-            .attrs([("v", "2"), ("type", "skmsg")])
+            .attrs(sk_enc_attrs)
             .bytes(skmsg_ciphertext)
             .build(),
     );
