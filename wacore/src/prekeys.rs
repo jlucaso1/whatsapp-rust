@@ -110,7 +110,7 @@ impl PreKeyUtils {
         if let Some(error_node) = node.get_optional_child("error") {
             return Err(anyhow::anyhow!(
                 "Error getting prekeys: {}",
-                DisplayableNode(error_node).to_string()
+                DisplayableNode(error_node)
             ));
         }
 
