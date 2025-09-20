@@ -47,7 +47,7 @@ impl Client {
             None => self.generate_message_id().await,
         };
 
-        let stanza_to_send = if peer {
+        let stanza_to_send: wacore_binary::Node = if peer {
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -192,7 +192,6 @@ impl Client {
             )
             .await?
         };
-
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
     }
 }

@@ -366,12 +366,13 @@ pub async fn prepare_group_stanza<
         group_info.participants.push(own_base_jid);
     }
 
-    let mut message_content_nodes = Vec::new();
+    let mut message_children: Vec<Node> = Vec::new();
     let mut includes_prekey_message = false;
     let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
 
     if force_skdm_distribution {
         let all_devices = resolver.resolve_devices(&group_info.participants).await?;
+        resolved_devices_for_phash = Some(all_devices.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
@@ -400,14 +401,25 @@ pub async fn prepare_group_stanza<
         )
         .await?;
         includes_prekey_message = includes_prekey_message || inc;
-        message_content_nodes.push(
+
+        // Add participants list as part of the single hybrid stanza
+        message_children.push(
             NodeBuilder::new("participants")
                 .children(participant_nodes)
                 .build(),
         );
+        if includes_prekey_message && let Some(acc) = account {
+            message_children.push(
+                NodeBuilder::new("device-identity")
+                    .bytes(acc.encode_to_vec())
+                    .build(),
+            );
+        }
 
-        resolved_devices_for_phash = Some(all_devices.clone());
+        // We will attach phash on the final message attrs below
+        let _ = MessageUtils::participant_list_hash(&all_devices);
     }
+
     let sender_address = own_sending_jid.to_protocol_address();
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let skmsg = encrypt_group_message(
@@ -421,14 +433,6 @@ pub async fn prepare_group_stanza<
 
     let skmsg_ciphertext = skmsg.serialized().to_vec();
 
-    if includes_prekey_message && let Some(acc) = account {
-        message_content_nodes.push(
-            NodeBuilder::new("device-identity")
-                .bytes(acc.encode_to_vec())
-                .build(),
-        );
-    }
-
     // Add decrypt-fail="hide" for edited group messages too
     let mut sk_enc_attrs = Attrs::new();
     sk_enc_attrs.insert("v".to_string(), "2".to_string());
@@ -439,12 +443,10 @@ pub async fn prepare_group_stanza<
         sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
     }
 
-    message_content_nodes.push(
-        NodeBuilder::new("enc")
-            .attrs(sk_enc_attrs)
-            .bytes(skmsg_ciphertext)
-            .build(),
-    );
+    let content_node = NodeBuilder::new("enc")
+        .attrs(sk_enc_attrs)
+        .bytes(skmsg_ciphertext)
+        .build();
 
     let mut stanza_attrs = Attrs::new();
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
@@ -457,6 +459,9 @@ pub async fn prepare_group_stanza<
         stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
     }
 
+    message_children.push(content_node);
+
+    // Add phash if we distributed keys in this message
     if let Some(devices) = &resolved_devices_for_phash {
         let phash = MessageUtils::participant_list_hash(devices);
         stanza_attrs.insert("phash".to_string(), phash);
@@ -464,8 +469,9 @@ pub async fn prepare_group_stanza<
 
     let stanza = NodeBuilder::new("message")
         .attrs(stanza_attrs.into_iter())
-        .children(message_content_nodes)
+        .children(message_children)
         .build();
+
     Ok(stanza)
 }
 pub async fn create_sender_key_distribution_message_for_group(
