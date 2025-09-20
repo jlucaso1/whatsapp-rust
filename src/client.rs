@@ -1154,28 +1154,35 @@ impl Client {
             .get_pn()
             .await
             .ok_or_else(|| anyhow!("Not logged in"))?;
-        let edit_protocol_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
-                    remote_jid: Some(to.to_string()),
-                    from_me: Some(true),
-                    id: Some(original_id.clone()),
-                    participant: if to.is_group() {
-                        Some(own_jid.to_non_ad().to_string())
-                    } else {
-                        None
-                    },
-                }),
-                r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
-                edited_message: Some(Box::new(new_content)),
-                ..Default::default()
+
+        let edit_container_message = wa::Message {
+            edited_message: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message {
+                    protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                        key: Some(wa::MessageKey {
+                            remote_jid: Some(to.to_string()),
+                            from_me: Some(true),
+                            id: Some(original_id.clone()),
+                            participant: if to.is_group() {
+                                Some(own_jid.to_non_ad().to_string())
+                            } else {
+                                None
+                            },
+                        }),
+                        r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
+                        edited_message: Some(Box::new(new_content)),
+                        timestamp_ms: Some(chrono::Utc::now().timestamp_millis()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
             })),
             ..Default::default()
         };
 
         self.send_message_impl(
             to,
-            Arc::new(edit_protocol_message),
+            Arc::new(edit_container_message),
             Some(original_id.clone()),
             false,
             false,

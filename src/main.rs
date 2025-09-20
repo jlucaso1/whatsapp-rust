@@ -88,7 +88,12 @@ fn main() {
 
                                 // 3. Create the new content for the message
                                 let updated_content = wa::Message {
-                                    conversation: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                    extended_text_message: Some(Box::new(
+                                        wa::message::ExtendedTextMessage {
+                                            text: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                            ..Default::default()
+                                        },
+                                    )),
                                     ..Default::default()
                                 };
 
