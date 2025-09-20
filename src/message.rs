@@ -236,7 +236,7 @@ impl Client {
                     );
                     let client_clone = self.clone();
                     let info_clone = info.clone();
-                    tokio::task::spawn_local(async move {
+                    tokio::spawn(async move {
                         if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
                             log::error!("Failed to send retry receipt (batch): {:?}", e);
                         }
@@ -307,7 +307,7 @@ impl Client {
                         let client_clone = self.clone();
                         let history_sync_clone = history_sync.clone();
                         let msg_id = info.id.clone();
-                        tokio::task::spawn_local(async move {
+                        tokio::spawn(async move {
                             // Enqueue history sync task to dedicated worker
                             client_clone
                                 .handle_history_sync(msg_id, history_sync_clone)

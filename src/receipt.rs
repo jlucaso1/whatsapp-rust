@@ -3,7 +3,6 @@ use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
 use log::info;
 use std::sync::Arc;
-use tokio::task;
 use wacore_binary::jid::JidExt as _;
 
 impl Client {
@@ -44,7 +43,7 @@ impl Client {
         if receipt_type == ReceiptType::Retry {
             let client_clone = Arc::clone(self);
             let node_clone = node.clone();
-            task::spawn_local(async move {
+            tokio::spawn(async move {
                 if let Err(e) = client_clone
                     .handle_retry_receipt(&receipt, &node_clone)
                     .await

@@ -16,7 +16,7 @@ type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 macro_rules! impl_store_wrapper {
     ($wrapper_ty:ty, $read_lock:ident, $write_lock:ident) => {
-        #[async_trait(?Send)]
+        #[async_trait]
         impl IdentityKeyStore for $wrapper_ty {
             async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
                 self.0.$read_lock().await.get_identity_key_pair().await
@@ -59,7 +59,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait(?Send)]
+        #[async_trait]
         impl PreKeyStore for $wrapper_ty {
             async fn load_prekey(
                 &self,
@@ -90,7 +90,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait(?Send)]
+        #[async_trait]
         impl SignedPreKeyStore for $wrapper_ty {
             async fn load_signed_prekey(
                 &self,
@@ -141,7 +141,7 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait(?Send)]
+        #[async_trait]
         impl SessionStore for $wrapper_ty {
             async fn load_session(
                 &self,
@@ -188,7 +188,7 @@ macro_rules! impl_store_wrapper {
     };
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
         let private_key_bytes = self.identity_key.private_key;
@@ -267,7 +267,7 @@ impl IdentityKeyStore for Device {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
@@ -294,7 +294,7 @@ impl PreKeyStore for Device {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
@@ -354,7 +354,7 @@ impl SignedPreKeyStore for Device {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl SessionStore for Device {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         let address_str = address.to_string();
@@ -456,7 +456,7 @@ impl Clone for DeviceStore {
 
 impl_store_wrapper!(DeviceStore, lock, lock);
 
-#[async_trait(?Send)]
+#[async_trait]
 impl SenderKeyStore for Device {
     async fn store_sender_key(
         &mut self,
@@ -495,7 +495,7 @@ impl SenderKeyStore for Device {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl GroupSenderKeyStore for Device {
     async fn store_sender_key(
         &mut self,
