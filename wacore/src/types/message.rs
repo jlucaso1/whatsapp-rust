@@ -58,6 +58,20 @@ impl From<String> for EditAttribute {
     }
 }
 
+impl EditAttribute {
+    pub fn to_string_val(&self) -> &'static str {
+        match self {
+            Self::Empty => "",
+            Self::MessageEdit => "1",
+            Self::PinInChat => "2",
+            Self::AdminEdit => "3",
+            Self::SenderRevoke => "7",
+            Self::AdminRevoke => "8",
+            Self::Unknown(_) => "",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BotEditType {
     First,

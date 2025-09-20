@@ -122,18 +122,20 @@ impl Client {
             self.send_message_impl(
                 receipt.source.chat.clone(),
                 Arc::clone(&original_msg_arc),
-                message_id,
+                Some(message_id.clone()), // Pass Some(message_id)
                 false,
                 true,
+                None,
             )
             .await?;
         } else {
             self.send_message_impl(
                 receipt.source.chat.clone(),
                 Arc::clone(&original_msg_arc),
-                message_id,
+                Some(message_id), // Pass Some(message_id)
                 false,
                 true,
+                None,
             )
             .await?;
         }

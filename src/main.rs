@@ -60,14 +60,45 @@ fn main() {
                                 && text == "ping"
                             {
                                 debug!("Received text ping, sending pong...");
-                                if let Err(e) = ctx
+                                let start = std::time::Instant::now();
+
+                                // 1. Send the initial message and get its ID
+                                let sent_msg_id = match ctx
                                     .send_message(wa::Message {
-                                        conversation: Some("pong".to_string()),
+                                        conversation: Some("🏓 Pong!".to_string()),
                                         ..Default::default()
                                     })
                                     .await
                                 {
-                                    error!("Failed to send text reply: {}", e);
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        error!("Failed to send initial pong message: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                // 2. Calculate the duration
+                                let duration = start.elapsed();
+                                let duration_str = format!("{:.2?}", duration);
+
+                                info!(
+                                    "Send took {}. Editing message {}...",
+                                    duration_str, &sent_msg_id
+                                );
+
+                                // 3. Create the new content for the message
+                                let updated_content = wa::Message {
+                                    conversation: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                    ..Default::default()
+                                };
+
+                                // 4. Edit the original message with the new content
+                                if let Err(e) =
+                                    ctx.edit_message(sent_msg_id.clone(), updated_content).await
+                                {
+                                    error!("Failed to edit message {}: {}", sent_msg_id, e);
+                                } else {
+                                    info!("Successfully sent edit for message {}.", sent_msg_id);
                                 }
                             }
                         }

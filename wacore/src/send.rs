@@ -162,6 +162,7 @@ where
     Ok((participant_nodes, includes_prekey_message))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -176,6 +177,7 @@ pub async fn prepare_dm_stanza<
     to_jid: Jid,
     message: &wa::Message,
     request_id: String,
+    edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
     let recipient_plaintext = message.encode_to_vec();
 
@@ -237,12 +239,19 @@ pub async fn prepare_dm_stanza<
         );
     }
 
+    let mut stanza_attrs = Attrs::new();
+    stanza_attrs.insert("to".to_string(), to_jid.to_string());
+    stanza_attrs.insert("id".to_string(), request_id);
+    stanza_attrs.insert("type".to_string(), "text".to_string());
+
+    if let Some(edit_attr) = edit
+        && edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+    }
+
     let stanza = NodeBuilder::new("message")
-        .attrs([
-            ("to", to_jid.to_string()),
-            ("id", request_id),
-            ("type", "text".to_string()),
-        ])
+        .attrs(stanza_attrs.into_iter())
         .children(message_content_nodes)
         .build();
 
@@ -314,6 +323,7 @@ pub async fn prepare_group_stanza<
     message: &wa::Message,
     request_id: String,
     force_skdm_distribution: bool,
+    edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
@@ -395,6 +405,12 @@ pub async fn prepare_group_stanza<
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
     stanza_attrs.insert("id".to_string(), request_id);
     stanza_attrs.insert("type".to_string(), "text".to_string());
+
+    if let Some(edit_attr) = edit
+        && edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+    }
 
     if let Some(devices) = &resolved_devices_for_phash {
         let phash = MessageUtils::participant_list_hash(devices);

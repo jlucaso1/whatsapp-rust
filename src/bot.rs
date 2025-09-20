@@ -21,15 +21,22 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
-    pub async fn send_message(&self, message: wa::Message) -> Result<(), anyhow::Error> {
-        let message_id = self.client.generate_message_id().await;
+    pub async fn send_message(&self, message: wa::Message) -> Result<String, anyhow::Error> {
         self.client
-            .send_message_impl(
+            .send_message(self.info.source.chat.clone(), message)
+            .await
+    }
+
+    pub async fn edit_message(
+        &self,
+        original_message_id: String,
+        new_message: wa::Message,
+    ) -> Result<String, anyhow::Error> {
+        self.client
+            .edit_message(
                 self.info.source.chat.clone(),
-                Arc::new(message),
-                message_id,
-                false,
-                false,
+                original_message_id,
+                new_message,
             )
             .await
     }
