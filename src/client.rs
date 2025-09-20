@@ -28,7 +28,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
-use tokio::task;
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
@@ -307,7 +306,7 @@ impl Client {
         *self.noise_socket.lock().await = Some(noise_socket);
 
         let client_clone = self.clone();
-        task::spawn_local(async move { client_clone.keepalive_loop().await });
+        tokio::spawn(async move { client_clone.keepalive_loop().await });
 
         Ok(())
     }
@@ -476,7 +475,7 @@ impl Client {
                     );
                     let self_clone = self.clone();
 
-                    task::spawn_local(async move {
+                    tokio::spawn(async move {
                         let (tag, id, from, participant, t) = ack_info;
                         let mut attrs = std::collections::HashMap::new();
                         attrs.insert("class".to_string(), tag.clone());
@@ -538,7 +537,7 @@ impl Client {
                 let client_clone = self.clone();
                 let node_arc = Arc::new(node.clone());
 
-                task::spawn_local(async move {
+                tokio::spawn(async move {
                     let info = match client_clone.parse_message_info(&node_arc).await {
                         Ok(info) => info,
                         Err(e) => {
@@ -618,7 +617,7 @@ impl Client {
         }
 
         let client_clone = self.clone();
-        task::spawn_local(async move {
+        tokio::spawn(async move {
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect passive IQ: {e:?}");
             }
@@ -1207,7 +1206,7 @@ impl Client {
         ));
 
         let client_clone = self.clone();
-        tokio::task::spawn_local(async move {
+        tokio::spawn(async move {
             if let Err(e) = client_clone.send_presence(Presence::Available).await {
                 log::warn!("Failed to send presence after push name update: {:?}", e);
             } else {

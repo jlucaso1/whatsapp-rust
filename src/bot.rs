@@ -36,7 +36,7 @@ impl MessageContext {
 }
 
 type EventHandlerCallback =
-    Arc<dyn Fn(Event, Arc<Client>) -> Pin<Box<dyn Future<Output = ()>>> + Send + Sync>;
+    Arc<dyn Fn(Event, Arc<Client>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 struct BotEventHandler {
     client: Arc<Client>,
@@ -50,7 +50,7 @@ impl EventHandler for BotEventHandler {
             let event_clone = event.clone();
             let client_clone = self.client.clone();
 
-            tokio::task::spawn_local(async move {
+            tokio::spawn(async move {
                 handler_clone(event_clone, client_clone).await;
             });
         }
@@ -75,7 +75,7 @@ impl Bot {
     pub async fn run(&mut self) -> Result<task::JoinHandle<()>> {
         if let Some(mut receiver) = self.sync_task_receiver.take() {
             let worker_client = self.client.clone();
-            tokio::task::spawn_local(async move {
+            tokio::spawn(async move {
                 while let Some(task) = receiver.recv().await {
                     match task {
                         crate::sync_task::MajorSyncTask::HistorySync {
@@ -107,7 +107,7 @@ impl Bot {
         self.client.core.event_bus.add_handler(handler);
 
         let client_for_run = self.client.clone();
-        let client_handle = tokio::task::spawn_local(async move {
+        let client_handle = tokio::spawn(async move {
             client_for_run.run().await;
         });
 
@@ -130,7 +130,7 @@ impl BotBuilder {
     pub fn on_event<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(Event, Arc<Client>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.event_handler = Some(Arc::new(move |event, client| {
             Box::pin(handler(event, client))

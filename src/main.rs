@@ -1,7 +1,6 @@
 use chrono::Local;
 use log::{debug, error, info};
 use std::io::Cursor;
-use tokio::task;
 use wacore::download::{Downloadable, MediaType};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
@@ -26,13 +25,12 @@ fn main() {
         })
         .init();
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
 
-    let local = task::LocalSet::new();
-    local.block_on(&rt, async {
+    rt.block_on(async {
         let mut bot = Bot::builder()
             .on_event(move |event, client| {
                 async move {

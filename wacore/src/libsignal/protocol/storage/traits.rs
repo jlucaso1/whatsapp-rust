@@ -43,8 +43,8 @@ pub enum IdentityChange {
 /// Signal clients usually use the identity store in a [TOFU] manner, but this is not required.
 ///
 /// [TOFU]: https://en.wikipedia.org/wiki/Trust_on_first_use
-#[async_trait(?Send)]
-pub trait IdentityKeyStore {
+#[async_trait]
+pub trait IdentityKeyStore: Send + Sync {
     /// Return the single specific identity the store is assumed to represent, with private key.
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair>;
 
@@ -80,8 +80,8 @@ pub trait IdentityKeyStore {
 }
 
 /// Interface for storing pre-keys downloaded from a server.
-#[async_trait(?Send)]
-pub trait PreKeyStore {
+#[async_trait]
+pub trait PreKeyStore: Send + Sync {
     /// Look up the pre-key corresponding to `prekey_id`.
     async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord>;
 
@@ -93,8 +93,8 @@ pub trait PreKeyStore {
 }
 
 /// Interface for storing signed pre-keys downloaded from a server.
-#[async_trait(?Send)]
-pub trait SignedPreKeyStore {
+#[async_trait]
+pub trait SignedPreKeyStore: Send + Sync {
     /// Look up the signed pre-key corresponding to `signed_prekey_id`.
     async fn get_signed_pre_key(
         &self,
@@ -116,8 +116,8 @@ pub trait SignedPreKeyStore {
 /// forward-secret message chain in the [Double Ratchet] protocol.
 ///
 /// [Double Ratchet]: https://signal.org/docs/specifications/doubleratchet/
-#[async_trait(?Send)]
-pub trait SessionStore {
+#[async_trait]
+pub trait SessionStore: Send + Sync {
     /// Look up the session corresponding to `address`.
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>>;
 
@@ -130,8 +130,8 @@ pub trait SessionStore {
 }
 
 /// Interface for storing sender key records, allowing multiple keys per user.
-#[async_trait(?Send)]
-pub trait SenderKeyStore {
+#[async_trait]
+pub trait SenderKeyStore: Send + Sync {
     /// Assign `record` to the entry for `(sender, distribution_id)`.
     async fn store_sender_key(
         &mut self,
