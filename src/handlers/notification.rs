@@ -1,9 +1,7 @@
 use crate::client::Client;
 use crate::types::events::Event;
-// ...existing code...
 use log::{info, warn};
 use std::sync::Arc;
-use tokio::task;
 use wacore_binary::{jid::SERVER_JID, node::Node};
 
 pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
@@ -15,7 +13,7 @@ pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
                 && from == SERVER_JID
             {
                 let client_clone = client.clone();
-                task::spawn_local(async move {
+                tokio::spawn(async move {
                     if let Err(e) = client_clone.upload_pre_keys().await {
                         warn!("Failed to upload pre-keys after notification: {:?}", e);
                     }

@@ -33,7 +33,7 @@ impl Client {
             pending.insert(message_id.clone());
         }
         let _guard = scopeguard::guard((self.clone(), message_id.clone()), |(client, id)| {
-            tokio::task::spawn_local(async move {
+            tokio::spawn(async move {
                 client.pending_retries.lock().await.remove(&id);
             });
         });

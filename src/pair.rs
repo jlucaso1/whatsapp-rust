@@ -58,7 +58,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     let codes_clone = codes.clone();
                     let client_clone = client.clone();
 
-                    tokio::task::spawn_local(async move {
+                    tokio::spawn(async move {
                         // The rotation logic is now inside the library
                         let mut is_first = true;
                         let mut stop_rx_clone = stop_rx.clone();
