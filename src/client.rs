@@ -28,6 +28,7 @@ use wacore_binary::jid::SERVER_JID;
 use crate::appstate_sync::AppStateProcessor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
@@ -120,6 +121,7 @@ pub struct Client {
 
     pub(crate) chat_locks: Arc<DashMap<Jid, Arc<tokio::sync::Mutex<()>>>>,
     pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
+    pub device_cache: Arc<DashMap<Jid, (Vec<Jid>, std::time::Instant)>>,
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
@@ -209,6 +211,7 @@ impl Client {
             id_counter: Arc::new(AtomicU64::new(0)),
             chat_locks: Arc::new(DashMap::new()),
             group_cache: Arc::new(DashMap::new()),
+            device_cache: Arc::new(DashMap::new()),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
