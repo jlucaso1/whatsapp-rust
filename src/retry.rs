@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::types::events::Receipt;
+use dashmap::Entry;
 use log::{info, warn};
 use prost::Message;
 use rand::TryRngCore;
@@ -26,14 +27,19 @@ impl Client {
 
         // For group messages, only retry once per message id to avoid loops
         if receipt.source.chat.is_group() {
-            if self.retried_group_messages.contains_key(&message_id) {
-                log::debug!(
-                    "Ignoring subsequent retry for group message {}: already handled.",
-                    message_id
-                );
-                return Ok(());
+            let dedupe_key = format!("{}:{}", receipt.source.chat, message_id);
+            match self.retried_group_messages.entry(dedupe_key.clone()) {
+                Entry::Occupied(_) => {
+                    log::debug!(
+                        "Ignoring subsequent retry for group message {}: already handled.",
+                        dedupe_key
+                    );
+                    return Ok(());
+                }
+                Entry::Vacant(e) => {
+                    e.insert(());
+                }
             }
-            self.retried_group_messages.insert(message_id.clone(), ());
         }
 
         {
@@ -66,6 +72,11 @@ impl Client {
                 return Ok(()); // Continue without the original message if retrieval failed
             }
         };
+
+        if receipt.source.chat.is_group() {
+            let dedupe_key = format!("{}:{}", receipt.source.chat, message_id);
+            self.retried_group_messages.insert(dedupe_key, ());
+        }
 
         let participant_jid = receipt.source.sender.clone();
 
