@@ -341,6 +341,7 @@ impl Client {
         *self.frame_socket.lock().await = None;
         *self.noise_socket.lock().await = None;
         *self.frames_rx.lock().await = None;
+        self.retried_group_messages.clear();
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
