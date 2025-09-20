@@ -79,6 +79,13 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    lid_pn_mappings (lid_user) {
+        lid_user -> Text,
+        pn_user -> Text,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_mutation_macs,
@@ -89,4 +96,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     sender_keys,
     sessions,
     signed_prekeys,
+    lid_pn_mappings,
 );

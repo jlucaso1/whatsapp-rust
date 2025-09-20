@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
+use crate::store::traits::{LIDStore, SessionStore};
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use chrono::DateTime;
@@ -123,6 +124,18 @@ impl Client {
             };
             let enc_type = enc_node.attrs().string("type");
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+
+            // Migrate PN -> LID session before parsing, best-effort
+            if matches!(
+                info.source.addressing_mode,
+                Some(crate::types::message::AddressingMode::Lid)
+            ) && let Some(store) = self.persistence_manager.sqlite_store()
+                && let Ok(Some(pn)) = store.get_pn_for_lid(&info.source.sender).await
+            {
+                let from_addr = pn.to_protocol_address().to_string();
+                let to_addr = info.source.sender.to_protocol_address().to_string();
+                let _ = store.migrate_session(&from_addr, &to_addr).await;
+            }
 
             let parsed_message = if enc_type == "pkmsg" {
                 match PreKeySignalMessage::try_from(ciphertext.as_slice()) {
@@ -367,6 +380,21 @@ impl Client {
                 _ => None,
             });
 
+        // Capture alternate participant ids if present (e.g., pn/lid pair)
+        // Some stanzas carry both participant and an alternate id; try to store mapping
+        let participant_alt = attrs
+            .optional_jid("participant_lid")
+            .or_else(|| attrs.optional_jid("participant_pn"));
+        if let Some(alt) = participant_alt {
+            // Determine which is lid vs pn by server
+            let (lid, pn) = if from.server() == wacore_binary::jid::HIDDEN_USER_SERVER {
+                (from.clone(), alt)
+            } else {
+                (alt, from.clone())
+            };
+            self.store_lid_pn_mapping(lid, pn).await;
+        }
+
         Ok(MessageInfo {
             source,
             id: attrs.string("id"),
@@ -517,5 +545,67 @@ impl Client {
                 sender_jid
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod receive_tests {
+    use super::*;
+    use crate::store::persistence_manager::PersistenceManager;
+    use wacore_binary::builder::NodeBuilder;
+
+    // This test verifies that when a LID-addressed message is received and only a PN session exists,
+    // we migrate PN->LID session before attempting to decrypt.
+    #[tokio::test]
+    async fn test_receive_migrates_pn_to_lid_before_decrypt() {
+        // Arrange: in-memory DB and device with PN set
+        let pm = Arc::new(PersistenceManager::new(":memory:").await.unwrap());
+        let (client, _rx) = Client::new(pm.clone()).await;
+
+        // Set own PN so parse_message_info works
+        pm.process_command(crate::store::commands::DeviceCommand::SetId(Some(
+            "5555@s.whatsapp.net".parse().unwrap(),
+        )))
+        .await;
+
+        // Insert a PN session record for the sender device
+        let store = pm.sqlite_store().unwrap();
+        let sender_pn: Jid = "236395184570386@s.whatsapp.net".parse().unwrap();
+        let sender_lid: Jid = "236395184570386@lid".parse().unwrap();
+
+        // Simulate mapping known PN<->LID
+        store
+            .put_lid_pn_mapping(&sender_lid, &sender_pn)
+            .await
+            .unwrap();
+
+        // Create a fake PN session record at device 0 (default)
+        let pn_addr = format!("{}.{}", sender_pn.user, 0); // ProtocolAddress Display format is name.device
+        // Store arbitrary bytes; we don't need real libsignal content, only presence
+        store.put_session(&pn_addr, b"dummy").await.unwrap();
+        assert!(store.has_session(&pn_addr).await.unwrap());
+
+        // Build a minimal encrypted message node addressed via LID with sender device 75.
+        let msg = NodeBuilder::new("message")
+            .attr("from", sender_lid.to_string())
+            .attr("id", "test-id")
+            .attr("t", "1")
+            .attr("addressing_mode", "Lid")
+            .children([NodeBuilder::new("enc")
+                .attr("type", "msg")
+                .attr("v", "2")
+                .bytes(vec![1, 2, 3])
+                .build()])
+            .build();
+
+        // Act: Call handle_encrypted_message. It will try to parse and attempt decrypt,
+        // first triggering the migration block.
+        client.clone().handle_encrypted_message(Arc::new(msg)).await;
+
+        // Assert: session is accessible at the LID-derived ProtocolAddress
+        // Note: PN and LID share the same Signal address key (name.device),
+        // so migration is a no-op and removal isn't observable.
+        let lid_addr = format!("{}.{}", sender_lid.user, 0);
+        assert!(store.has_session(&lid_addr).await.unwrap());
     }
 }

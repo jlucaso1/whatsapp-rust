@@ -4,6 +4,8 @@ use async_trait::async_trait;
 
 use crate::libsignal::protocol::Direction;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use wacore_binary::jid::Jid;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppStateSyncKey {
@@ -38,6 +40,9 @@ pub trait SessionStore: Send + Sync {
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
     async fn delete_session(&self, address: &str) -> Result<()>;
     async fn has_session(&self, address: &str) -> Result<bool>;
+    async fn migrate_session(&self, _from_address: &str, _to_address: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -82,6 +87,7 @@ pub trait Backend:
     + crate::libsignal::store::PreKeyStore
     + crate::libsignal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
+    + LIDStore
     + Send
     + Sync
 {
@@ -95,7 +101,16 @@ impl<T> Backend for T where
         + crate::libsignal::store::PreKeyStore
         + crate::libsignal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
+        + LIDStore
         + Send
         + Sync
 {
+}
+
+#[async_trait]
+pub trait LIDStore: Send + Sync {
+    async fn put_lid_pn_mapping(&self, lid: &Jid, pn: &Jid) -> Result<()>;
+    async fn get_pn_for_lid(&self, lid: &Jid) -> Result<Option<Jid>>;
+    async fn get_lid_for_pn(&self, pn: &Jid) -> Result<Option<Jid>>;
+    async fn get_many_lids_for_pns(&self, pns: &[Jid]) -> Result<HashMap<Jid, Jid>>;
 }

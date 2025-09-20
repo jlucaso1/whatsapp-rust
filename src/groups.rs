@@ -2,6 +2,7 @@ use crate::client::Client;
 use wacore::client::context::GroupInfo;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
+use wacore_binary::jid::JidExt as _;
 
 impl Client {
     pub async fn query_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
@@ -48,6 +49,35 @@ impl Client {
             addressing_mode,
         };
         self.group_cache.insert(jid.clone(), info.clone());
+
+        // Opportunistically persist PN<->LID mappings from participant attributes
+        let mut pairs: Vec<(Jid, Jid)> = Vec::new();
+        for participant_node in group_node.get_children_by_tag("participant") {
+            let mut attrs = participant_node.attrs();
+            let jid = attrs.jid("jid");
+            let lid = attrs.optional_jid("lid");
+            let pn = attrs.optional_jid("phone_number");
+            if jid.server() == wacore_binary::jid::DEFAULT_USER_SERVER {
+                if let Some(l) = lid.clone() {
+                    pairs.push((l, jid.clone()));
+                }
+                if let Some(p) = pn.clone() {
+                    // jid already PN; if both present and consistent, ignore
+                    let _ = p;
+                }
+            } else if jid.server() == wacore_binary::jid::HIDDEN_USER_SERVER {
+                if let Some(p) = pn.clone() {
+                    pairs.push((jid.clone(), p));
+                }
+                if let Some(l) = lid.clone() {
+                    // jid already LID; if both present and consistent, ignore
+                    let _ = l;
+                }
+            }
+        }
+        for (lid, pn) in pairs {
+            self.store_lid_pn_mapping(lid, pn).await;
+        }
 
         Ok(info)
     }

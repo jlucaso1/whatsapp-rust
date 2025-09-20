@@ -366,12 +366,29 @@ pub async fn prepare_group_stanza<
         group_info.participants.push(own_base_jid);
     }
 
+    // If group uses LID addressing, resolve participants to LIDs when we can.
+    let encryption_jids: Vec<Jid> = if matches!(
+        group_info.addressing_mode,
+        crate::types::message::AddressingMode::Lid
+    ) {
+        let map = resolver
+            .resolve_encryption_jids(&group_info.participants)
+            .await?;
+        group_info
+            .participants
+            .iter()
+            .map(|pn| map.get(pn).cloned().unwrap_or_else(|| pn.clone()))
+            .collect()
+    } else {
+        group_info.participants.clone()
+    };
+
     let mut message_children: Vec<Node> = Vec::new();
     let mut includes_prekey_message = false;
     let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
 
     if force_skdm_distribution {
-        let all_devices = resolver.resolve_devices(&group_info.participants).await?;
+        let all_devices = resolver.resolve_devices(&encryption_jids).await?;
         resolved_devices_for_phash = Some(all_devices.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,

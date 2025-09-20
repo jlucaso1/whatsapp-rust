@@ -59,3 +59,12 @@ CREATE TABLE signed_prekeys (
     id INTEGER PRIMARY KEY NOT NULL,
     record BLOB NOT NULL
 );
+
+-- Mapping between LID (lightweight identity) users and PN (phone-number) users
+-- Stores only the user part; server is implied by JID kind
+CREATE TABLE lid_pn_mappings (
+    lid_user TEXT PRIMARY KEY NOT NULL,
+    pn_user TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_pn_user ON lid_pn_mappings(pn_user);

@@ -2245,6 +2245,7 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror",
+ "tokio",
  "uuid",
  "wacore-binary",
  "waproto",

@@ -40,6 +40,7 @@ use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
 use crate::sync_task::MajorSyncTask;
+use wacore::store::traits::LIDStore;
 
 const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
@@ -1287,6 +1288,23 @@ impl Client {
     pub async fn get_lid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.lid.clone()
+    }
+
+    pub(crate) async fn store_lid_pn_mapping(&self, lid: Jid, pn: Jid) {
+        if lid.user.is_empty() || pn.user.is_empty() {
+            return;
+        }
+
+        if let Some(store) = self.persistence_manager.sqlite_store()
+            && let Err(e) = store.put_lid_pn_mapping(&lid, &pn).await
+        {
+            log::warn!(
+                "Failed to store LID-PN mapping for {} -> {}: {}",
+                lid,
+                pn,
+                e
+            );
+        }
     }
 
     pub(crate) async fn send_protocol_receipt(

@@ -592,6 +592,39 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl wacore::store::traits::LIDStore for MockBackend {
+        async fn put_lid_pn_mapping(
+            &self,
+            _lid: &wacore_binary::jid::Jid,
+            _pn: &wacore_binary::jid::Jid,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn get_pn_for_lid(
+            &self,
+            _lid: &wacore_binary::jid::Jid,
+        ) -> StoreResult<Option<wacore_binary::jid::Jid>> {
+            Ok(None)
+        }
+
+        async fn get_lid_for_pn(
+            &self,
+            _pn: &wacore_binary::jid::Jid,
+        ) -> StoreResult<Option<wacore_binary::jid::Jid>> {
+            Ok(None)
+        }
+
+        async fn get_many_lids_for_pns(
+            &self,
+            _pns: &[wacore_binary::jid::Jid],
+        ) -> StoreResult<std::collections::HashMap<wacore_binary::jid::Jid, wacore_binary::jid::Jid>>
+        {
+            Ok(Default::default())
+        }
+    }
+
     fn create_encrypted_mutation(
         op: wa::syncd_mutation::SyncdOperation,
         index_mac: &[u8],
