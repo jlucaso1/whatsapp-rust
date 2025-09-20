@@ -8,19 +8,32 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
 impl Client {
-    pub async fn send_message(&self, to: Jid, message: wa::Message) -> Result<(), anyhow::Error> {
+    pub async fn send_message(
+        &self,
+        to: Jid,
+        message: wa::Message,
+    ) -> Result<String, anyhow::Error> {
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, Arc::new(message), request_id, false, false)
-            .await
+        self.send_message_impl(
+            to,
+            Arc::new(message),
+            Some(request_id.clone()),
+            false,
+            false,
+            None,
+        )
+        .await?;
+        Ok(request_id)
     }
 
     pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
         message: Arc<wa::Message>,
-        request_id: String,
+        request_id_override: Option<String>,
         peer: bool,
         force_key_distribution: bool,
+        edit: Option<crate::types::message::EditAttribute>,
     ) -> Result<(), anyhow::Error> {
         let chat_mutex = self
             .chat_locks
@@ -28,6 +41,11 @@ impl Client {
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _chat_guard = chat_mutex.lock().await;
+
+        let request_id = match request_id_override {
+            Some(id) => id,
+            None => self.generate_message_id().await,
+        };
 
         let stanza_to_send = if peer {
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -99,6 +117,7 @@ impl Client {
                 message.as_ref(),
                 request_id.clone(),
                 force_skdm,
+                edit.clone(),
             )
             .await
             {
@@ -130,6 +149,7 @@ impl Client {
                             message.as_ref(),
                             request_id,
                             true, // Force distribution on retry
+                            edit.clone(),
                         )
                         .await?
                     } else {
@@ -168,6 +188,7 @@ impl Client {
                 to,
                 message.as_ref(),
                 request_id,
+                edit,
             )
             .await?
         };

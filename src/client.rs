@@ -2,9 +2,11 @@ mod context_impl;
 
 use crate::handshake;
 use crate::pair;
+use anyhow::anyhow;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
 
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
@@ -865,9 +867,10 @@ impl Client {
             .send_message_impl(
                 own_jid,
                 Arc::new(msg),
-                self.generate_message_id().await,
+                Some(self.generate_message_id().await),
                 true,
                 false,
+                None,
             )
             .await
         {
@@ -1139,6 +1142,48 @@ impl Client {
 
     pub fn is_logged_in(&self) -> bool {
         self.is_logged_in.load(Ordering::Relaxed)
+    }
+
+    pub async fn edit_message(
+        &self,
+        to: Jid,
+        original_id: String,
+        new_content: wa::Message,
+    ) -> Result<String, anyhow::Error> {
+        let own_jid = self
+            .get_pn()
+            .await
+            .ok_or_else(|| anyhow!("Not logged in"))?;
+        let edit_protocol_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(true),
+                    id: Some(original_id.clone()),
+                    participant: if to.is_group() {
+                        Some(own_jid.to_non_ad().to_string())
+                    } else {
+                        None
+                    },
+                }),
+                r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
+                edited_message: Some(Box::new(new_content)),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        self.send_message_impl(
+            to,
+            Arc::new(edit_protocol_message),
+            Some(original_id.clone()),
+            false,
+            false,
+            Some(crate::types::message::EditAttribute::MessageEdit),
+        )
+        .await?;
+
+        Ok(original_id)
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
