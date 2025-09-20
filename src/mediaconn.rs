@@ -27,7 +27,7 @@ impl MediaConn {
 impl Client {
     pub(crate) async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
         {
-            let guard = self.media_conn.lock().await;
+            let guard = self.media_conn.read().await;
             if !force
                 && let Some(conn) = &*guard
                 && !conn.is_expired()
@@ -75,7 +75,8 @@ impl Client {
             fetched_at: Instant::now(),
         };
 
-        *self.media_conn.lock().await = Some(new_conn.clone());
+        let mut write_guard = self.media_conn.write().await;
+        *write_guard = Some(new_conn.clone());
 
         Ok(new_conn)
     }

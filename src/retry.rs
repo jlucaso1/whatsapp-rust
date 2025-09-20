@@ -1,4 +1,4 @@
-use crate::client::{Client, RecentMessageKey};
+use crate::client::Client;
 use crate::types::events::Receipt;
 use log::{info, warn};
 use prost::Message;
@@ -10,25 +10,9 @@ use wacore::libsignal::store::PreKeyStore;
 use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, JidExt as _};
-use waproto::whatsapp as wa;
+use wacore_binary::jid::JidExt as _;
 
 impl Client {
-    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: Arc<wa::Message>) {
-        const RECENT_MESSAGES_SIZE: usize = 256;
-        let key = RecentMessageKey { to, id };
-        let mut map_guard = self.recent_messages_map.lock().await;
-        let mut list_guard = self.recent_messages_list.lock().await;
-
-        if list_guard.len() >= RECENT_MESSAGES_SIZE
-            && let Some(old_key) = list_guard.pop_front()
-        {
-            map_guard.remove(&old_key);
-        }
-        list_guard.push_back(key.clone());
-        map_guard.insert(key, msg);
-    }
-
     pub(crate) async fn handle_retry_receipt(
         self: &Arc<Self>,
         receipt: &Receipt,
@@ -58,12 +42,16 @@ impl Client {
             .take_recent_message(receipt.source.chat.clone(), message_id.clone())
             .await
         {
-            Some(msg) => msg,
-            None => {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
                 log::debug!(
                     "Ignoring retry for message {message_id}: already handled or not found in cache."
                 );
                 return Ok(());
+            }
+            Err(e) => {
+                log::warn!("Failed to retrieve recent message for retry {message_id}: {e}");
+                return Ok(()); // Continue without the original message if retrieval failed
             }
         };
 
@@ -267,6 +255,8 @@ impl Client {
 mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
+    use wacore_binary::jid::Jid;
+    use waproto::whatsapp as wa;
 
     #[tokio::test]
     async fn recent_message_cache_insert_and_take() {
@@ -282,19 +272,32 @@ mod tests {
             ..Default::default()
         };
 
+        // Insert via the public API
         client
             .add_recent_message(chat.clone(), msg_id.clone(), Arc::new(msg.clone()))
-            .await;
+            .await
+            .expect("Failed to add recent message");
+
+        // Wait for the manager task to process reliably in tests
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // First take should return and remove it from cache
-        let taken = client
+        let taken_result = client
             .take_recent_message(chat.clone(), msg_id.clone())
             .await;
-        assert!(taken.is_some());
-        assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
+        match taken_result {
+            Ok(taken) => {
+                assert!(taken.is_some());
+                assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
+            }
+            Err(e) => panic!("Failed to take recent message: {}", e),
+        }
 
         // Second take should return None
-        let taken_again = client.take_recent_message(chat, msg_id).await;
-        assert!(taken_again.is_none());
+        let taken_again_result = client.take_recent_message(chat, msg_id).await;
+        match taken_again_result {
+            Ok(taken_again) => assert!(taken_again.is_none()),
+            Err(e) => panic!("Failed to take recent message: {}", e),
+        }
     }
 }

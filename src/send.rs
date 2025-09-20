@@ -55,7 +55,8 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
             let account_info = device_snapshot.account.clone();
 
-            self.add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
+            let _ = self
+                .add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
                 .await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -137,7 +138,8 @@ impl Client {
                 }
             }
         } else {
-            self.add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
+            let _ = self
+                .add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
                 .await;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
