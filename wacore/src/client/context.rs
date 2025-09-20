@@ -25,4 +25,10 @@ pub trait SendContextResolver: Send + Sync {
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error>;
 
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>;
+
+    // Given PN JIDs, returns PN->LID map for participants we should encrypt to
+    async fn resolve_encryption_jids(
+        &self,
+        pns: &[Jid],
+    ) -> Result<HashMap<Jid, Jid>, anyhow::Error>;
 }
