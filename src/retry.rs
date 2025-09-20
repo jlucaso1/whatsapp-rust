@@ -24,6 +24,18 @@ impl Client {
 
         let message_id = retry_child.attrs().string("id");
 
+        // For group messages, only retry once per message id to avoid loops
+        if receipt.source.chat.is_group() {
+            if self.retried_group_messages.contains_key(&message_id) {
+                log::debug!(
+                    "Ignoring subsequent retry for group message {}: already handled.",
+                    message_id
+                );
+                return Ok(());
+            }
+            self.retried_group_messages.insert(message_id.clone(), ());
+        }
+
         {
             let mut pending = self.pending_retries.lock().await;
             if pending.contains(&message_id) {

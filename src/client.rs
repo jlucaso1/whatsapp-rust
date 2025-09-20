@@ -3,6 +3,7 @@ mod context_impl;
 use crate::handshake;
 use crate::pair;
 use anyhow::anyhow;
+use dashmap::DashMap;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
@@ -15,7 +16,7 @@ use crate::handlers;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
 
-use dashmap::DashMap;
+// keep single DashMap import above
 
 use log::{debug, error, info, warn};
 
@@ -123,6 +124,7 @@ pub struct Client {
     pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
     pub device_cache: Arc<DashMap<Jid, (Vec<Jid>, std::time::Instant)>>,
 
+    pub(crate) retried_group_messages: Arc<DashMap<String, ()>>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
     pub(crate) recent_msg_tx: RecentMessageManagerHandle,
@@ -212,6 +214,7 @@ impl Client {
             chat_locks: Arc::new(DashMap::new()),
             group_cache: Arc::new(DashMap::new()),
             device_cache: Arc::new(DashMap::new()),
+            retried_group_messages: Arc::new(DashMap::new()),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
