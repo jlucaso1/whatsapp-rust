@@ -27,7 +27,7 @@ use crate::appstate_sync::AppStateProcessor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::task;
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
@@ -61,11 +61,47 @@ pub struct RecentMessageKey {
     pub id: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RecentMessageManagerHandle(pub mpsc::Sender<RecentMessageCommand>);
+
+impl RecentMessageManagerHandle {
+    pub(crate) async fn send_insert(
+        &self,
+        key: RecentMessageKey,
+        msg: Arc<wa::Message>,
+    ) -> Result<(), mpsc::error::SendError<RecentMessageCommand>> {
+        self.0.send(RecentMessageCommand::Insert(key, msg)).await
+    }
+
+    pub(crate) async fn shutdown(
+        &self,
+    ) -> Result<(), mpsc::error::SendError<RecentMessageCommand>> {
+        self.0.send(RecentMessageCommand::Shutdown).await
+    }
+}
+
+#[derive(Debug)]
+pub enum RecentMessageCommand {
+    Insert(RecentMessageKey, Arc<wa::Message>),
+    Take(RecentMessageKey, oneshot::Sender<Option<Arc<wa::Message>>>),
+    Shutdown,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecentMessageError {
+    #[error("Manager task unavailable - channel send failed")]
+    ManagerUnavailable,
+    #[error("Manager task did not respond within timeout")]
+    ResponseTimeout,
+    #[error("Manager task panicked or was dropped")]
+    TaskDropped,
+}
+
 pub struct Client {
     pub(crate) core: wacore::client::CoreClient,
 
     pub(crate) persistence_manager: Arc<PersistenceManager>,
-    pub(crate) media_conn: Arc<Mutex<Option<crate::mediaconn::MediaConn>>>,
+    pub(crate) media_conn: Arc<RwLock<Option<crate::mediaconn::MediaConn>>>,
 
     pub(crate) is_logged_in: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
@@ -86,8 +122,7 @@ pub struct Client {
 
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
-    pub(crate) recent_messages_map: Arc<Mutex<HashMap<RecentMessageKey, Arc<wa::Message>>>>,
-    pub(crate) recent_messages_list: Arc<Mutex<VecDeque<RecentMessageKey>>>,
+    pub(crate) recent_msg_tx: RecentMessageManagerHandle,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
@@ -119,10 +154,46 @@ impl Client {
 
         let (tx, rx) = mpsc::channel(32);
 
+        let (recent_tx, mut recent_rx) = mpsc::channel(256);
+        let recent_handle = RecentMessageManagerHandle(recent_tx);
+
+        let map_inner = Arc::new(Mutex::new(HashMap::with_capacity(256)));
+        let list_inner = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
+        let map_clone = map_inner.clone();
+        let list_clone = list_inner.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = recent_rx.recv().await {
+                match cmd {
+                    RecentMessageCommand::Insert(key, msg) => {
+                        let mut map = map_clone.lock().await;
+                        let mut list = list_clone.lock().await;
+                        map.insert(key.clone(), msg);
+                        list.push_back(key);
+                        if list.len() > 256
+                            && let Some(old_key) = list.pop_front()
+                        {
+                            map.remove(&old_key);
+                        }
+                    }
+                    RecentMessageCommand::Take(key, responder) => {
+                        let mut map = map_clone.lock().await;
+                        let mut list = list_clone.lock().await;
+                        let msg = map.remove(&key);
+                        list.retain(|k| k != &key);
+                        let _ = responder.send(msg);
+                    }
+                    RecentMessageCommand::Shutdown => {
+                        info!("RecentMessageManager shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
         let this = Self {
             core,
             persistence_manager: persistence_manager.clone(),
-            media_conn: Arc::new(Mutex::new(None)),
+            media_conn: Arc::new(RwLock::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -140,8 +211,8 @@ impl Client {
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
-            recent_messages_map: Arc::new(Mutex::new(HashMap::with_capacity(256))),
-            recent_messages_list: Arc::new(Mutex::new(VecDeque::with_capacity(256))),
+            recent_msg_tx: recent_handle,
+
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
@@ -246,6 +317,12 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify_waiters();
+
+        // Shutdown recent message manager
+        if let Err(e) = self.recent_msg_tx.shutdown().await {
+            warn!("Failed to shutdown recent message manager: {}", e);
+        }
+
         if let Some(fs) = self.frame_socket.lock().await.as_mut() {
             fs.close().await;
         }
@@ -301,16 +378,40 @@ impl Client {
         &self,
         to: Jid,
         id: String,
-    ) -> Option<Arc<wa::Message>> {
+    ) -> Result<Option<Arc<wa::Message>>, RecentMessageError> {
         let key = RecentMessageKey { to, id };
-        let mut map_guard = self.recent_messages_map.lock().await;
-        if let Some(msg) = map_guard.remove(&key) {
-            let mut list_guard = self.recent_messages_list.lock().await;
-            list_guard.retain(|k| k != &key);
-            Some(msg)
-        } else {
-            None
+        let (oneshot_tx, oneshot_rx) = oneshot::channel();
+
+        // Use a timeout to prevent hanging if the task is unresponsive
+        if (self
+            .recent_msg_tx
+            .0
+            .send(RecentMessageCommand::Take(key, oneshot_tx))
+            .await)
+            .is_err()
+        {
+            return Err(RecentMessageError::ManagerUnavailable);
         }
+
+        // Wait for response with timeout
+        match tokio::time::timeout(Duration::from_secs(5), oneshot_rx).await {
+            Ok(Ok(msg)) => Ok(msg),
+            Ok(Err(_)) => Err(RecentMessageError::TaskDropped),
+            Err(_) => Err(RecentMessageError::ResponseTimeout),
+        }
+    }
+
+    pub(crate) async fn add_recent_message(
+        &self,
+        to: Jid,
+        id: String,
+        msg: Arc<wa::Message>,
+    ) -> Result<(), RecentMessageError> {
+        let key = RecentMessageKey { to, id };
+        self.recent_msg_tx
+            .send_insert(key, msg)
+            .await
+            .map_err(|_| RecentMessageError::ManagerUnavailable)
     }
 
     pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
