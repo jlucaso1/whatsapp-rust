@@ -20,21 +20,22 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
 type DeviceRow = (
-    String,
-    String,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Vec<u8>,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Option<Vec<u8>>,
-    String,
-    i32,
-    i32,
-    i64,
-    i64,
+    i32,      // id (new primary key)
+    String,   // lid
+    String,   // pn
+    i32,      // registration_id
+    Vec<u8>,  // noise_key
+    Vec<u8>,  // identity_key
+    Vec<u8>,  // signed_pre_key
+    i32,      // signed_pre_key_id
+    Vec<u8>,  // signed_pre_key_signature
+    Vec<u8>,  // adv_secret_key
+    Option<Vec<u8>>, // account
+    String,   // push_name
+    i32,      // app_version_primary
+    i32,      // app_version_secondary
+    i64,      // app_version_tertiary
+    i64,      // app_version_last_fetched_ms
 );
 
 #[derive(Clone)]
@@ -253,6 +254,7 @@ impl SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
         if let Some((
+            _device_id,  // We don't use this in the CoreDevice (id is just for DB organization)
             lid_str,
             pn_str,
             registration_id,
