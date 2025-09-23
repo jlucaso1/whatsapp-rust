@@ -60,20 +60,20 @@ mod tests {
     #[tokio::test]
     async fn test_custom_enc_handler_registration() {
         use crate::bot::Bot;
+        use crate::config::ClientConfig;
 
         // Create a mock handler
         let mock_handler = MockEncHandler::new();
 
         // Build bot with custom handler and unique DB
         let db_path = format!("/tmp/test_enc_handler_{}.db", rand::random::<u64>());
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let config = ClientConfig {
+            db_path,
+            ..Default::default()
+        };
 
         let bot = Bot::builder()
-            .with_backend(backend)
+            .with_config(config)
             .with_enc_handler("frskmsg", mock_handler)
             .build()
             .await
@@ -86,20 +86,20 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_custom_handlers() {
         use crate::bot::Bot;
+        use crate::config::ClientConfig;
 
         let handler1 = MockEncHandler::new();
         let handler2 = MockEncHandler::new();
 
         // Build bot with unique DB
         let db_path = format!("/tmp/test_enc_multiple_{}.db", rand::random::<u64>());
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let config = ClientConfig {
+            db_path,
+            ..Default::default()
+        };
 
         let bot = Bot::builder()
-            .with_backend(backend)
+            .with_config(config)
             .with_enc_handler("frskmsg", handler1)
             .with_enc_handler("customtype", handler2)
             .build()
@@ -115,17 +115,17 @@ mod tests {
     #[tokio::test]
     async fn test_builtin_handlers_still_work() {
         use crate::bot::Bot;
+        use crate::config::ClientConfig;
 
         // Build bot without custom handlers but with unique DB
         let db_path = format!("/tmp/test_enc_builtin_{}.db", rand::random::<u64>());
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let config = ClientConfig {
+            db_path,
+            ..Default::default()
+        };
 
         let bot = Bot::builder()
-            .with_backend(backend)
+            .with_config(config)
             .build()
             .await
             .expect("Failed to build bot");
