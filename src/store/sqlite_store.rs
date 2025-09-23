@@ -11,6 +11,7 @@ use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::AppStateMutationMAC;
+use wacore::store::traits::LIDStore;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
@@ -511,6 +512,60 @@ impl SessionStore for SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
         Ok(count > 0)
+    }
+
+    async fn migrate_session(&self, from_address: &str, to_address: &str) -> Result<()> {
+        if from_address == to_address {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let from = from_address.to_string();
+        let to = to_address.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            conn.transaction::<(), diesel::result::Error, _>(|conn| {
+                // Check if destination already exists
+                let dest_exists: bool = diesel::select(diesel::dsl::exists(
+                    sessions::table.filter(sessions::address.eq(&to)),
+                ))
+                .get_result(conn)?;
+
+                if dest_exists {
+                    // If destination exists, we can safely delete source and exit
+                    diesel::delete(sessions::table.filter(sessions::address.eq(&from)))
+                        .execute(conn)?;
+                    return Ok(());
+                }
+
+                // Load source session (if any)
+                let source_record: Option<Vec<u8>> = sessions::table
+                    .select(sessions::record)
+                    .filter(sessions::address.eq(&from))
+                    .first::<Vec<u8>>(conn)
+                    .optional()?;
+
+                if let Some(record) = source_record {
+                    // Insert into destination
+                    diesel::insert_into(sessions::table)
+                        .values((sessions::address.eq(&to), sessions::record.eq(&record)))
+                        .on_conflict(sessions::address)
+                        .do_nothing()
+                        .execute(conn)?;
+                    // Delete source
+                    diesel::delete(sessions::table.filter(sessions::address.eq(&from)))
+                        .execute(conn)?;
+                }
+
+                Ok(())
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
     }
 }
 
@@ -1037,5 +1092,221 @@ impl AppStateStore for SqliteStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))??;
         Ok(result.map(|r| r.1))
+    }
+}
+
+#[async_trait]
+impl LIDStore for SqliteStore {
+    async fn put_lid_pn_mapping(
+        &self,
+        lid: &wacore_binary::jid::Jid,
+        pn: &wacore_binary::jid::Jid,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let lid_user = lid.user.clone();
+        let pn_user = pn.user.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(lid_pn_mappings::table)
+                .values((
+                    lid_pn_mappings::lid_user.eq(&lid_user),
+                    lid_pn_mappings::pn_user.eq(&pn_user),
+                ))
+                .on_conflict(lid_pn_mappings::lid_user)
+                .do_update()
+                .set(lid_pn_mappings::pn_user.eq(&pn_user))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_pn_for_lid(
+        &self,
+        lid: &wacore_binary::jid::Jid,
+    ) -> Result<Option<wacore_binary::jid::Jid>> {
+        let pool = self.pool.clone();
+        let lid_user = lid.user.clone();
+        let pn_user: Option<String> =
+            tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<String> = lid_pn_mappings::table
+                    .select(lid_pn_mappings::pn_user)
+                    .filter(lid_pn_mappings::lid_user.eq(&lid_user))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(pn_user.and_then(|u| {
+            format!("{}@{}", u, wacore_binary::jid::DEFAULT_USER_SERVER)
+                .parse()
+                .ok()
+        }))
+    }
+
+    async fn get_lid_for_pn(
+        &self,
+        pn: &wacore_binary::jid::Jid,
+    ) -> Result<Option<wacore_binary::jid::Jid>> {
+        let pool = self.pool.clone();
+        let pn_user = pn.user.clone();
+        let lid_user: Option<String> =
+            tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<String> = lid_pn_mappings::table
+                    .select(lid_pn_mappings::lid_user)
+                    .filter(lid_pn_mappings::pn_user.eq(&pn_user))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(lid_user.and_then(|u| {
+            format!("{}@{}", u, wacore_binary::jid::HIDDEN_USER_SERVER)
+                .parse()
+                .ok()
+        }))
+    }
+
+    async fn get_many_lids_for_pns(
+        &self,
+        pns: &[wacore_binary::jid::Jid],
+    ) -> Result<std::collections::HashMap<wacore_binary::jid::Jid, wacore_binary::jid::Jid>> {
+        use std::collections::HashMap;
+        if pns.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let pool = self.pool.clone();
+        let pn_users: Vec<String> = pns.iter().map(|j| j.user.clone()).collect();
+        let rows: Vec<(String, String)> =
+            tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Vec<(String, String)> = lid_pn_mappings::table
+                    .select((lid_pn_mappings::lid_user, lid_pn_mappings::pn_user))
+                    .filter(lid_pn_mappings::pn_user.eq_any(&pn_users))
+                    .load(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        let mut map = HashMap::new();
+        for (lid_user, pn_user) in rows {
+            if let (Ok(lid), Ok(pn)) = (
+                format!("{}@{}", lid_user, wacore_binary::jid::HIDDEN_USER_SERVER).parse(),
+                format!("{}@{}", pn_user, wacore_binary::jid::DEFAULT_USER_SERVER).parse(),
+            ) {
+                map.insert(pn, lid);
+            }
+        }
+        Ok(map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wacore_binary::jid::Jid;
+
+    async fn setup_test_store() -> SqliteStore {
+        SqliteStore::new(":memory:").await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_lid_pn_mapping() {
+        let store = setup_test_store().await;
+
+        let lid1: Jid = "1111@lid".parse().unwrap();
+        let pn1: Jid = "1111@s.whatsapp.net".parse().unwrap();
+        let lid2: Jid = "2222@lid".parse().unwrap();
+        let pn2: Jid = "2222@s.whatsapp.net".parse().unwrap();
+
+        // 1. Test insertion
+        store.put_lid_pn_mapping(&lid1, &pn1).await.unwrap();
+        store.put_lid_pn_mapping(&lid2, &pn2).await.unwrap();
+
+        // 2. Test Getters
+        assert_eq!(
+            store.get_pn_for_lid(&lid1).await.unwrap(),
+            Some(pn1.clone())
+        );
+        assert_eq!(
+            store.get_lid_for_pn(&pn1).await.unwrap(),
+            Some(lid1.clone())
+        );
+        assert_eq!(
+            store.get_pn_for_lid(&lid2).await.unwrap(),
+            Some(pn2.clone())
+        );
+
+        // 3. Test non-existent key
+        let non_existent_lid: Jid = "3333@lid".parse().unwrap();
+        assert_eq!(store.get_pn_for_lid(&non_existent_lid).await.unwrap(), None);
+
+        // 4. Test update (LID is primary key, so updating its PN)
+        let pn1_new: Jid = "1111_new@s.whatsapp.net".parse().unwrap();
+        store.put_lid_pn_mapping(&lid1, &pn1_new).await.unwrap();
+        assert_eq!(
+            store.get_pn_for_lid(&lid1).await.unwrap(),
+            Some(pn1_new.clone())
+        );
+        // Old PN should no longer map to anything
+        assert_eq!(store.get_lid_for_pn(&pn1).await.unwrap(), None);
+
+        // 5. Test `get_many_lids_for_pns`
+        let pns_to_query = vec![
+            pn1_new.clone(),
+            pn2.clone(),
+            "9999@s.whatsapp.net".parse().unwrap(),
+        ];
+        let map = store.get_many_lids_for_pns(&pns_to_query).await.unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&pn1_new), Some(&lid1));
+        assert_eq!(map.get(&pn2), Some(&lid2));
+    }
+
+    #[tokio::test]
+    async fn test_migrate_session_pn_to_lid() {
+        let store = setup_test_store().await;
+
+        // Prepare a fake PN session and migrate to LID address
+        let pn_addr = "12345@s.whatsapp.net.0".to_string();
+        let lid_addr = "12345@lid.0".to_string();
+        let session_bytes = vec![1, 2, 3, 4, 5];
+
+        store.put_session(&pn_addr, &session_bytes).await.unwrap();
+        assert!(store.has_session(&pn_addr).await.unwrap());
+        assert!(!store.has_session(&lid_addr).await.unwrap());
+
+        store
+            .migrate_session(&pn_addr, &lid_addr)
+            .await
+            .expect("migration should succeed");
+
+        // After migration, PN removed and LID present
+        assert!(!store.has_session(&pn_addr).await.unwrap());
+        assert!(store.has_session(&lid_addr).await.unwrap());
+
+        let migrated = store.get_session(&lid_addr).await.unwrap().unwrap();
+        assert_eq!(migrated, session_bytes);
     }
 }
