@@ -2,9 +2,9 @@ use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use wacore::crypto::sha256;
 use wacore::handshake::NoiseHandshake;
 use wacore::handshake::utils::generate_iv;
+use wacore::libsignal::crypto::CryptographicHash;
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
 use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
@@ -245,7 +245,9 @@ fn test_initial_pattern_hash() {
     let expected_hash =
         hex::decode("5df72b67b965add1168f0a6c756df21c204f7e64fc682be6a3ab4b682c8db64b").unwrap();
 
-    let actual_hash = sha256(pattern.as_bytes());
+    let mut hasher = CryptographicHash::new("SHA-256").unwrap();
+    hasher.update(pattern.as_bytes());
+    let actual_hash = hasher.finalize();
 
     assert_eq!(actual_hash.as_slice(), expected_hash.as_slice());
 }

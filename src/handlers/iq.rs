@@ -13,13 +13,8 @@ use wacore_binary::node::Node;
 /// - Pairing requests
 /// - Feature queries
 /// - Settings updates
+#[derive(Default)]
 pub struct IqHandler;
-
-impl Default for IqHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl IqHandler {
     pub fn new() -> Self {

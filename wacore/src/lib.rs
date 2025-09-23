@@ -1,7 +1,6 @@
 pub use aes_gcm;
 pub mod appstate;
 pub mod client;
-pub mod crypto;
 pub mod download;
 pub mod handshake;
 pub mod history_sync;

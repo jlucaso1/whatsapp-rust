@@ -1,4 +1,4 @@
-use crate::crypto::{aes_256_cbc_decrypt, hmac_sha256};
+use crate::libsignal::crypto::{CryptographicMac, aes_256_cbc_decrypt};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -291,7 +291,13 @@ impl DownloadUtils {
 
         let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, media_type);
 
-        let computed_mac_full = hmac_sha256(&mac_key, &[&iv, ciphertext]);
+        let computed_mac_full = {
+            let mut mac = CryptographicMac::new("HmacSha256", &mac_key)
+                .map_err(|e| anyhow!(e.to_string()))?;
+            mac.update(&iv);
+            mac.update(ciphertext);
+            mac.finalize()
+        };
         if &computed_mac_full[..MAC_SIZE] != received_mac {
             return Err(anyhow!("Invalid MAC signature"));
         }

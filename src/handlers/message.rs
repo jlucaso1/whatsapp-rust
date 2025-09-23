@@ -12,13 +12,8 @@ use wacore_binary::node::Node;
 /// - Media messages (images, videos, documents, etc.)
 /// - System messages
 /// - Group messages
+#[derive(Default)]
 pub struct MessageHandler;
-
-impl Default for MessageHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl MessageHandler {
     pub fn new() -> Self {
