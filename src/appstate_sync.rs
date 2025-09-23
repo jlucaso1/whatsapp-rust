@@ -616,6 +616,14 @@ mod tests {
         ) -> StoreResult<Option<wacore::store::Device>> {
             Ok(Some(wacore::store::Device::new()))
         }
+
+        async fn device_exists(&self, _device_id: i32) -> StoreResult<bool> {
+            Ok(true)
+        }
+
+        async fn create_new_device(&self) -> StoreResult<i32> {
+            Ok(1)
+        }
     }
 
     fn create_encrypted_mutation(

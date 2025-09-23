@@ -808,4 +808,12 @@ impl wacore::store::traits::DevicePersistence for DeviceAwareSqliteStore {
     ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         self.store.load_device_data_for_device(device_id).await
     }
+
+    async fn device_exists(&self, device_id: i32) -> wacore::store::error::Result<bool> {
+        self.store.device_exists(device_id).await
+    }
+
+    async fn create_new_device(&self) -> wacore::store::error::Result<i32> {
+        self.store.create_new_device().await
+    }
 }

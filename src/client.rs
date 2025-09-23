@@ -232,7 +232,6 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            // TODO: Re-enable AppStateProcessor when it's made generic
             app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
@@ -788,7 +787,6 @@ impl Client {
                 }
             };
 
-            // TODO: Re-enable when AppStateProcessor is generic
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, new_state, list) =
                     proc.decode_patch_list(&resp, &download, true).await?;

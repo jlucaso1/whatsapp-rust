@@ -164,56 +164,21 @@ impl SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            if !new_lid.is_empty() {
-                let rows_affected = diesel::update(device::table.filter(device::lid.eq("")))
-                    .set((
-                        device::lid.eq(&new_lid),
-                        device::pn.eq(&new_pn),
-                        device::registration_id.eq(registration_id),
-                        device::noise_key.eq(&noise_key_data),
-                        device::identity_key.eq(&identity_key_data),
-                        device::signed_pre_key.eq(&signed_pre_key_data),
-                        device::signed_pre_key_id.eq(signed_pre_key_id),
-                        device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                        device::adv_secret_key.eq(&adv_secret_key[..]),
-                        device::account.eq(account_data.clone()),
-                        device::push_name.eq(&push_name),
-                        device::app_version_primary.eq(app_version_primary),
-                        device::app_version_secondary.eq(app_version_secondary),
-                        device::app_version_tertiary.eq(app_version_tertiary),
-                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                    ))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            // Find existing device id (single-account mode assumes one row exists)
+            let existing_id: Option<i32> = device::table
+                .select(device::id)
+                .first::<i32>(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                if rows_affected > 0 {
-                    return Ok(());
-                }
-            }
+            let Some(device_id) = existing_id else {
+                return Err(StoreError::DeviceNotFound(1));
+            };
 
-            diesel::insert_into(device::table)
-                .values((
-                    device::lid.eq(new_lid.clone()),
-                    device::pn.eq(new_pn.clone()),
-                    device::registration_id.eq(registration_id),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(signed_pre_key_id),
-                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&adv_secret_key[..]),
-                    device::account.eq(account_data.clone()),
-                    device::push_name.eq(&push_name),
-                    device::app_version_primary.eq(app_version_primary),
-                    device::app_version_secondary.eq(app_version_secondary),
-                    device::app_version_tertiary.eq(app_version_tertiary),
-                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                ))
-                .on_conflict(device::lid)
-                .do_update()
+            diesel::update(device::table.filter(device::id.eq(device_id)))
                 .set((
-                    device::lid.eq(new_lid),
-                    device::pn.eq(new_pn),
+                    device::lid.eq(&new_lid),
+                    device::pn.eq(&new_pn),
                     device::registration_id.eq(registration_id),
                     device::noise_key.eq(&noise_key_data),
                     device::identity_key.eq(&identity_key_data),
@@ -305,7 +270,7 @@ impl SqliteStore {
             }
 
             // If we couldn't find the device row, return an error so callers
-            // know the device must be created first (StoreManager should do this).
+            // know the device must be created first (PersistenceManager should do this).
             Err(StoreError::DeviceNotFound(device_id))
         })
         .await
@@ -695,6 +660,7 @@ impl IdentityStore for SqliteStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
+        let device_id = 1; // single-account mode
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -703,8 +669,9 @@ impl IdentityStore for SqliteStore {
                 .values((
                     identities::address.eq(address),
                     identities::key.eq(&key[..]),
+                    identities::device_id.eq(device_id),
                 ))
-                .on_conflict(identities::address)
+                .on_conflict((identities::address, identities::device_id))
                 .do_update()
                 .set(identities::key.eq(&key[..]))
                 .execute(&mut conn)
@@ -719,13 +686,18 @@ impl IdentityStore for SqliteStore {
     async fn delete_identity(&self, address: &str) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
+        let device_id = 1;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(identities::table.filter(identities::address.eq(address)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            diesel::delete(
+                identities::table
+                    .filter(identities::address.eq(address))
+                    .filter(identities::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
         })
         .await
@@ -749,6 +721,7 @@ impl IdentityStore for SqliteStore {
                 let res: Option<Vec<u8>> = identities::table
                     .select(identities::key)
                     .filter(identities::address.eq(address))
+                    .filter(identities::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -799,6 +772,7 @@ impl SessionStore for SqliteStore {
                 let res: Option<Vec<u8>> = sessions::table
                     .select(sessions::record)
                     .filter(sessions::address.eq(address))
+                    .filter(sessions::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -819,8 +793,12 @@ impl SessionStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             diesel::insert_into(sessions::table)
-                .values((sessions::address.eq(address), sessions::record.eq(&session)))
-                .on_conflict(sessions::address)
+                .values((
+                    sessions::address.eq(address),
+                    sessions::record.eq(&session),
+                    sessions::device_id.eq(1),
+                ))
+                .on_conflict((sessions::address, sessions::device_id))
                 .do_update()
                 .set(sessions::record.eq(&session))
                 .execute(&mut conn)
@@ -839,9 +817,13 @@ impl SessionStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(sessions::table.filter(sessions::address.eq(address)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            diesel::delete(
+                sessions::table
+                    .filter(sessions::address.eq(address))
+                    .filter(sessions::device_id.eq(1)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
         })
         .await
@@ -858,6 +840,7 @@ impl SessionStore for SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             let cnt: i64 = sessions::table
                 .filter(sessions::address.eq(address))
+                .filter(sessions::device_id.eq(1))
                 .count()
                 .get_result(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -884,6 +867,7 @@ impl libsignal::store::PreKeyStore for SqliteStore {
                 let res: Option<Vec<u8>> = prekeys::table
                     .select(prekeys::key)
                     .filter(prekeys::id.eq(prekey_id as i32))
+                    .filter(prekeys::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -928,8 +912,9 @@ impl libsignal::store::PreKeyStore for SqliteStore {
                     prekeys::id.eq(prekey_id as i32),
                     prekeys::key.eq(&private_key_bytes),
                     prekeys::uploaded.eq(uploaded),
+                    prekeys::device_id.eq(1),
                 ))
-                .on_conflict(prekeys::id)
+                .on_conflict((prekeys::id, prekeys::device_id))
                 .do_update()
                 .set((
                     prekeys::key.eq(&private_key_bytes),
@@ -952,6 +937,7 @@ impl libsignal::store::PreKeyStore for SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             let cnt: i64 = prekeys::table
                 .filter(prekeys::id.eq(prekey_id as i32))
+                .filter(prekeys::device_id.eq(1))
                 .count()
                 .get_result(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -968,9 +954,13 @@ impl libsignal::store::PreKeyStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(prekeys::table.filter(prekeys::id.eq(prekey_id as i32)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            diesel::delete(
+                prekeys::table
+                    .filter(prekeys::id.eq(prekey_id as i32))
+                    .filter(prekeys::device_id.eq(1)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
         })
         .await
@@ -993,8 +983,9 @@ impl SenderKeyStoreHelper for SqliteStore {
                 .values((
                     sender_keys::address.eq(address),
                     sender_keys::record.eq(&record_vec),
+                    sender_keys::device_id.eq(1),
                 ))
-                .on_conflict(sender_keys::address)
+                .on_conflict((sender_keys::address, sender_keys::device_id))
                 .do_update()
                 .set(sender_keys::record.eq(&record_vec))
                 .execute(&mut conn)
@@ -1017,6 +1008,7 @@ impl SenderKeyStoreHelper for SqliteStore {
                 let res: Option<Vec<u8>> = sender_keys::table
                     .select(sender_keys::record)
                     .filter(sender_keys::address.eq(address))
+                    .filter(sender_keys::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1034,9 +1026,13 @@ impl SenderKeyStoreHelper for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(sender_keys::table.filter(sender_keys::address.eq(address)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            diesel::delete(
+                sender_keys::table
+                    .filter(sender_keys::address.eq(address))
+                    .filter(sender_keys::device_id.eq(1)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
         })
         .await
@@ -1060,6 +1056,7 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
                 let res: Option<Vec<u8>> = signed_prekeys::table
                     .select(signed_prekeys::record)
                     .filter(signed_prekeys::id.eq(signed_prekey_id as i32))
+                    .filter(signed_prekeys::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1084,6 +1081,7 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
 
         let results: Vec<Vec<u8>> = signed_prekeys::table
             .select(signed_prekeys::record)
+            .filter(signed_prekeys::device_id.eq(1))
             .load(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
@@ -1112,8 +1110,9 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
                 .values((
                     signed_prekeys::id.eq(signed_prekey_id as i32),
                     signed_prekeys::record.eq(&data),
+                    signed_prekeys::device_id.eq(1),
                 ))
-                .on_conflict(signed_prekeys::id)
+                .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
                 .do_update()
                 .set(signed_prekeys::record.eq(&data))
                 .execute(&mut conn)
@@ -1136,6 +1135,7 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             let cnt: i64 = signed_prekeys::table
                 .filter(signed_prekeys::id.eq(signed_prekey_id as i32))
+                .filter(signed_prekeys::device_id.eq(1))
                 .count()
                 .get_result(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1156,7 +1156,9 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             diesel::delete(
-                signed_prekeys::table.filter(signed_prekeys::id.eq(signed_prekey_id as i32)),
+                signed_prekeys::table
+                    .filter(signed_prekeys::id.eq(signed_prekey_id as i32))
+                    .filter(signed_prekeys::device_id.eq(1)),
             )
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1181,6 +1183,7 @@ impl AppStateKeyStore for SqliteStore {
                 let res: Option<Vec<u8>> = app_state_keys::table
                     .select(app_state_keys::key_data)
                     .filter(app_state_keys::key_id.eq(&key_id))
+                    .filter(app_state_keys::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1211,8 +1214,9 @@ impl AppStateKeyStore for SqliteStore {
                 .values((
                     app_state_keys::key_id.eq(&key_id),
                     app_state_keys::key_data.eq(&data),
+                    app_state_keys::device_id.eq(1),
                 ))
-                .on_conflict(app_state_keys::key_id)
+                .on_conflict((app_state_keys::key_id, app_state_keys::device_id))
                 .do_update()
                 .set(app_state_keys::key_data.eq(&data))
                 .execute(&mut conn)
@@ -1238,6 +1242,7 @@ impl AppStateStore for SqliteStore {
                 let res: Option<Vec<u8>> = app_state_versions::table
                     .select(app_state_versions::state_data)
                     .filter(app_state_versions::name.eq(name))
+                    .filter(app_state_versions::device_id.eq(1))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1268,8 +1273,9 @@ impl AppStateStore for SqliteStore {
                 .values((
                     app_state_versions::name.eq(name),
                     app_state_versions::state_data.eq(&data),
+                    app_state_versions::device_id.eq(1),
                 ))
-                .on_conflict(app_state_versions::name)
+                .on_conflict((app_state_versions::name, app_state_versions::device_id))
                 .do_update()
                 .set(app_state_versions::state_data.eq(&data))
                 .execute(&mut conn)
@@ -1305,10 +1311,12 @@ impl AppStateStore for SqliteStore {
                         app_state_mutation_macs::version.eq(version as i64),
                         app_state_mutation_macs::index_mac.eq(&m.index_mac),
                         app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                        app_state_mutation_macs::device_id.eq(1),
                     ))
                     .on_conflict((
                         app_state_mutation_macs::name,
                         app_state_mutation_macs::index_mac,
+                        app_state_mutation_macs::device_id,
                     ))
                     .do_update()
                     .set((
@@ -1346,7 +1354,8 @@ impl AppStateStore for SqliteStore {
                     app_state_mutation_macs::table.filter(
                         app_state_mutation_macs::name
                             .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&idx)),
+                            .and(app_state_mutation_macs::index_mac.eq(&idx))
+                            .and(app_state_mutation_macs::device_id.eq(1)),
                     ),
                 )
                 .execute(&mut conn)
@@ -1381,7 +1390,8 @@ impl AppStateStore for SqliteStore {
                     .filter(
                         app_state_mutation_macs::name
                             .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&index_mac)),
+                            .and(app_state_mutation_macs::index_mac.eq(&index_mac))
+                            .and(app_state_mutation_macs::device_id.eq(1)),
                     )
                     .order(app_state_mutation_macs::version.desc())
                     .first(&mut conn)
@@ -1401,7 +1411,8 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
         &self,
         device_data: &wacore::store::Device,
     ) -> wacore::store::error::Result<()> {
-        self.save_device_data(device_data).await
+        // Single-device mode always targets device_id = 1
+        self.save_device_data_for_device(1, device_data).await
     }
 
     async fn save_device_data_for_device(
@@ -1416,7 +1427,8 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
     async fn load_device_data(
         &self,
     ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
-        self.load_device_data().await
+        // Single-device mode always targets device_id = 1
+        self.load_device_data_for_device(1).await
     }
 
     async fn load_device_data_for_device(
@@ -1424,5 +1436,13 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
         device_id: i32,
     ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         self.load_device_data_for_device(device_id).await
+    }
+
+    async fn device_exists(&self, device_id: i32) -> wacore::store::error::Result<bool> {
+        self.device_exists(device_id).await
+    }
+
+    async fn create_new_device(&self) -> wacore::store::error::Result<i32> {
+        self.create_new_device().await
     }
 }

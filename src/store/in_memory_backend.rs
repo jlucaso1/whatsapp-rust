@@ -314,4 +314,19 @@ impl wacore::store::traits::DevicePersistence for InMemoryBackend {
         let device_data_by_id = self.device_data_by_id.read().await;
         Ok(device_data_by_id.get(&device_id).cloned())
     }
+
+    async fn device_exists(&self, device_id: i32) -> wacore::store::error::Result<bool> {
+        let device_data_by_id = self.device_data_by_id.read().await;
+        Ok(device_data_by_id.contains_key(&device_id) || self.device_data.read().await.is_some())
+    }
+
+    async fn create_new_device(&self) -> wacore::store::error::Result<i32> {
+        let dev = wacore::store::Device::new();
+        // For single-device tests, store under id=1
+        let mut device_data_by_id = self.device_data_by_id.write().await;
+        device_data_by_id.insert(1, dev.clone());
+        let mut device_data_store = self.device_data.write().await;
+        *device_data_store = Some(dev);
+        Ok(1)
+    }
 }

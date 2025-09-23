@@ -17,6 +17,21 @@ pub struct PersistenceManager {
 impl PersistenceManager {
     /// Create a PersistenceManager with a backend implementation (single device mode)
     pub async fn new(backend: Arc<dyn Backend>) -> Result<Self, StoreError> {
+        debug!("PersistenceManager: Ensuring device row exists (single-device mode).");
+        // Ensure a device row with id=1 exists; create it if not.
+        let exists = backend
+            .device_exists(1)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        if !exists {
+            debug!("PersistenceManager: No device row found. Creating new device row.");
+            let id = backend
+                .create_new_device()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            debug!("PersistenceManager: Created device row with id={id}.");
+        }
+
         debug!("PersistenceManager: Attempting to load device data via Backend.");
         let device_data_opt = backend
             .load_device_data()
@@ -32,7 +47,7 @@ impl PersistenceManager {
             dev.load_from_serializable(serializable_device);
             dev
         } else {
-            debug!("PersistenceManager: No existing device data found. Creating a new Device.");
+            debug!("PersistenceManager: No data yet; initializing default Device in memory.");
             Device::new(backend.clone())
         };
 

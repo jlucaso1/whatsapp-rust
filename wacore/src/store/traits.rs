@@ -95,6 +95,12 @@ pub trait DevicePersistence: Send + Sync {
         &self,
         device_id: i32,
     ) -> Result<Option<crate::store::Device>>;
+
+    /// Check if a device row exists for the given `device_id`.
+    async fn device_exists(&self, device_id: i32) -> Result<bool>;
+
+    /// Create a new device row and return its generated `device_id`.
+    async fn create_new_device(&self) -> Result<i32>;
 }
 
 pub trait Backend:
