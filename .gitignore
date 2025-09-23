@@ -4,6 +4,5 @@
 /whatsapp_store
 /.cargo
 /.vscode
-whatsapp.db*
-test.db*
+/*.db*
 .env
