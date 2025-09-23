@@ -136,6 +136,7 @@ pub struct Client {
 
     // TODO: Make AppStateProcessor generic over Backend trait
     // app_state_processor: Option<AppStateProcessor<dyn Backend>>,
+    #[allow(dead_code)]
     app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
@@ -732,7 +733,7 @@ impl Client {
         let has_more = true;
         let want_snapshot = full_sync;
 
-        while has_more {
+        if has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
 
             let mut collection_builder = NodeBuilder::new("collection")
@@ -829,8 +830,7 @@ impl Client {
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
             */
-            // For now, we'll break since AppStateProcessor is disabled
-            break;
+            // For now, we'll just return since AppStateProcessor is disabled
         }
 
         backend
@@ -841,6 +841,7 @@ impl Client {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
         if raw_key_ids.is_empty() {
             return;
@@ -879,6 +880,7 @@ impl Client {
         }
     }
 
+    #[allow(dead_code)]
     async fn dispatch_app_state_mutation(
         &self,
         m: &crate::appstate_sync::Mutation,
