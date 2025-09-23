@@ -1,10 +1,38 @@
+use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::Event;
+use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
 use wacore_binary::{jid::SERVER_JID, node::Node};
 
-pub async fn handle_notification(client: &Arc<Client>, node: &Node) {
+/// Handler for `<notification>` stanzas.
+///
+/// Processes various notification types including:
+/// - Encrypt notifications (key upload requests)
+/// - Server sync notifications
+/// - Account sync notifications (push name updates)
+pub struct NotificationHandler;
+
+impl NotificationHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl StanzaHandler for NotificationHandler {
+    fn tag(&self) -> &'static str {
+        "notification"
+    }
+
+    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+        handle_notification_impl(&client, node).await;
+        true
+    }
+}
+
+async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
     let notification_type = node.attrs.get("type").cloned().unwrap_or_default();
 
     match notification_type.as_str() {
