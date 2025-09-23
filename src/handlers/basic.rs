@@ -22,7 +22,7 @@ impl StanzaHandler for SuccessHandler {
         "success"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         client.handle_success(node).await;
         true
     }
@@ -46,7 +46,7 @@ impl StanzaHandler for FailureHandler {
         "failure"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         client.handle_connect_failure(node).await;
         true
     }
@@ -70,7 +70,7 @@ impl StanzaHandler for StreamErrorHandler {
         "stream:error"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         client.handle_stream_error(node).await;
         true
     }
@@ -94,7 +94,7 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(&self, _client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, _client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         use log::info;
         use wacore::xml::DisplayableNode;
 
