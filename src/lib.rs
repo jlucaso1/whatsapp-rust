@@ -4,7 +4,6 @@ pub mod types;
 
 pub mod client;
 pub use client::Client;
-pub mod config;
 pub mod download;
 pub mod handlers;
 pub mod handshake;
