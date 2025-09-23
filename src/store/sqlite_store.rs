@@ -3,8 +3,8 @@ use crate::store::traits::*;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
-use diesel::{sql_query};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
 use wacore::appstate::hash::HashState;
@@ -21,27 +21,27 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
 type DeviceRow = (
-    i32,      // id (new primary key)
-    String,   // lid
-    String,   // pn
-    i32,      // registration_id
-    Vec<u8>,  // noise_key
-    Vec<u8>,  // identity_key
-    Vec<u8>,  // signed_pre_key
-    i32,      // signed_pre_key_id
-    Vec<u8>,  // signed_pre_key_signature
-    Vec<u8>,  // adv_secret_key
+    i32,             // id (new primary key)
+    String,          // lid
+    String,          // pn
+    i32,             // registration_id
+    Vec<u8>,         // noise_key
+    Vec<u8>,         // identity_key
+    Vec<u8>,         // signed_pre_key
+    i32,             // signed_pre_key_id
+    Vec<u8>,         // signed_pre_key_signature
+    Vec<u8>,         // adv_secret_key
     Option<Vec<u8>>, // account
-    String,   // push_name
-    i32,      // app_version_primary
-    i32,      // app_version_secondary
-    i64,      // app_version_tertiary
-    i64,      // app_version_last_fetched_ms
+    String,          // push_name
+    i32,             // app_version_primary
+    i32,             // app_version_secondary
+    i64,             // app_version_tertiary
+    i64,             // app_version_last_fetched_ms
 );
 
 #[derive(Clone)]
 pub struct SqliteStore {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl SqliteStore {
@@ -239,6 +239,81 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Save device data for a specific device ID (multi-account mode)
+    pub async fn save_device_data_for_device(
+        &self,
+        device_id: i32,
+        device_data: &CoreDevice,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let noise_key_data = self.serialize_keypair(&device_data.noise_key)?;
+        let identity_key_data = self.serialize_keypair(&device_data.identity_key)?;
+        let signed_pre_key_data = self.serialize_keypair(&device_data.signed_pre_key)?;
+        let account_data = device_data
+            .account
+            .as_ref()
+            .map(|account| account.encode_to_vec());
+        let registration_id = device_data.registration_id as i32;
+        let signed_pre_key_id = device_data.signed_pre_key_id as i32;
+        let signed_pre_key_signature: Vec<u8> = device_data.signed_pre_key_signature.to_vec();
+        let adv_secret_key: Vec<u8> = device_data.adv_secret_key.to_vec();
+        let push_name = device_data.push_name.clone();
+        let app_version_primary = device_data.app_version_primary as i32;
+        let app_version_secondary = device_data.app_version_secondary as i32;
+        let app_version_tertiary = device_data.app_version_tertiary as i64;
+        let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
+        let new_lid = device_data
+            .lid
+            .as_ref()
+            .map(|j| j.to_string())
+            .unwrap_or_default();
+        let new_pn = device_data
+            .pn
+            .as_ref()
+            .map(|j| j.to_string())
+            .unwrap_or_default();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Try to update the existing device row by id
+            let rows_affected = diesel::update(device::table.filter(device::id.eq(device_id)))
+                .set((
+                    device::lid.eq(&new_lid),
+                    device::pn.eq(&new_pn),
+                    device::registration_id.eq(registration_id),
+                    device::noise_key.eq(&noise_key_data),
+                    device::identity_key.eq(&identity_key_data),
+                    device::signed_pre_key.eq(&signed_pre_key_data),
+                    device::signed_pre_key_id.eq(signed_pre_key_id),
+                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
+                    device::adv_secret_key.eq(&adv_secret_key[..]),
+                    device::account.eq(account_data.clone()),
+                    device::push_name.eq(&push_name),
+                    device::app_version_primary.eq(app_version_primary),
+                    device::app_version_secondary.eq(app_version_secondary),
+                    device::app_version_tertiary.eq(app_version_tertiary),
+                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if rows_affected > 0 {
+                return Ok(());
+            }
+
+            // If we couldn't find the device row, return an error so callers
+            // know the device must be created first (StoreManager should do this).
+            Err(StoreError::DeviceNotFound(device_id))
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(())
+    }
+
     pub async fn load_device_data(&self) -> Result<Option<CoreDevice>> {
         let pool = self.pool.clone();
         let row = tokio::task::spawn_blocking(move || -> Result<Option<DeviceRow>> {
@@ -255,7 +330,7 @@ impl SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
         if let Some((
-            _device_id,  // We don't use this in the CoreDevice (id is just for DB organization)
+            _device_id, // We don't use this in the CoreDevice (id is just for DB organization)
             lid_str,
             pn_str,
             registration_id,
@@ -340,7 +415,7 @@ impl SqliteStore {
     /// Create a new device entry in the database and return its ID
     pub async fn create_new_device(&self) -> Result<i32> {
         use crate::store::schema::device;
-        
+
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<i32> {
             let mut conn = pool
@@ -349,7 +424,7 @@ impl SqliteStore {
 
             // Create a new CoreDevice with default values
             let new_device = wacore::store::Device::new();
-            
+
             // Serialize the device data
             let noise_key_data = {
                 let mut bytes = Vec::with_capacity(64);
@@ -373,8 +448,8 @@ impl SqliteStore {
             // Insert the new device
             diesel::insert_into(device::table)
                 .values((
-                    device::lid.eq(""),  // Empty initially, will be set during pairing
-                    device::pn.eq(""),   // Empty initially, will be set during pairing
+                    device::lid.eq(""), // Empty initially, will be set during pairing
+                    device::pn.eq(""),  // Empty initially, will be set during pairing
                     device::registration_id.eq(new_device.registration_id as i32),
                     device::noise_key.eq(&noise_key_data),
                     device::identity_key.eq(&identity_key_data),
@@ -392,9 +467,9 @@ impl SqliteStore {
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            // Get the last inserted row ID  
+            // Get the last inserted row ID
             use diesel::sql_types::Integer;
-            
+
             #[derive(QueryableByName)]
             struct LastInsertedId {
                 #[diesel(sql_type = Integer)]
@@ -415,7 +490,7 @@ impl SqliteStore {
     /// Check if a device with the given ID exists
     pub async fn device_exists(&self, device_id: i32) -> Result<bool> {
         use crate::store::schema::device;
-        
+
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<bool> {
             let mut conn = pool
@@ -437,7 +512,7 @@ impl SqliteStore {
     /// List all device IDs in the database
     pub async fn list_device_ids(&self) -> Result<Vec<i32>> {
         use crate::store::schema::device;
-        
+
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<i32>> {
             let mut conn = pool
@@ -458,7 +533,7 @@ impl SqliteStore {
     /// Delete a device and all its associated data
     pub async fn delete_device(&self, device_id: i32) -> Result<()> {
         use crate::store::schema::*;
-        
+
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
@@ -470,31 +545,40 @@ impl SqliteStore {
                 // Delete all associated data first (foreign key children)
                 diesel::delete(identities::table.filter(identities::device_id.eq(device_id)))
                     .execute(conn)?;
-                
+
                 diesel::delete(sessions::table.filter(sessions::device_id.eq(device_id)))
                     .execute(conn)?;
-                
+
                 diesel::delete(prekeys::table.filter(prekeys::device_id.eq(device_id)))
                     .execute(conn)?;
-                
-                diesel::delete(signed_prekeys::table.filter(signed_prekeys::device_id.eq(device_id)))
-                    .execute(conn)?;
-                
+
+                diesel::delete(
+                    signed_prekeys::table.filter(signed_prekeys::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+
                 diesel::delete(sender_keys::table.filter(sender_keys::device_id.eq(device_id)))
                     .execute(conn)?;
-                
-                diesel::delete(app_state_keys::table.filter(app_state_keys::device_id.eq(device_id)))
-                    .execute(conn)?;
-                
-                diesel::delete(app_state_versions::table.filter(app_state_versions::device_id.eq(device_id)))
-                    .execute(conn)?;
-                
-                diesel::delete(app_state_mutation_macs::table.filter(app_state_mutation_macs::device_id.eq(device_id)))
-                    .execute(conn)?;
+
+                diesel::delete(
+                    app_state_keys::table.filter(app_state_keys::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+
+                diesel::delete(
+                    app_state_versions::table.filter(app_state_versions::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+
+                diesel::delete(
+                    app_state_mutation_macs::table
+                        .filter(app_state_mutation_macs::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
 
                 // Finally delete the device itself
-                let deleted_rows = diesel::delete(device::table.filter(device::id.eq(device_id)))
-                    .execute(conn)?;
+                let deleted_rows =
+                    diesel::delete(device::table.filter(device::id.eq(device_id))).execute(conn)?;
 
                 if deleted_rows == 0 {
                     return Err(diesel::result::Error::NotFound);
@@ -516,7 +600,7 @@ impl SqliteStore {
     /// Load device data for a specific device ID
     pub async fn load_device_data_for_device(&self, device_id: i32) -> Result<Option<CoreDevice>> {
         use crate::store::schema::device;
-        
+
         let pool = self.pool.clone();
         let row = tokio::task::spawn_blocking(move || -> Result<Option<DeviceRow>> {
             let mut conn = pool
@@ -533,7 +617,7 @@ impl SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
         if let Some((
-            _device_id,  // We already know the device_id
+            _device_id, // We already know the device_id
             lid_str,
             pn_str,
             registration_id,
@@ -567,9 +651,8 @@ impl SqliteStore {
             let identity_key = self.deserialize_keypair(&identity_key_data)?;
             let signed_pre_key = self.deserialize_keypair(&signed_pre_key_data)?;
 
-            let signed_pre_key_signature: [u8; 64] = signed_pre_key_signature_data
-                .try_into()
-                .map_err(|_| {
+            let signed_pre_key_signature: [u8; 64] =
+                signed_pre_key_signature_data.try_into().map_err(|_| {
                     StoreError::Serialization("Invalid signed_pre_key_signature length".to_string())
                 })?;
 

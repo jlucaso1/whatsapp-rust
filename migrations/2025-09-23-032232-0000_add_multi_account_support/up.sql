@@ -36,35 +36,112 @@ FROM device;
 DROP TABLE device;
 ALTER TABLE device_new RENAME TO device;
 
--- Step 4: Add device_id column to all account-specific tables and set to 1 for existing data
--- identities table
-ALTER TABLE identities ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Step 4: Update all account-specific tables to include device_id in their primary keys
+-- and add device_id = 1 for existing data
+
+-- Recreate identities table with composite primary key
+CREATE TABLE identities_new (
+    address TEXT NOT NULL,
+    key BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
+);
+INSERT INTO identities_new (address, key, device_id) 
+SELECT address, key, 1 FROM identities;
+DROP TABLE identities;
+ALTER TABLE identities_new RENAME TO identities;
 CREATE INDEX idx_identities_device_id ON identities (device_id);
 
--- sessions table  
-ALTER TABLE sessions ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate sessions table with composite primary key
+CREATE TABLE sessions_new (
+    address TEXT NOT NULL,
+    record BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
+);
+INSERT INTO sessions_new (address, record, device_id) 
+SELECT address, record, 1 FROM sessions;
+DROP TABLE sessions;
+ALTER TABLE sessions_new RENAME TO sessions;
 CREATE INDEX idx_sessions_device_id ON sessions (device_id);
 
--- prekeys table
-ALTER TABLE prekeys ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate prekeys table with composite primary key
+CREATE TABLE prekeys_new (
+    id INTEGER NOT NULL,
+    key BLOB NOT NULL,
+    uploaded BOOLEAN NOT NULL DEFAULT FALSE,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (id, device_id)
+);
+INSERT INTO prekeys_new (id, key, uploaded, device_id) 
+SELECT id, key, uploaded, 1 FROM prekeys;
+DROP TABLE prekeys;
+ALTER TABLE prekeys_new RENAME TO prekeys;
 CREATE INDEX idx_prekeys_device_id ON prekeys (device_id);
 
--- sender_keys table
-ALTER TABLE sender_keys ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate sender_keys table with composite primary key
+CREATE TABLE sender_keys_new (
+    address TEXT NOT NULL,
+    record BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (address, device_id)
+);
+INSERT INTO sender_keys_new (address, record, device_id) 
+SELECT address, record, 1 FROM sender_keys;
+DROP TABLE sender_keys;
+ALTER TABLE sender_keys_new RENAME TO sender_keys;
 CREATE INDEX idx_sender_keys_device_id ON sender_keys (device_id);
 
--- signed_prekeys table
-ALTER TABLE signed_prekeys ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate signed_prekeys table with composite primary key
+CREATE TABLE signed_prekeys_new (
+    id INTEGER NOT NULL,
+    record BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (id, device_id)
+);
+INSERT INTO signed_prekeys_new (id, record, device_id) 
+SELECT id, record, 1 FROM signed_prekeys;
+DROP TABLE signed_prekeys;
+ALTER TABLE signed_prekeys_new RENAME TO signed_prekeys;
 CREATE INDEX idx_signed_prekeys_device_id ON signed_prekeys (device_id);
 
--- app_state_keys table
-ALTER TABLE app_state_keys ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate app_state_keys table with composite primary key
+CREATE TABLE app_state_keys_new (
+    key_id BLOB NOT NULL,
+    key_data BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (key_id, device_id)
+);
+INSERT INTO app_state_keys_new (key_id, key_data, device_id) 
+SELECT key_id, key_data, 1 FROM app_state_keys;
+DROP TABLE app_state_keys;
+ALTER TABLE app_state_keys_new RENAME TO app_state_keys;
 CREATE INDEX idx_app_state_keys_device_id ON app_state_keys (device_id);
 
--- app_state_versions table
-ALTER TABLE app_state_versions ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate app_state_versions table with composite primary key
+CREATE TABLE app_state_versions_new (
+    name TEXT NOT NULL,
+    state_data BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (name, device_id)
+);
+INSERT INTO app_state_versions_new (name, state_data, device_id) 
+SELECT name, state_data, 1 FROM app_state_versions;
+DROP TABLE app_state_versions;
+ALTER TABLE app_state_versions_new RENAME TO app_state_versions;
 CREATE INDEX idx_app_state_versions_device_id ON app_state_versions (device_id);
 
--- app_state_mutation_macs table
-ALTER TABLE app_state_mutation_macs ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1;
+-- Recreate app_state_mutation_macs table with composite primary key
+CREATE TABLE app_state_mutation_macs_new (
+    name TEXT NOT NULL,
+    version BIGINT NOT NULL,
+    index_mac BLOB NOT NULL,
+    value_mac BLOB NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (name, index_mac, device_id)
+);
+INSERT INTO app_state_mutation_macs_new (name, version, index_mac, value_mac, device_id) 
+SELECT name, version, index_mac, value_mac, 1 FROM app_state_mutation_macs;
+DROP TABLE app_state_mutation_macs;
+ALTER TABLE app_state_mutation_macs_new RENAME TO app_state_mutation_macs;
 CREATE INDEX idx_app_state_mutation_macs_device_id ON app_state_mutation_macs (device_id);

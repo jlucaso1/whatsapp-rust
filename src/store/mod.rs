@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod device_aware_store;
 pub mod error;
 pub mod generic;
 pub mod persistence_manager;
@@ -8,6 +9,9 @@ pub mod signal_adapter;
 pub mod sqlite_store;
 pub mod store_manager;
 pub mod traits;
+
+#[cfg(test)]
+mod device_isolation_tests;
 pub use crate::store::traits::*;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
