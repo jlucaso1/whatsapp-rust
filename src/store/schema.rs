@@ -4,6 +4,7 @@ diesel::table! {
     app_state_keys (key_id) {
         key_id -> Binary,
         key_data -> Binary,
+        device_id -> Integer,
     }
 }
 
@@ -13,6 +14,7 @@ diesel::table! {
         version -> BigInt,
         index_mac -> Binary,
         value_mac -> Binary,
+        device_id -> Integer,
     }
 }
 
@@ -20,11 +22,13 @@ diesel::table! {
     app_state_versions (name) {
         name -> Text,
         state_data -> Binary,
+        device_id -> Integer,
     }
 }
 
 diesel::table! {
-    device (lid) {
+    device (id) {
+        id -> Integer,
         lid -> Text,
         pn -> Text,
         registration_id -> Integer,
@@ -47,6 +51,7 @@ diesel::table! {
     identities (address) {
         address -> Text,
         key -> Binary,
+        device_id -> Integer,
     }
 }
 
@@ -55,6 +60,7 @@ diesel::table! {
         id -> Integer,
         key -> Binary,
         uploaded -> Bool,
+        device_id -> Integer,
     }
 }
 
@@ -62,6 +68,7 @@ diesel::table! {
     sender_keys (address) {
         address -> Text,
         record -> Binary,
+        device_id -> Integer,
     }
 }
 
@@ -69,6 +76,7 @@ diesel::table! {
     sessions (address) {
         address -> Text,
         record -> Binary,
+        device_id -> Integer,
     }
 }
 
@@ -76,6 +84,7 @@ diesel::table! {
     signed_prekeys (id) {
         id -> Integer,
         record -> Binary,
+        device_id -> Integer,
     }
 }
 
