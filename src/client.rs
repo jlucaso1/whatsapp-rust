@@ -13,6 +13,7 @@ use wacore_binary::node::Node;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 
 use crate::handlers;
+use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
 
@@ -145,6 +146,9 @@ pub struct Client {
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 
     pub(crate) send_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
+
+    /// Custom handlers for encrypted message types
+    pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
 }
 
 impl Client {
@@ -237,6 +241,7 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
+            custom_enc_handlers: Arc::new(DashMap::new()),
         };
 
         let arc = Arc::new(this);

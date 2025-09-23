@@ -1,8 +1,6 @@
 pub use wacore::{proto_helpers, store::traits};
 
-pub mod types {
-    pub use wacore::types::*;
-}
+pub mod types;
 
 pub mod client;
 pub use client::Client;
