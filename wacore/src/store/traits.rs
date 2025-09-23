@@ -79,22 +79,15 @@ pub struct AppStateMutationMAC {
 pub trait DevicePersistence: Send + Sync {
     /// Save device data (single device mode)
     async fn save_device_data(&self, device_data: &crate::store::Device) -> Result<()>;
-
+    
     /// Save device data for a specific device ID (multi-account mode)
-    async fn save_device_data_for_device(
-        &self,
-        device_id: i32,
-        device_data: &crate::store::Device,
-    ) -> Result<()>;
-
+    async fn save_device_data_for_device(&self, device_id: i32, device_data: &crate::store::Device) -> Result<()>;
+    
     /// Load device data (single device mode)
     async fn load_device_data(&self) -> Result<Option<crate::store::Device>>;
-
+    
     /// Load device data for a specific device ID (multi-account mode)
-    async fn load_device_data_for_device(
-        &self,
-        device_id: i32,
-    ) -> Result<Option<crate::store::Device>>;
+    async fn load_device_data_for_device(&self, device_id: i32) -> Result<Option<crate::store::Device>>;
 }
 
 pub trait Backend:
