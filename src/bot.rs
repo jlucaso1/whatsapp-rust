@@ -160,18 +160,19 @@ impl BotBuilder {
     }
 
     /// Register a custom handler for a specific encrypted message type
-    /// 
+    ///
     /// # Arguments
     /// * `enc_type` - The encrypted message type (e.g., "frskmsg")
     /// * `handler` - The handler implementation for this type
-    /// 
+    ///
     /// # Returns
     /// The updated BotBuilder
     pub fn with_enc_handler<H>(mut self, enc_type: impl Into<String>, handler: H) -> Self
     where
         H: EncHandler + 'static,
     {
-        self.custom_enc_handlers.insert(enc_type.into(), Arc::new(handler));
+        self.custom_enc_handlers
+            .insert(enc_type.into(), Arc::new(handler));
         self
     }
 
