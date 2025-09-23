@@ -31,12 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("🚀 Starting Multi-Account WhatsApp Bot Example");
 
-    // Step 1: Create a StoreManager 
+    // Step 1: Create a StoreManager
     // This manages multiple WhatsApp accounts in a single database
     let store_manager = Arc::new(
         StoreManager::new("multi_account.db")
             .await
-            .expect("Failed to create StoreManager")
+            .expect("Failed to create StoreManager"),
     );
 
     info!("📊 StoreManager created successfully");
@@ -46,37 +46,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .list_devices()
         .await
         .expect("Failed to list devices");
-    
-    info!("📱 Found {} existing devices: {:?}", existing_devices.len(), existing_devices);
+
+    info!(
+        "📱 Found {} existing devices: {:?}",
+        existing_devices.len(),
+        existing_devices
+    );
 
     // Step 3: Create multiple bots using the same StoreManager
-    
+
     // Bot 1: Create a new device automatically
     info!("🤖 Creating Bot 1 (new device)...");
     let mut bot1 = Bot::builder()
         .with_store_manager(store_manager.clone())
-        .on_event(|event, client| {
-            async move {
-                let device_id = client.persistence_manager().device_id();
-                match event {
-                    Event::PairingQrCode { code, timeout } => {
-                        info!("📱 [Device {}] New pairing QR code (valid for {}s):", device_id, timeout.as_secs());
-                        info!("\n{}\n", code);
+        .on_event(|event, client| async move {
+            let device_id = client.persistence_manager().device_id();
+            match event {
+                Event::PairingQrCode { code, timeout } => {
+                    info!(
+                        "📱 [Device {}] New pairing QR code (valid for {}s):",
+                        device_id,
+                        timeout.as_secs()
+                    );
+                    info!("\n{}\n", code);
+                }
+                Event::Connected(_) => {
+                    info!("✅ [Device {}] Connected successfully!", device_id);
+                }
+                Event::Message(msg, _info) => {
+                    if let Some(text) = msg.conversation.as_ref() {
+                        info!("💬 [Device {}] Received message: {}", device_id, text);
                     }
-                    Event::Connected(_) => {
-                        info!("✅ [Device {}] Connected successfully!", device_id);
-                    }
-                    Event::Message(msg, _info) => {
-                        if let Some(text) = msg.conversation.as_ref() {
-                            info!("💬 [Device {}] Received message: {}", device_id, text);
-                        }
-                    }
-                    Event::LoggedOut(_) => {
-                        error!("❌ [Device {}] Logged out!", device_id);
-                    }
-                    _ => {
-                        debug!("📨 [Device {}] Received event: {:?}", device_id, event);
-                    }
+                }
+                Event::LoggedOut(_) => {
+                    error!("❌ [Device {}] Logged out!", device_id);
+                }
+                _ => {
+                    debug!("📨 [Device {}] Received event: {:?}", device_id, event);
                 }
             }
         })
@@ -91,28 +97,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🤖 Creating Bot 2 (new device)...");
     let mut bot2 = Bot::builder()
         .with_store_manager(store_manager.clone())
-        .on_event(|event, client| {
-            async move {
-                let device_id = client.persistence_manager().device_id();
-                match event {
-                    Event::PairingQrCode { code, timeout } => {
-                        info!("📱 [Device {}] New pairing QR code (valid for {}s):", device_id, timeout.as_secs());
-                        info!("\n{}\n", code);
+        .on_event(|event, client| async move {
+            let device_id = client.persistence_manager().device_id();
+            match event {
+                Event::PairingQrCode { code, timeout } => {
+                    info!(
+                        "📱 [Device {}] New pairing QR code (valid for {}s):",
+                        device_id,
+                        timeout.as_secs()
+                    );
+                    info!("\n{}\n", code);
+                }
+                Event::Connected(_) => {
+                    info!("✅ [Device {}] Connected successfully!", device_id);
+                }
+                Event::Message(msg, _info) => {
+                    if let Some(text) = msg.conversation.as_ref() {
+                        info!("💬 [Device {}] Received message: {}", device_id, text);
                     }
-                    Event::Connected(_) => {
-                        info!("✅ [Device {}] Connected successfully!", device_id);
-                    }
-                    Event::Message(msg, _info) => {
-                        if let Some(text) = msg.conversation.as_ref() {
-                            info!("💬 [Device {}] Received message: {}", device_id, text);
-                        }
-                    }
-                    Event::LoggedOut(_) => {
-                        error!("❌ [Device {}] Logged out!", device_id);
-                    }
-                    _ => {
-                        debug!("📨 [Device {}] Received event: {:?}", device_id, event);
-                    }
+                }
+                Event::LoggedOut(_) => {
+                    error!("❌ [Device {}] Logged out!", device_id);
+                }
+                _ => {
+                    debug!("📨 [Device {}] Received event: {:?}", device_id, event);
                 }
             }
         })
@@ -127,21 +135,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // If you already have devices, you can create a bot for a specific device:
     if !existing_devices.is_empty() {
         let existing_device_id = existing_devices[0];
-        info!("🔄 Creating Bot 3 for existing device ID: {}", existing_device_id);
-        
+        info!(
+            "🔄 Creating Bot 3 for existing device ID: {}",
+            existing_device_id
+        );
+
         let _bot3 = Bot::builder()
             .with_store_manager(store_manager.clone())
             .for_device(existing_device_id) // Use specific device ID
-            .on_event(|event, client| {
-                async move {
-                    let device_id = client.persistence_manager().device_id();
-                    info!("📨 [Device {}] Event: {:?}", device_id, event);
-                }
+            .on_event(|event, client| async move {
+                let device_id = client.persistence_manager().device_id();
+                info!("📨 [Device {}] Event: {:?}", device_id, event);
             })
             .build()
             .await
             .expect("Failed to create Bot 3");
-        
+
         info!("🤖 Bot 3 created for existing device");
     }
 
@@ -150,15 +159,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .list_devices()
         .await
         .expect("Failed to list devices");
-    
-    info!("📊 Total devices now: {} - {:?}", all_devices.len(), all_devices);
+
+    info!(
+        "📊 Total devices now: {} - {:?}",
+        all_devices.len(),
+        all_devices
+    );
 
     // Step 6: Start the bots
     info!("🚀 Starting all bots...");
-    
+
     let bot1_handle = bot1.run().await.expect("Failed to start Bot 1");
     info!("✅ Bot 1 started");
-    
+
     let bot2_handle = bot2.run().await.expect("Failed to start Bot 2");
     info!("✅ Bot 2 started");
 
@@ -201,7 +214,7 @@ mod tests {
         let store_manager = Arc::new(
             StoreManager::new("test_multi.db")
                 .await
-                .expect("Failed to create test StoreManager")
+                .expect("Failed to create test StoreManager"),
         );
 
         // Create first account
@@ -209,8 +222,8 @@ mod tests {
             .create_new_device()
             .await
             .expect("Failed to create device 1");
-        
-        // Create second account  
+
+        // Create second account
         let manager2 = store_manager
             .create_new_device()
             .await
@@ -224,7 +237,7 @@ mod tests {
             .list_devices()
             .await
             .expect("Failed to list devices");
-        
+
         assert_eq!(devices.len(), 2);
         assert!(devices.contains(&manager1.device_id()));
         assert!(devices.contains(&manager2.device_id()));
@@ -234,7 +247,7 @@ mod tests {
             .delete_device(manager1.device_id())
             .await
             .expect("Failed to delete device 1");
-        
+
         store_manager
             .delete_device(manager2.device_id())
             .await
@@ -245,11 +258,11 @@ mod tests {
             .list_devices()
             .await
             .expect("Failed to list devices after cleanup");
-        
+
         assert!(devices_after.is_empty());
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_backward_compatibility() {
         // Test that the old single-account API still works
         let bot = Bot::builder()
