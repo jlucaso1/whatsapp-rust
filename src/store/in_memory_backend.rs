@@ -1,4 +1,3 @@
-use crate::store::error::StoreError;
 use crate::store::traits::*;
 use async_trait::async_trait;
 use std::collections::HashMap;

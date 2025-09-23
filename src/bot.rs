@@ -194,7 +194,9 @@ impl BotBuilder {
 
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
-            anyhow::anyhow!("Backend is required. Use with_backend() to set a storage implementation.")
+            anyhow::anyhow!(
+                "Backend is required. Use with_backend() to set a storage implementation."
+            )
         })?;
 
         let persistence_manager = if let Some(device_id) = self.device_id {
@@ -290,7 +292,7 @@ mod tests {
 
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        
+
         // Should have device ID 1 for single device mode
         assert_eq!(persistence_manager.device_id(), 1);
         assert!(!persistence_manager.is_multi_account());
@@ -303,7 +305,9 @@ mod tests {
         // First, we need to create device data for device ID 42
         let mut device = wacore::store::Device::new();
         device.push_name = "Test Device".to_string();
-        backend.save_device_data_for_device(42, &device).await
+        backend
+            .save_device_data_for_device(42, &device)
+            .await
             .expect("Failed to save device data");
 
         let bot = Bot::builder()
@@ -315,7 +319,7 @@ mod tests {
 
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        
+
         // Should have device ID 42
         assert_eq!(persistence_manager.device_id(), 42);
         assert!(persistence_manager.is_multi_account());
@@ -324,7 +328,8 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend() {
         // Create an in-memory backend for testing
-        let backend = Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+        let backend =
+            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
 
         // Build a bot with the custom backend
         let bot = Bot::builder()
@@ -336,7 +341,7 @@ mod tests {
         // Verify the bot was created successfully
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        
+
         // Should have device ID 1 for single device mode
         assert_eq!(persistence_manager.device_id(), 1);
     }
@@ -344,12 +349,15 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend_specific_device() {
         // Create an in-memory backend for testing
-        let backend = Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+        let backend =
+            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
 
         // First, we need to create some device data for device ID 100
         let mut device = wacore::store::Device::new();
         device.push_name = "Test Device".to_string();
-        backend.save_device_data_for_device(100, &device).await
+        backend
+            .save_device_data_for_device(100, &device)
+            .await
             .expect("Failed to save device data");
 
         // Build a bot with the custom backend for a specific device
@@ -363,19 +371,22 @@ mod tests {
         // Verify the bot was created successfully with the correct device ID
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        
+
         assert_eq!(persistence_manager.device_id(), 100);
     }
 
     #[tokio::test]
     async fn test_bot_builder_missing_backend() {
         // Try to build without setting a backend
-        let result = Bot::builder()
-            .build()
-            .await;
+        let result = Bot::builder().build().await;
 
         // This should fail
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Backend is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Backend is required")
+        );
     }
 }
