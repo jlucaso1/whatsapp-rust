@@ -1,5 +1,5 @@
 use super::error::StoreError;
-use super::persistence_manager::{PersistenceManager, StoreBackend};
+use super::persistence_manager::PersistenceManager;
 use super::sqlite_store::SqliteStore;
 use log::{debug, info};
 use std::collections::HashMap;
@@ -47,8 +47,13 @@ impl StoreManager {
         }
 
         // Create a new PersistenceManager for this device
-        let backend = StoreBackend::Sqlite(self.sqlite_store.clone());
-        let manager = Arc::new(PersistenceManager::new_for_device(device_id, backend).await?);
+        let manager = Arc::new(
+            PersistenceManager::new_for_device_with_sqlite_store(
+                device_id,
+                self.sqlite_store.clone(),
+            )
+            .await?,
+        );
 
         // Cache it for future use
         {
@@ -70,8 +75,13 @@ impl StoreManager {
         debug!("Created new device with ID: {}", device_id);
 
         // Create a PersistenceManager for the new device
-        let backend = StoreBackend::Sqlite(self.sqlite_store.clone());
-        let manager = Arc::new(PersistenceManager::new_for_device(device_id, backend).await?);
+        let manager = Arc::new(
+            PersistenceManager::new_for_device_with_sqlite_store(
+                device_id,
+                self.sqlite_store.clone(),
+            )
+            .await?,
+        );
 
         // Cache it
         {
