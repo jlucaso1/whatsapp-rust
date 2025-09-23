@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
+use diesel::{sql_query};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
 use wacore::appstate::hash::HashState;
@@ -313,6 +314,275 @@ impl SqliteStore {
             } else {
                 None
             };
+
+            Ok(Some(CoreDevice {
+                pn: id,
+                lid,
+                registration_id: registration_id as u32,
+                noise_key,
+                identity_key,
+                signed_pre_key,
+                signed_pre_key_id: signed_pre_key_id as u32,
+                signed_pre_key_signature,
+                adv_secret_key,
+                account,
+                push_name,
+                app_version_primary: app_version_primary as u32,
+                app_version_secondary: app_version_secondary as u32,
+                app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
+                app_version_last_fetched_ms,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Create a new device entry in the database and return its ID
+    pub async fn create_new_device(&self) -> Result<i32> {
+        use crate::store::schema::device;
+        
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<i32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Create a new CoreDevice with default values
+            let new_device = wacore::store::Device::new();
+            
+            // Serialize the device data
+            let noise_key_data = {
+                let mut bytes = Vec::with_capacity(64);
+                bytes.extend_from_slice(&new_device.noise_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.noise_key.public_key.public_key_bytes());
+                bytes
+            };
+            let identity_key_data = {
+                let mut bytes = Vec::with_capacity(64);
+                bytes.extend_from_slice(&new_device.identity_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.identity_key.public_key.public_key_bytes());
+                bytes
+            };
+            let signed_pre_key_data = {
+                let mut bytes = Vec::with_capacity(64);
+                bytes.extend_from_slice(&new_device.signed_pre_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.signed_pre_key.public_key.public_key_bytes());
+                bytes
+            };
+
+            // Insert the new device
+            diesel::insert_into(device::table)
+                .values((
+                    device::lid.eq(""),  // Empty initially, will be set during pairing
+                    device::pn.eq(""),   // Empty initially, will be set during pairing
+                    device::registration_id.eq(new_device.registration_id as i32),
+                    device::noise_key.eq(&noise_key_data),
+                    device::identity_key.eq(&identity_key_data),
+                    device::signed_pre_key.eq(&signed_pre_key_data),
+                    device::signed_pre_key_id.eq(new_device.signed_pre_key_id as i32),
+                    device::signed_pre_key_signature.eq(&new_device.signed_pre_key_signature[..]),
+                    device::adv_secret_key.eq(&new_device.adv_secret_key[..]),
+                    device::account.eq(None::<Vec<u8>>),
+                    device::push_name.eq(&new_device.push_name),
+                    device::app_version_primary.eq(new_device.app_version_primary as i32),
+                    device::app_version_secondary.eq(new_device.app_version_secondary as i32),
+                    device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
+                    device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Get the last inserted row ID  
+            use diesel::sql_types::Integer;
+            
+            #[derive(QueryableByName)]
+            struct LastInsertedId {
+                #[diesel(sql_type = Integer)]
+                last_insert_rowid: i32,
+            }
+
+            let device_id: i32 = sql_query("SELECT last_insert_rowid() as last_insert_rowid")
+                .get_result::<LastInsertedId>(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?
+                .last_insert_rowid;
+
+            Ok(device_id)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    /// Check if a device with the given ID exists
+    pub async fn device_exists(&self, device_id: i32) -> Result<bool> {
+        use crate::store::schema::device;
+        
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let count: i64 = device::table
+                .filter(device::id.eq(device_id))
+                .count()
+                .get_result(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(count > 0)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    /// List all device IDs in the database
+    pub async fn list_device_ids(&self) -> Result<Vec<i32>> {
+        use crate::store::schema::device;
+        
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<i32>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let ids: Vec<i32> = device::table
+                .select(device::id)
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(ids)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    /// Delete a device and all its associated data
+    pub async fn delete_device(&self, device_id: i32) -> Result<()> {
+        use crate::store::schema::*;
+        
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Start a transaction to ensure all deletes succeed or fail together
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                // Delete all associated data first (foreign key children)
+                diesel::delete(identities::table.filter(identities::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(sessions::table.filter(sessions::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(prekeys::table.filter(prekeys::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(signed_prekeys::table.filter(signed_prekeys::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(sender_keys::table.filter(sender_keys::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(app_state_keys::table.filter(app_state_keys::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(app_state_versions::table.filter(app_state_versions::device_id.eq(device_id)))
+                    .execute(conn)?;
+                
+                diesel::delete(app_state_mutation_macs::table.filter(app_state_mutation_macs::device_id.eq(device_id)))
+                    .execute(conn)?;
+
+                // Finally delete the device itself
+                let deleted_rows = diesel::delete(device::table.filter(device::id.eq(device_id)))
+                    .execute(conn)?;
+
+                if deleted_rows == 0 {
+                    return Err(diesel::result::Error::NotFound);
+                }
+
+                Ok(())
+            })
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => StoreError::DeviceNotFound(device_id),
+                _ => StoreError::Database(e.to_string()),
+            })?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    /// Load device data for a specific device ID
+    pub async fn load_device_data_for_device(&self, device_id: i32) -> Result<Option<CoreDevice>> {
+        use crate::store::schema::device;
+        
+        let pool = self.pool.clone();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<DeviceRow>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let result = device::table
+                .filter(device::id.eq(device_id))
+                .first::<DeviceRow>(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        if let Some((
+            _device_id,  // We already know the device_id
+            lid_str,
+            pn_str,
+            registration_id,
+            noise_key_data,
+            identity_key_data,
+            signed_pre_key_data,
+            signed_pre_key_id,
+            signed_pre_key_signature_data,
+            adv_secret_key_data,
+            account_data,
+            push_name,
+            app_version_primary,
+            app_version_secondary,
+            app_version_tertiary,
+            app_version_last_fetched_ms,
+        )) = row
+        {
+            // Same parsing logic as load_device_data
+            let id = if !pn_str.is_empty() {
+                pn_str.parse().ok()
+            } else {
+                None
+            };
+            let lid = if !lid_str.is_empty() {
+                lid_str.parse().ok()
+            } else {
+                None
+            };
+
+            let noise_key = self.deserialize_keypair(&noise_key_data)?;
+            let identity_key = self.deserialize_keypair(&identity_key_data)?;
+            let signed_pre_key = self.deserialize_keypair(&signed_pre_key_data)?;
+
+            let signed_pre_key_signature: [u8; 64] = signed_pre_key_signature_data
+                .try_into()
+                .map_err(|_| {
+                    StoreError::Serialization("Invalid signed_pre_key_signature length".to_string())
+                })?;
+
+            let adv_secret_key: [u8; 32] = adv_secret_key_data.try_into().map_err(|_| {
+                StoreError::Serialization("Invalid adv_secret_key length".to_string())
+            })?;
+
+            let account = account_data
+                .map(|data| {
+                    wa::AdvSignedDeviceIdentity::decode(&data[..])
+                        .map_err(|e| StoreError::Serialization(e.to_string()))
+                })
+                .transpose()?;
 
             Ok(Some(CoreDevice {
                 pn: id,
