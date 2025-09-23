@@ -1,7 +1,6 @@
 use crate::client::Client;
-use crate::config::ClientConfig;
 use crate::store::persistence_manager::PersistenceManager;
-use crate::store::store_manager::StoreManager;
+use crate::store::traits::Backend;
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
@@ -73,6 +72,16 @@ pub struct Bot {
     event_handler: Option<EventHandlerCallback>,
 }
 
+impl std::fmt::Debug for Bot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bot")
+            .field("client", &"<Client>")
+            .field("sync_task_receiver", &self.sync_task_receiver.is_some())
+            .field("event_handler", &self.event_handler.is_some())
+            .finish()
+    }
+}
+
 impl Bot {
     pub fn builder() -> BotBuilder {
         BotBuilder::new()
@@ -128,11 +137,10 @@ impl Bot {
 #[derive(Default)]
 pub struct BotBuilder {
     event_handler: Option<EventHandlerCallback>,
-    db_path: Option<String>,
-    override_app_version: Option<(u32, u32, u32)>,
     custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
-    store_manager: Option<Arc<StoreManager>>,
     device_id: Option<i32>,
+    // The only way to configure storage
+    backend: Option<Arc<dyn Backend>>,
 }
 
 impl BotBuilder {
@@ -148,17 +156,6 @@ impl BotBuilder {
         self.event_handler = Some(Arc::new(move |event, client| {
             Box::pin(handler(event, client))
         }));
-        self
-    }
-
-    pub fn with_config(mut self, config: ClientConfig) -> Self {
-        let db_path = if config.db_path.is_empty() {
-            "whatsapp.db".to_string()
-        } else {
-            config.db_path
-        };
-        self.db_path = Some(db_path);
-        self.override_app_version = config.app_version_override;
         self
     }
 
@@ -179,58 +176,58 @@ impl BotBuilder {
         self
     }
 
-    /// Use a specific StoreManager for multi-account support.
-    /// This overrides any database path configuration.
-    pub fn with_store_manager(mut self, store_manager: Arc<StoreManager>) -> Self {
-        self.store_manager = Some(store_manager);
-        self
-    }
-
     /// Specify which device ID to use for multi-account scenarios.
-    /// This requires a StoreManager to be set via `with_store_manager()`.
-    /// If not specified, a new device will be created.
+    /// If not specified, single device mode will be used.
     pub fn for_device(mut self, device_id: i32) -> Self {
         self.device_id = Some(device_id);
         self
     }
 
+    /// Use a backend implementation for storage.
+    /// This is the only way to configure storage - there are no defaults.
+    ///
+    /// # Arguments
+    /// * `backend` - The backend implementation that provides all storage operations
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_backend(mut self, backend: Arc<dyn Backend>) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
-        let persistence_manager = if let Some(store_manager) = self.store_manager {
-            // Multi-account mode using StoreManager
-            let manager = if let Some(device_id) = self.device_id {
-                info!("Loading existing device with ID: {}", device_id);
-                store_manager
-                    .get_persistence_manager(device_id)
+        let backend = self.backend.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Backend is required. Use with_backend() to set a storage implementation."
+            )
+        })?;
+
+        let persistence_manager = if let Some(device_id) = self.device_id {
+            info!("Creating PersistenceManager for device ID: {}", device_id);
+            Arc::new(
+                PersistenceManager::new_for_device(device_id, backend)
                     .await
                     .map_err(|e| {
                         anyhow::anyhow!(
-                            "Failed to get persistence manager for device {}: {}",
+                            "Failed to create persistence manager for device {}: {}",
                             device_id,
                             e
                         )
-                    })?
-            } else {
-                info!("Creating new device");
-                store_manager
-                    .create_new_device()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to create new device: {}", e))?
-            };
-
-            info!("Using device ID: {}", manager.device_id());
-            manager
+                    })?,
+            )
         } else {
-            // Backward compatibility mode using direct database path
-            let db_path = self.db_path.unwrap_or_else(|| "whatsapp.db".to_string());
-            info!(
-                "Initializing PersistenceManager with SQLite at '{}'...",
-                &db_path
-            );
-
+            info!("Creating PersistenceManager for single device mode");
             Arc::new(
-                PersistenceManager::new(&db_path)
+                PersistenceManager::new(backend)
                     .await
-                    .map_err(|e| anyhow::anyhow!("Failed to init persistence manager: {}", e))?,
+                    .map_err(|e| anyhow::anyhow!("Failed to create persistence manager: {}", e))?,
             )
         };
 
@@ -240,8 +237,7 @@ impl BotBuilder {
 
         spawn_preconnect_task().await;
 
-        crate::version::resolve_and_update_version(&persistence_manager, self.override_app_version)
-            .await;
+        crate::version::resolve_and_update_version(&persistence_manager, None).await;
 
         info!("Creating client...");
         let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
@@ -280,152 +276,129 @@ async fn spawn_preconnect_task() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::store_manager::StoreManager;
+    use crate::store::sqlite_store::SqliteStore;
 
-    async fn create_test_store_manager() -> Arc<StoreManager> {
+    async fn create_test_sqlite_backend() -> Arc<dyn Backend> {
         let temp_db = format!(
             "file:memdb_bot_{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         );
         Arc::new(
-            StoreManager::new(&temp_db)
+            SqliteStore::new(&temp_db)
                 .await
-                .expect("Failed to create test StoreManager"),
-        )
+                .expect("Failed to create test SqliteStore"),
+        ) as Arc<dyn Backend>
     }
 
     #[tokio::test]
-    async fn test_bot_builder_backward_compatibility() {
-        // Test that the original API still works
-        let temp_db = format!("/tmp/test_bot_{}.db", uuid::Uuid::new_v4());
+    async fn test_bot_builder_single_device() {
+        let backend = create_test_sqlite_backend().await;
 
-        let config = ClientConfig {
-            db_path: temp_db,
-            app_version_override: None,
-        };
-
-        // This should work without using StoreManager
-        let _bot = Bot::builder()
-            .with_config(config)
-            .build()
-            .await
-            .expect("Failed to build bot with backward compatibility");
-    }
-
-    #[tokio::test]
-    async fn test_bot_builder_with_store_manager_new_device() {
-        let store_manager = create_test_store_manager().await;
-
-        // Create a bot with a new device using StoreManager
         let bot = Bot::builder()
-            .with_store_manager(store_manager.clone())
+            .with_backend(backend)
             .build()
             .await
-            .expect("Failed to build bot with new device");
+            .expect("Failed to build bot");
 
-        // Verify we can get the device ID
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        let device_id = persistence_manager.device_id();
 
-        // Should be a valid device ID (auto-assigned)
-        assert!(device_id > 0);
-
-        // Verify the device exists in the store manager
-        assert!(
-            store_manager
-                .device_exists(device_id)
-                .await
-                .expect("Failed to check device existence")
-        );
+        // Should have device ID 1 for single device mode
+        assert_eq!(persistence_manager.device_id(), 1);
+        assert!(!persistence_manager.is_multi_account());
     }
 
     #[tokio::test]
-    async fn test_bot_builder_with_store_manager_specific_device() {
-        let store_manager = create_test_store_manager().await;
+    async fn test_bot_builder_multi_device() {
+        // Use InMemoryBackend for this test since it supports arbitrary device IDs
+        let backend =
+            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
 
-        // First create a device to get an ID
-        let device_manager = store_manager
-            .create_new_device()
+        // First, we need to create device data for device ID 42
+        let mut device = wacore::store::Device::new();
+        device.push_name = "Test Device".to_string();
+        backend
+            .save_device_data_for_device(42, &device)
             .await
-            .expect("Failed to create device");
-        let device_id = device_manager.device_id();
+            .expect("Failed to save device data");
 
-        // Now create a bot for that specific device
         let bot = Bot::builder()
-            .with_store_manager(store_manager.clone())
-            .for_device(device_id)
+            .with_backend(backend)
+            .for_device(42)
             .build()
             .await
-            .expect("Failed to build bot for specific device");
+            .expect("Failed to build bot");
 
-        // Verify it's using the correct device
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
-        assert_eq!(persistence_manager.device_id(), device_id);
+
+        // Should have device ID 42
+        assert_eq!(persistence_manager.device_id(), 42);
+        assert!(persistence_manager.is_multi_account());
     }
 
     #[tokio::test]
-    async fn test_bot_builder_device_not_found() {
-        let store_manager = create_test_store_manager().await;
+    async fn test_bot_builder_with_custom_backend() {
+        // Create an in-memory backend for testing
+        let backend =
+            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
 
-        // Try to create a bot for a non-existent device
-        let result = Bot::builder()
-            .with_store_manager(store_manager)
-            .for_device(999) // Non-existent device ID
+        // Build a bot with the custom backend
+        let bot = Bot::builder()
+            .with_backend(backend)
             .build()
-            .await;
+            .await
+            .expect("Failed to build bot with custom backend");
 
-        // Should fail
+        // Verify the bot was created successfully
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+
+        // Should have device ID 1 for single device mode
+        assert_eq!(persistence_manager.device_id(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_custom_backend_specific_device() {
+        // Create an in-memory backend for testing
+        let backend =
+            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+
+        // First, we need to create some device data for device ID 100
+        let mut device = wacore::store::Device::new();
+        device.push_name = "Test Device".to_string();
+        backend
+            .save_device_data_for_device(100, &device)
+            .await
+            .expect("Failed to save device data");
+
+        // Build a bot with the custom backend for a specific device
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .for_device(100)
+            .build()
+            .await
+            .expect("Failed to build bot with custom backend for specific device");
+
+        // Verify the bot was created successfully with the correct device ID
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+
+        assert_eq!(persistence_manager.device_id(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_missing_backend() {
+        // Try to build without setting a backend
+        let result = Bot::builder().build().await;
+
+        // This should fail
         assert!(result.is_err());
-        if let Err(error) = result {
-            let error_msg = error.to_string();
-            assert!(error_msg.contains("999"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_multiple_bots_same_store_manager() {
-        let store_manager = create_test_store_manager().await;
-
-        // Create two bots with the same store manager (different devices)
-        let bot1 = Bot::builder()
-            .with_store_manager(store_manager.clone())
-            .build()
-            .await
-            .expect("Failed to build bot 1");
-
-        let bot2 = Bot::builder()
-            .with_store_manager(store_manager.clone())
-            .build()
-            .await
-            .expect("Failed to build bot 2");
-
-        // They should have different device IDs
-        let device_id1 = bot1.client().persistence_manager().device_id();
-        let device_id2 = bot2.client().persistence_manager().device_id();
-
-        assert_ne!(device_id1, device_id2);
-
-        // Both devices should exist in the store manager
         assert!(
-            store_manager
-                .device_exists(device_id1)
-                .await
-                .expect("Failed to check device 1")
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Backend is required")
         );
-        assert!(
-            store_manager
-                .device_exists(device_id2)
-                .await
-                .expect("Failed to check device 2")
-        );
-
-        // Should have 2 devices total
-        let devices = store_manager
-            .list_devices()
-            .await
-            .expect("Failed to list devices");
-        assert_eq!(devices.len(), 2);
     }
 }

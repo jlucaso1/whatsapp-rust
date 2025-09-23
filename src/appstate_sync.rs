@@ -15,13 +15,13 @@ use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
 #[derive(Clone)]
-pub struct AppStateProcessor<B: Backend> {
-    backend: Arc<B>,
+pub struct AppStateProcessor {
+    backend: Arc<dyn Backend>,
     key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
 }
 
-impl<B: Backend> AppStateProcessor<B> {
-    pub fn new(backend: Arc<B>) -> Self {
+impl AppStateProcessor {
+    pub fn new(backend: Arc<dyn Backend>) -> Self {
         Self {
             backend,
             key_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -589,6 +589,32 @@ mod tests {
         }
         async fn delete_sender_key(&self, _: &str) -> StoreResult<()> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl crate::store::traits::DevicePersistence for MockBackend {
+        async fn save_device_data(&self, _device_data: &wacore::store::Device) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn save_device_data_for_device(
+            &self,
+            _device_id: i32,
+            _device_data: &wacore::store::Device,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn load_device_data(&self) -> StoreResult<Option<wacore::store::Device>> {
+            Ok(Some(wacore::store::Device::new()))
+        }
+
+        async fn load_device_data_for_device(
+            &self,
+            _device_id: i32,
+        ) -> StoreResult<Option<wacore::store::Device>> {
+            Ok(Some(wacore::store::Device::new()))
         }
     }
 

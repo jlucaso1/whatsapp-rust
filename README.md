@@ -7,8 +7,67 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 - ✅ **Secure Connection & Pairing:** Full implementation of the Noise Protocol handshake and QR code pairing for secure, multi-device sessions.
 - ✅ **End-to-End Encrypted Messaging:** Robust support for the Signal Protocol, enabling E2E encrypted communication for both one-on-one and group chats.
 - ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
-- ✅ **Persistent State:** Uses Diesel and SQLite for durable session state, ensuring the client can resume sessions after a restart.
+- ✅ **Flexible Storage Architecture:** Supports custom storage backends (PostgreSQL, MongoDB, Redis, etc.) through a clean trait-based interface, while maintaining SQLite as the default.
+- ✅ **Persistent State:** Uses Diesel and SQLite for durable session state by default, ensuring the client can resume sessions after a restart.
 - ✅ **Asynchronous by Design:** Built on `tokio` for efficient, non-blocking I/O and concurrent task handling.
+
+## Storage Backends
+
+The library uses a clean, trait-based storage architecture. You must provide a storage backend implementation when creating a bot.
+
+### Using SQLite (Default Implementation)
+
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::sqlite_store::SqliteStore;
+use std::sync::Arc;
+
+let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .build()
+    .await?;
+```
+
+### Multi-Account Support
+
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::sqlite_store::SqliteStore;
+use std::sync::Arc;
+
+let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+
+// First, create device data for the specific device
+let mut device = wacore::store::Device::new();
+device.push_name = "My Device".to_string();
+backend.save_device_data_for_device(42, &device).await?;
+
+// Create bot for specific device
+let bot = Bot::builder()
+    .with_backend(backend)
+    .for_device(42)
+    .build()
+    .await?;
+```
+
+### Custom Backend Implementation
+
+```rust
+use whatsapp_rust::bot::Bot;
+use std::sync::Arc;
+
+// Implement the Backend trait for your storage system
+let custom_backend = Arc::new(MyPostgreSQLBackend::new("postgresql://..."));
+
+let bot = Bot::builder()
+    .with_backend(custom_backend)
+    .build()
+    .await?;
+```
+
+See `examples/custom_backend_example.rs` for a complete implementation template.
 
 ## Quick Start: A Universal Ping-Pong Bot
 

@@ -74,6 +74,29 @@ pub struct AppStateMutationMAC {
     pub value_mac: Vec<u8>,
 }
 
+/// Trait for device data persistence operations
+#[async_trait]
+pub trait DevicePersistence: Send + Sync {
+    /// Save device data (single device mode)
+    async fn save_device_data(&self, device_data: &crate::store::Device) -> Result<()>;
+
+    /// Save device data for a specific device ID (multi-account mode)
+    async fn save_device_data_for_device(
+        &self,
+        device_id: i32,
+        device_data: &crate::store::Device,
+    ) -> Result<()>;
+
+    /// Load device data (single device mode)
+    async fn load_device_data(&self) -> Result<Option<crate::store::Device>>;
+
+    /// Load device data for a specific device ID (multi-account mode)
+    async fn load_device_data_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Option<crate::store::Device>>;
+}
+
 pub trait Backend:
     IdentityStore
     + SessionStore
@@ -82,6 +105,7 @@ pub trait Backend:
     + crate::libsignal::store::PreKeyStore
     + crate::libsignal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
+    + DevicePersistence
     + Send
     + Sync
 {
@@ -95,6 +119,7 @@ impl<T> Backend for T where
         + crate::libsignal::store::PreKeyStore
         + crate::libsignal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
+        + DevicePersistence
         + Send
         + Sync
 {
