@@ -1,11 +1,13 @@
 use crate::client::Client;
 use crate::config::ClientConfig;
 use crate::store::persistence_manager::PersistenceManager;
+use crate::types::enc_handler::EncHandler;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
 use anyhow::Result;
 use http::Uri;
 use log::{debug, info, warn};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -127,6 +129,7 @@ pub struct BotBuilder {
     event_handler: Option<EventHandlerCallback>,
     db_path: Option<String>,
     override_app_version: Option<(u32, u32, u32)>,
+    custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
 }
 
 impl BotBuilder {
@@ -156,6 +159,22 @@ impl BotBuilder {
         self
     }
 
+    /// Register a custom handler for a specific encrypted message type
+    /// 
+    /// # Arguments
+    /// * `enc_type` - The encrypted message type (e.g., "frskmsg")
+    /// * `handler` - The handler implementation for this type
+    /// 
+    /// # Returns
+    /// The updated BotBuilder
+    pub fn with_enc_handler<H>(mut self, enc_type: impl Into<String>, handler: H) -> Self
+    where
+        H: EncHandler + 'static,
+    {
+        self.custom_enc_handlers.insert(enc_type.into(), Arc::new(handler));
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let db_path = self.db_path.unwrap_or_else(|| "whatsapp.db".to_string());
         info!(
@@ -179,6 +198,11 @@ impl BotBuilder {
 
         info!("Creating client...");
         let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
+
+        // Register custom enc handlers
+        for (enc_type, handler) in self.custom_enc_handlers {
+            client.custom_enc_handlers.insert(enc_type, handler);
+        }
 
         Ok(Bot {
             client,

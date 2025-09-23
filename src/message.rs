@@ -67,6 +67,23 @@ impl Client {
 
         for &enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
+            
+            // First check for custom handlers
+            if let Some(handler) = self.custom_enc_handlers.get(&enc_type) {
+                let handler_clone = handler.clone();
+                let client_clone = self.clone();
+                let info_clone = info.clone();
+                let enc_node_clone = Arc::new(enc_node.clone());
+                
+                tokio::spawn(async move {
+                    if let Err(e) = handler_clone.handle(client_clone, &enc_node_clone, &info_clone).await {
+                        log::warn!("Custom handler for enc type '{}' failed: {e:?}", enc_type);
+                    }
+                });
+                continue;
+            }
+            
+            // Fall back to built-in handlers
             match enc_type.as_str() {
                 "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
                 "skmsg" => group_content_enc_nodes.push(enc_node),
