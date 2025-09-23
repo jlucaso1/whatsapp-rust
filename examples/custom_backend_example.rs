@@ -9,15 +9,13 @@ use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::*;
 
 // Example: A hypothetical Redis-based backend
-#[allow(dead_code)]
 struct RedisBackend {
     // Redis client would go here
     // redis_client: redis::Client,
 }
 
 impl RedisBackend {
-    #[allow(dead_code)]
-    pub fn new(_redis_url: &str) -> Self {
+    pub fn new(redis_url: &str) -> Self {
         // Initialize Redis client
         // let redis_client = redis::Client::open(redis_url).unwrap();
         Self {
@@ -29,16 +27,12 @@ impl RedisBackend {
 // Implement all the required storage traits
 #[async_trait]
 impl IdentityStore for RedisBackend {
-    async fn put_identity(
-        &self,
-        _address: &str,
-        _key: [u8; 32],
-    ) -> wacore::store::error::Result<()> {
+    async fn put_identity(&self, address: &str, key: [u8; 32]) -> wacore::store::error::Result<()> {
         // Store identity in Redis: HSET identities:{address} key {key_bytes}
         todo!("Implement Redis storage for identities")
     }
 
-    async fn load_identity(&self, _address: &str) -> wacore::store::error::Result<Option<Vec<u8>>> {
+    async fn load_identity(&self, address: &str) -> wacore::store::error::Result<Option<Vec<u8>>> {
         // Load from Redis: HGET identities:{address} key
         todo!("Implement Redis loading for identities")
     }
@@ -59,7 +53,7 @@ impl IdentityStore for RedisBackend {
 
 #[async_trait]
 impl SessionStore for RedisBackend {
-    async fn get_session(&self, _address: &str) -> wacore::store::error::Result<Option<Vec<u8>>> {
+    async fn get_session(&self, address: &str) -> wacore::store::error::Result<Option<Vec<u8>>> {
         // Load session from Redis
         todo!("Implement Redis storage for sessions")
     }
@@ -86,7 +80,7 @@ impl SessionStore for RedisBackend {
 impl DevicePersistence for RedisBackend {
     async fn save_device_data(
         &self,
-        _device_data: &wacore::store::Device,
+        device_data: &wacore::store::Device,
     ) -> Result<(), whatsapp_rust::store::error::StoreError> {
         // Serialize and store device data in Redis
         todo!("Implement Redis storage for device data")
@@ -112,6 +106,9 @@ impl DevicePersistence for RedisBackend {
         _device_id: i32,
     ) -> Result<Option<wacore::store::Device>, whatsapp_rust::store::error::StoreError> {
         todo!()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -266,7 +263,6 @@ impl wacore::libsignal::store::SignedPreKeyStore for RedisBackend {
 }
 
 // Example usage
-#[allow(dead_code)]
 async fn example_usage() -> Result<(), Box<dyn std::error::Error>> {
     // Create a custom Redis backend
     let redis_backend = Arc::new(RedisBackend::new("redis://localhost:6379"));

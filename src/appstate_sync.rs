@@ -15,13 +15,13 @@ use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
 #[derive(Clone)]
-pub struct AppStateProcessor {
-    backend: Arc<dyn Backend>,
+pub struct AppStateProcessor<B: Backend> {
+    backend: Arc<B>,
     key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
 }
 
-impl AppStateProcessor {
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
+impl<B: Backend> AppStateProcessor<B> {
+    pub fn new(backend: Arc<B>) -> Self {
         Self {
             backend,
             key_cache: Arc::new(Mutex::new(HashMap::new())),
