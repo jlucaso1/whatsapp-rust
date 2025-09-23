@@ -14,6 +14,12 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 /// - Account sync notifications (push name updates)
 pub struct NotificationHandler;
 
+impl Default for NotificationHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotificationHandler {
     pub fn new() -> Self {
         Self

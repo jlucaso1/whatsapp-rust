@@ -9,6 +9,12 @@ use wacore_binary::node::Node;
 /// Processes successful authentication/connection events.
 pub struct SuccessHandler;
 
+impl Default for SuccessHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SuccessHandler {
     pub fn new() -> Self {
         Self
@@ -31,6 +37,12 @@ impl StanzaHandler for SuccessHandler {
 ///
 /// Processes connection or authentication failures.
 pub struct FailureHandler;
+
+impl Default for FailureHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl FailureHandler {
     pub fn new() -> Self {
@@ -55,6 +67,12 @@ impl StanzaHandler for FailureHandler {
 /// Processes stream-level errors that may require connection reset.
 pub struct StreamErrorHandler;
 
+impl Default for StreamErrorHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamErrorHandler {
     pub fn new() -> Self {
         Self
@@ -77,6 +95,12 @@ impl StanzaHandler for StreamErrorHandler {
 ///
 /// Processes acknowledgment messages.
 pub struct AckHandler;
+
+impl Default for AckHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AckHandler {
     pub fn new() -> Self {
