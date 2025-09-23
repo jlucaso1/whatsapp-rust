@@ -1,11 +1,13 @@
 use chrono::Local;
 use log::{debug, error, info};
 use std::io::Cursor;
+use std::sync::Arc;
 use wacore::download::{Downloadable, MediaType};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
+use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::upload::UploadResponse;
 
 // This is a demo of a simple ping-pong bot with every type of media.
@@ -31,7 +33,17 @@ fn main() {
         .unwrap();
 
     rt.block_on(async {
+        let backend = match SqliteStore::new("whatsapp.db").await {
+            Ok(store) => Arc::new(store),
+            Err(e) => {
+                error!("Failed to create SQLite backend: {}", e);
+                return;
+            }
+        };
+        info!("SQLite backend initialized successfully.");
+
         let mut bot = Bot::builder()
+            .with_backend(backend)
             .on_event(move |event, client| {
                 async move {
                     match event {

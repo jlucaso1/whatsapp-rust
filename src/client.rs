@@ -10,6 +10,7 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
 
+use crate::appstate_sync::AppStateProcessor;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
@@ -134,10 +135,8 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    // TODO: Make AppStateProcessor generic over Backend trait
-    // app_state_processor: Option<AppStateProcessor<dyn Backend>>,
-    #[allow(dead_code)]
-    app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    pub(crate) app_state_processor: Option<AppStateProcessor>,
+    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
@@ -234,7 +233,7 @@ impl Client {
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
             // TODO: Re-enable AppStateProcessor when it's made generic
-            // app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
+            app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
@@ -725,12 +724,12 @@ impl Client {
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
-        let state = backend.get_app_state_version(name.as_str()).await?;
+        let mut state = backend.get_app_state_version(name.as_str()).await?;
         if state.version == 0 {
             full_sync = true;
         }
 
-        let has_more = true;
+        let mut has_more = true;
         let want_snapshot = full_sync;
 
         if has_more {
@@ -781,7 +780,7 @@ impl Client {
                     Err(_) => None,
                 };
 
-            let _download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
+            let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
                 if let Some(bytes) = &pre_downloaded_snapshot {
                     Ok(bytes.clone())
                 } else {
@@ -790,11 +789,10 @@ impl Client {
             };
 
             // TODO: Re-enable when AppStateProcessor is generic
-            /*
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, new_state, list) =
-                    proc.decode_patch_list(&resp, download, true).await?;
-                let decode_elapsed = decode_start.elapsed();
+                    proc.decode_patch_list(&resp, &download, true).await?;
+                let decode_elapsed = _decode_start.elapsed();
                 if decode_elapsed.as_millis() > 500 {
                     debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
                 }
@@ -829,8 +827,7 @@ impl Client {
                 state = new_state;
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
-            */
-            // For now, we'll just return since AppStateProcessor is disabled
+            }
         }
 
         backend
