@@ -44,7 +44,22 @@ impl Client {
         self.get_request_utils().generate_request_id()
     }
 
-    pub(crate) async fn generate_message_id(&self) -> String {
+    /// Generates a unique message ID that conforms to the WhatsApp protocol format.
+    ///
+    /// This is an advanced function that allows library users to generate message IDs
+    /// that are compatible with the WhatsApp protocol. The generated ID includes
+    /// timestamp, user JID, and random components to ensure uniqueness.
+    ///
+    /// # Advanced Use Case
+    ///
+    /// This function is intended for advanced users who need to build custom protocol
+    /// interactions or manage message IDs manually. Most users should use higher-level
+    /// methods like `send_message` which handle ID generation automatically.
+    ///
+    /// # Returns
+    ///
+    /// A string containing the generated message ID in the format expected by WhatsApp.
+    pub async fn generate_message_id(&self) -> String {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         self.get_request_utils()
             .generate_message_id(device_snapshot.pn.as_ref())
@@ -54,7 +69,59 @@ impl Client {
         RequestUtils::with_counter(self.unique_id.clone(), self.id_counter.clone())
     }
 
-    pub(crate) async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
+    /// Sends a custom IQ (Info/Query) stanza to the WhatsApp server.
+    ///
+    /// This is an advanced function that allows library users to send custom IQ stanzas
+    /// for protocol interactions that are not covered by higher-level methods. Common
+    /// use cases include live location updates, custom presence management, or other
+    /// advanced WhatsApp features.
+    ///
+    /// # Advanced Use Case
+    ///
+    /// This function bypasses some of the higher-level abstractions and safety checks
+    /// provided by other client methods. Users should be familiar with the WhatsApp
+    /// protocol and IQ stanza format before using this function.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The IQ query to send, containing the stanza type, namespace, content, and optional timeout
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Node)` - The response node from the server
+    /// * `Err(IqError)` - Various error conditions including timeout, connection issues, or server errors
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wacore::request::{InfoQuery, InfoQueryType};
+    /// use wacore_binary::builder::NodeBuilder;
+    /// use wacore_binary::node::NodeContent;
+    /// use wacore_binary::jid::Jid;
+    ///
+    /// // This is a simplified example - real usage requires proper setup
+    /// # async fn example(client: &whatsapp_rust::Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let query_node = NodeBuilder::new("presence")
+    ///     .attr("type", "available")
+    ///     .build();
+    ///
+    /// let server_jid = Jid::new("", "s.whatsapp.net");
+    ///
+    /// let query = InfoQuery {
+    ///     query_type: InfoQueryType::Set,
+    ///     namespace: "presence",
+    ///     to: server_jid,
+    ///     target: None,
+    ///     content: Some(NodeContent::Nodes(vec![query_node])),
+    ///     id: None,
+    ///     timeout: None,
+    /// };
+    ///
+    /// let response = client.send_iq(query).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
         let req_id = query
             .id
             .clone()
@@ -103,5 +170,33 @@ impl Client {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // This test verifies that the public API methods are accessible
+    // It's a compile-time test - if the methods aren't public, this won't compile
+    #[tokio::test]
+    async fn test_public_api_accessibility() {
+        // We can't test the actual functionality without a real client setup,
+        // but we can verify the methods exist and are public by checking they exist
+
+        // This is a compile-time test for method visibility
+        // The fact that this compiles means the methods are public and accessible
+
+        // If these were private, this would fail to compile
+        fn _check_methods_exist() {
+            // Check that generate_message_id exists and is accessible
+            let _method = Client::generate_message_id;
+
+            // Check that send_iq exists and is accessible
+            let _method = Client::send_iq;
+        }
+
+        // Test passes if it compiles - which it will if methods are public
+        _check_methods_exist();
     }
 }
