@@ -1,7 +1,7 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    app_state_keys (key_id) {
+    app_state_keys (key_id, device_id) {
         key_id -> Binary,
         key_data -> Binary,
         device_id -> Integer,
@@ -9,7 +9,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    app_state_mutation_macs (name, index_mac) {
+    app_state_mutation_macs (name, index_mac, device_id) {
         name -> Text,
         version -> BigInt,
         index_mac -> Binary,
@@ -19,7 +19,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    app_state_versions (name) {
+    app_state_versions (name, device_id) {
         name -> Text,
         state_data -> Binary,
         device_id -> Integer,
@@ -48,7 +48,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    identities (address) {
+    identities (address, device_id) {
         address -> Text,
         key -> Binary,
         device_id -> Integer,
@@ -56,7 +56,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    prekeys (id) {
+    prekeys (id, device_id) {
         id -> Integer,
         key -> Binary,
         uploaded -> Bool,
@@ -65,7 +65,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    sender_keys (address) {
+    sender_keys (address, device_id) {
         address -> Text,
         record -> Binary,
         device_id -> Integer,
@@ -73,7 +73,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    sessions (address) {
+    sessions (address, device_id) {
         address -> Text,
         record -> Binary,
         device_id -> Integer,
@@ -81,7 +81,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    signed_prekeys (id) {
+    signed_prekeys (id, device_id) {
         id -> Integer,
         record -> Binary,
         device_id -> Integer,

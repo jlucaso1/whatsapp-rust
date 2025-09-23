@@ -1,3 +1,4 @@
+use super::device_aware_store::DeviceAwareSqliteStore;
 use super::error::StoreError;
 use crate::store::Device;
 use crate::store::sqlite_store::SqliteStore;
@@ -21,6 +22,20 @@ impl StoreBackend {
         }
     }
 
+    pub async fn save_device_data_for_device(
+        &self,
+        device_id: i32,
+        device_data: &wacore::store::Device,
+    ) -> Result<(), StoreError> {
+        match self {
+            StoreBackend::Sqlite(store) => {
+                store
+                    .save_device_data_for_device(device_id, device_data)
+                    .await
+            }
+        }
+    }
+
     pub async fn load_device_data(&self) -> Result<Option<wacore::store::Device>, StoreError> {
         match self {
             StoreBackend::Sqlite(store) => store.load_device_data().await,
@@ -30,6 +45,14 @@ impl StoreBackend {
     pub fn as_backend(&self) -> Arc<dyn Backend> {
         match self {
             StoreBackend::Sqlite(store) => store.clone() as Arc<dyn Backend>,
+        }
+    }
+
+    pub fn as_device_aware_backend(&self, device_id: i32) -> Arc<dyn Backend> {
+        match self {
+            StoreBackend::Sqlite(store) => {
+                Arc::new(DeviceAwareSqliteStore::new(store.clone(), device_id)) as Arc<dyn Backend>
+            }
         }
     }
 }
@@ -76,8 +99,11 @@ impl PersistenceManager {
 
     /// Create a PersistenceManager for a specific device ID (multi-account mode)
     pub async fn new_for_device(device_id: i32, backend: StoreBackend) -> Result<Self, StoreError> {
-        debug!("PersistenceManager: Loading device data for device ID {}", device_id);
-        
+        debug!(
+            "PersistenceManager: Loading device data for device ID {}",
+            device_id
+        );
+
         // Load device data for this specific device
         let device_data_opt = match &backend {
             StoreBackend::Sqlite(store) => store.load_device_data_for_device(device_id).await?,
@@ -88,7 +114,7 @@ impl PersistenceManager {
                 "PersistenceManager: Loaded existing device data for device {} (PushName: '{}'). Initializing Device.",
                 device_id, serializable_device.push_name
             );
-            let mut dev = Device::new(backend.as_backend());
+            let mut dev = Device::new(backend.as_device_aware_backend(device_id));
             dev.load_from_serializable(serializable_device);
             dev
         } else {
@@ -153,7 +179,15 @@ impl PersistenceManager {
                 let serializable_device = device_guard.to_serializable();
                 drop(device_guard);
 
-                backend.save_device_data(&serializable_device).await?;
+                // If this PersistenceManager is associated with a specific device_id,
+                // use the device-aware save path to ensure we update the correct row.
+                if let Some(device_id) = self.device_id {
+                    backend
+                        .save_device_data_for_device(device_id, &serializable_device)
+                        .await?;
+                } else {
+                    backend.save_device_data(&serializable_device).await?;
+                }
                 *dirty_guard = false;
                 debug!("Device state saved successfully.");
             }
