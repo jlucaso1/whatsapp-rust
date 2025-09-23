@@ -2,6 +2,8 @@ pub mod commands;
 pub mod device_aware_store;
 pub mod error;
 pub mod generic;
+#[cfg(test)]
+pub mod in_memory_backend;
 pub mod persistence_manager;
 pub mod schema;
 pub mod signal;
