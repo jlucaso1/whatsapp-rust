@@ -16,7 +16,7 @@ use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStr
 
 use wacore::store::Device as CoreDevice;
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
@@ -1392,5 +1392,37 @@ impl AppStateStore for SqliteStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))??;
         Ok(result.map(|r| r.1))
+    }
+}
+
+#[async_trait]
+impl wacore::store::traits::DevicePersistence for SqliteStore {
+    async fn save_device_data(
+        &self,
+        device_data: &wacore::store::Device,
+    ) -> wacore::store::error::Result<()> {
+        self.save_device_data(device_data).await
+    }
+
+    async fn save_device_data_for_device(
+        &self,
+        device_id: i32,
+        device_data: &wacore::store::Device,
+    ) -> wacore::store::error::Result<()> {
+        self.save_device_data_for_device(device_id, device_data)
+            .await
+    }
+
+    async fn load_device_data(
+        &self,
+    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
+        self.load_device_data().await
+    }
+
+    async fn load_device_data_for_device(
+        &self,
+        device_id: i32,
+    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
+        self.load_device_data_for_device(device_id).await
     }
 }

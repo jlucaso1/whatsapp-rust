@@ -10,6 +10,7 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
 
+use crate::appstate_sync::AppStateProcessor;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
@@ -25,7 +26,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::SERVER_JID;
 
-use crate::appstate_sync::AppStateProcessor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -34,7 +34,6 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
-use wacore::store::traits::AppStateStore;
 use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
@@ -136,8 +135,8 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
-    app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    pub(crate) app_state_processor: Option<AppStateProcessor>,
+    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
@@ -233,9 +232,8 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            app_state_processor: persistence_manager
-                .sqlite_store()
-                .map(AppStateProcessor::new),
+            // TODO: Re-enable AppStateProcessor when it's made generic
+            app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
@@ -723,7 +721,7 @@ impl Client {
         name: WAPatchName,
         full_sync: bool,
     ) -> anyhow::Result<()> {
-        let backend = self.persistence_manager.sqlite_store().unwrap().clone();
+        let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
         let mut state = backend.get_app_state_version(name.as_str()).await?;
@@ -732,9 +730,9 @@ impl Client {
         }
 
         let mut has_more = true;
-        let mut want_snapshot = full_sync;
+        let want_snapshot = full_sync;
 
-        while has_more {
+        if has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
 
             let mut collection_builder = NodeBuilder::new("collection")
@@ -762,7 +760,7 @@ impl Client {
             let resp = self.send_iq(iq).await?;
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
-            let decode_start = std::time::Instant::now();
+            let _decode_start = std::time::Instant::now();
             let pre_downloaded_snapshot: Option<Vec<u8>> =
                 match wacore::appstate::patch_decode::parse_patch_list(&resp) {
                     Ok(pl) => {
@@ -790,10 +788,11 @@ impl Client {
                 }
             };
 
+            // TODO: Re-enable when AppStateProcessor is generic
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, new_state, list) =
-                    proc.decode_patch_list(&resp, download, true).await?;
-                let decode_elapsed = decode_start.elapsed();
+                    proc.decode_patch_list(&resp, &download, true).await?;
+                let decode_elapsed = _decode_start.elapsed();
                 if decode_elapsed.as_millis() > 500 {
                     debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
                 }
@@ -828,11 +827,7 @@ impl Client {
                 state = new_state;
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
-            } else {
-                break;
             }
-
-            want_snapshot = false;
         }
 
         backend
@@ -843,6 +838,7 @@ impl Client {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
         if raw_key_ids.is_empty() {
             return;
@@ -881,6 +877,7 @@ impl Client {
         }
     }
 
+    #[allow(dead_code)]
     async fn dispatch_app_state_mutation(
         &self,
         m: &crate::appstate_sync::Mutation,
