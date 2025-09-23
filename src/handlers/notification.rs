@@ -12,13 +12,8 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 /// - Encrypt notifications (key upload requests)
 /// - Server sync notifications
 /// - Account sync notifications (push name updates)
+#[derive(Default)]
 pub struct NotificationHandler;
-
-impl Default for NotificationHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl NotificationHandler {
     pub fn new() -> Self {

@@ -393,7 +393,7 @@ mod tests {
     use wacore::appstate::hash::HashState;
     use wacore::appstate::hash::generate_content_mac;
     use wacore::appstate::keys::expand_app_state_keys;
-    use wacore::crypto::aes_256_cbc_encrypt;
+    use wacore::libsignal::crypto::aes_256_cbc_encrypt;
     use wacore::store::error::Result as StoreResult;
     use wacore::store::traits::AppStateKeyStore as _;
     use wacore::store::traits::AppStateSyncKey;

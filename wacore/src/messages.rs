@@ -1,4 +1,4 @@
-use crate::crypto::sha256;
+use crate::libsignal::crypto::CryptographicHash;
 use base64::Engine as _;
 
 pub struct MessageUtils;
@@ -24,7 +24,12 @@ impl MessageUtils {
 
         let concatenated_jids = jids.join("");
 
-        let full_hash = sha256(concatenated_jids.as_bytes());
+        let full_hash = {
+            let mut h = CryptographicHash::new("SHA-256").unwrap();
+            h.update(concatenated_jids.as_bytes());
+            let v = h.finalize();
+            <[u8; 32]>::try_from(v.as_slice()).unwrap()
+        };
 
         let truncated_hash = &full_hash[..6];
 

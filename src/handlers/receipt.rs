@@ -10,13 +10,8 @@ use wacore_binary::node::Node;
 /// - Message delivery confirmations
 /// - Read receipts
 /// - Played receipts (for voice messages and media)
+#[derive(Default)]
 pub struct ReceiptHandler;
-
-impl Default for ReceiptHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl ReceiptHandler {
     pub fn new() -> Self {

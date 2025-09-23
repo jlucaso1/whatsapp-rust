@@ -1,6 +1,6 @@
 use crate::appstate::AppStateError;
 use crate::appstate::lthash::WAPATCH_INTEGRITY;
-use crate::crypto::{hmac_sha256, hmac_sha512};
+use crate::libsignal::crypto::CryptographicMac;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::collections::HashMap;
@@ -73,8 +73,11 @@ impl HashState {
 
     pub fn generate_snapshot_mac(&self, name: &str, key: &[u8]) -> Vec<u8> {
         let version_be = u64_to_be(self.version);
-        let refs: Vec<&[u8]> = vec![&self.hash[..], &version_be[..], name.as_bytes()];
-        hmac_sha256(key, &refs).to_vec()
+        let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+        mac.update(&self.hash);
+        mac.update(&version_be);
+        mac.update(name.as_bytes());
+        mac.finalize()
     }
 }
 
@@ -94,8 +97,11 @@ pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], versio
     }
     parts.push(u64_to_be(version).to_vec());
     parts.push(name.as_bytes().to_vec());
-    let refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
-    hmac_sha256(key, &refs).to_vec()
+    let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+    for p in parts.iter() {
+        mac.update(p);
+    }
+    mac.finalize()
 }
 
 pub fn generate_content_mac(
@@ -106,7 +112,14 @@ pub fn generate_content_mac(
 ) -> Vec<u8> {
     let op_byte = [operation as u8 + 1];
     let key_data_length = u64_to_be((key_id.len() + 1) as u64);
-    let mac_full = hmac_sha512(key, &[&op_byte, key_id, data, &key_data_length]);
+    let mac_full = {
+        let mut mac = CryptographicMac::new("HmacSha512", key).unwrap();
+        mac.update(&op_byte);
+        mac.update(key_id);
+        mac.update(data);
+        mac.update(&key_data_length);
+        mac.finalize()
+    };
     mac_full[..32].to_vec()
 }
 
@@ -119,7 +132,11 @@ pub fn validate_index_mac(
     expected_mac: &[u8],
     key: &[u8; 32],
 ) -> Result<(), AppStateError> {
-    let computed = hmac_sha256(key, &[index_json_bytes]);
+    let computed = {
+        let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+        mac.update(index_json_bytes);
+        mac.finalize()
+    };
     if computed.as_slice() != expected_mac {
         Err(AppStateError::MismatchingIndexMAC)
     } else {
