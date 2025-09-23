@@ -13,53 +13,34 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 
 ## Storage Backends
 
-The library uses a clean, trait-based storage architecture. You must provide a storage backend implementation when creating a bot.
+The library provides a flexible storage architecture that allows you to choose your preferred database:
 
-### Using SQLite (Default Implementation)
+### Default SQLite Usage
 ```rust
-use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
-use std::sync::Arc;
+use whatsapp_rust::{Bot, ClientConfig};
 
-let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let config = ClientConfig {
+    db_path: "whatsapp.db".to_string(),
+    app_version_override: None,
+};
 
 let bot = Bot::builder()
-    .with_backend(backend)
+    .with_config(config)
     .build()
     .await?;
 ```
 
-### Multi-Account Support  
+### Custom Backend Usage
 ```rust
-use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::Bot;
 use std::sync::Arc;
 
-let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
-
-// First, create device data for the specific device
-let mut device = wacore::store::Device::new();
-device.push_name = "My Device".to_string();
-backend.save_device_data_for_device(42, &device).await?;
-
-// Create bot for specific device
-let bot = Bot::builder()
-    .with_backend(backend)
-    .for_device(42)
-    .build()
-    .await?;
-```
-
-### Custom Backend Implementation
-```rust
-use whatsapp_rust::bot::Bot;
-use std::sync::Arc;
-
-// Implement the Backend trait for your storage system
+// Implement the Backend and DevicePersistence traits for your storage system
 let custom_backend = Arc::new(MyPostgreSQLBackend::new("postgresql://..."));
+let device_persistence = Arc::new(MyPostgreSQLDevicePersistence::new("postgresql://..."));
 
 let bot = Bot::builder()
-    .with_backend(custom_backend)
+    .with_backend(custom_backend, device_persistence)
     .build()
     .await?;
 ```
