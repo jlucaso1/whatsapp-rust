@@ -6,6 +6,7 @@ pub mod schema;
 pub mod signal;
 pub mod signal_adapter;
 pub mod sqlite_store;
+pub mod store_manager;
 pub mod traits;
 pub use crate::store::traits::*;
 use std::ops::{Deref, DerefMut};

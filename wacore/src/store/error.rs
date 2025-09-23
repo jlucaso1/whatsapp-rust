@@ -22,6 +22,9 @@ pub enum StoreError {
 
     #[error("Migration error: {0}")]
     Migration(String),
+
+    #[error("Device with ID {0} not found")]
+    DeviceNotFound(i32),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

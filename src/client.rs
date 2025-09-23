@@ -1147,6 +1147,12 @@ impl Client {
         self.is_logged_in.load(Ordering::Relaxed)
     }
 
+    /// Get access to the PersistenceManager for this client.
+    /// This is useful for multi-account scenarios to get the device ID.
+    pub fn persistence_manager(&self) -> Arc<PersistenceManager> {
+        self.persistence_manager.clone()
+    }
+
     pub async fn edit_message(
         &self,
         to: Jid,
