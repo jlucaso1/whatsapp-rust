@@ -1397,32 +1397,19 @@ impl AppStateStore for SqliteStore {
 
 #[async_trait]
 impl wacore::store::traits::DevicePersistence for SqliteStore {
-    async fn save_device_data(
-        &self,
-        device_data: &wacore::store::Device,
-    ) -> wacore::store::error::Result<()> {
+    async fn save_device_data(&self, device_data: &wacore::store::Device) -> wacore::store::error::Result<()> {
         self.save_device_data(device_data).await
     }
-
-    async fn save_device_data_for_device(
-        &self,
-        device_id: i32,
-        device_data: &wacore::store::Device,
-    ) -> wacore::store::error::Result<()> {
-        self.save_device_data_for_device(device_id, device_data)
-            .await
+    
+    async fn save_device_data_for_device(&self, device_id: i32, device_data: &wacore::store::Device) -> wacore::store::error::Result<()> {
+        self.save_device_data_for_device(device_id, device_data).await
     }
-
-    async fn load_device_data(
-        &self,
-    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
+    
+    async fn load_device_data(&self) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         self.load_device_data().await
     }
-
-    async fn load_device_data_for_device(
-        &self,
-        device_id: i32,
-    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
+    
+    async fn load_device_data_for_device(&self, device_id: i32) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         self.load_device_data_for_device(device_id).await
     }
 }
