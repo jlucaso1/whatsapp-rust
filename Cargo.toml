@@ -52,7 +52,7 @@ scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-websockets = { version = "0.12.0", features = ["client", "rustls-webpki-roots", "rand", "ring"] }
 ureq = { version = "3.1.0", default-features = false, features = ["rustls", "json"] }
 wacore = { path = "./wacore" }
@@ -61,6 +61,10 @@ waproto = { workspace = true }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
+
+[[example]]
+name = "multi_account"
+path = "examples/multi_account.rs"
 
 [profile.release]
 opt-level = "z"
