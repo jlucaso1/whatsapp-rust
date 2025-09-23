@@ -16,16 +16,9 @@ pub struct InMemoryBackend {
     sender_keys: Arc<RwLock<HashMap<String, Vec<u8>>>>,
     app_state_keys: Arc<RwLock<HashMap<Vec<u8>, AppStateSyncKey>>>,
     app_state_versions: Arc<RwLock<HashMap<String, HashState>>>,
-    #[allow(clippy::type_complexity)]
     app_state_mutation_macs: Arc<RwLock<HashMap<String, HashMap<Vec<u8>, Vec<u8>>>>>,
     device_data: Arc<RwLock<Option<wacore::store::Device>>>,
     device_data_by_id: Arc<RwLock<HashMap<i32, wacore::store::Device>>>,
-}
-
-impl Default for InMemoryBackend {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl InMemoryBackend {

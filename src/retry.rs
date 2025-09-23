@@ -287,11 +287,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = Arc::new(crate::store::sqlite_store::SqliteStore::new(":memory:").await.unwrap()) as Arc<dyn crate::store::traits::Backend>;
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _sync_rx) = Client::new(pm.clone()).await;
 

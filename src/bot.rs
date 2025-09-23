@@ -72,16 +72,6 @@ pub struct Bot {
     event_handler: Option<EventHandlerCallback>,
 }
 
-impl std::fmt::Debug for Bot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Bot")
-            .field("client", &"<Client>")
-            .field("sync_task_receiver", &self.sync_task_receiver.is_some())
-            .field("event_handler", &self.event_handler.is_some())
-            .finish()
-    }
-}
-
 impl Bot {
     pub fn builder() -> BotBuilder {
         BotBuilder::new()
@@ -310,9 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_multi_device() {
-        // Use InMemoryBackend for this test since it supports arbitrary device IDs
-        let backend =
-            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+        let backend = create_test_sqlite_backend().await;
 
         // First, we need to create device data for device ID 42
         let mut device = wacore::store::Device::new();

@@ -592,32 +592,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl crate::store::traits::DevicePersistence for MockBackend {
-        async fn save_device_data(&self, _device_data: &wacore::store::Device) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn save_device_data_for_device(
-            &self,
-            _device_id: i32,
-            _device_data: &wacore::store::Device,
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn load_device_data(&self) -> StoreResult<Option<wacore::store::Device>> {
-            Ok(Some(wacore::store::Device::new()))
-        }
-
-        async fn load_device_data_for_device(
-            &self,
-            _device_id: i32,
-        ) -> StoreResult<Option<wacore::store::Device>> {
-            Ok(Some(wacore::store::Device::new()))
-        }
-    }
-
     fn create_encrypted_mutation(
         op: wa::syncd_mutation::SyncdOperation,
         index_mac: &[u8],
