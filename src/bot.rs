@@ -1,8 +1,7 @@
 use crate::client::Client;
 use crate::config::ClientConfig;
-use crate::store::persistence_manager::{DevicePersistence, PersistenceManager};
+use crate::store::persistence_manager::PersistenceManager;
 use crate::store::store_manager::StoreManager;
-use crate::store::traits::Backend;
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
@@ -134,9 +133,6 @@ pub struct BotBuilder {
     custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
     store_manager: Option<Arc<StoreManager>>,
     device_id: Option<i32>,
-    // New field for direct backend support
-    backend: Option<Arc<dyn Backend>>,
-    device_persistence: Option<Arc<dyn DevicePersistence>>,
 }
 
 impl BotBuilder {
@@ -191,77 +187,15 @@ impl BotBuilder {
     }
 
     /// Specify which device ID to use for multi-account scenarios.
-    /// This requires a StoreManager to be set via `with_store_manager()` or a backend via `with_backend()`.
+    /// This requires a StoreManager to be set via `with_store_manager()`.
     /// If not specified, a new device will be created.
     pub fn for_device(mut self, device_id: i32) -> Self {
         self.device_id = Some(device_id);
         self
     }
 
-    /// Use a custom backend implementation for storage.
-    /// This allows using alternative storage backends (e.g., PostgreSQL, Redis) instead of SQLite.
-    ///
-    /// # Arguments
-    /// * `backend` - The backend implementation that provides all storage operations
-    /// * `device_persistence` - The device persistence implementation for loading/saving device data
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let backend = Arc::new(MyCustomBackend::new());
-    /// let device_persistence = Arc::new(MyCustomDevicePersistence::new());
-    /// let bot = Bot::builder()
-    ///     .with_backend(backend, device_persistence)
-    ///     .build()
-    ///     .await?;
-    /// ```
-    pub fn with_backend(
-        mut self,
-        backend: Arc<dyn Backend>,
-        device_persistence: Arc<dyn DevicePersistence>,
-    ) -> Self {
-        self.backend = Some(backend);
-        self.device_persistence = Some(device_persistence);
-        self
-    }
-
     pub async fn build(self) -> Result<Bot> {
-        let persistence_manager = if let Some(backend) = self.backend {
-            // Custom backend mode
-            let device_persistence = self.device_persistence.ok_or_else(|| {
-                anyhow::anyhow!("Device persistence is required when using custom backend")
-            })?;
-
-            if let Some(device_id) = self.device_id {
-                info!(
-                    "Creating PersistenceManager with custom backend for device ID: {}",
-                    device_id
-                );
-                Arc::new(
-                    PersistenceManager::new_for_device_with_backend(
-                        device_id,
-                        backend,
-                        device_persistence,
-                    )
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to create persistence manager for device {}: {}",
-                            device_id,
-                            e
-                        )
-                    })?,
-                )
-            } else {
-                info!("Creating PersistenceManager with custom backend");
-                Arc::new(
-                    PersistenceManager::new_with_backend(backend, device_persistence)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to create persistence manager: {}", e)
-                        })?,
-                )
-            }
-        } else if let Some(store_manager) = self.store_manager {
+        let persistence_manager = if let Some(store_manager) = self.store_manager {
             // Multi-account mode using StoreManager
             let manager = if let Some(device_id) = self.device_id {
                 info!("Loading existing device with ID: {}", device_id);
@@ -493,61 +427,5 @@ mod tests {
             .await
             .expect("Failed to list devices");
         assert_eq!(devices.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_bot_builder_with_custom_backend() {
-        // Create an in-memory backend for testing
-        let backend = Arc::new(crate::store::in_memory_backend::InMemoryBackend::new());
-        let device_persistence = backend.clone() as Arc<dyn DevicePersistence>;
-
-        // Build a bot with the custom backend
-        let bot = Bot::builder()
-            .with_backend(backend.clone(), device_persistence)
-            .build()
-            .await
-            .expect("Failed to build bot with custom backend");
-
-        // Verify the bot was created successfully
-        let client = bot.client();
-        let persistence_manager = client.persistence_manager();
-
-        // Should have device ID 1 for backward compatibility mode
-        assert_eq!(persistence_manager.device_id(), 1);
-
-        // Verify it's not using SQLite
-        assert!(persistence_manager.sqlite_store().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_bot_builder_with_custom_backend_specific_device() {
-        // Create an in-memory backend for testing
-        let backend = Arc::new(crate::store::in_memory_backend::InMemoryBackend::new());
-        let device_persistence = backend.clone() as Arc<dyn DevicePersistence>;
-
-        // First, we need to create some device data for device ID 100
-        let mut device = wacore::store::Device::new();
-        device.push_name = "Test Device".to_string();
-        device_persistence
-            .save_device_data_for_device(100, &device)
-            .await
-            .expect("Failed to save device data");
-
-        // Build a bot with the custom backend for a specific device
-        let bot = Bot::builder()
-            .with_backend(backend.clone(), device_persistence)
-            .for_device(100)
-            .build()
-            .await
-            .expect("Failed to build bot with custom backend for specific device");
-
-        // Verify the bot was created successfully with the correct device ID
-        let client = bot.client();
-        let persistence_manager = client.persistence_manager();
-
-        assert_eq!(persistence_manager.device_id(), 100);
-
-        // Verify it's not using SQLite
-        assert!(persistence_manager.sqlite_store().is_none());
     }
 }
