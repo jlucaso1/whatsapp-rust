@@ -25,7 +25,7 @@ impl StanzaHandler for ReceiptHandler {
         "receipt"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         client.handle_receipt(node).await;
         true
     }

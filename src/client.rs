@@ -149,6 +149,9 @@ pub struct Client {
 
     /// Router for dispatching stanzas to their appropriate handlers
     pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
+
+    /// Whether to send ACKs synchronously or in a background task
+    pub(crate) synchronous_ack: bool,
 }
 
 impl Client {
@@ -241,6 +244,7 @@ impl Client {
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             stanza_router: Self::create_stanza_router(),
+            synchronous_ack: false,
         };
 
         let arc = Arc::new(this);
@@ -506,48 +510,8 @@ impl Client {
             info!(target: "Client/Recv","{}", DisplayableNode(node));
         }
 
-        match node.tag.as_str() {
-            "message" | "receipt" | "notification" | "call" => {
-                if let (Some(id), Some(from)) = (node.attrs.get("id"), node.attrs.get("from")) {
-                    let ack_info = (
-                        node.tag.clone(),
-                        id.clone(),
-                        from.clone(),
-                        node.attrs.get("participant").cloned(),
-                        if node.tag != "message" {
-                            node.attrs.get("type").cloned()
-                        } else {
-                            None
-                        },
-                    );
-                    let self_clone = self.clone();
-
-                    tokio::spawn(async move {
-                        let (tag, id, from, participant, t) = ack_info;
-                        let mut attrs = std::collections::HashMap::new();
-                        attrs.insert("class".to_string(), tag.clone());
-                        attrs.insert("id".to_string(), id.clone());
-                        attrs.insert("to".to_string(), from);
-                        if let Some(p) = participant {
-                            attrs.insert("participant".to_string(), p);
-                        }
-                        if let Some(typ) = t {
-                            attrs.insert("type".to_string(), typ);
-                        }
-
-                        let ack = Node {
-                            tag: "ack".to_string(),
-                            attrs,
-                            content: None,
-                        };
-                        if let Err(e) = self_clone.send_node(ack).await {
-                            warn!(target: "Client", "Failed to send ack for {} {}: {e:?}", tag, id);
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
+        // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
+        let mut cancelled = false;
 
         if node.tag == "xmlstreamend" {
             warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
@@ -566,9 +530,79 @@ impl Client {
         }
 
         // Dispatch to appropriate handler using the router
-        if !self.stanza_router.dispatch(self.clone(), node).await {
+        if !self
+            .stanza_router
+            .dispatch(self.clone(), node, &mut cancelled)
+            .await
+        {
             warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(node));
         }
+
+        // Send the deferred ACK if applicable and not cancelled by handler
+        if self.should_ack(node) && !cancelled {
+            self.maybe_deferred_ack(node).await;
+        }
+    }
+
+    /// Determine if a node should be acknowledged with <ack/>.
+    fn should_ack(&self, node: &Node) -> bool {
+        matches!(
+            node.tag.as_str(),
+            "message" | "receipt" | "notification" | "call"
+        ) && node.attrs.contains_key("id")
+            && node.attrs.contains_key("from")
+    }
+
+    /// Possibly send a deferred ack: either immediately or via spawned task.
+    /// Handlers can cancel by setting `cancelled` to true.
+    async fn maybe_deferred_ack(self: &Arc<Self>, node: &Node) {
+        if self.synchronous_ack {
+            if let Err(e) = self.send_ack_for(node).await {
+                warn!(target: "Client", "Failed to send ack: {e:?}");
+            }
+        } else {
+            let this = self.clone();
+            let node_clone = node.clone();
+            tokio::spawn(async move {
+                if let Err(e) = this.send_ack_for(&node_clone).await {
+                    warn!(target: "Client", "Failed to send ack: {e:?}");
+                }
+            });
+        }
+    }
+
+    /// Build and send an <ack/> node corresponding to the given stanza.
+    async fn send_ack_for(&self, node: &Node) -> Result<(), ClientError> {
+        let id = match node.attrs.get("id") {
+            Some(v) => v.clone(),
+            None => return Ok(()),
+        };
+        let from = match node.attrs.get("from") {
+            Some(v) => v.clone(),
+            None => return Ok(()),
+        };
+        let participant = node.attrs.get("participant").cloned();
+        let typ = if node.tag != "message" {
+            node.attrs.get("type").cloned()
+        } else {
+            None
+        };
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("class".to_string(), node.tag.clone());
+        attrs.insert("id".to_string(), id);
+        attrs.insert("to".to_string(), from);
+        if let Some(p) = participant {
+            attrs.insert("participant".to_string(), p);
+        }
+        if let Some(t) = typ {
+            attrs.insert("type".to_string(), t);
+        }
+        let ack = Node {
+            tag: "ack".to_string(),
+            attrs,
+            content: None,
+        };
+        self.send_node(ack).await
     }
 
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {

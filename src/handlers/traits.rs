@@ -18,9 +18,10 @@ pub trait StanzaHandler: Send + Sync {
     /// # Arguments
     /// * `client` - Arc reference to the client instance
     /// * `node` - The XML node to process
+    /// * `cancelled` - If set to `true`, prevents the deferred ack from being sent
     ///
     /// # Returns
     /// Returns `true` if the node was successfully handled, `false` if it should be
     /// processed by other handlers or logged as unhandled.
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool;
+    async fn handle(&self, client: Arc<Client>, node: &Node, cancelled: &mut bool) -> bool;
 }

@@ -46,7 +46,7 @@ impl StanzaHandler for UnimplementedHandler {
         }
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         client.handle_unimplemented(&node.tag).await;
         true
     }

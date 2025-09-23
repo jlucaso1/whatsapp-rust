@@ -27,7 +27,7 @@ impl StanzaHandler for MessageHandler {
         "message"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         let client_clone = client.clone();
         let node_arc = Arc::new(node.clone());
 

@@ -27,7 +27,7 @@ impl StanzaHandler for NotificationHandler {
         "notification"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         handle_notification_impl(&client, node).await;
         true
     }

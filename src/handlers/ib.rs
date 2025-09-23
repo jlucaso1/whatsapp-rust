@@ -33,7 +33,7 @@ impl StanzaHandler for IbHandler {
         "ib"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
         handle_ib_impl(client, node).await;
         true
     }

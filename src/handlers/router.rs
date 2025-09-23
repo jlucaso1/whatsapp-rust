@@ -46,9 +46,9 @@ impl StanzaRouter {
     /// Returns `true` if a handler was found and successfully processed the node,
     /// `false` if no handler was registered for the node's tag or the handler
     /// indicated it couldn't process the node.
-    pub async fn dispatch(&self, client: Arc<Client>, node: &Node) -> bool {
+    pub async fn dispatch(&self, client: Arc<Client>, node: &Node, cancelled: &mut bool) -> bool {
         if let Some(handler) = self.handlers.get(node.tag.as_str()) {
-            handler.handle(client, node).await
+            handler.handle(client, node, cancelled).await
         } else {
             false
         }
@@ -97,7 +97,12 @@ mod tests {
             self.tag
         }
 
-        async fn handle(&self, _client: Arc<crate::client::Client>, _node: &Node) -> bool {
+        async fn handle(
+            &self,
+            _client: Arc<crate::client::Client>,
+            _node: &Node,
+            _cancelled: &mut bool,
+        ) -> bool {
             self.handled
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             true
@@ -150,7 +155,8 @@ mod tests {
         let pm = PersistenceManager::new(backend).await.unwrap();
         let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
 
-        let result = router.dispatch(client, &node).await;
+        let mut cancelled = false;
+        let result = router.dispatch(client, &node, &mut cancelled).await;
 
         assert!(result);
         assert!(handler_ref.was_handled());
@@ -181,7 +187,8 @@ mod tests {
         let pm = PersistenceManager::new(backend).await.unwrap();
         let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
 
-        let result = router.dispatch(client, &node).await;
+        let mut cancelled = false;
+        let result = router.dispatch(client, &node, &mut cancelled).await;
 
         assert!(!result);
 
