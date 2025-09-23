@@ -136,8 +136,7 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    // TODO: Make AppStateProcessor generic over Backend trait
-    // app_state_processor: Option<AppStateProcessor<dyn Backend>>,
+    app_state_processor: Option<AppStateProcessor<crate::store::sqlite_store::SqliteStore>>,
     app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
@@ -234,8 +233,9 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            // TODO: Re-enable AppStateProcessor when it's made generic
-            // app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
+            app_state_processor: persistence_manager
+                .sqlite_store()
+                .map(AppStateProcessor::new),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
@@ -723,7 +723,7 @@ impl Client {
         name: WAPatchName,
         full_sync: bool,
     ) -> anyhow::Result<()> {
-        let backend = self.persistence_manager.backend();
+        let backend = self.persistence_manager.sqlite_store().unwrap().clone();
         let mut full_sync = full_sync;
 
         let mut state = backend.get_app_state_version(name.as_str()).await?;
@@ -790,8 +790,6 @@ impl Client {
                 }
             };
 
-            // TODO: Re-enable when AppStateProcessor is generic
-            /*
             if let Some(proc) = &self.app_state_processor {
                 let (mutations, new_state, list) =
                     proc.decode_patch_list(&resp, download, true).await?;
@@ -830,9 +828,9 @@ impl Client {
                 state = new_state;
                 has_more = list.has_more_patches;
                 debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
-            */
-            // For now, we'll break since AppStateProcessor is disabled
-            break;
+            } else {
+                break;
+            }
 
             want_snapshot = false;
         }

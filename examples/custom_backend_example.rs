@@ -3,6 +3,7 @@
 // This example demonstrates how to create a custom storage backend that could,
 // for example, use PostgreSQL, MongoDB, or any other storage system.
 
+use whatsapp_rust::store::persistence_manager::DevicePersistence;
 use whatsapp_rust::store::traits::*;
 use whatsapp_rust::bot::Bot;
 use async_trait::async_trait;
@@ -114,10 +115,11 @@ impl DevicePersistence for RedisBackend {
 async fn example_usage() -> Result<(), Box<dyn std::error::Error>> {
     // Create a custom Redis backend
     let redis_backend = Arc::new(RedisBackend::new("redis://localhost:6379"));
+    let device_persistence = redis_backend.clone() as Arc<dyn DevicePersistence>;
     
     // Create a bot using the custom backend
-    let _bot = Bot::builder()
-        .with_backend(redis_backend)
+    let bot = Bot::builder()
+        .with_backend(redis_backend, device_persistence)
         .build()
         .await?;
     
