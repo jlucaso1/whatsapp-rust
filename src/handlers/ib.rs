@@ -1,10 +1,39 @@
+use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
+use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
 use wacore_binary::node::Node;
 
-pub async fn handle_ib(client: Arc<Client>, node: &Node) {
+/// Handler for `<ib>` (information broadcast) stanzas.
+///
+/// Processes various server notifications including:
+/// - Dirty state notifications
+/// - Edge routing information
+/// - Offline sync previews and completion notifications
+/// - Thread metadata
+pub struct IbHandler;
+
+impl IbHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl StanzaHandler for IbHandler {
+    fn tag(&self) -> &'static str {
+        "ib"
+    }
+
+    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+        handle_ib_impl(client, node).await;
+        true
+    }
+}
+
+async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
     for child in node.children().unwrap_or_default() {
         match child.tag.as_str() {
             "dirty" => {

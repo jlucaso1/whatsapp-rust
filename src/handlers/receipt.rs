@@ -1,0 +1,31 @@
+use super::traits::StanzaHandler;
+use crate::client::Client;
+use async_trait::async_trait;
+use std::sync::Arc;
+use wacore_binary::node::Node;
+
+/// Handler for `<receipt>` stanzas.
+///
+/// Processes delivery and read receipts for sent messages, including:
+/// - Message delivery confirmations
+/// - Read receipts
+/// - Played receipts (for voice messages and media)
+pub struct ReceiptHandler;
+
+impl ReceiptHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl StanzaHandler for ReceiptHandler {
+    fn tag(&self) -> &'static str {
+        "receipt"
+    }
+
+    async fn handle(&self, client: Arc<Client>, node: &Node) -> bool {
+        client.handle_receipt(node).await;
+        true
+    }
+}

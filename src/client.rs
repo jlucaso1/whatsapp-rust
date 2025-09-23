@@ -11,8 +11,6 @@ use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
 
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
-
-use crate::handlers;
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
@@ -149,6 +147,9 @@ pub struct Client {
 
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
+
+    /// Router for dispatching stanzas to their appropriate handlers
+    pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
 }
 
 impl Client {
@@ -242,10 +243,45 @@ impl Client {
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
+            stanza_router: Self::create_stanza_router(),
         };
 
         let arc = Arc::new(this);
         (arc, rx)
+    }
+
+    /// Create and configure the stanza router with all the handlers.
+    fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
+        use crate::handlers::{
+            basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
+            ib::IbHandler,
+            iq::IqHandler,
+            message::MessageHandler,
+            notification::NotificationHandler,
+            receipt::ReceiptHandler,
+            router::StanzaRouter,
+            unimplemented::UnimplementedHandler,
+        };
+
+        let mut router = StanzaRouter::new();
+
+        // Register all handlers
+        router.register(Arc::new(MessageHandler::new()));
+        router.register(Arc::new(ReceiptHandler::new()));
+        router.register(Arc::new(IqHandler::new()));
+        router.register(Arc::new(SuccessHandler::new()));
+        router.register(Arc::new(FailureHandler::new()));
+        router.register(Arc::new(StreamErrorHandler::new()));
+        router.register(Arc::new(IbHandler::new()));
+        router.register(Arc::new(NotificationHandler::new()));
+        router.register(Arc::new(AckHandler::new()));
+
+        // Register unimplemented handlers
+        router.register(Arc::new(UnimplementedHandler::for_call()));
+        router.register(Arc::new(UnimplementedHandler::for_presence()));
+        router.register(Arc::new(UnimplementedHandler::for_chatstate()));
+
+        router
     }
 
     pub async fn run(self: &Arc<Self>) {
@@ -532,58 +568,13 @@ impl Client {
             }
         }
 
-        match node.tag.as_str() {
-            "success" => self.handle_success(node).await,
-            "failure" => self.handle_connect_failure(node).await,
-            "stream:error" => self.handle_stream_error(node).await,
-            "ib" => handlers::ib::handle_ib(self.clone(), node).await,
-            "iq" => {
-                if !self.handle_iq(node).await {
-                    warn!(target: "Client", "Received unhandled IQ: {}", DisplayableNode(node));
-                }
-            }
-            "receipt" => self.handle_receipt(node).await,
-            "notification" => {
-                handlers::notification::handle_notification(self, node).await;
-            }
-            "call" | "presence" | "chatstate" => self.handle_unimplemented(&node.tag).await,
-            "message" => {
-                let client_clone = self.clone();
-                let node_arc = Arc::new(node.clone());
-
-                tokio::spawn(async move {
-                    let info = match client_clone.parse_message_info(&node_arc).await {
-                        Ok(info) => info,
-                        Err(e) => {
-                            log::warn!(
-                                "Could not parse message info to acquire lock; dropping message. Error: {e:?}"
-                            );
-                            return;
-                        }
-                    };
-                    let chat_jid = info.source.chat;
-
-                    let mutex_arc = client_clone
-                        .chat_locks
-                        .entry(chat_jid)
-                        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                        .clone();
-
-                    let _lock_guard = mutex_arc.lock().await;
-
-                    client_clone.handle_encrypted_message(node_arc).await;
-                });
-            }
-            "ack" => {
-                info!(target: "Client/Recv", "Received ACK node: {}", DisplayableNode(node));
-            }
-            _ => {
-                warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(node));
-            }
+        // Dispatch to appropriate handler using the router
+        if !self.stanza_router.dispatch(self.clone(), node).await {
+            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(node));
         }
     }
 
-    async fn handle_unimplemented(&self, tag: &str) {
+    pub(crate) async fn handle_unimplemented(&self, tag: &str) {
         warn!(target: "Client", "TODO: Implement handler for <{tag}>");
     }
 
@@ -608,7 +599,7 @@ impl Client {
         self.send_iq(query).await.map(|_| ())
     }
 
-    async fn handle_success(self: &Arc<Self>, node: &Node) {
+    pub(crate) async fn handle_success(self: &Arc<Self>, node: &Node) {
         info!("Successfully authenticated with WhatsApp servers!");
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
@@ -1018,7 +1009,7 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
     }
 
-    async fn handle_stream_error(&self, node: &Node) {
+    pub(crate) async fn handle_stream_error(&self, node: &Node) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
         let mut attrs = node.attrs();
@@ -1065,7 +1056,7 @@ impl Client {
         self.shutdown_notifier.notify_one();
     }
 
-    async fn handle_connect_failure(&self, node: &Node) {
+    pub(crate) async fn handle_connect_failure(&self, node: &Node) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.shutdown_notifier.notify_one();
 
@@ -1118,7 +1109,7 @@ impl Client {
         }
     }
 
-    async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
+    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
         if let Some("get") = node.attrs().optional_string("type")
             && let Some(_ping_node) = node.get_optional_child("ping")
         {
