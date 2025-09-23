@@ -142,12 +142,7 @@ mod tests {
         use crate::store::persistence_manager::PersistenceManager;
 
         let db_path = format!("/tmp/test_router_{}.db", rand::random::<u64>());
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
-        let pm = PersistenceManager::new(backend).await.unwrap();
+        let pm = PersistenceManager::new(&db_path).await.unwrap();
         let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
 
         let result = router.dispatch(client, &node).await;
@@ -173,12 +168,7 @@ mod tests {
         use crate::store::persistence_manager::PersistenceManager;
 
         let db_path = format!("/tmp/test_router_{}.db", rand::random::<u64>());
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
-        let pm = PersistenceManager::new(backend).await.unwrap();
+        let pm = PersistenceManager::new(&db_path).await.unwrap();
         let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
 
         let result = router.dispatch(client, &node).await;
