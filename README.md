@@ -16,6 +16,7 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 The library uses a clean, trait-based storage architecture. You must provide a storage backend implementation when creating a bot.
 
 ### Using SQLite (Default Implementation)
+
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
@@ -29,7 +30,8 @@ let bot = Bot::builder()
     .await?;
 ```
 
-### Multi-Account Support  
+### Multi-Account Support
+
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
@@ -51,6 +53,7 @@ let bot = Bot::builder()
 ```
 
 ### Custom Backend Implementation
+
 ```rust
 use whatsapp_rust::bot::Bot;
 use std::sync::Arc;
