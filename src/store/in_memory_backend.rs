@@ -1,5 +1,4 @@
 use crate::store::error::StoreError;
-use crate::store::persistence_manager::DevicePersistence;
 use crate::store::traits::*;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -275,11 +274,11 @@ impl wacore::libsignal::store::SignedPreKeyStore for InMemoryBackend {
 }
 
 #[async_trait]
-impl DevicePersistence for InMemoryBackend {
+impl wacore::store::traits::DevicePersistence for InMemoryBackend {
     async fn save_device_data(
         &self,
         device_data: &wacore::store::Device,
-    ) -> std::result::Result<(), StoreError> {
+    ) -> wacore::store::error::Result<()> {
         let mut device_data_store = self.device_data.write().await;
         *device_data_store = Some(device_data.clone());
         Ok(())
@@ -289,7 +288,7 @@ impl DevicePersistence for InMemoryBackend {
         &self,
         device_id: i32,
         device_data: &wacore::store::Device,
-    ) -> std::result::Result<(), StoreError> {
+    ) -> wacore::store::error::Result<()> {
         let mut device_data_by_id = self.device_data_by_id.write().await;
         device_data_by_id.insert(device_id, device_data.clone());
         Ok(())
@@ -297,7 +296,7 @@ impl DevicePersistence for InMemoryBackend {
 
     async fn load_device_data(
         &self,
-    ) -> std::result::Result<Option<wacore::store::Device>, StoreError> {
+    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         let device_data_store = self.device_data.read().await;
         Ok(device_data_store.clone())
     }
@@ -305,12 +304,8 @@ impl DevicePersistence for InMemoryBackend {
     async fn load_device_data_for_device(
         &self,
         device_id: i32,
-    ) -> std::result::Result<Option<wacore::store::Device>, StoreError> {
+    ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
         let device_data_by_id = self.device_data_by_id.read().await;
         Ok(device_data_by_id.get(&device_id).cloned())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
