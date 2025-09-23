@@ -1,28 +1,23 @@
-use std::sync::Arc;
-use anyhow::Result;
-use wacore_binary::node::Node;
 use crate::client::Client;
 use crate::types::message::MessageInfo;
+use anyhow::Result;
+use std::sync::Arc;
+use wacore_binary::node::Node;
 
 /// Trait for handling custom encrypted message types
 #[async_trait::async_trait]
 pub trait EncHandler: Send + Sync {
     /// Handle an encrypted node of a specific type
-    /// 
+    ///
     /// # Arguments
     /// * `client` - The client instance
     /// * `enc_node` - The encrypted node to handle
     /// * `info` - The message info context
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` if the message was handled successfully
     /// * `Err(anyhow::Error)` if handling failed
-    async fn handle(
-        &self,
-        client: Arc<Client>,
-        enc_node: &Node,
-        info: &MessageInfo,
-    ) -> Result<()>;
+    async fn handle(&self, client: Arc<Client>, enc_node: &Node, info: &MessageInfo) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -66,7 +61,7 @@ mod tests {
     async fn test_custom_enc_handler_registration() {
         use crate::bot::Bot;
         use crate::config::ClientConfig;
-        
+
         // Create a mock handler
         let mock_handler = MockEncHandler::new();
 
@@ -88,11 +83,11 @@ mod tests {
         assert!(bot.client().custom_enc_handlers.contains_key("frskmsg"));
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_multiple_custom_handlers() {
         use crate::bot::Bot;
         use crate::config::ClientConfig;
-        
+
         let handler1 = MockEncHandler::new();
         let handler2 = MockEncHandler::new();
 
@@ -121,7 +116,7 @@ mod tests {
     async fn test_builtin_handlers_still_work() {
         use crate::bot::Bot;
         use crate::config::ClientConfig;
-        
+
         // Build bot without custom handlers but with unique DB
         let db_path = format!("/tmp/test_enc_builtin_{}.db", rand::random::<u64>());
         let config = ClientConfig {
