@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::SERVER_JID;
 
+use crate::appstate_sync::AppStateProcessor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -33,6 +34,7 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
+use wacore::store::traits::AppStateStore;
 use waproto::whatsapp as wa;
 
 use crate::socket::{FrameSocket, NoiseSocket, SocketError};
@@ -724,13 +726,13 @@ impl Client {
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
-        let state = backend.get_app_state_version(name.as_str()).await?;
+        let mut state = backend.get_app_state_version(name.as_str()).await?;
         if state.version == 0 {
             full_sync = true;
         }
 
-        let has_more = true;
-        let want_snapshot = full_sync;
+        let mut has_more = true;
+        let mut want_snapshot = full_sync;
 
         while has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
@@ -760,7 +762,7 @@ impl Client {
             let resp = self.send_iq(iq).await?;
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
-            let _decode_start = std::time::Instant::now();
+            let decode_start = std::time::Instant::now();
             let pre_downloaded_snapshot: Option<Vec<u8>> =
                 match wacore::appstate::patch_decode::parse_patch_list(&resp) {
                     Ok(pl) => {
@@ -780,7 +782,7 @@ impl Client {
                     Err(_) => None,
                 };
 
-            let _download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
+            let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
                 if let Some(bytes) = &pre_downloaded_snapshot {
                     Ok(bytes.clone())
                 } else {
@@ -831,6 +833,8 @@ impl Client {
             */
             // For now, we'll break since AppStateProcessor is disabled
             break;
+
+            want_snapshot = false;
         }
 
         backend

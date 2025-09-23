@@ -18,10 +18,7 @@ impl PersistenceManager {
     /// Create a PersistenceManager with a backend implementation (single device mode)
     pub async fn new(backend: Arc<dyn Backend>) -> Result<Self, StoreError> {
         debug!("PersistenceManager: Attempting to load device data via Backend.");
-        let device_data_opt = backend
-            .load_device_data()
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let device_data_opt = backend.load_device_data().await.map_err(|e| StoreError::Database(e.to_string()))?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             debug!(
@@ -46,20 +43,14 @@ impl PersistenceManager {
     }
 
     /// Create a PersistenceManager for a specific device ID (multi-account mode)
-    pub async fn new_for_device(
-        device_id: i32,
-        backend: Arc<dyn Backend>,
-    ) -> Result<Self, StoreError> {
+    pub async fn new_for_device(device_id: i32, backend: Arc<dyn Backend>) -> Result<Self, StoreError> {
         debug!(
             "PersistenceManager: Loading device data for device ID {}",
             device_id
         );
 
         // Load device data for this specific device
-        let device_data_opt = backend
-            .load_device_data_for_device(device_id)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let device_data_opt = backend.load_device_data_for_device(device_id).await.map_err(|e| StoreError::Database(e.to_string()))?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             debug!(
@@ -111,11 +102,11 @@ impl PersistenceManager {
     {
         let mut device_guard = self.device.write().await;
         let result = modifier(&mut device_guard);
-
+        
         let mut dirty_guard = self.dirty.lock().await;
         *dirty_guard = true;
         self.save_notify.notify_one();
-
+        
         result
     }
 
@@ -135,9 +126,7 @@ impl PersistenceManager {
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
             } else {
-                self.backend
-                    .save_device_data(&serializable_device)
-                    .await
+                self.backend.save_device_data(&serializable_device).await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
             }
             *dirty_guard = false;
