@@ -14,6 +14,12 @@ use wacore_binary::node::Node;
 /// - Group messages
 pub struct MessageHandler;
 
+impl Default for MessageHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MessageHandler {
     pub fn new() -> Self {
         Self

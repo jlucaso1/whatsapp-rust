@@ -15,6 +15,12 @@ use wacore_binary::node::Node;
 /// - Settings updates
 pub struct IqHandler;
 
+impl Default for IqHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IqHandler {
     pub fn new() -> Self {
         Self
