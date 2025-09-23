@@ -1,6 +1,8 @@
+use super::device_aware_store::DeviceAwareSqliteStore;
 use super::error::StoreError;
 use super::persistence_manager::PersistenceManager;
 use super::sqlite_store::SqliteStore;
+use super::traits::Backend;
 use log::{debug, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,12 +49,9 @@ impl StoreManager {
         }
 
         // Create a new PersistenceManager for this device
+        let backend = Arc::new(DeviceAwareSqliteStore::new(self.sqlite_store.clone(), device_id)) as Arc<dyn Backend>;
         let manager = Arc::new(
-            PersistenceManager::new_for_device_with_sqlite_store(
-                device_id,
-                self.sqlite_store.clone(),
-            )
-            .await?,
+            PersistenceManager::new_for_device(device_id, backend).await?,
         );
 
         // Cache it for future use
@@ -75,12 +74,9 @@ impl StoreManager {
         debug!("Created new device with ID: {}", device_id);
 
         // Create a PersistenceManager for the new device
+        let backend = Arc::new(DeviceAwareSqliteStore::new(self.sqlite_store.clone(), device_id)) as Arc<dyn Backend>;
         let manager = Arc::new(
-            PersistenceManager::new_for_device_with_sqlite_store(
-                device_id,
-                self.sqlite_store.clone(),
-            )
-            .await?,
+            PersistenceManager::new_for_device(device_id, backend).await?,
         );
 
         // Cache it
