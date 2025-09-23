@@ -16,7 +16,7 @@ use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStr
 
 use wacore::store::Device as CoreDevice;
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
 type SignalStoreError = Box<dyn std::error::Error + Send + Sync>;
