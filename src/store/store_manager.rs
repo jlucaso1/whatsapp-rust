@@ -49,10 +49,11 @@ impl StoreManager {
         }
 
         // Create a new PersistenceManager for this device
-        let backend = Arc::new(DeviceAwareSqliteStore::new(self.sqlite_store.clone(), device_id)) as Arc<dyn Backend>;
-        let manager = Arc::new(
-            PersistenceManager::new_for_device(device_id, backend).await?,
-        );
+        let backend = Arc::new(DeviceAwareSqliteStore::new(
+            self.sqlite_store.clone(),
+            device_id,
+        )) as Arc<dyn Backend>;
+        let manager = Arc::new(PersistenceManager::new_for_device(device_id, backend).await?);
 
         // Cache it for future use
         {
@@ -74,10 +75,11 @@ impl StoreManager {
         debug!("Created new device with ID: {}", device_id);
 
         // Create a PersistenceManager for the new device
-        let backend = Arc::new(DeviceAwareSqliteStore::new(self.sqlite_store.clone(), device_id)) as Arc<dyn Backend>;
-        let manager = Arc::new(
-            PersistenceManager::new_for_device(device_id, backend).await?,
-        );
+        let backend = Arc::new(DeviceAwareSqliteStore::new(
+            self.sqlite_store.clone(),
+            device_id,
+        )) as Arc<dyn Backend>;
+        let manager = Arc::new(PersistenceManager::new_for_device(device_id, backend).await?);
 
         // Cache it
         {
