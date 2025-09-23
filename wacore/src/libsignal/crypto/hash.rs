@@ -13,6 +13,7 @@ use crate::libsignal::crypto::{Error, Result};
 pub enum CryptographicMac {
     HmacSha256(Hmac<Sha256>),
     HmacSha1(Hmac<Sha1>),
+    HmacSha512(Hmac<Sha512>),
 }
 
 impl CryptographicMac {
@@ -24,6 +25,9 @@ impl CryptographicMac {
             "HMACSha256" | "HmacSha256" => Ok(Self::HmacSha256(
                 Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length"),
             )),
+            "HMACSha512" | "HmacSha512" => Ok(Self::HmacSha512(
+                Hmac::<Sha512>::new_from_slice(key).expect("HMAC accepts any key length"),
+            )),
             _ => Err(Error::UnknownAlgorithm("MAC", algo.to_string())),
         }
     }
@@ -32,6 +36,7 @@ impl CryptographicMac {
         match self {
             Self::HmacSha1(sha1) => sha1.update(input),
             Self::HmacSha256(sha256) => sha256.update(input),
+            Self::HmacSha512(sha512) => sha512.update(input),
         }
     }
 
@@ -44,6 +49,7 @@ impl CryptographicMac {
         match self {
             Self::HmacSha1(sha1) => sha1.finalize_reset().into_bytes().to_vec(),
             Self::HmacSha256(sha256) => sha256.finalize_reset().into_bytes().to_vec(),
+            Self::HmacSha512(sha512) => sha512.finalize_reset().into_bytes().to_vec(),
         }
     }
 }

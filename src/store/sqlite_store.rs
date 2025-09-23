@@ -653,14 +653,16 @@ impl SqliteStore {
             Ok(None)
         }
     }
-}
 
-#[async_trait]
-impl IdentityStore for SqliteStore {
-    async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
+    // ---- Device-parameterized helpers (to deduplicate code) ----
+    pub async fn put_identity_for_device(
+        &self,
+        address: &str,
+        key: [u8; 32],
+        device_id: i32,
+    ) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        let device_id = 1; // single-account mode
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -683,10 +685,9 @@ impl IdentityStore for SqliteStore {
         Ok(())
     }
 
-    async fn delete_identity(&self, address: &str) -> Result<()> {
+    pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        let device_id = 1;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -705,86 +706,60 @@ impl IdentityStore for SqliteStore {
         Ok(())
     }
 
-    async fn is_trusted_identity(
+    pub async fn load_identity_for_device(
         &self,
         address: &str,
-        key: &[u8; 32],
-        _direction: Direction,
-    ) -> Result<bool> {
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = identities::table
-                    .select(identities::key)
-                    .filter(identities::address.eq(address))
-                    .filter(identities::device_id.eq(1))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        match result {
-            Some(stored_key) => Ok(stored_key.as_slice() == key),
-            None => Ok(true),
-        }
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let res: Option<Vec<u8>> = identities::table
+                .select(identities::key)
+                .filter(identities::address.eq(address))
+                .filter(identities::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(res)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    pub async fn get_session_for_device(
+        &self,
+        address: &str,
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = identities::table
-                    .select(identities::key)
-                    .filter(identities::address.eq(address))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(result)
-    }
-}
-
-#[async_trait]
-impl SessionStore for SqliteStore {
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        let pool = self.pool.clone();
-        let address = address.to_string();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = sessions::table
-                    .select(sessions::record)
-                    .filter(sessions::address.eq(address))
-                    .filter(sessions::device_id.eq(1))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(result)
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let res: Option<Vec<u8>> = sessions::table
+                .select(sessions::record)
+                .filter(sessions::address.eq(address))
+                .filter(sessions::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(res)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
+    pub async fn put_session_for_device(
+        &self,
+        address: &str,
+        session: &[u8],
+        device_id: i32,
+    ) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
         let session = session.to_vec();
@@ -796,7 +771,7 @@ impl SessionStore for SqliteStore {
                 .values((
                     sessions::address.eq(address),
                     sessions::record.eq(&session),
-                    sessions::device_id.eq(1),
+                    sessions::device_id.eq(device_id),
                 ))
                 .on_conflict((sessions::address, sessions::device_id))
                 .do_update()
@@ -810,7 +785,7 @@ impl SessionStore for SqliteStore {
         Ok(())
     }
 
-    async fn delete_session(&self, address: &str) -> Result<()> {
+    pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -820,7 +795,7 @@ impl SessionStore for SqliteStore {
             diesel::delete(
                 sessions::table
                     .filter(sessions::address.eq(address))
-                    .filter(sessions::device_id.eq(1)),
+                    .filter(sessions::device_id.eq(device_id)),
             )
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -831,24 +806,371 @@ impl SessionStore for SqliteStore {
         Ok(())
     }
 
-    async fn has_session(&self, address: &str) -> Result<bool> {
+    pub async fn has_session_for_device(&self, address: &str, device_id: i32) -> Result<bool> {
+        Ok(self
+            .get_session_for_device(address, device_id)
+            .await?
+            .is_some())
+    }
+
+    pub async fn put_sender_key_for_device(
+        &self,
+        address: &str,
+        record: &[u8],
+        device_id: i32,
+    ) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        let count: i64 = tokio::task::spawn_blocking(move || -> Result<i64> {
+        let record_vec = record.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let cnt: i64 = sessions::table
-                .filter(sessions::address.eq(address))
-                .filter(sessions::device_id.eq(1))
-                .count()
-                .get_result(&mut conn)
+            diesel::insert_into(sender_keys::table)
+                .values((
+                    sender_keys::address.eq(address),
+                    sender_keys::record.eq(&record_vec),
+                    sender_keys::device_id.eq(device_id),
+                ))
+                .on_conflict((sender_keys::address, sender_keys::device_id))
+                .do_update()
+                .set(sender_keys::record.eq(&record_vec))
+                .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(cnt)
+            Ok(())
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(count > 0)
+        Ok(())
+    }
+
+    pub async fn get_sender_key_for_device(
+        &self,
+        address: &str,
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
+        let pool = self.pool.clone();
+        let address = address.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let res: Option<Vec<u8>> = sender_keys::table
+                .select(sender_keys::record)
+                .filter(sender_keys::address.eq(address))
+                .filter(sender_keys::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(res)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    pub async fn delete_sender_key_for_device(&self, address: &str, device_id: i32) -> Result<()> {
+        let pool = self.pool.clone();
+        let address = address.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                sender_keys::table
+                    .filter(sender_keys::address.eq(address))
+                    .filter(sender_keys::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn get_app_state_sync_key_for_device(
+        &self,
+        key_id: &[u8],
+        device_id: i32,
+    ) -> Result<Option<AppStateSyncKey>> {
+        let pool = self.pool.clone();
+        let key_id = key_id.to_vec();
+        let res: Option<Vec<u8>> =
+            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = app_state_keys::table
+                    .select(app_state_keys::key_data)
+                    .filter(app_state_keys::key_id.eq(&key_id))
+                    .filter(app_state_keys::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        if let Some(data) = res {
+            let (key, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            Ok(Some(key))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn set_app_state_sync_key_for_device(
+        &self,
+        key_id: &[u8],
+        key: AppStateSyncKey,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let key_id = key_id.to_vec();
+        let data = bincode::serde::encode_to_vec(&key, bincode::config::standard())
+            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(app_state_keys::table)
+                .values((
+                    app_state_keys::key_id.eq(&key_id),
+                    app_state_keys::key_data.eq(&data),
+                    app_state_keys::device_id.eq(device_id),
+                ))
+                .on_conflict((app_state_keys::key_id, app_state_keys::device_id))
+                .do_update()
+                .set(app_state_keys::key_data.eq(&data))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn get_app_state_version_for_device(
+        &self,
+        name: &str,
+        device_id: i32,
+    ) -> Result<HashState> {
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let res: Option<Vec<u8>> =
+            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = app_state_versions::table
+                    .select(app_state_versions::state_data)
+                    .filter(app_state_versions::name.eq(name))
+                    .filter(app_state_versions::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        if let Some(data) = res {
+            let (state, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            Ok(state)
+        } else {
+            Ok(HashState::default())
+        }
+    }
+
+    pub async fn set_app_state_version_for_device(
+        &self,
+        name: &str,
+        state: HashState,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let data = bincode::serde::encode_to_vec(&state, bincode::config::standard())
+            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(app_state_versions::table)
+                .values((
+                    app_state_versions::name.eq(&name),
+                    app_state_versions::state_data.eq(&data),
+                    app_state_versions::device_id.eq(device_id),
+                ))
+                .on_conflict((app_state_versions::name, app_state_versions::device_id))
+                .do_update()
+                .set(app_state_versions::state_data.eq(&data))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn put_app_state_mutation_macs_for_device(
+        &self,
+        name: &str,
+        version: u64,
+        mutations: &[AppStateMutationMAC],
+        device_id: i32,
+    ) -> Result<()> {
+        if mutations.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let mutations: Vec<AppStateMutationMAC> = mutations.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            for m in mutations {
+                diesel::insert_into(app_state_mutation_macs::table)
+                    .values((
+                        app_state_mutation_macs::name.eq(&name),
+                        app_state_mutation_macs::version.eq(version as i64),
+                        app_state_mutation_macs::index_mac.eq(&m.index_mac),
+                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                        app_state_mutation_macs::device_id.eq(device_id),
+                    ))
+                    .on_conflict((
+                        app_state_mutation_macs::name,
+                        app_state_mutation_macs::index_mac,
+                        app_state_mutation_macs::device_id,
+                    ))
+                    .do_update()
+                    .set((
+                        app_state_mutation_macs::version.eq(version as i64),
+                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                    ))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn delete_app_state_mutation_macs_for_device(
+        &self,
+        name: &str,
+        index_macs: &[Vec<u8>],
+        device_id: i32,
+    ) -> Result<()> {
+        if index_macs.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let index_macs: Vec<Vec<u8>> = index_macs.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            for idx in index_macs {
+                diesel::delete(
+                    app_state_mutation_macs::table.filter(
+                        app_state_mutation_macs::name
+                            .eq(&name)
+                            .and(app_state_mutation_macs::index_mac.eq(&idx))
+                            .and(app_state_mutation_macs::device_id.eq(device_id)),
+                    ),
+                )
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn get_app_state_mutation_mac_for_device(
+        &self,
+        name: &str,
+        index_mac: &[u8],
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let index_mac = index_mac.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let res: Option<Vec<u8>> = app_state_mutation_macs::table
+                .select(app_state_mutation_macs::value_mac)
+                .filter(app_state_mutation_macs::name.eq(&name))
+                .filter(app_state_mutation_macs::index_mac.eq(&index_mac))
+                .filter(app_state_mutation_macs::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(res)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+}
+
+#[async_trait]
+impl IdentityStore for SqliteStore {
+    async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
+        self.put_identity_for_device(address, key, 1).await
+    }
+
+    async fn delete_identity(&self, address: &str) -> Result<()> {
+        self.delete_identity_for_device(address, 1).await
+    }
+
+    async fn is_trusted_identity(
+        &self,
+        address: &str,
+        key: &[u8; 32],
+        _direction: Direction,
+    ) -> Result<bool> {
+        match self.load_identity(address).await? {
+            Some(stored_key) => Ok(stored_key.as_slice() == key),
+            None => Ok(true),
+        }
+    }
+
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        self.load_identity_for_device(address, 1).await
+    }
+}
+
+#[async_trait]
+impl SessionStore for SqliteStore {
+    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        self.get_session_for_device(address, 1).await
+    }
+
+    async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
+        self.put_session_for_device(address, session, 1).await
+    }
+
+    async fn delete_session(&self, address: &str) -> Result<()> {
+        self.delete_session_for_device(address, 1).await
+    }
+
+    async fn has_session(&self, address: &str) -> Result<bool> {
+        self.has_session_for_device(address, 1).await
     }
 }
 
@@ -972,72 +1294,15 @@ impl libsignal::store::PreKeyStore for SqliteStore {
 #[async_trait]
 impl SenderKeyStoreHelper for SqliteStore {
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
-        let pool = self.pool.clone();
-        let address = address.to_string();
-        let record_vec = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(sender_keys::table)
-                .values((
-                    sender_keys::address.eq(address),
-                    sender_keys::record.eq(&record_vec),
-                    sender_keys::device_id.eq(1),
-                ))
-                .on_conflict((sender_keys::address, sender_keys::device_id))
-                .do_update()
-                .set(sender_keys::record.eq(&record_vec))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.put_sender_key_for_device(address, record, 1).await
     }
 
     async fn get_sender_key(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        let pool = self.pool.clone();
-        let address = address.to_string();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = sender_keys::table
-                    .select(sender_keys::record)
-                    .filter(sender_keys::address.eq(address))
-                    .filter(sender_keys::device_id.eq(1))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(result)
+        self.get_sender_key_for_device(address, 1).await
     }
 
     async fn delete_sender_key(&self, address: &str) -> Result<()> {
-        let pool = self.pool.clone();
-        let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                sender_keys::table
-                    .filter(sender_keys::address.eq(address))
-                    .filter(sender_keys::device_id.eq(1)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.delete_sender_key_for_device(address, 1).await
     }
 }
 
@@ -1173,118 +1438,22 @@ impl libsignal::store::SignedPreKeyStore for SqliteStore {
 #[async_trait]
 impl AppStateKeyStore for SqliteStore {
     async fn get_app_state_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
-        let pool = self.pool.clone();
-        let key_id = key_id.to_vec();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = app_state_keys::table
-                    .select(app_state_keys::key_data)
-                    .filter(app_state_keys::key_id.eq(&key_id))
-                    .filter(app_state_keys::device_id.eq(1))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        if let Some(data) = result {
-            let (key, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            Ok(Some(key))
-        } else {
-            Ok(None)
-        }
+        self.get_app_state_sync_key_for_device(key_id, 1).await
     }
 
     async fn set_app_state_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
-        let pool = self.pool.clone();
-        let key_id = key_id.to_vec();
-        let data = bincode::serde::encode_to_vec(&key, bincode::config::standard())
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(app_state_keys::table)
-                .values((
-                    app_state_keys::key_id.eq(&key_id),
-                    app_state_keys::key_data.eq(&data),
-                    app_state_keys::device_id.eq(1),
-                ))
-                .on_conflict((app_state_keys::key_id, app_state_keys::device_id))
-                .do_update()
-                .set(app_state_keys::key_data.eq(&data))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.set_app_state_sync_key_for_device(key_id, key, 1).await
     }
 }
 
 #[async_trait]
 impl AppStateStore for SqliteStore {
     async fn get_app_state_version(&self, name: &str) -> Result<HashState> {
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let result: Option<Vec<u8>> =
-            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<Vec<u8>> = app_state_versions::table
-                    .select(app_state_versions::state_data)
-                    .filter(app_state_versions::name.eq(name))
-                    .filter(app_state_versions::device_id.eq(1))
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        if let Some(data) = result {
-            let (state, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            Ok(state)
-        } else {
-            Ok(HashState::default())
-        }
+        self.get_app_state_version_for_device(name, 1).await
     }
 
     async fn set_app_state_version(&self, name: &str, state: HashState) -> Result<()> {
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let data = bincode::serde::encode_to_vec(&state, bincode::config::standard())
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(app_state_versions::table)
-                .values((
-                    app_state_versions::name.eq(name),
-                    app_state_versions::state_data.eq(&data),
-                    app_state_versions::device_id.eq(1),
-                ))
-                .on_conflict((app_state_versions::name, app_state_versions::device_id))
-                .do_update()
-                .set(app_state_versions::state_data.eq(&data))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.set_app_state_version_for_device(name, state, 1).await
     }
 
     async fn put_app_state_mutation_macs(
@@ -1293,44 +1462,8 @@ impl AppStateStore for SqliteStore {
         version: u64,
         mutations: &[AppStateMutationMAC],
     ) -> Result<()> {
-        use crate::store::schema::app_state_mutation_macs;
-        if mutations.is_empty() {
-            return Ok(());
-        }
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let mutations: Vec<AppStateMutationMAC> = mutations.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for m in mutations {
-                diesel::insert_into(app_state_mutation_macs::table)
-                    .values((
-                        app_state_mutation_macs::name.eq(&name),
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::index_mac.eq(&m.index_mac),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
-                        app_state_mutation_macs::device_id.eq(1),
-                    ))
-                    .on_conflict((
-                        app_state_mutation_macs::name,
-                        app_state_mutation_macs::index_mac,
-                        app_state_mutation_macs::device_id,
-                    ))
-                    .do_update()
-                    .set((
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
-                    ))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.put_app_state_mutation_macs_for_device(name, version, mutations, 1)
+            .await
     }
 
     async fn delete_app_state_mutation_macs(
@@ -1338,34 +1471,8 @@ impl AppStateStore for SqliteStore {
         name: &str,
         index_macs: &[Vec<u8>],
     ) -> Result<()> {
-        use crate::store::schema::app_state_mutation_macs;
-        if index_macs.is_empty() {
-            return Ok(());
-        }
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let index_macs: Vec<Vec<u8>> = index_macs.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for idx in index_macs {
-                diesel::delete(
-                    app_state_mutation_macs::table.filter(
-                        app_state_mutation_macs::name
-                            .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&idx))
-                            .and(app_state_mutation_macs::device_id.eq(1)),
-                    ),
-                )
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        self.delete_app_state_mutation_macs_for_device(name, index_macs, 1)
+            .await
     }
 
     async fn get_app_state_mutation_mac(
@@ -1373,35 +1480,8 @@ impl AppStateStore for SqliteStore {
         name: &str,
         index_mac: &[u8],
     ) -> Result<Option<Vec<u8>>> {
-        use crate::store::schema::app_state_mutation_macs;
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let index_mac = index_mac.to_vec();
-        let result: Option<(i64, Vec<u8>)> =
-            tokio::task::spawn_blocking(move || -> Result<Option<(i64, Vec<u8>)>> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                let res: Option<(i64, Vec<u8>)> = app_state_mutation_macs::table
-                    .select((
-                        app_state_mutation_macs::version,
-                        app_state_mutation_macs::value_mac,
-                    ))
-                    .filter(
-                        app_state_mutation_macs::name
-                            .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&index_mac))
-                            .and(app_state_mutation_macs::device_id.eq(1)),
-                    )
-                    .order(app_state_mutation_macs::version.desc())
-                    .first(&mut conn)
-                    .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(res)
-            })
+        self.get_app_state_mutation_mac_for_device(name, index_mac, 1)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(result.map(|r| r.1))
     }
 }
 
