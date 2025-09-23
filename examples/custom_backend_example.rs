@@ -113,6 +113,17 @@ impl DevicePersistence for RedisBackend {
     ) -> Result<Option<wacore::store::Device>, whatsapp_rust::store::error::StoreError> {
         todo!()
     }
+
+    async fn device_exists(
+        &self,
+        _device_id: i32,
+    ) -> Result<bool, whatsapp_rust::store::error::StoreError> {
+        todo!()
+    }
+
+    async fn create_new_device(&self) -> Result<i32, whatsapp_rust::store::error::StoreError> {
+        todo!()
+    }
 }
 
 // Stub implementations for the missing traits to make this compile
