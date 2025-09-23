@@ -12,6 +12,12 @@ use wacore_binary::node::Node;
 /// - Played receipts (for voice messages and media)
 pub struct ReceiptHandler;
 
+impl Default for ReceiptHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReceiptHandler {
     pub fn new() -> Self {
         Self

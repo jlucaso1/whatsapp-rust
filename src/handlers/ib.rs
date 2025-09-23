@@ -15,6 +15,12 @@ use wacore_binary::node::Node;
 /// - Thread metadata
 pub struct IbHandler;
 
+impl Default for IbHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IbHandler {
     pub fn new() -> Self {
         Self
