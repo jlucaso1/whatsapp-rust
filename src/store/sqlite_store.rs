@@ -159,23 +159,41 @@ impl SqliteStore {
             .as_ref()
             .map(|j| j.to_string())
             .unwrap_or_default();
+
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            // Find existing device id (single-account mode assumes one row exists)
-            let existing_id: Option<i32> = device::table
+            // In single-device mode, find the first device or default to ID 1.
+            let device_id: i32 = device::table
                 .select(device::id)
                 .first::<i32>(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(e.to_string()))?
+                .unwrap_or(1);
 
-            let Some(device_id) = existing_id else {
-                return Err(StoreError::DeviceNotFound(1));
-            };
-
-            diesel::update(device::table.filter(device::id.eq(device_id)))
+            diesel::insert_into(device::table)
+                .values((
+                    device::id.eq(device_id),
+                    device::lid.eq(&new_lid),
+                    device::pn.eq(&new_pn),
+                    device::registration_id.eq(registration_id),
+                    device::noise_key.eq(&noise_key_data),
+                    device::identity_key.eq(&identity_key_data),
+                    device::signed_pre_key.eq(&signed_pre_key_data),
+                    device::signed_pre_key_id.eq(signed_pre_key_id),
+                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
+                    device::adv_secret_key.eq(&adv_secret_key[..]),
+                    device::account.eq(account_data.clone()),
+                    device::push_name.eq(&push_name),
+                    device::app_version_primary.eq(app_version_primary),
+                    device::app_version_secondary.eq(app_version_secondary),
+                    device::app_version_tertiary.eq(app_version_tertiary),
+                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                ))
+                .on_conflict(device::id)
+                .do_update()
                 .set((
                     device::lid.eq(&new_lid),
                     device::pn.eq(&new_pn),
@@ -243,9 +261,9 @@ impl SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            // Try to update the existing device row by id
-            let rows_affected = diesel::update(device::table.filter(device::id.eq(device_id)))
-                .set((
+            diesel::insert_into(device::table)
+                .values((
+                    device::id.eq(device_id),
                     device::lid.eq(&new_lid),
                     device::pn.eq(&new_pn),
                     device::registration_id.eq(registration_id),
@@ -262,17 +280,9 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                 ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            if rows_affected > 0 {
-                return Ok(());
-            }
-
-            // If the device was not found, create it.
-            diesel::insert_into(device::table)
-                .values((
-                    device::id.eq(device_id),
+                .on_conflict(device::id)
+                .do_update()
+                .set((
                     device::lid.eq(&new_lid),
                     device::pn.eq(&new_pn),
                     device::registration_id.eq(registration_id),
@@ -1521,8 +1531,7 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
         device_id: i32,
         device_data: &wacore::store::Device,
     ) -> wacore::store::error::Result<()> {
-        self.save_device_data_for_device(device_id, device_data)
-            .await
+        SqliteStore::save_device_data_for_device(self, device_id, device_data).await
     }
 
     async fn load_device_data(
@@ -1536,14 +1545,14 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
         &self,
         device_id: i32,
     ) -> wacore::store::error::Result<Option<wacore::store::Device>> {
-        self.load_device_data_for_device(device_id).await
+        SqliteStore::load_device_data_for_device(self, device_id).await
     }
 
     async fn device_exists(&self, device_id: i32) -> wacore::store::error::Result<bool> {
-        self.device_exists(device_id).await
+        SqliteStore::device_exists(self, device_id).await
     }
 
     async fn create_new_device(&self) -> wacore::store::error::Result<i32> {
-        self.create_new_device().await
+        SqliteStore::create_new_device(self).await
     }
 }
