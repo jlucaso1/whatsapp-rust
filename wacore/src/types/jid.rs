@@ -7,6 +7,12 @@ pub trait JidExt {
 
 impl JidExt for Jid {
     fn to_protocol_address(&self) -> ProtocolAddress {
-        ProtocolAddress::new(self.user.clone(), (self.device as u32).into())
+        let agent = self.actual_agent();
+        let name = if agent != 0 {
+            format!("{}_{}", self.user, agent)
+        } else {
+            self.user.clone()
+        };
+        ProtocolAddress::new(name, (self.device as u32).into())
     }
 }

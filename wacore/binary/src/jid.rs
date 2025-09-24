@@ -138,6 +138,14 @@ impl Jid {
         }
     }
 
+    pub fn actual_agent(&self) -> u8 {
+        match self.server.as_str() {
+            DEFAULT_USER_SERVER => 0,
+            HIDDEN_USER_SERVER => 1,
+            _ => self.agent,
+        }
+    }
+
     pub fn to_non_ad(&self) -> Self {
         Self {
             user: self.user.clone(),
