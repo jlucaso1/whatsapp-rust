@@ -1,10 +1,10 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
     CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
-    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SignalProtocolError,
-    UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
+    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SenderKeyStore,
+    SignalProtocolError, UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
-use crate::libsignal::store::GroupSenderKeyStore;
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
@@ -25,11 +25,14 @@ pub async fn encrypt_group_message<S, R>(
     csprng: &mut R,
 ) -> Result<SenderKeyMessage>
 where
-    S: GroupSenderKeyStore + ?Sized,
+    S: SenderKeyStore + ?Sized,
     R: Rng + CryptoRng,
 {
+    let sender_key_name = SenderKeyName::new(group_id.to_string(), sender.to_string());
+    let composite_address = sender_key_name.to_protocol_address();
+
     let mut record = sender_key_store
-        .load_sender_key(group_id, sender)
+        .load_sender_key(&composite_address)
         .await?
         .ok_or(SignalProtocolError::NoSenderKeyState)?;
 
@@ -62,14 +65,14 @@ where
     sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
 
     sender_key_store
-        .store_sender_key(group_id, sender, &record)
+        .store_sender_key(&composite_address, &record)
         .await?;
 
     Ok(skm)
 }
 
 pub struct SignalStores<'a, S, I, P, SP> {
-    pub sender_key_store: &'a mut (dyn GroupSenderKeyStore + Send + Sync),
+    pub sender_key_store: &'a mut (dyn crate::libsignal::protocol::SenderKeyStore + Send + Sync),
     pub session_store: &'a mut S,
     pub identity_store: &'a mut I,
     pub prekey_store: &'a mut P,
@@ -475,14 +478,17 @@ pub async fn prepare_group_stanza<
     Ok(stanza)
 }
 pub async fn create_sender_key_distribution_message_for_group(
-    store: &mut (dyn GroupSenderKeyStore + Send + Sync),
+    store: &mut (dyn SenderKeyStore + Send + Sync),
     group_jid: &Jid,
     own_sending_jid: &Jid,
 ) -> Result<Vec<u8>> {
     let sender_address = own_sending_jid.to_protocol_address();
 
+    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let composite_address = sender_key_name.to_protocol_address();
+
     let mut record = store
-        .load_sender_key(group_jid, &sender_address)
+        .load_sender_key(&composite_address)
         .await?
         .unwrap_or_else(SenderKeyRecord::new_empty);
 
@@ -500,9 +506,7 @@ pub async fn create_sender_key_distribution_message_for_group(
             signing_key.public_key,
             Some(signing_key.private_key),
         );
-        store
-            .store_sender_key(group_jid, &sender_address, &record)
-            .await?;
+        store.store_sender_key(&composite_address, &record).await?;
     }
 
     let state = record

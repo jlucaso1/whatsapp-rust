@@ -3,7 +3,7 @@ use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
 use std::sync::Arc;
 use wacore::libsignal::protocol::SignalProtocolError;
-use wacore::{libsignal::store::GroupSenderKeyStore, types::jid::JidExt};
+use wacore::types::jid::JidExt;
 use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
@@ -85,11 +85,16 @@ impl Client {
             };
 
             let force_skdm = {
-                let device_guard = device_store_arc.read().await;
+                use wacore::libsignal::protocol::SenderKeyStore;
+                use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                let mut device_guard = device_store_arc.write().await;
                 let sender_address = own_sending_jid.to_protocol_address();
+                let sender_key_name =
+                    SenderKeyName::new(to.to_string(), sender_address.to_string());
+                let composite_address = sender_key_name.to_protocol_address();
 
                 let key_exists = device_guard
-                    .load_sender_key(&to, &sender_address)
+                    .load_sender_key(&composite_address)
                     .await?
                     .is_some();
 
