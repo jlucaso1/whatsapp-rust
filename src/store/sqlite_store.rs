@@ -269,9 +269,30 @@ impl SqliteStore {
                 return Ok(());
             }
 
-            // If we couldn't find the device row, return an error so callers
-            // know the device must be created first (PersistenceManager should do this).
-            Err(StoreError::DeviceNotFound(device_id))
+            // If the device was not found, create it.
+            diesel::insert_into(device::table)
+                .values((
+                    device::id.eq(device_id),
+                    device::lid.eq(&new_lid),
+                    device::pn.eq(&new_pn),
+                    device::registration_id.eq(registration_id),
+                    device::noise_key.eq(&noise_key_data),
+                    device::identity_key.eq(&identity_key_data),
+                    device::signed_pre_key.eq(&signed_pre_key_data),
+                    device::signed_pre_key_id.eq(signed_pre_key_id),
+                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
+                    device::adv_secret_key.eq(&adv_secret_key[..]),
+                    device::account.eq(account_data.clone()),
+                    device::push_name.eq(&push_name),
+                    device::app_version_primary.eq(app_version_primary),
+                    device::app_version_secondary.eq(app_version_secondary),
+                    device::app_version_tertiary.eq(app_version_tertiary),
+                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(())
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;

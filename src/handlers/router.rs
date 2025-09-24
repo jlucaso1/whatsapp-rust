@@ -143,12 +143,11 @@ mod tests {
             content: None,
         };
 
-        // Create a minimal client for testing with a temporary database
+        // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let db_path = format!("/tmp/test_router_{}.db", rand::random::<u64>());
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
                 .await
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
@@ -160,9 +159,6 @@ mod tests {
 
         assert!(result);
         assert!(handler_ref.was_handled());
-
-        // Cleanup
-        let _ = std::fs::remove_file(db_path);
     }
 
     #[tokio::test]
@@ -175,12 +171,11 @@ mod tests {
             content: None,
         };
 
-        // Create a minimal client for testing with a temporary database
+        // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let db_path = format!("/tmp/test_router_{}.db", rand::random::<u64>());
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
                 .await
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
@@ -191,8 +186,5 @@ mod tests {
         let result = router.dispatch(client, &node, &mut cancelled).await;
 
         assert!(!result);
-
-        // Cleanup
-        let _ = std::fs::remove_file(db_path);
     }
 }
