@@ -64,10 +64,9 @@ mod tests {
         // Create a mock handler
         let mock_handler = MockEncHandler::new();
 
-        // Build bot with custom handler and unique DB
-        let db_path = format!("/tmp/test_enc_handler_{}.db", rand::random::<u64>());
+        // Build bot with custom handler and in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );
@@ -90,10 +89,9 @@ mod tests {
         let handler1 = MockEncHandler::new();
         let handler2 = MockEncHandler::new();
 
-        // Build bot with unique DB
-        let db_path = format!("/tmp/test_enc_multiple_{}.db", rand::random::<u64>());
+        // Build bot with in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );
@@ -116,10 +114,9 @@ mod tests {
     async fn test_builtin_handlers_still_work() {
         use crate::bot::Bot;
 
-        // Build bot without custom handlers but with unique DB
-        let db_path = format!("/tmp/test_enc_builtin_{}.db", rand::random::<u64>());
+        // Build bot without custom handlers but with in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(&db_path)
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );

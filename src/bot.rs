@@ -310,9 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_multi_device() {
-        // Use InMemoryBackend for this test since it supports arbitrary device IDs
-        let backend =
-            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+        let backend = create_test_sqlite_backend().await;
 
         // First, we need to create device data for device ID 42
         let mut device = wacore::store::Device::new();
@@ -340,10 +338,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend() {
         // Create an in-memory backend for testing
-        let backend =
-            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
-
-        // Build a bot with the custom backend
+        let backend = create_test_sqlite_backend().await;
         let bot = Bot::builder()
             .with_backend(backend)
             .build()
@@ -361,8 +356,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend_specific_device() {
         // Create an in-memory backend for testing
-        let backend =
-            Arc::new(crate::store::in_memory_backend::InMemoryBackend::new()) as Arc<dyn Backend>;
+        let backend = create_test_sqlite_backend().await;
 
         // First, we need to create some device data for device ID 100
         let mut device = wacore::store::Device::new();
