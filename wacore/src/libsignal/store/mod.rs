@@ -1,14 +1,10 @@
 pub mod record_helpers;
 pub mod sender_key_name;
 
-use crate::libsignal::protocol::{
-    IdentityKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord,
-};
+use crate::libsignal::protocol::{IdentityKeyStore, ProtocolAddress, SessionRecord};
 use async_trait::async_trait;
 use std::error::Error;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
-
-use wacore_binary::jid::Jid;
 
 type StoreError = Box<dyn Error + Send + Sync>;
 
@@ -56,24 +52,6 @@ pub trait SessionStore: Send + Sync {
     async fn contains_session(&self, address: &ProtocolAddress) -> Result<bool, StoreError>;
     async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), StoreError>;
     async fn delete_all_sessions(&self, name: &str) -> Result<(), StoreError>;
-}
-
-use anyhow::Result;
-
-#[async_trait]
-pub trait GroupSenderKeyStore: Send + Sync {
-    async fn store_sender_key(
-        &mut self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-        record: &SenderKeyRecord,
-    ) -> Result<()>;
-
-    async fn load_sender_key(
-        &self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-    ) -> Result<Option<SenderKeyRecord>>;
 }
 
 pub trait SignalProtocolStore:

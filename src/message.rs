@@ -12,8 +12,7 @@ use wacore::libsignal::protocol::SenderKeyDistributionMessage;
 use wacore::libsignal::protocol::group_decrypt;
 use wacore::libsignal::protocol::process_sender_key_distribution_message;
 use wacore::libsignal::protocol::{
-    PreKeySignalMessage, ProtocolAddress, SignalMessage, SignalProtocolError, UsePQRatchet,
-    message_decrypt,
+    PreKeySignalMessage, SignalMessage, SignalProtocolError, UsePQRatchet, message_decrypt,
 };
 use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
@@ -222,16 +221,10 @@ impl Client {
             let sender_address = info.source.sender.to_protocol_address();
             let sender_key_name =
                 SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
-            let group_sender_address = sender_key_name.to_protocol_address();
 
             let decrypt_result = {
                 let mut device_guard = device_arc.write().await;
-                group_decrypt(
-                    ciphertext.as_slice(),
-                    &mut *device_guard,
-                    &group_sender_address,
-                )
-                .await
+                group_decrypt(ciphertext.as_slice(), &mut *device_guard, &sender_key_name).await
             };
 
             match decrypt_result {
@@ -264,8 +257,9 @@ impl Client {
                 }
                 Err(e) => {
                     log::error!(
-                        "Group batch decrypt failed for sender {}: {:?}",
-                        group_sender_address,
+                        "Group batch decrypt failed for group {} sender {}: {:?}",
+                        sender_key_name.group_id(),
+                        sender_key_name.sender_id(),
                         e
                     );
                 }
@@ -513,17 +507,13 @@ impl Client {
         let device_arc = self.persistence_manager.get_device_arc().await;
         let mut device_guard = device_arc.write().await;
 
-        let sender_address =
-            ProtocolAddress::new(sender_jid.user.clone(), (sender_jid.device as u32).into());
-        let group_sender_address =
-            ProtocolAddress::new(format!("{}\n{}", group_jid, sender_address), 0.into());
+        let sender_address = sender_jid.to_protocol_address();
 
-        if let Err(e) = process_sender_key_distribution_message(
-            &group_sender_address,
-            &skdm,
-            &mut *device_guard,
-        )
-        .await
+        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+
+        if let Err(e) =
+            process_sender_key_distribution_message(&sender_key_name, &skdm, &mut *device_guard)
+                .await
         {
             log::error!(
                 "Failed to process SenderKeyDistributionMessage from {}: {:?}",
