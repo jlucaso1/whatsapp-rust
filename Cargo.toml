@@ -66,6 +66,10 @@ uuid = { version = "1.0", features = ["v4"] }
 name = "multi_account"
 path = "examples/multi_account.rs"
 
+[[example]]
+name = "listen_only"
+path = "examples/listen_only.rs"
+
 [profile.release]
 opt-level = "z"
 debug = false

@@ -10,18 +10,19 @@ use crate::libsignal::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt};
 use crate::libsignal::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
 use crate::libsignal::protocol::sender_keys::{SenderKeyState, SenderMessageKey};
 use crate::libsignal::protocol::{
-    CiphertextMessageType, KeyPair, ProtocolAddress, Result, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, consts,
+    CiphertextMessageType, KeyPair, Result, SenderKeyDistributionMessage, SenderKeyMessage,
+    SenderKeyRecord, SenderKeyStore, SignalProtocolError, consts,
 };
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 
 pub async fn group_encrypt<R: Rng + CryptoRng>(
     sender_key_store: &mut dyn SenderKeyStore,
-    sender: &ProtocolAddress,
+    sender_key_name: &SenderKeyName,
     plaintext: &[u8],
     csprng: &mut R,
 ) -> Result<SenderKeyMessage> {
     let mut record = sender_key_store
-        .load_sender_key(sender)
+        .load_sender_key(sender_key_name)
         .await?
         .ok_or(SignalProtocolError::NoSenderKeyState)?;
 
@@ -61,7 +62,9 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
 
     sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
 
-    sender_key_store.store_sender_key(sender, &record).await?;
+    sender_key_store
+        .store_sender_key(sender_key_name, &record)
+        .await?;
 
     Ok(skm)
 }
@@ -111,14 +114,14 @@ fn get_sender_key(state: &mut SenderKeyState, iteration: u32) -> Result<SenderMe
 pub async fn group_decrypt(
     skm_bytes: &[u8],
     sender_key_store: &mut dyn SenderKeyStore,
-    sender: &ProtocolAddress,
+    sender_key_name: &SenderKeyName,
 ) -> Result<Vec<u8>> {
     let skm = SenderKeyMessage::try_from(skm_bytes)?;
 
     let chain_id = skm.chain_id();
 
     let mut record = sender_key_store
-        .load_sender_key(sender)
+        .load_sender_key(sender_key_name)
         .await?
         .ok_or(SignalProtocolError::NoSenderKeyState)?;
 
@@ -150,40 +153,50 @@ pub async fn group_decrypt(
 
     let sender_key = get_sender_key(sender_key_state, skm.iteration())?;
 
-    let plaintext =
-        match aes_256_cbc_decrypt(skm.ciphertext(), sender_key.cipher_key(), sender_key.iv()) {
-            Ok(plaintext) => plaintext,
-            Err(DecryptionErrorCrypto::BadKeyOrIv) => {
-                log::error!("incoming sender key state corrupt for {sender}, chain ID {chain_id}",);
-                return Err(SignalProtocolError::InvalidSenderKeySession);
-            }
-            Err(DecryptionErrorCrypto::BadCiphertext(msg)) => {
-                log::error!("sender key decryption failed: {msg}");
-                return Err(SignalProtocolError::InvalidMessage(
-                    CiphertextMessageType::SenderKey,
-                    "decryption failed",
-                ));
-            }
-        };
+    let plaintext = match aes_256_cbc_decrypt(
+        skm.ciphertext(),
+        sender_key.cipher_key(),
+        sender_key.iv(),
+    ) {
+        Ok(plaintext) => plaintext,
+        Err(DecryptionErrorCrypto::BadKeyOrIv) => {
+            log::error!(
+                "incoming sender key state corrupt for group {} sender {} (chain ID {chain_id})",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            );
+            return Err(SignalProtocolError::InvalidSenderKeySession);
+        }
+        Err(DecryptionErrorCrypto::BadCiphertext(msg)) => {
+            log::error!("sender key decryption failed: {msg}");
+            return Err(SignalProtocolError::InvalidMessage(
+                CiphertextMessageType::SenderKey,
+                "decryption failed",
+            ));
+        }
+    };
 
-    sender_key_store.store_sender_key(sender, &record).await?;
+    sender_key_store
+        .store_sender_key(sender_key_name, &record)
+        .await?;
 
     Ok(plaintext)
 }
 
 pub async fn process_sender_key_distribution_message(
-    sender: &ProtocolAddress,
+    sender_key_name: &SenderKeyName,
     skdm: &SenderKeyDistributionMessage,
     sender_key_store: &mut dyn SenderKeyStore,
 ) -> Result<()> {
     log::info!(
-        "{} Processing SenderKey distribution with chain ID {}",
-        sender,
+        "Processing SenderKey distribution for group {} from sender {} with chain ID {}",
+        sender_key_name.group_id(),
+        sender_key_name.sender_id(),
         skdm.chain_id()?
     );
 
     let mut sender_key_record = sender_key_store
-        .load_sender_key(sender)
+        .load_sender_key(sender_key_name)
         .await?
         .unwrap_or_else(SenderKeyRecord::new_empty);
 
@@ -196,17 +209,17 @@ pub async fn process_sender_key_distribution_message(
         None,
     );
     sender_key_store
-        .store_sender_key(sender, &sender_key_record)
+        .store_sender_key(sender_key_name, &sender_key_record)
         .await?;
     Ok(())
 }
 
 pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
-    sender: &ProtocolAddress,
+    sender_key_name: &SenderKeyName,
     sender_key_store: &mut dyn SenderKeyStore,
     csprng: &mut R,
 ) -> Result<SenderKeyDistributionMessage> {
-    let sender_key_record = sender_key_store.load_sender_key(sender).await?;
+    let sender_key_record = sender_key_store.load_sender_key(sender_key_name).await?;
 
     let sender_key_record = match sender_key_record {
         Some(record) => record,
@@ -227,7 +240,9 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
                 signing_key.public_key,
                 Some(signing_key.private_key),
             );
-            sender_key_store.store_sender_key(sender, &record).await?;
+            sender_key_store
+                .store_sender_key(sender_key_name, &record)
+                .await?;
             record
         }
     };

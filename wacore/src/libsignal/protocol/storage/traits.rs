@@ -13,6 +13,7 @@ use crate::libsignal::protocol::state::{
     PreKeyId, PreKeyRecord, SessionRecord, SignedPreKeyId, SignedPreKeyRecord,
 };
 use crate::libsignal::protocol::{IdentityKey, IdentityKeyPair, ProtocolAddress};
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 
 // TODO: consider moving this enum into utils.rs?
 /// Each Signal message can be considered to have exactly two participants, a sender and receiver.
@@ -135,7 +136,7 @@ pub trait SenderKeyStore: Send + Sync {
     /// Assign `record` to the entry for `(sender, distribution_id)`.
     async fn store_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
         // TODO: pass this by value!
         record: &SenderKeyRecord,
     ) -> Result<()>;
@@ -143,7 +144,7 @@ pub trait SenderKeyStore: Send + Sync {
     /// Look up the entry corresponding to `(sender, distribution_id)`.
     async fn load_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
     ) -> Result<Option<SenderKeyRecord>>;
 }
 

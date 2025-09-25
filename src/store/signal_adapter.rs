@@ -4,15 +4,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
-    PreKeyRecord, PreKeyStore, ProtocolAddress, SenderKeyRecord, SessionRecord, SessionStore,
-    SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
+    PreKeyRecord, PreKeyStore, ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
+    SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
-use wacore_binary::jid::Jid;
 
 use wacore::libsignal::store::record_helpers as wacore_record;
+use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::libsignal::store::{
-    GroupSenderKeyStore, PreKeyStore as WacorePreKeyStore,
-    SignedPreKeyStore as WacoreSignedPreKeyStore,
+    PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
 
 #[derive(Clone)]
@@ -202,43 +201,26 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
 impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
-        sender: &wacore::libsignal::protocol::ProtocolAddress,
+        sender_key_name: &SenderKeyName,
         record: &wacore::libsignal::protocol::SenderKeyRecord,
     ) -> wacore::libsignal::protocol::error::Result<()> {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record)
-            .await
+        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(
+            &mut *device,
+            sender_key_name,
+            record,
+        )
+        .await
     }
 
     async fn load_sender_key(
         &mut self,
-        sender: &wacore::libsignal::protocol::ProtocolAddress,
+        sender_key_name: &SenderKeyName,
     ) -> wacore::libsignal::protocol::error::Result<
         Option<wacore::libsignal::protocol::SenderKeyRecord>,
     > {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
-    }
-}
-
-#[async_trait]
-impl GroupSenderKeyStore for SenderKeyAdapter {
-    async fn store_sender_key(
-        &mut self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-        record: &SenderKeyRecord,
-    ) -> anyhow::Result<()> {
-        let mut device = self.0.device.write().await;
-        device.store_sender_key(group_id, sender, record).await
-    }
-
-    async fn load_sender_key(
-        &self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-    ) -> anyhow::Result<Option<SenderKeyRecord>> {
-        let device = self.0.device.read().await;
-        device.load_sender_key(group_id, sender).await
+        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender_key_name)
+            .await
     }
 }

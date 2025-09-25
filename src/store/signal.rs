@@ -8,8 +8,8 @@ use wacore::libsignal::protocol::{
     ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
     SignalProtocolError,
 };
+use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::libsignal::store::*;
-use wacore_binary::jid::Jid;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 type StoreError = Box<dyn std::error::Error + Send + Sync>;
@@ -460,10 +460,14 @@ impl_store_wrapper!(DeviceStore, lock, lock);
 impl SenderKeyStore for Device {
     async fn store_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
         record: &SenderKeyRecord,
     ) -> SignalResult<()> {
-        let unique_key = sender.name().to_string();
+        let unique_key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         let serialized_record = record.serialize()?;
         self.backend
             .put_sender_key(&unique_key, &serialized_record)
@@ -473,51 +477,19 @@ impl SenderKeyStore for Device {
 
     async fn load_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
     ) -> SignalResult<Option<SenderKeyRecord>> {
-        let unique_key = sender.name().to_string();
+        let unique_key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         match self
             .backend
             .get_sender_key(&unique_key)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
         {
-            Some(data) => {
-                let record = SenderKeyRecord::deserialize(&data)?;
-                if record.serialize()?.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(record))
-                }
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-#[async_trait]
-impl GroupSenderKeyStore for Device {
-    async fn store_sender_key(
-        &mut self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-        record: &SenderKeyRecord,
-    ) -> anyhow::Result<()> {
-        let unique_key = format!("{}:{}", group_id, sender);
-        let serialized_record = record.serialize()?;
-        self.backend
-            .put_sender_key(&unique_key, &serialized_record)
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn load_sender_key(
-        &self,
-        group_id: &Jid,
-        sender: &ProtocolAddress,
-    ) -> anyhow::Result<Option<SenderKeyRecord>> {
-        let unique_key = format!("{}:{}", group_id, sender);
-        match self.backend.get_sender_key(&unique_key).await? {
             Some(data) => {
                 let record = SenderKeyRecord::deserialize(&data)?;
                 if record.serialize()?.is_empty() {
