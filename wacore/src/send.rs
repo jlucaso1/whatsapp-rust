@@ -1,8 +1,8 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
-    CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION,
-    SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyRecord, SenderKeyStore,
-    SignalProtocolError, UsePQRatchet, aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
+    CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
+    SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
+    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
@@ -10,17 +10,18 @@ use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
+use std::collections::HashSet;
 use std::time::SystemTime;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
-    group_id: &Jid,
-    sender: &ProtocolAddress,
+    group_jid: &Jid,
+    sender_jid: &Jid,
     plaintext: &[u8],
     csprng: &mut R,
 ) -> Result<SenderKeyMessage>
@@ -28,11 +29,16 @@ where
     S: SenderKeyStore + ?Sized,
     R: Rng + CryptoRng,
 {
-    let sender_key_name = SenderKeyName::new(group_id.to_string(), sender.to_string());
-    let composite_address = sender_key_name.to_protocol_address();
+    let sender_address = sender_jid.to_protocol_address();
+    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    log::debug!(
+        "Attempting to load sender key for group {} sender {}",
+        sender_key_name.group_id(),
+        sender_key_name.sender_id()
+    );
 
     let mut record = sender_key_store
-        .load_sender_key(&composite_address)
+        .load_sender_key(&sender_key_name)
         .await?
         .ok_or(SignalProtocolError::NoSenderKeyState)?;
 
@@ -65,7 +71,7 @@ where
     sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
 
     sender_key_store
-        .store_sender_key(&composite_address, &record)
+        .store_sender_key(&sender_key_name, &record)
         .await?;
 
     Ok(skm)
@@ -106,6 +112,10 @@ where
     }
 
     if !jids_needing_prekeys.is_empty() {
+        log::info!(
+            "Fetching prekeys for devices without sessions: {:?}",
+            jids_needing_prekeys
+        );
         let prekey_bundles = resolver
             .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
             .await?;
@@ -364,9 +374,9 @@ pub async fn prepare_group_stanza<
     if !group_info
         .participants
         .iter()
-        .any(|p| p.user == own_base_jid.user)
+        .any(|participant| participant.is_same_user_as(&own_base_jid))
     {
-        group_info.participants.push(own_base_jid);
+        group_info.participants.push(own_base_jid.clone());
     }
 
     let mut message_children: Vec<Node> = Vec::new();
@@ -374,8 +384,50 @@ pub async fn prepare_group_stanza<
     let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
 
     if force_skdm_distribution {
-        let all_devices = resolver.resolve_devices(&group_info.participants).await?;
-        resolved_devices_for_phash = Some(all_devices.clone());
+        let expected_server = own_sending_jid.server.clone();
+        let mut jids_to_resolve: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                let mut base = jid.to_non_ad();
+                if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
+                    base.server = expected_server.clone();
+                }
+                base
+            })
+            .filter(|jid| {
+                if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
+                    jid.server == expected_server
+                } else {
+                    true
+                }
+            })
+            .collect();
+        if !jids_to_resolve
+            .iter()
+            .any(|participant| participant.is_same_user_as(&own_base_jid))
+        {
+            jids_to_resolve.push(own_base_jid.clone());
+        }
+
+        let mut seen_users = HashSet::new();
+        jids_to_resolve.retain(|jid| seen_users.insert((jid.user.clone(), jid.server.clone())));
+
+        log::info!("Resolving devices for participants: {:?}", jids_to_resolve);
+
+        let mut distribution_list = resolver.resolve_devices(&jids_to_resolve).await?;
+
+        let mut seen = HashSet::new();
+        distribution_list.retain(|jid| seen.insert(jid.to_string()));
+
+        log::info!(
+            "SKDM distribution list for {} resolved to {} devices: {:?}",
+            to_jid,
+            distribution_list.len(),
+            distribution_list
+        );
+
+        resolved_devices_for_phash = Some(distribution_list.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
@@ -398,7 +450,7 @@ pub async fn prepare_group_stanza<
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
-            &all_devices,
+            &distribution_list,
             &skdm_plaintext_to_encrypt,
             &empty_attrs,
         )
@@ -418,17 +470,13 @@ pub async fn prepare_group_stanza<
                     .build(),
             );
         }
-
-        // We will attach phash on the final message attrs below
-        let _ = MessageUtils::participant_list_hash(&all_devices);
     }
 
-    let sender_address = own_sending_jid.to_protocol_address();
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
-        &sender_address,
+        &own_sending_jid,
         &plaintext,
         &mut rand::rngs::OsRng.unwrap_err(),
     )
@@ -485,19 +533,23 @@ pub async fn create_sender_key_distribution_message_for_group(
     let sender_address = own_sending_jid.to_protocol_address();
 
     let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
-    let composite_address = sender_key_name.to_protocol_address();
 
     let mut record = store
-        .load_sender_key(&composite_address)
+        .load_sender_key(&sender_key_name)
         .await?
         .unwrap_or_else(SenderKeyRecord::new_empty);
 
     if record.sender_key_state().is_err() {
-        let signing_key =
-            crate::libsignal::protocol::KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        log::info!(
+            "No sender key found for self in group {}. Creating a new sender key state.",
+            group_jid
+        );
 
-        let chain_id = (rand::rngs::OsRng.unwrap_err().random::<u32>()) >> 1;
-        let sender_key_seed: [u8; 32] = rand::rngs::OsRng.unwrap_err().random();
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
+
+        let chain_id = (rng.random::<u32>()) >> 1;
+        let sender_key_seed: [u8; 32] = rng.random();
         record.add_sender_key_state(
             SENDERKEY_MESSAGE_CURRENT_VERSION,
             chain_id,
@@ -506,7 +558,7 @@ pub async fn create_sender_key_distribution_message_for_group(
             signing_key.public_key,
             Some(signing_key.private_key),
         );
-        store.store_sender_key(&composite_address, &record).await?;
+        store.store_sender_key(&sender_key_name, &record).await?;
     }
 
     let state = record
@@ -514,7 +566,7 @@ pub async fn create_sender_key_distribution_message_for_group(
         .map_err(|e| anyhow!("Invalid SK state: {:?}", e))?;
     let chain_key = state
         .sender_chain_key()
-        .ok_or(anyhow!("Missing chain key"))?;
+        .ok_or_else(|| anyhow!("Missing chain key"))?;
 
     let skdm = SenderKeyDistributionMessage::new(
         state.message_version().try_into().unwrap(),

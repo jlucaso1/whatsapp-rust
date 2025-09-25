@@ -9,6 +9,7 @@ use wacore::libsignal::protocol::{
 };
 
 use wacore::libsignal::store::record_helpers as wacore_record;
+use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::libsignal::store::{
     PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
@@ -200,21 +201,26 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
 impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
-        sender: &wacore::libsignal::protocol::ProtocolAddress,
+        sender_key_name: &SenderKeyName,
         record: &wacore::libsignal::protocol::SenderKeyRecord,
     ) -> wacore::libsignal::protocol::error::Result<()> {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(&mut *device, sender, record)
-            .await
+        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(
+            &mut *device,
+            sender_key_name,
+            record,
+        )
+        .await
     }
 
     async fn load_sender_key(
         &mut self,
-        sender: &wacore::libsignal::protocol::ProtocolAddress,
+        sender_key_name: &SenderKeyName,
     ) -> wacore::libsignal::protocol::error::Result<
         Option<wacore::libsignal::protocol::SenderKeyRecord>,
     > {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender).await
+        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender_key_name)
+            .await
     }
 }

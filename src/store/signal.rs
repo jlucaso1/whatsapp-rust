@@ -8,6 +8,7 @@ use wacore::libsignal::protocol::{
     ProtocolAddress, PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord,
     SignalProtocolError,
 };
+use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::libsignal::store::*;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
@@ -459,10 +460,14 @@ impl_store_wrapper!(DeviceStore, lock, lock);
 impl SenderKeyStore for Device {
     async fn store_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
         record: &SenderKeyRecord,
     ) -> SignalResult<()> {
-        let unique_key = sender.name().to_string();
+        let unique_key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         let serialized_record = record.serialize()?;
         self.backend
             .put_sender_key(&unique_key, &serialized_record)
@@ -472,9 +477,13 @@ impl SenderKeyStore for Device {
 
     async fn load_sender_key(
         &mut self,
-        sender: &ProtocolAddress,
+        sender_key_name: &SenderKeyName,
     ) -> SignalResult<Option<SenderKeyRecord>> {
-        let unique_key = sender.name().to_string();
+        let unique_key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
         match self
             .backend
             .get_sender_key(&unique_key)

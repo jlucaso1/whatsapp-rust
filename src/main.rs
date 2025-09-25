@@ -1,5 +1,5 @@
 use chrono::Local;
-use log::{debug, error, info};
+use log::{error, info};
 use std::io::Cursor;
 use std::sync::Arc;
 use wacore::download::{Downloadable, MediaType};
@@ -71,7 +71,7 @@ fn main() {
                             if let Some(text) = ctx.message.text_content()
                                 && text == "ping"
                             {
-                                debug!("Received text ping, sending pong...");
+                                info!("Received text ping, sending pong...");
                                 let start = std::time::Instant::now();
 
                                 // 1. Send the initial message and get its ID

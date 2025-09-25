@@ -84,6 +84,14 @@ impl Client {
                 crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
             };
 
+            if !group_info
+                .participants
+                .iter()
+                .any(|participant| participant.is_same_user_as(&own_sending_jid))
+            {
+                group_info.participants.push(own_sending_jid.to_non_ad());
+            }
+
             let force_skdm = {
                 use wacore::libsignal::protocol::SenderKeyStore;
                 use wacore::libsignal::store::sender_key_name::SenderKeyName;
@@ -91,10 +99,9 @@ impl Client {
                 let sender_address = own_sending_jid.to_protocol_address();
                 let sender_key_name =
                     SenderKeyName::new(to.to_string(), sender_address.to_string());
-                let composite_address = sender_key_name.to_protocol_address();
 
                 let key_exists = device_guard
-                    .load_sender_key(&composite_address)
+                    .load_sender_key(&sender_key_name)
                     .await?
                     .is_some();
 

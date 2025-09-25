@@ -39,6 +39,7 @@ pub use crate::libsignal::core::{
 pub use crate::libsignal::crypto::aes_256_cbc_encrypt;
 pub use crate::libsignal::protocol::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
 pub use crate::libsignal::protocol::sender_keys::InvalidSenderKeySessionError;
+pub use crate::libsignal::store::sender_key_name::SenderKeyName;
 use error::Result;
 pub use error::SignalProtocolError;
 pub use group_cipher::{
