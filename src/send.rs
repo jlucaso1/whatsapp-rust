@@ -10,7 +10,7 @@ use wacore_binary::node::{Attrs, Node};
 use wacore_binary::builder::NodeBuilder;
 use wacore::libsignal::protocol::{CiphertextMessage, message_encrypt, process_prekey_bundle, UsePQRatchet};
 use std::time::SystemTime;
-use futures_util::future::join_all;
+use futures_util::{stream, StreamExt};
 use rand::TryRngCore;
 
 /// Parallel encryption for SKDM distribution to improve performance for large groups
@@ -21,11 +21,12 @@ async fn encrypt_for_devices_parallel(
     plaintext_to_encrypt: &[u8],
     enc_extra_attrs: &Attrs,
 ) -> Result<(Vec<Node>, bool), anyhow::Error> {
-    // First, identify devices needing prekeys
+    // First, identify devices needing prekeys using a mutable clone
     let mut jids_needing_prekeys = Vec::new();
+    let cloned_adapter_for_check = store_adapter.clone();
     for device_jid in devices {
         let signal_address = device_jid.to_protocol_address();
-        if store_adapter
+        if cloned_adapter_for_check
             .session_store
             .load_session(&signal_address)
             .await?
@@ -46,6 +47,8 @@ async fn encrypt_for_devices_parallel(
             .await?;
 
         // Process prekeys sequentially to maintain store consistency
+        // Create a single mutable RNG instance instead of OsRng.unwrap_err() for each call
+        let mut rng = rand::rngs::OsRng.unwrap_err();
         let mut cloned_adapter = store_adapter.clone();
         for device_jid in &jids_needing_prekeys {
             let signal_address = device_jid.to_protocol_address();
@@ -58,26 +61,29 @@ async fn encrypt_for_devices_parallel(
                 &mut cloned_adapter.identity_store,
                 bundle,
                 SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut rng,
                 UsePQRatchet::No,
             )
             .await?;
         }
     }
 
-    // Now perform parallel encryption
-    let mut tasks = Vec::new();
+    // Now perform bounded parallel encryption
+    let concurrency = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4) // Default to 4 concurrent tasks if unavailable
+        .clamp(1, 16); // Ensure at least 1, cap at 16 to avoid overwhelming the system
+
     let plaintext = plaintext_to_encrypt.to_vec();
     let attrs = enc_extra_attrs.clone();
 
-    for device_jid in devices {
-        let device_jid_clone = device_jid.clone();
+    let encryption_tasks = devices.iter().cloned().map(|device_jid| {
         let plaintext_clone = plaintext.clone();
         let attrs_clone = attrs.clone();
         let mut store_clone = store_adapter.clone();
 
-        let task = tokio::spawn(async move {
-            let signal_address = device_jid_clone.to_protocol_address();
+        async move {
+            let signal_address = device_jid.to_protocol_address();
             
             let encrypted_payload = message_encrypt(
                 &plaintext_clone,
@@ -107,36 +113,34 @@ async fn encrypt_for_devices_parallel(
                 .build();
 
             let participant_node = NodeBuilder::new("to")
-                .attr("jid", device_jid_clone.to_string())
+                .attr("jid", device_jid.to_string())
                 .children([enc_node])
                 .build();
             
             // Return the node and whether a pre-key message was used
             Ok::<(Node, bool), anyhow::Error>((participant_node, enc_type == "pkmsg"))
-        });
-        
-        tasks.push(task);
-    }
+        }
+    });
 
-    // Wait for all tasks to complete
-    let results = join_all(tasks).await;
+    // Use bounded concurrency instead of unbounded task spawning
+    let results: Vec<Result<(Node, bool), anyhow::Error>> = stream::iter(encryption_tasks)
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
 
     let mut participant_nodes = Vec::new();
     let mut includes_prekey_message = false;
 
     for result in results {
         match result {
-            Ok(Ok((node, uses_prekey))) => {
+            Ok((node, uses_prekey)) => {
                 participant_nodes.push(node);
                 if uses_prekey {
                     includes_prekey_message = true;
                 }
             }
-            Ok(Err(e)) => {
-                return Err(anyhow!("An encryption task for SKDM failed: {}", e));
-            }
             Err(e) => {
-                return Err(anyhow!("A tokio task for SKDM panicked: {}", e));
+                return Err(anyhow!("An encryption task for SKDM failed: {}", e));
             }
         }
     }

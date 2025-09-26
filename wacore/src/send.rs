@@ -98,6 +98,42 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
+/// Helper function to encrypt for a set of devices using parallel or sequential processing
+async fn encrypt_for_device_set<'a, S, I, P, SP>(
+    devices: &[Jid],
+    plaintext: &[u8],
+    enc_extra_attrs: &Attrs,
+    parallel_processor: Option<&dyn ParallelEncryptionProcessor>,
+    stores: &mut SignalStores<'a, S, I, P, SP>,
+    resolver: &dyn SendContextResolver,
+) -> Result<(Vec<Node>, bool)>
+where
+    S: crate::libsignal::protocol::SessionStore + Send + Sync,
+    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
+{
+    if let Some(processor) = parallel_processor {
+        processor
+            .encrypt_for_devices_parallel(
+                resolver,
+                devices,
+                plaintext,
+                enc_extra_attrs,
+            )
+            .await
+    } else {
+        encrypt_for_devices(
+            stores,
+            resolver,
+            devices,
+            plaintext,
+            enc_extra_attrs,
+        )
+        .await
+    }
+}
+
 async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
@@ -253,49 +289,29 @@ pub async fn prepare_dm_stanza<
     }
 
     if !recipient_devices.is_empty() {
-        let (nodes, inc) = if let Some(processor) = parallel_processor {
-            processor
-                .encrypt_for_devices_parallel(
-                    resolver,
-                    &recipient_devices,
-                    &recipient_plaintext,
-                    &enc_extra_attrs,
-                )
-                .await?
-        } else {
-            encrypt_for_devices(
-                stores,
-                resolver,
-                &recipient_devices,
-                &recipient_plaintext,
-                &enc_extra_attrs,
-            )
-            .await?
-        };
+        let (nodes, inc) = encrypt_for_device_set(
+            &recipient_devices,
+            &recipient_plaintext,
+            &enc_extra_attrs,
+            parallel_processor,
+            stores,
+            resolver,
+        )
+        .await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
 
     if !own_other_devices.is_empty() {
-        let (nodes, inc) = if let Some(processor) = parallel_processor {
-            processor
-                .encrypt_for_devices_parallel(
-                    resolver,
-                    &own_other_devices,
-                    &own_devices_plaintext,
-                    &enc_extra_attrs,
-                )
-                .await?
-        } else {
-            encrypt_for_devices(
-                stores,
-                resolver,
-                &own_other_devices,
-                &own_devices_plaintext,
-                &enc_extra_attrs,
-            )
-            .await?
-        };
+        let (nodes, inc) = encrypt_for_device_set(
+            &own_other_devices,
+            &own_devices_plaintext,
+            &enc_extra_attrs,
+            parallel_processor,
+            stores,
+            resolver,
+        )
+        .await?;
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
