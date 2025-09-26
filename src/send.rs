@@ -2,10 +2,179 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
 use std::sync::Arc;
-use wacore::libsignal::protocol::SignalProtocolError;
+use wacore::libsignal::protocol::{SignalProtocolError, SessionStore};
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
+use wacore_binary::node::{Attrs, Node};
+use wacore_binary::builder::NodeBuilder;
+use wacore::libsignal::protocol::{CiphertextMessage, message_encrypt, process_prekey_bundle, UsePQRatchet};
+use std::time::SystemTime;
+use futures_util::future::join_all;
+use rand::TryRngCore;
+
+/// Parallel encryption for SKDM distribution to improve performance for large groups
+async fn encrypt_for_devices_parallel(
+    store_adapter: &SignalProtocolStoreAdapter,
+    resolver: &dyn wacore::client::context::SendContextResolver,
+    devices: &[Jid],
+    plaintext_to_encrypt: &[u8],
+    enc_extra_attrs: &Attrs,
+) -> Result<(Vec<Node>, bool), anyhow::Error> {
+    // First, identify devices needing prekeys
+    let mut jids_needing_prekeys = Vec::new();
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        if store_adapter
+            .session_store
+            .load_session(&signal_address)
+            .await?
+            .is_none()
+        {
+            jids_needing_prekeys.push(device_jid.clone());
+        }
+    }
+
+    // Fetch prekeys sequentially (this part can't be parallelized due to resolver trait)
+    if !jids_needing_prekeys.is_empty() {
+        log::info!(
+            "Fetching prekeys for devices without sessions: {:?}",
+            jids_needing_prekeys
+        );
+        let prekey_bundles = resolver
+            .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+            .await?;
+
+        // Process prekeys sequentially to maintain store consistency
+        let mut cloned_adapter = store_adapter.clone();
+        for device_jid in &jids_needing_prekeys {
+            let signal_address = device_jid.to_protocol_address();
+            let bundle = prekey_bundles
+                .get(device_jid)
+                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
+            process_prekey_bundle(
+                &signal_address,
+                &mut cloned_adapter.session_store,
+                &mut cloned_adapter.identity_store,
+                bundle,
+                SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+                UsePQRatchet::No,
+            )
+            .await?;
+        }
+    }
+
+    // Now perform parallel encryption
+    let mut tasks = Vec::new();
+    let plaintext = plaintext_to_encrypt.to_vec();
+    let attrs = enc_extra_attrs.clone();
+
+    for device_jid in devices {
+        let device_jid_clone = device_jid.clone();
+        let plaintext_clone = plaintext.clone();
+        let attrs_clone = attrs.clone();
+        let mut store_clone = store_adapter.clone();
+
+        let task = tokio::spawn(async move {
+            let signal_address = device_jid_clone.to_protocol_address();
+            
+            let encrypted_payload = message_encrypt(
+                &plaintext_clone,
+                &signal_address,
+                &mut store_clone.session_store,
+                &mut store_clone.identity_store,
+                SystemTime::now(),
+            )
+            .await?;
+
+            let (enc_type, serialized_bytes) = match encrypted_payload {
+                CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec()),
+                CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+                _ => return Err(anyhow!("Unexpected encryption message type for SKDM")),
+            };
+
+            let mut enc_attrs = Attrs::new();
+            enc_attrs.insert("v".to_string(), "2".to_string());
+            enc_attrs.insert("type".to_string(), enc_type.to_string());
+            for (k, v) in attrs_clone.iter() {
+                enc_attrs.insert(k.clone(), v.clone());
+            }
+
+            let enc_node = NodeBuilder::new("enc")
+                .attrs(enc_attrs)
+                .bytes(serialized_bytes)
+                .build();
+
+            let participant_node = NodeBuilder::new("to")
+                .attr("jid", device_jid_clone.to_string())
+                .children([enc_node])
+                .build();
+            
+            // Return the node and whether a pre-key message was used
+            Ok::<(Node, bool), anyhow::Error>((participant_node, enc_type == "pkmsg"))
+        });
+        
+        tasks.push(task);
+    }
+
+    // Wait for all tasks to complete
+    let results = join_all(tasks).await;
+
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
+
+    for result in results {
+        match result {
+            Ok(Ok((node, uses_prekey))) => {
+                participant_nodes.push(node);
+                if uses_prekey {
+                    includes_prekey_message = true;
+                }
+            }
+            Ok(Err(e)) => {
+                return Err(anyhow!("An encryption task for SKDM failed: {}", e));
+            }
+            Err(e) => {
+                return Err(anyhow!("A tokio task for SKDM panicked: {}", e));
+            }
+        }
+    }
+
+    Ok((participant_nodes, includes_prekey_message))
+}
+
+/// Implementation of parallel encryption processor for Client
+pub struct ClientParallelProcessor {
+    store_adapter: SignalProtocolStoreAdapter,
+}
+
+impl ClientParallelProcessor {
+    pub fn new(store_adapter: SignalProtocolStoreAdapter) -> Self {
+        Self { store_adapter }
+    }
+}
+
+#[async_trait::async_trait]
+impl wacore::send::ParallelEncryptionProcessor for ClientParallelProcessor {
+    async fn encrypt_for_devices_parallel(
+        &self,
+        resolver: &dyn wacore::client::context::SendContextResolver,
+        devices: &[Jid],
+        plaintext_to_encrypt: &[u8],
+        enc_extra_attrs: &Attrs,
+    ) -> Result<(Vec<Node>, bool), anyhow::Error> {
+        // Use our parallel implementation
+        encrypt_for_devices_parallel(
+            &self.store_adapter,
+            resolver,
+            devices,
+            plaintext_to_encrypt,
+            enc_extra_attrs,
+        )
+        .await
+    }
+}
 
 impl Client {
     pub async fn send_message(
@@ -109,6 +278,9 @@ impl Client {
             };
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+            
+            // Create parallel processor for SKDM distribution
+            let parallel_processor = ClientParallelProcessor::new(store_adapter.clone());
 
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
@@ -130,6 +302,7 @@ impl Client {
                 request_id.clone(),
                 force_skdm,
                 edit.clone(),
+                Some(&parallel_processor), // Enable parallel processing
             )
             .await
             {
@@ -142,6 +315,10 @@ impl Client {
 
                         let mut store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
+                            
+                        // Create parallel processor for retry
+                        let parallel_processor_retry = ClientParallelProcessor::new(store_adapter_retry.clone());
+                            
                         let mut stores_retry = wacore::send::SignalStores {
                             session_store: &mut store_adapter_retry.session_store,
                             identity_store: &mut store_adapter_retry.identity_store,
@@ -162,6 +339,7 @@ impl Client {
                             request_id,
                             true, // Force distribution on retry
                             edit.clone(),
+                            Some(&parallel_processor_retry), // Enable parallel processing on retry
                         )
                         .await?
                     } else {
@@ -183,6 +361,9 @@ impl Client {
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
+            
+            // Create parallel processor for DM encryption
+            let parallel_processor = ClientParallelProcessor::new(store_adapter.clone());
 
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
@@ -201,6 +382,7 @@ impl Client {
                 message.as_ref(),
                 request_id,
                 edit,
+                Some(&parallel_processor), // Enable parallel processing for DMs too
             )
             .await?
         };

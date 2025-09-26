@@ -8,6 +8,7 @@ use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::collections::HashSet;
@@ -17,6 +18,18 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
+
+/// Trait for parallel encryption processing - implemented by the main crate
+#[async_trait]
+pub trait ParallelEncryptionProcessor: Send + Sync {
+    async fn encrypt_for_devices_parallel(
+        &self,
+        resolver: &dyn SendContextResolver,
+        devices: &[Jid],
+        plaintext_to_encrypt: &[u8],
+        enc_extra_attrs: &Attrs,
+    ) -> Result<(Vec<Node>, bool)>;
+}
 
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
@@ -199,6 +212,7 @@ pub async fn prepare_dm_stanza<
     message: &wa::Message,
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
+    parallel_processor: Option<&dyn ParallelEncryptionProcessor>,
 ) -> Result<Node> {
     let recipient_plaintext = message.encode_to_vec();
 
@@ -239,27 +253,49 @@ pub async fn prepare_dm_stanza<
     }
 
     if !recipient_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
-            stores,
-            resolver,
-            &recipient_devices,
-            &recipient_plaintext,
-            &enc_extra_attrs,
-        )
-        .await?;
+        let (nodes, inc) = if let Some(processor) = parallel_processor {
+            processor
+                .encrypt_for_devices_parallel(
+                    resolver,
+                    &recipient_devices,
+                    &recipient_plaintext,
+                    &enc_extra_attrs,
+                )
+                .await?
+        } else {
+            encrypt_for_devices(
+                stores,
+                resolver,
+                &recipient_devices,
+                &recipient_plaintext,
+                &enc_extra_attrs,
+            )
+            .await?
+        };
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
 
     if !own_other_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
-            stores,
-            resolver,
-            &own_other_devices,
-            &own_devices_plaintext,
-            &enc_extra_attrs,
-        )
-        .await?;
+        let (nodes, inc) = if let Some(processor) = parallel_processor {
+            processor
+                .encrypt_for_devices_parallel(
+                    resolver,
+                    &own_other_devices,
+                    &own_devices_plaintext,
+                    &enc_extra_attrs,
+                )
+                .await?
+        } else {
+            encrypt_for_devices(
+                stores,
+                resolver,
+                &own_other_devices,
+                &own_devices_plaintext,
+                &enc_extra_attrs,
+            )
+            .await?
+        };
         participant_nodes.extend(nodes);
         includes_prekey_message = includes_prekey_message || inc;
     }
@@ -364,6 +400,8 @@ pub async fn prepare_group_stanza<
     request_id: String,
     force_skdm_distribution: bool,
     edit: Option<crate::types::message::EditAttribute>,
+    // New parameter for parallel processing context
+    parallel_processor: Option<&dyn ParallelEncryptionProcessor>,
 ) -> Result<Node> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
@@ -447,14 +485,29 @@ pub async fn prepare_group_stanza<
 
         // For SKDM distribution we don't set decrypt-fail; use empty attrs
         let empty_attrs = Attrs::new();
-        let (participant_nodes, inc) = encrypt_for_devices(
-            stores,
-            resolver,
-            &distribution_list,
-            &skdm_plaintext_to_encrypt,
-            &empty_attrs,
-        )
-        .await?;
+        
+        let (participant_nodes, inc) = if let Some(processor) = parallel_processor {
+            // Use parallel processing for SKDM distribution when available
+            processor
+                .encrypt_for_devices_parallel(
+                    resolver,
+                    &distribution_list,
+                    &skdm_plaintext_to_encrypt,
+                    &empty_attrs,
+                )
+                .await?
+        } else {
+            // Fall back to sequential processing
+            encrypt_for_devices(
+                stores,
+                resolver,
+                &distribution_list,
+                &skdm_plaintext_to_encrypt,
+                &empty_attrs,
+            )
+            .await?
+        };
+        
         includes_prekey_message = includes_prekey_message || inc;
 
         // Add participants list as part of the single hybrid stanza
