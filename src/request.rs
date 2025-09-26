@@ -90,37 +90,6 @@ impl Client {
     ///
     /// * `Ok(Node)` - The response node from the server
     /// * `Err(IqError)` - Various error conditions including timeout, connection issues, or server errors
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use wacore::request::{InfoQuery, InfoQueryType};
-    /// use wacore_binary::builder::NodeBuilder;
-    /// use wacore_binary::node::NodeContent;
-    /// use wacore_binary::jid::Jid;
-    ///
-    /// // This is a simplified example - real usage requires proper setup
-    /// # async fn example(client: &whatsapp_rust::Client) -> Result<(), Box<dyn std::error::Error>> {
-    /// let query_node = NodeBuilder::new("presence")
-    ///     .attr("type", "available")
-    ///     .build();
-    ///
-    /// let server_jid = Jid::new("", "s.whatsapp.net");
-    ///
-    /// let query = InfoQuery {
-    ///     query_type: InfoQueryType::Set,
-    ///     namespace: "presence",
-    ///     to: server_jid,
-    ///     target: None,
-    ///     content: Some(NodeContent::Nodes(vec![query_node])),
-    ///     id: None,
-    ///     timeout: None,
-    /// };
-    ///
-    /// let response = client.send_iq(query).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
         let req_id = query
             .id
