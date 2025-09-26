@@ -208,7 +208,7 @@ enum PrivateKeyData {
     DjbPrivateKey([u8; curve25519::PRIVATE_KEY_LENGTH]),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, derive_more::From)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::From)]
 pub struct PrivateKey {
     key: PrivateKeyData,
 }

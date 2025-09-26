@@ -364,7 +364,7 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
             pre_key_id: proto_structure.pre_key_id.map(|id| id.into()),
             signed_pre_key_id: signed_pre_key_id.into(),
             base_key,
-            identity_key: IdentityKey::try_from(identity_key.as_ref())?,
+            identity_key: IdentityKey::from_bytes(identity_key.as_ref())?,
             message: SignalMessage::try_from(message.as_ref())?,
             serialized: Box::from(value),
         })

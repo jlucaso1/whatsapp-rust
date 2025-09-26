@@ -1,9 +1,16 @@
 use crate::libsignal::protocol::ProtocolAddress;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SenderKeyName {
     group_id: String,
     sender_id: String,
+}
+
+impl fmt::Display for SenderKeyName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.group_id, self.sender_id)
+    }
 }
 
 impl SenderKeyName {

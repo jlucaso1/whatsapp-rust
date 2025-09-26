@@ -124,7 +124,7 @@ impl SessionState {
         match self.session.remote_identity_public.len() {
             0 => Ok(None),
             _ => Ok(Some(
-                IdentityKey::decode(&self.session.remote_identity_public)
+                IdentityKey::from_bytes(&self.session.remote_identity_public)
                     .map_err(|_| InvalidSessionError("invalid remote identity key"))?,
             )),
         }
@@ -135,7 +135,7 @@ impl SessionState {
     }
 
     pub fn local_identity_key(&self) -> Result<IdentityKey, InvalidSessionError> {
-        IdentityKey::decode(&self.session.local_identity_public)
+        IdentityKey::from_bytes(&self.session.local_identity_public)
             .map_err(|_| InvalidSessionError("invalid local identity key"))
     }
 

@@ -1,3 +1,4 @@
+use crate::libsignal::protocol::SignalProtocolError;
 use crate::store::Device;
 use prost::Message;
 use thiserror::Error;
@@ -22,6 +23,8 @@ pub enum HandshakeError {
     IncompleteResponse,
     #[error("Crypto operation failed: {0}")]
     Crypto(String),
+    #[error("Signal protocol error: {0}")]
+    Signal(#[from] SignalProtocolError),
     #[error("Server certificate verification failed: {0}")]
     CertVerification(String),
     #[error("Unexpected data length: expected {expected}, got {got} for {name}")]
@@ -216,7 +219,27 @@ impl HandshakeUtils {
 
     /// Prepares client payload for handshake
     pub fn prepare_client_payload(device: &Device) -> Vec<u8> {
-        let client_payload = device.get_client_payload();
+        let snapshot = &device.snapshot;
+        let username = snapshot
+            .pn
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .unwrap_or(0);
+        let app_version = snapshot.app_version.clone();
+
+        let client_payload = wa::ClientPayload {
+            connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
+            connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
+            user_agent: Some(wa::client_payload::UserAgent {
+                platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
+                app_version,
+                ..Default::default()
+            }),
+            username: Some(username),
+            push_name: snapshot.push_name.clone(),
+            ..Default::default()
+        };
         client_payload.encode_to_vec()
     }
 }

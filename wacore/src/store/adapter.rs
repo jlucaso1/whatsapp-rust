@@ -1,18 +1,17 @@
-use crate::store::Device;
-use async_trait::async_trait;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use wacore::libsignal::protocol::{
+use crate::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
     PreKeyRecord, PreKeyStore, ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
     SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
-
-use wacore::libsignal::store::record_helpers as wacore_record;
-use wacore::libsignal::store::sender_key_name::SenderKeyName;
-use wacore::libsignal::store::{
+use crate::libsignal::store::record_helpers as wacore_record;
+use crate::libsignal::store::sender_key_name::SenderKeyName;
+use crate::libsignal::store::{
     PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
+use crate::store::device::Device;
+use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 struct SharedDevice {
@@ -198,14 +197,14 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
 }
 
 #[async_trait]
-impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
+impl crate::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        record: &wacore::libsignal::protocol::SenderKeyRecord,
-    ) -> wacore::libsignal::protocol::error::Result<()> {
+        record: &crate::libsignal::protocol::SenderKeyRecord,
+    ) -> crate::libsignal::protocol::error::Result<()> {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(
+        crate::libsignal::protocol::SenderKeyStore::store_sender_key(
             &mut *device,
             sender_key_name,
             record,
@@ -216,11 +215,14 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn load_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-    ) -> wacore::libsignal::protocol::error::Result<
-        Option<wacore::libsignal::protocol::SenderKeyRecord>,
+    ) -> crate::libsignal::protocol::error::Result<
+        Option<crate::libsignal::protocol::SenderKeyRecord>,
     > {
         let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender_key_name)
-            .await
+        crate::libsignal::protocol::SenderKeyStore::load_sender_key(
+            &mut *device,
+            sender_key_name,
+        )
+        .await
     }
 }

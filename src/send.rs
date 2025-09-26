@@ -108,18 +108,10 @@ impl Client {
                 force_key_distribution || !key_exists
             };
 
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
-
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
-            };
+            let store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
             match wacore::send::prepare_group_stanza(
-                &mut stores,
+                store_adapter,
                 self,
                 &mut group_info,
                 &own_jid,
@@ -140,18 +132,11 @@ impl Client {
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
-                        let mut store_adapter_retry =
+                        let store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
-                        let mut stores_retry = wacore::send::SignalStores {
-                            session_store: &mut store_adapter_retry.session_store,
-                            identity_store: &mut store_adapter_retry.identity_store,
-                            prekey_store: &mut store_adapter_retry.pre_key_store,
-                            signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
-                            sender_key_store: &mut store_adapter_retry.sender_key_store,
-                        };
 
                         wacore::send::prepare_group_stanza(
-                            &mut stores_retry,
+                            store_adapter_retry,
                             self,
                             &mut group_info,
                             &own_jid,
@@ -182,18 +167,10 @@ impl Client {
             let account_info = device_snapshot.account.clone();
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
-
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
-            };
+            let store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
             wacore::send::prepare_dm_stanza(
-                &mut stores,
+                store_adapter,
                 self,
                 &own_jid,
                 account_info.as_ref(),

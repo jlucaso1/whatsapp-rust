@@ -14,22 +14,28 @@ pub enum DeviceCommand {
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
     match command {
         DeviceCommand::SetId(id) => {
-            device.pn = id;
+            device.snapshot.pn = id.map(|j| j.to_string());
         }
         DeviceCommand::SetLid(lid) => {
-            device.lid = lid;
+            device.snapshot.lid = lid.map(|j| j.to_string());
         }
         DeviceCommand::SetPushName(name) => {
-            device.push_name = name;
+            device.snapshot.push_name = Some(name);
         }
         DeviceCommand::SetAccount(account) => {
-            device.account = account;
+            device.snapshot.account = account;
         }
         DeviceCommand::SetAppVersion((p, s, t)) => {
-            device.app_version_primary = p;
-            device.app_version_secondary = s;
-            device.app_version_tertiary = t;
-            device.app_version_last_fetched_ms = chrono::Utc::now().timestamp_millis();
+            let app_version = wa::client_payload::user_agent::AppVersion {
+                primary: Some(p),
+                secondary: Some(s),
+                tertiary: Some(t),
+                quaternary: None,
+                quinary: None,
+            };
+            device.snapshot.app_version = Some(app_version);
+            device.snapshot.app_version_last_fetched_ms =
+                Some(chrono::Utc::now().timestamp_millis());
         }
     }
 }

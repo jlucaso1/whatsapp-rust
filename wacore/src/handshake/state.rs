@@ -1,6 +1,6 @@
 use super::noise::{self, NoiseHandshake};
 use crate::handshake::utils::{HandshakeError, HandshakeUtils};
-use crate::libsignal::protocol::KeyPair;
+use crate::libsignal::protocol::{IdentityKeyStore, KeyPair};
 use aes_gcm::Aes256Gcm;
 use prost::Message;
 use rand::TryRngCore;
@@ -17,7 +17,7 @@ pub struct HandshakeState {
 }
 
 impl HandshakeState {
-    pub fn new(device: &crate::store::Device) -> Result<Self> {
+    pub async fn new(device: &crate::store::Device) -> Result<Self> {
         let ephemeral_kp = KeyPair::generate(&mut OsRng.unwrap_err());
         let wa_header = &wacore_binary::consts::WA_CONN_HEADER;
 
@@ -29,7 +29,7 @@ impl HandshakeState {
         Ok(Self {
             noise,
             ephemeral_kp,
-            static_kp: device.noise_key,
+            static_kp: device.get_identity_key_pair().await?.into(),
             payload: HandshakeUtils::prepare_client_payload(device),
         })
     }

@@ -1,229 +1,294 @@
-use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
-use once_cell::sync::Lazy;
+use crate::libsignal::protocol::{
+    CiphertextMessageType, Direction, IdentityChange, IdentityKey, IdentityKeyPair,
+    IdentityKeyStore, SenderKeyStore as LibsignalSenderKeyStore, SignalProtocolError,
+};
+use crate::libsignal::store::{PreKeyStore, SignedPreKeyStore};
+use crate::store::traits::{
+    AppStateKeyStore, AppStateStore, Backend, IdentityStore, SenderKeyStoreHelper, SessionStore,
+};
+use async_trait::async_trait;
 use prost::Message;
-use rand::TryRngCore;
-use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
-use wacore_binary::jid::Jid;
+use std::sync::Arc;
+use wacore_binary::jid::{Jid, JidExt as _};
 use waproto::whatsapp as wa;
 
-pub mod key_pair_serde {
-    use super::KeyPair;
-    use crate::libsignal::protocol::{PrivateKey, PublicKey};
-    use serde::{self, Deserializer, Serializer};
-
-    pub fn serialize<S>(key_pair: &KeyPair, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes: Vec<u8> = key_pair
-            .private_key
-            .serialize()
-            .into_iter()
-            .chain(key_pair.public_key.public_key_bytes().iter().copied())
-            .collect();
-        serializer.serialize_bytes(&bytes)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<KeyPair, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let bytes: &[u8] = serde::Deserialize::deserialize(deserializer)?;
-        if bytes.len() != 64 {
-            return Err(serde::de::Error::invalid_length(bytes.len(), &"64"));
-        }
-        let private_key = PrivateKey::deserialize(&bytes[0..32])
-            .map_err(|e| serde::de::Error::custom(e.to_string()))?;
-        let public_key = PublicKey::from_djb_public_key_bytes(&bytes[32..64])
-            .map_err(|e| serde::de::Error::custom(e.to_string()))?;
-        Ok(KeyPair::new(public_key, private_key))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ProcessedMessageKey {
-    pub to: Jid,
-    pub id: String,
-}
-
-fn build_base_client_payload(
-    app_version: wa::client_payload::user_agent::AppVersion,
-) -> wa::ClientPayload {
-    wa::ClientPayload {
-        user_agent: Some(wa::client_payload::UserAgent {
-            platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
-            release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::Release as i32),
-            app_version: Some(app_version),
-            mcc: Some("000".to_string()),
-            mnc: Some("000".to_string()),
-            os_version: Some("0.1.0".to_string()),
-            manufacturer: Some("".to_string()),
-            device: Some("Desktop".to_string()),
-            os_build_number: Some("0.1.0".to_string()),
-            locale_language_iso6391: Some("en".to_string()),
-            locale_country_iso31661_alpha2: Some("en".to_string()),
-            ..Default::default()
-        }),
-        web_info: Some(wa::client_payload::WebInfo {
-            web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32),
-            ..Default::default()
-        }),
-        connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
-        connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
-        ..Default::default()
-    }
-}
-
-static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
-    os: Some("rust".to_string()),
-    version: Some(wa::device_props::AppVersion {
-        primary: Some(0),
-        secondary: Some(1),
-        tertiary: Some(0),
-        ..Default::default()
-    }),
-    platform_type: Some(wa::device_props::PlatformType::Unknown as i32),
-    require_full_sync: Some(false),
-    ..Default::default()
-});
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Device {
-    pub pn: Option<Jid>,
-    pub lid: Option<Jid>,
-    pub registration_id: u32,
-    #[serde(with = "key_pair_serde")]
-    pub noise_key: KeyPair,
-    #[serde(with = "key_pair_serde")]
-    pub identity_key: KeyPair,
-    #[serde(with = "key_pair_serde")]
-    pub signed_pre_key: KeyPair,
-    pub signed_pre_key_id: u32,
-    #[serde(with = "BigArray")]
-    pub signed_pre_key_signature: [u8; 64],
-    pub adv_secret_key: [u8; 32],
+#[derive(Clone, Message)]
+pub struct DeviceSnapshot {
+    #[prost(string, optional, tag = "1")]
+    pub pn: Option<String>,
+    #[prost(string, optional, tag = "2")]
+    pub lid: Option<String>,
+    #[prost(string, optional, tag = "3")]
+    pub phone_id: Option<String>,
+    #[prost(message, optional, tag = "4")]
     pub account: Option<wa::AdvSignedDeviceIdentity>,
-    pub push_name: String,
-    pub app_version_primary: u32,
-    pub app_version_secondary: u32,
-    pub app_version_tertiary: u32,
-    pub app_version_last_fetched_ms: i64,
+    #[prost(uint32, optional, tag = "5")]
+    pub registration_id: Option<u32>,
+    #[prost(message, optional, tag = "6")]
+    pub identity: Option<wa::IdentityKeyPairStructure>,
+    #[prost(string, optional, tag = "7")]
+    pub push_name: Option<String>,
+    #[prost(message, optional, tag = "8")]
+    pub app_version: Option<wa::client_payload::user_agent::AppVersion>,
+    #[prost(int64, optional, tag = "9")]
+    pub app_version_last_fetched_ms: Option<i64>,
 }
 
-impl Default for Device {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct Device {
+    pub backend: Box<dyn Backend>,
+    pub snapshot: DeviceSnapshot,
 }
 
 impl Device {
-    pub fn new() -> Self {
-        use rand::RngCore;
-
-        let identity_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
-
-        let identity_key: KeyPair = KeyPair::new(
-            *identity_key_pair.public_key(),
-            *identity_key_pair.private_key(),
-        );
-        let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
-        let signature_box = identity_key_pair
-            .private_key()
-            .calculate_signature(
-                &signed_pre_key.public_key.serialize(),
-                &mut OsRng.unwrap_err(),
-            )
-            .unwrap();
-        let signed_pre_key_signature: [u8; 64] = signature_box.as_ref().try_into().unwrap();
-        let mut adv_secret_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut adv_secret_key);
-
+    pub fn new(backend: Box<dyn Backend>) -> Self {
         Self {
-            pn: None,
-            lid: None,
-            registration_id: 3718719151,
-            noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
-            identity_key,
-            signed_pre_key,
-            signed_pre_key_id: 1,
-            signed_pre_key_signature,
-            adv_secret_key,
-            account: None,
-            push_name: String::new(),
-            app_version_primary: 2,
-            app_version_secondary: 3000,
-            app_version_tertiary: 1023868176,
-            app_version_last_fetched_ms: 0,
+            backend,
+            snapshot: DeviceSnapshot::default(),
         }
     }
 
-    pub fn is_ready_for_presence(&self) -> bool {
-        self.pn.is_some() && !self.push_name.is_empty()
+    pub fn with_snapshot(backend: Box<dyn Backend>, snapshot: DeviceSnapshot) -> Self {
+        Self { backend, snapshot }
     }
 
-    pub fn get_client_payload(&self) -> wa::ClientPayload {
-        match &self.pn {
-            Some(jid) => self.get_login_payload(jid),
-            None => self.get_registration_payload(),
+    pub fn set_jid(&mut self, jid: &Jid) {
+        if jid.is_lid() {
+            self.snapshot.lid = Some(jid.to_string());
+        } else {
+            self.snapshot.pn = Some(jid.to_string());
         }
     }
 
-    fn get_login_payload(&self, jid: &Jid) -> wa::ClientPayload {
-        let app_version = wa::client_payload::user_agent::AppVersion {
-            primary: Some(self.app_version_primary),
-            secondary: Some(self.app_version_secondary),
-            tertiary: Some(self.app_version_tertiary),
-            ..Default::default()
-        };
-        let mut payload = build_base_client_payload(app_version);
-        payload.username = jid.user.parse::<u64>().ok();
-        payload.device = Some(jid.device as u32);
-        payload.passive = Some(true);
-        payload
+    pub fn set_identity(&mut self, identity: wa::IdentityKeyPairStructure) {
+        self.snapshot.identity = Some(identity);
+    }
+    pub fn set_registration_id(&mut self, registration_id: u32) {
+        self.snapshot.registration_id = Some(registration_id);
+    }
+}
+
+#[async_trait]
+impl IdentityKeyStore for Device {
+    async fn get_identity_key_pair(
+        &self,
+    ) -> std::result::Result<IdentityKeyPair, SignalProtocolError> {
+        let key_pair_struct = self
+            .snapshot
+            .identity
+            .as_ref()
+            .ok_or(SignalProtocolError::InvalidMessage(
+                CiphertextMessageType::Whisper,
+                "Missing identity key from device snapshot",
+            ))?;
+        let key_pair_bytes = key_pair_struct
+            .private_key
+            .as_ref()
+            .ok_or(SignalProtocolError::InvalidMessage(
+                CiphertextMessageType::Whisper,
+                "Missing private key from identity key pair structure",
+            ))?;
+        IdentityKeyPair::from_bytes(key_pair_bytes)
     }
 
-    fn get_registration_payload(&self) -> wa::ClientPayload {
-        let app_version = wa::client_payload::user_agent::AppVersion {
-            primary: Some(self.app_version_primary),
-            secondary: Some(self.app_version_secondary),
-            tertiary: Some(self.app_version_tertiary),
-            ..Default::default()
-        };
-        let mut payload = build_base_client_payload(app_version);
+    async fn get_local_registration_id(&self) -> std::result::Result<u32, SignalProtocolError> {
+        self.snapshot
+            .registration_id
+            .ok_or(SignalProtocolError::InvalidMessage(
+                CiphertextMessageType::Whisper,
+                "Missing registration ID from device snapshot",
+            ))
+    }
 
-        let device_props_bytes = DEVICE_PROPS.encode_to_vec();
+    async fn save_identity(
+        &mut self,
+        address: &crate::libsignal::protocol::ProtocolAddress,
+        identity_key: &IdentityKey,
+    ) -> std::result::Result<IdentityChange, SignalProtocolError> {
+        let existing_identity = self.get_identity(address).await?;
 
-        let version = payload
-            .user_agent
-            .as_ref()
-            .unwrap()
-            .app_version
-            .as_ref()
-            .unwrap();
-        let version_str = format!(
-            "{}.{}.{}",
-            version.primary(),
-            version.secondary(),
-            version.tertiary()
-        );
-        let build_hash: [u8; 16] = md5::compute(version_str.as_bytes()).into();
+        self.backend
+            .put_identity(&address.to_string(), *identity_key.public_key().as_ref())
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("save_identity".to_string(), e.to_string())
+            })?;
 
-        let reg_data = wa::client_payload::DevicePairingRegistrationData {
-            e_regid: Some(self.registration_id.to_be_bytes().to_vec()),
-            e_keytype: Some(vec![5]),
-            e_ident: Some(self.identity_key.public_key.public_key_bytes().to_vec()),
-            e_skey_id: Some(self.signed_pre_key_id.to_be_bytes()[1..].to_vec()),
-            e_skey_val: Some(self.signed_pre_key.public_key.public_key_bytes().to_vec()),
-            e_skey_sig: Some(self.signed_pre_key_signature.to_vec()),
-            build_hash: Some(build_hash.to_vec()),
-            device_props: Some(device_props_bytes),
-        };
+        match existing_identity {
+            None => Ok(IdentityChange::NewOrUnchanged),
+            Some(existing) if &existing == identity_key => Ok(IdentityChange::NewOrUnchanged),
+            Some(_) => Ok(IdentityChange::ReplacedExisting),
+        }
+    }
 
-        payload.device_pairing_data = Some(reg_data);
-        payload.passive = Some(false);
-        payload.pull = Some(false);
-        payload
+    async fn is_trusted_identity(
+        &self,
+        address: &crate::libsignal::protocol::ProtocolAddress,
+        identity_key: &IdentityKey,
+        direction: Direction,
+    ) -> std::result::Result<bool, SignalProtocolError> {
+        self.backend
+            .is_trusted_identity(&address.to_string(), identity_key.public_key().as_ref(), direction)
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("is_trusted_identity".to_string(), e.to_string())
+            })
+    }
+
+    async fn get_identity(
+        &self,
+        address: &crate::libsignal::protocol::ProtocolAddress,
+    ) -> std::result::Result<Option<IdentityKey>, SignalProtocolError> {
+        match self
+            .backend
+            .load_identity(&address.to_string())
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("get_identity".to_string(), e.to_string())
+            })? {
+            Some(bytes) => Ok(Some(IdentityKey::from_bytes(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+#[async_trait]
+impl PreKeyStore for Device {
+    async fn load_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> std::result::Result<
+        Option<wa::PreKeyRecordStructure>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        self.backend.load_prekey(prekey_id).await
+    }
+
+    async fn store_prekey(
+        &self,
+        prekey_id: u32,
+        record: wa::PreKeyRecordStructure,
+        uploaded: bool,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.store_prekey(prekey_id, record, uploaded).await
+    }
+
+    async fn contains_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.contains_prekey(prekey_id).await
+    }
+
+    async fn remove_prekey(
+        &self,
+        prekey_id: u32,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.remove_prekey(prekey_id).await
+    }
+}
+
+#[async_trait]
+impl SignedPreKeyStore for Device {
+    async fn load_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<
+        Option<wa::SignedPreKeyRecordStructure>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        self.backend.load_signed_prekey(signed_prekey_id).await
+    }
+
+    async fn load_signed_prekeys(
+        &self,
+    ) -> std::result::Result<
+        Vec<wa::SignedPreKeyRecordStructure>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        self.backend.load_signed_prekeys().await
+    }
+
+    async fn store_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+        record: wa::SignedPreKeyRecordStructure,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend
+            .store_signed_prekey(signed_prekey_id, record)
+            .await
+    }
+
+    async fn contains_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.contains_signed_prekey(signed_prekey_id).await
+    }
+
+    async fn remove_signed_prekey(
+        &self,
+        signed_prekey_id: u32,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.backend.remove_signed_prekey(signed_prekey_id).await
+    }
+}
+
+#[async_trait]
+impl LibsignalSenderKeyStore for Device {
+    async fn store_sender_key(
+        &mut self,
+        sender_key_name: &crate::libsignal::store::sender_key_name::SenderKeyName,
+        record: &crate::libsignal::protocol::SenderKeyRecord,
+    ) -> std::result::Result<(), crate::libsignal::protocol::SignalProtocolError> {
+        self.backend
+            .put_sender_key(&sender_key_name.to_string(), &record.serialize()?)
+            .await
+            .map_err(|e| {
+                crate::libsignal::protocol::SignalProtocolError::InvalidState(
+                    "put_sender_key".to_string(),
+                    e.to_string(),
+                )
+            })
+    }
+
+    async fn load_sender_key(
+        &mut self,
+        sender_key_name: &crate::libsignal::store::sender_key_name::SenderKeyName,
+    ) -> std::result::Result<
+        Option<crate::libsignal::protocol::SenderKeyRecord>,
+        crate::libsignal::protocol::SignalProtocolError,
+    > {
+        match self
+            .backend
+            .get_sender_key(&sender_key_name.to_string())
+            .await
+            .map_err(|e| {
+                SignalProtocolError::InvalidState("get_sender_key".to_string(), e.to_string())
+            })? {
+            Some(bytes) => Ok(Some(
+                crate::libsignal::protocol::SenderKeyRecord::deserialize(&bytes)?,
+            )),
+            None => Ok(None),
+        }
+    }
+}
+
+pub struct AppState {
+    backend: Arc<dyn AppStateStore>,
+}
+
+impl AppState {
+    pub fn new(backend: Arc<dyn AppStateStore>) -> Self {
+        Self { backend }
+    }
+}
+
+pub struct AppStateKeys {
+    backend: Arc<dyn AppStateKeyStore>,
+}
+
+impl AppStateKeys {
+    pub fn new(backend: Arc<dyn AppStateKeyStore>) -> Self {
+        Self { backend }
     }
 }
