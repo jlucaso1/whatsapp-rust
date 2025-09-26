@@ -31,6 +31,40 @@ pub trait ParallelEncryptionProcessor: Send + Sync {
     ) -> Result<(Vec<Node>, bool)>;
 }
 
+/// Encrypts plaintext for a group using the sender's SenderKey state, returns a signed
+/// SenderKeyMessage, and advances/persists the sender chain key.
+///
+/// This loads the sender key record for (group_jid, sender_jid), derives message keys for the
+/// current chain iteration, produces a signed SenderKeyMessage containing the ciphertext and
+/// iteration metadata, advances the sender chain key to the next iteration, and stores the
+/// updated record back into `sender_key_store`.
+///
+/// # Parameters
+///
+/// - `csprng`: cryptographically secure RNG used for any randomness required when constructing
+///   the SenderKeyMessage (e.g., nonces or signature randomness).
+///
+/// # Returns
+///
+/// A `SenderKeyMessage` containing the encrypted payload, chain id, and the iteration used to
+/// produce the ciphertext.
+///
+/// # Examples
+///
+/// ```
+/// # use rand::rngs::OsRng;
+/// # async fn example() -> anyhow::Result<()> {
+/// # // `store`, `group_jid`, `sender_jid`, and `plaintext` are placeholders for real values.
+/// # let mut store = /* impl SenderKeyStore */ todo!();
+/// # let group_jid = /* Jid */ todo!();
+/// # let sender_jid = /* Jid */ todo!();
+/// # let plaintext: &[u8] = b"hello group";
+/// let mut rng = OsRng;
+/// // encrypt_group_message returns a SenderKeyMessage ready for distribution to group members
+/// let skm = encrypt_group_message(&mut store, &group_jid, &sender_jid, plaintext, &mut rng).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_jid: &Jid,
@@ -98,7 +132,30 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
-/// Helper function to encrypt for a set of devices using parallel or sequential processing
+/// Encrypts plaintext for a set of device JIDs, delegating to a provided parallel processor when available and otherwise using the sequential path.
+///
+/// # Returns
+///
+/// A tuple where the first element is a vector of per-device `Node` encryption payloads and the second element is `true` if any of the produced payloads include a prekey (pre-key) message, `false` otherwise.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use crate::{SignalStores, SendContextResolver, Jid, Attrs, Node};
+/// # async fn example<S,I,P,SP>(stores: &mut SignalStores<'_, S, I, P, SP>, resolver: &dyn SendContextResolver) {
+/// let devices: Vec<Jid> = vec![]; // device JIDs to encrypt for
+/// let plaintext: &[u8] = b"hello";
+/// let extra_attrs = Attrs::default();
+/// let result: (Vec<Node>, bool) = encrypt_for_device_set(
+///     &devices,
+///     plaintext,
+///     &extra_attrs,
+///     None, // no parallel processor; falls back to sequential path
+///     stores,
+///     resolver,
+/// ).await.unwrap();
+/// # }
+/// ```
 async fn encrypt_for_device_set<'a, S, I, P, SP>(
     devices: &[Jid],
     plaintext: &[u8],
@@ -134,6 +191,38 @@ where
     }
 }
 
+/// Encrypts the given plaintext for each device JID, establishing Signal sessions using fetched pre-key bundles for devices that lack a current session.
+///
+/// If any target device has no existing session, this function fetches pre-key bundles via the provided resolver and processes them to establish sessions before encrypting. For each device it produces an `enc` child node containing the serialized Signal ciphertext and returns a `to` node per device. The provided `enc_extra_attrs` are merged into each `enc` node's attributes (in addition to `v="2"` and a `type` of `"msg"` or `"pkmsg"`).
+///
+/// Returns a tuple with the per-device participant `Node`s and a boolean that is `true` if at least one encrypted payload is a pre-key message (indicating a prekey-based session was used), `false` otherwise.
+///
+/// Errors are returned if session store operations, resolver pre-key fetches, bundle processing, or message encryption fail.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use futures::executor::block_on;
+/// # async fn example() -> anyhow::Result<()> {
+/// // Assume `stores`, `resolver`, `devices`, `plaintext`, and `attrs` are prepared:
+/// // let mut stores = ...;
+/// // let resolver: &dyn SendContextResolver = ...;
+/// // let devices: Vec<Jid> = ...;
+/// // let plaintext: Vec<u8> = ...;
+/// // let attrs: Attrs = ...;
+///
+/// let (participant_nodes, includes_prekey) = encrypt_for_devices(
+///     &mut stores,
+///     resolver,
+///     &devices,
+///     &plaintext,
+///     &attrs,
+/// ).await?;
+///
+/// // `participant_nodes` contains a `to` node per device with an `enc` child.
+/// // `includes_prekey` is true if any payload was a pre-key message.
+/// # Ok(()) }
+/// ```
 async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
@@ -232,7 +321,46 @@ where
     Ok((participant_nodes, includes_prekey_message))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Prepare a direct-message stanza containing encrypted payloads for the recipient's devices and the sender's other devices.
+///
+/// When encryption for multiple devices is required this function resolves devices, encrypts the message payloads
+/// (optionally using a provided parallel processor), and assembles a `message` stanza with `participants` and,
+/// if applicable, `device-identity`. If `edit` is present (and not `Empty`), per-device `enc` nodes will include
+/// `decrypt-fail="hide"` and the stanza will include an `edit` attribute.
+///
+/// # Parameters
+///
+/// - `account`: Optional device identity to include as `device-identity` when prekey messages were used.
+/// - `edit`: Optional edit attribute; when not `Empty` it causes `decrypt-fail="hide"` on enc nodes and sets the stanza `edit` attr.
+/// - `parallel_processor`: Optional parallel encryption processor; when provided, per-device encryption will be delegated to it.
+///
+/// # Returns
+///
+/// The prepared `message` stanza `Node` containing encrypted payloads for participant devices and any required metadata.
+///
+/// # Examples
+///
+/// ```
+/// // Pseudocode showing typical usage:
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut stores = /* SignalStores setup */;
+/// let resolver = /* SendContextResolver implementation */;
+/// let own_jid = /* Jid of sender */;
+/// let to_jid = /* Jid of recipient */;
+/// let message = /* wa::Message to send */;
+/// let stanza = prepare_dm_stanza(
+///     &mut stores,
+///     resolver.as_ref(),
+///     &own_jid,
+///     None,               // no AdvSignedDeviceIdentity
+///     to_jid,
+///     &message,
+///     "req123".to_string(),
+///     None,               // not an edit
+///     None,               // no parallel processor
+/// ).await?;
+/// # Ok(()) }
+/// ```
 pub async fn prepare_dm_stanza<
     'a,
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -397,7 +525,60 @@ where
     Ok(stanza)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Prepare a hybrid group message stanza that contains an encrypted Sender Key Distribution (SKDM)
+/// when requested and the encrypted group payload for the group identified by `to_jid`.
+///
+/// This function:
+/// - Ensures the sender is listed among group participants.
+/// - Optionally builds and distributes an SKDM to resolved participant devices when
+///   `force_skdm_distribution` is true; SKDM distribution may be performed in parallel
+///   when `parallel_processor` is provided, otherwise it falls back to the sequential path.
+/// - Constructs a SenderKeyMessage for the group payload, applies edit-related `decrypt-fail`
+///   attributes when needed, and embeds any device-identity block if prekey messages are included.
+/// - Populates the stanza attributes (`to`, `id`, `type`, optional `edit`, and `phash` when
+///   SKDM distribution occurred) and returns the assembled `message` stanza node.
+///
+/// Errors returned by this function originate from device resolution, prekey/session processing,
+/// sender key creation or storage, or message encryption routines and are propagated to the caller.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use crate::types::message::AddressingMode;
+/// # use crate::{SignalStores, SendContextResolver};
+/// # use wa::Message;
+/// # use std::sync::Arc;
+/// # async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Setup placeholders (actual stores and resolver must be provided by the caller)
+/// let mut stores: SignalStores<'_, _, _, _, _> = unimplemented!();
+/// let resolver: &dyn SendContextResolver = unimplemented!();
+/// let mut group_info = unimplemented!(); // GroupInfo with participants and addressing_mode
+/// let own_jid = unimplemented!(); // Jid for this device
+/// let own_lid = unimplemented!(); // local Jid when using LID addressing
+/// let account = None;
+/// let to_jid = unimplemented!();
+/// let message = Message::default();
+/// let request_id = "req-id".to_string();
+///
+/// // Prepare a group stanza, forcing SKDM distribution and without a parallel processor.
+/// let stanza = crate::prepare_group_stanza(
+///     &mut stores,
+///     resolver,
+///     &mut group_info,
+///     &own_jid,
+///     &own_lid,
+///     account,
+///     to_jid,
+///     &message,
+///     request_id,
+///     true, // force_skdm_distribution
+///     None, // edit
+///     None, // parallel_processor
+/// ).await?;
+///
+/// // `stanza` is a ready-to-send Node representing the hybrid group message.
+/// # Ok(()) }
+/// ```
 pub async fn prepare_group_stanza<
     'a,
     S: crate::libsignal::protocol::SessionStore + Send + Sync,

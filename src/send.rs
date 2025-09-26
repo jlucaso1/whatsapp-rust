@@ -13,7 +13,45 @@ use std::time::SystemTime;
 use futures_util::{stream, StreamExt};
 use rand::TryRngCore;
 
-/// Parallel encryption for SKDM distribution to improve performance for large groups
+/// Encrypts the same plaintext for multiple device JIDs in parallel and returns per-device
+/// participant "to" nodes suitable for SKDM distribution.
+///
+/// This function:
+/// - Identifies devices that lack an existing session and fetches/processes their pre-key
+///   bundles sequentially to ensure store consistency.
+/// - Performs bounded parallel per-device encryption to produce an `enc` sub-node for each
+///   recipient and wraps it in a `to` participant node.
+/// - Returns a list of participant nodes and a boolean indicating whether any encryption used
+///   a PreKey (pre-key message).
+///
+/// # Returns
+///
+/// A tuple containing:
+/// - `Vec<Node>`: participant `to` nodes, each containing an `enc` child with the serialized ciphertext.
+/// - `bool`: `true` if at least one encrypted message was a pre-key message, `false` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// // Illustrative example (types and concrete setup omitted for brevity).
+/// # async fn _example() -> Result<(), anyhow::Error> {
+/// let store_adapter: SignalProtocolStoreAdapter = /* ... */;
+/// let resolver: &dyn wacore::client::context::SendContextResolver = /* ... */;
+/// let devices: Vec<Jid> = vec![/* device JIDs */];
+/// let plaintext = b"hello";
+/// let extra_attrs = Attrs::new();
+///
+/// let (participant_nodes, includes_prekey) = encrypt_for_devices_parallel(
+///     &store_adapter,
+///     resolver,
+///     &devices,
+///     plaintext,
+///     &extra_attrs,
+/// ).await?;
+///
+/// // `participant_nodes` can be embedded into an SKDM stanza for distribution.
+/// # Ok(()) }
+/// ```
 async fn encrypt_for_devices_parallel(
     store_adapter: &SignalProtocolStoreAdapter,
     resolver: &dyn wacore::client::context::SendContextResolver,
@@ -154,6 +192,16 @@ pub struct ClientParallelProcessor {
 }
 
 impl ClientParallelProcessor {
+    /// Create a ClientParallelProcessor that wraps the provided SignalProtocolStoreAdapter.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use crate::send::ClientParallelProcessor;
+    /// // Obtain or construct a SignalProtocolStoreAdapter appropriate for your environment.
+    /// let store_adapter = /* SignalProtocolStoreAdapter instance */ unimplemented!();
+    /// let processor = ClientParallelProcessor::new(store_adapter);
+    /// ```
     pub fn new(store_adapter: SignalProtocolStoreAdapter) -> Self {
         Self { store_adapter }
     }
@@ -161,6 +209,21 @@ impl ClientParallelProcessor {
 
 #[async_trait::async_trait]
 impl wacore::send::ParallelEncryptionProcessor for ClientParallelProcessor {
+    /// Encrypts the given plaintext for multiple recipient devices and produces per-device participant nodes.
+    ///
+    /// Produces a vector of participant `to` nodes (each containing an `enc` child with the serialized ciphertext)
+    /// and a boolean that is `true` if any produced ciphertext was a pre-key (prekey) message, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example(client: &Client, resolver: &dyn wacore::client::context::SendContextResolver, devices: &[Jid]) -> anyhow::Result<()> {
+    /// let plaintext = b"hello world";
+    /// let attrs = Attrs::new();
+    /// let (participant_nodes, includes_prekey) = client.encrypt_for_devices_parallel(resolver, devices, plaintext, &attrs).await?;
+    /// assert!(!participant_nodes.is_empty());
+    /// # Ok(()) }
+    /// ```
     async fn encrypt_for_devices_parallel(
         &self,
         resolver: &dyn wacore::client::context::SendContextResolver,
@@ -181,6 +244,27 @@ impl wacore::send::ParallelEncryptionProcessor for ClientParallelProcessor {
 }
 
 impl Client {
+    /// Send a WhatsApp message to the specified JID and return the generated request id.
+    ///
+    /// The function generates a message request identifier, delivers the provided `wa::Message` to
+    /// `to`, and returns the request id if the send operation succeeds.
+    ///
+    /// # Returns
+    ///
+    /// `Ok` with the generated request id string on success, `Err` on failure.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[tokio::test]
+    /// async fn example_send_message() {
+    ///     // Setup a connected Client named `client` beforehand.
+    ///     let to: Jid = "12345@s.whatsapp.net".parse().unwrap();
+    ///     let message = wa::Message::text("Hello");
+    ///     let request_id = client.send_message(to, message).await.unwrap();
+    ///     assert!(!request_id.is_empty());
+    /// }
+    /// ```
     pub async fn send_message(
         &self,
         to: Jid,
@@ -199,6 +283,33 @@ impl Client {
         Ok(request_id)
     }
 
+    /// Send a message to a JID, handling peer, group, and direct-message sending flows.
+    ///
+    /// This method serializes sends to the same chat, derives or reuses a request ID (or uses the provided override),
+    /// and prepares the outgoing stanza according to the destination:
+    /// - peer: prepares a peer stanza using per-device session/identity stores;
+    /// - group: prepares a group stanza, ensures the sender key state (with a retry that forces distribution if missing),
+    ///   and may update recent messages and group participant lists as needed;
+    /// - direct (DM): prepares a DM stanza and updates recent messages.
+    /// For group and DM paths this method constructs and passes a ClientParallelProcessor to the underlying
+    /// preparation functions to enable parallel SKDM encryption and distribution. The resulting stanza is sent
+    /// via send_node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step of stanza preparation, key distribution, or sending fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # async fn doc_example(client: &crate::Client, to: crate::Jid, msg: Arc<crate::wa::Message>) -> Result<()> {
+    /// // Send a DM (peer = false) without forcing key distribution and without edit metadata.
+    /// client.send_message_impl(to, msg, None, false, false, None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
