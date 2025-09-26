@@ -1,7 +1,6 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
-use futures_util::{StreamExt, stream};
 use rand::TryRngCore;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -85,81 +84,51 @@ async fn encrypt_for_devices_parallel(
         }
     }
 
-    // Now perform bounded parallel encryption
-    let concurrency = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4) // Default to 4 concurrent tasks if unavailable
-        .clamp(1, 16); // Ensure at least 1, cap at 16 to avoid overwhelming the system
-
-    let plaintext = plaintext_to_encrypt.to_vec();
-    let attrs = enc_extra_attrs.clone();
-
-    let encryption_tasks = devices.iter().cloned().map(|device_jid| {
-        let plaintext_clone = plaintext.clone();
-        let attrs_clone = attrs.clone();
-        let mut store_clone = store_adapter.clone();
-
-        async move {
-            let signal_address = device_jid.to_protocol_address();
-
-            let encrypted_payload = message_encrypt(
-                &plaintext_clone,
-                &signal_address,
-                &mut store_clone.session_store,
-                &mut store_clone.identity_store,
-                SystemTime::now(),
-            )
-            .await?;
-
-            let (enc_type, serialized_bytes) = match encrypted_payload {
-                CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec()),
-                CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-                _ => return Err(anyhow!("Unexpected encryption message type for SKDM")),
-            };
-
-            let mut enc_attrs = Attrs::new();
-            enc_attrs.insert("v".to_string(), "2".to_string());
-            enc_attrs.insert("type".to_string(), enc_type.to_string());
-            for (k, v) in attrs_clone.iter() {
-                enc_attrs.insert(k.clone(), v.clone());
-            }
-
-            let enc_node = NodeBuilder::new("enc")
-                .attrs(enc_attrs)
-                .bytes(serialized_bytes)
-                .build();
-
-            let participant_node = NodeBuilder::new("to")
-                .attr("jid", device_jid.to_string())
-                .children([enc_node])
-                .build();
-
-            // Return the node and whether a pre-key message was used
-            Ok::<(Node, bool), anyhow::Error>((participant_node, enc_type == "pkmsg"))
-        }
-    });
-
-    // Use bounded concurrency instead of unbounded task spawning
-    let results: Vec<Result<(Node, bool), anyhow::Error>> = stream::iter(encryption_tasks)
-        .buffer_unordered(concurrency)
-        .collect()
-        .await;
-
+    // Encryption must be sequential due to database writes in message_encrypt
+    // Each call to message_encrypt updates the session store, causing SQLite concurrency issues
     let mut participant_nodes = Vec::new();
     let mut includes_prekey_message = false;
 
-    for result in results {
-        match result {
-            Ok((node, uses_prekey)) => {
-                participant_nodes.push(node);
-                if uses_prekey {
-                    includes_prekey_message = true;
-                }
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        let mut store_clone = store_adapter.clone();
+        
+        let encrypted_payload = message_encrypt(
+            plaintext_to_encrypt,
+            &signal_address,
+            &mut store_clone.session_store,
+            &mut store_clone.identity_store,
+            SystemTime::now(),
+        )
+        .await?;
+
+        let (enc_type, serialized_bytes) = match encrypted_payload {
+            CiphertextMessage::PreKeySignalMessage(msg) => {
+                includes_prekey_message = true;
+                ("pkmsg", msg.serialized().to_vec())
             }
-            Err(e) => {
-                return Err(anyhow!("An encryption task for SKDM failed: {}", e));
-            }
+            CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+            _ => return Err(anyhow!("Unexpected encryption message type for SKDM")),
+        };
+
+        let mut enc_attrs = Attrs::new();
+        enc_attrs.insert("v".to_string(), "2".to_string());
+        enc_attrs.insert("type".to_string(), enc_type.to_string());
+        for (k, v) in enc_extra_attrs.iter() {
+            enc_attrs.insert(k.clone(), v.clone());
         }
+
+        let enc_node = NodeBuilder::new("enc")
+            .attrs(enc_attrs)
+            .bytes(serialized_bytes)
+            .build();
+
+        let participant_node = NodeBuilder::new("to")
+            .attr("jid", device_jid.to_string())
+            .children([enc_node])
+            .build();
+        
+        participant_nodes.push(participant_node);
     }
 
     Ok((participant_nodes, includes_prekey_message))
