@@ -1,13 +1,185 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
+use rand::TryRngCore;
 use std::sync::Arc;
-use wacore::libsignal::protocol::SignalProtocolError;
+use std::time::SystemTime;
+use wacore::libsignal::protocol::{
+    CiphertextMessage, UsePQRatchet, message_encrypt, process_prekey_bundle,
+};
+use wacore::libsignal::protocol::{SessionStore, SignalProtocolError};
 use wacore::types::jid::JidExt;
+use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::node::{Attrs, Node};
 use waproto::whatsapp as wa;
 
+/// Encrypts the same plaintext for multiple device JIDs in parallel and returns per-device
+/// participant "to" nodes suitable for SKDM distribution.
+///
+/// This function:
+/// - Identifies devices that lack an existing session and fetches/processes their pre-key
+///   bundles sequentially to ensure store consistency.
+/// - Performs bounded parallel per-device encryption to produce an `enc` sub-node for each
+///   recipient and wraps it in a `to` participant node.
+/// - Returns a list of participant nodes and a boolean indicating whether any encryption used
+///   a PreKey (pre-key message).
+///
+/// # Returns
+///
+/// A tuple containing:
+/// - `Vec<Node>`: participant `to` nodes, each containing an `enc` child with the serialized ciphertext.
+/// - `bool`: `true` if at least one encrypted message was a pre-key message, `false` otherwise.
+async fn encrypt_for_devices_parallel(
+    store_adapter: &SignalProtocolStoreAdapter,
+    resolver: &dyn wacore::client::context::SendContextResolver,
+    devices: &[Jid],
+    plaintext_to_encrypt: &[u8],
+    enc_extra_attrs: &Attrs,
+) -> Result<(Vec<Node>, bool), anyhow::Error> {
+    // First, identify devices needing prekeys using a mutable clone
+    let mut jids_needing_prekeys = Vec::new();
+    let cloned_adapter_for_check = store_adapter.clone();
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        if cloned_adapter_for_check
+            .session_store
+            .load_session(&signal_address)
+            .await?
+            .is_none()
+        {
+            jids_needing_prekeys.push(device_jid.clone());
+        }
+    }
+
+    // Fetch prekeys sequentially (this part can't be parallelized due to resolver trait)
+    if !jids_needing_prekeys.is_empty() {
+        log::info!(
+            "Fetching prekeys for devices without sessions: {:?}",
+            jids_needing_prekeys
+        );
+        let prekey_bundles = resolver
+            .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+            .await?;
+
+        // Process prekeys sequentially to maintain store consistency
+        // Create a single mutable RNG instance instead of OsRng.unwrap_err() for each call
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut cloned_adapter = store_adapter.clone();
+        for device_jid in &jids_needing_prekeys {
+            let signal_address = device_jid.to_protocol_address();
+            let bundle = prekey_bundles
+                .get(device_jid)
+                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
+            process_prekey_bundle(
+                &signal_address,
+                &mut cloned_adapter.session_store,
+                &mut cloned_adapter.identity_store,
+                bundle,
+                SystemTime::now(),
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await?;
+        }
+    }
+
+    // Encryption must be sequential due to database writes in message_encrypt
+    // Each call to message_encrypt updates the session store, causing SQLite concurrency issues
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
+
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        let mut store_clone = store_adapter.clone();
+        
+        let encrypted_payload = message_encrypt(
+            plaintext_to_encrypt,
+            &signal_address,
+            &mut store_clone.session_store,
+            &mut store_clone.identity_store,
+            SystemTime::now(),
+        )
+        .await?;
+
+        let (enc_type, serialized_bytes) = match encrypted_payload {
+            CiphertextMessage::PreKeySignalMessage(msg) => {
+                includes_prekey_message = true;
+                ("pkmsg", msg.serialized().to_vec())
+            }
+            CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+            _ => return Err(anyhow!("Unexpected encryption message type for SKDM")),
+        };
+
+        let mut enc_attrs = Attrs::new();
+        enc_attrs.insert("v".to_string(), "2".to_string());
+        enc_attrs.insert("type".to_string(), enc_type.to_string());
+        for (k, v) in enc_extra_attrs.iter() {
+            enc_attrs.insert(k.clone(), v.clone());
+        }
+
+        let enc_node = NodeBuilder::new("enc")
+            .attrs(enc_attrs)
+            .bytes(serialized_bytes)
+            .build();
+
+        let participant_node = NodeBuilder::new("to")
+            .attr("jid", device_jid.to_string())
+            .children([enc_node])
+            .build();
+        
+        participant_nodes.push(participant_node);
+    }
+
+    Ok((participant_nodes, includes_prekey_message))
+}
+
+/// Implementation of parallel encryption processor for Client
+pub struct ClientParallelProcessor {
+    store_adapter: SignalProtocolStoreAdapter,
+}
+
+impl ClientParallelProcessor {
+    /// Create a ClientParallelProcessor that wraps the provided SignalProtocolStoreAdapter.
+    pub fn new(store_adapter: SignalProtocolStoreAdapter) -> Self {
+        Self { store_adapter }
+    }
+}
+
+#[async_trait::async_trait]
+impl wacore::send::ParallelEncryptionProcessor for ClientParallelProcessor {
+    /// Encrypts the given plaintext for multiple recipient devices and produces per-device participant nodes.
+    ///
+    /// Produces a vector of participant `to` nodes (each containing an `enc` child with the serialized ciphertext)
+    /// and a boolean that is `true` if any produced ciphertext was a pre-key (prekey) message, `false` otherwise.
+    async fn encrypt_for_devices_parallel(
+        &self,
+        resolver: &dyn wacore::client::context::SendContextResolver,
+        devices: &[Jid],
+        plaintext_to_encrypt: &[u8],
+        enc_extra_attrs: &Attrs,
+    ) -> Result<(Vec<Node>, bool), anyhow::Error> {
+        // Use our parallel implementation
+        encrypt_for_devices_parallel(
+            &self.store_adapter,
+            resolver,
+            devices,
+            plaintext_to_encrypt,
+            enc_extra_attrs,
+        )
+        .await
+    }
+}
+
 impl Client {
+    /// Send a WhatsApp message to the specified JID and return the generated request id.
+    ///
+    /// The function generates a message request identifier, delivers the provided `wa::Message` to
+    /// `to`, and returns the request id if the send operation succeeds.
+    ///
+    /// # Returns
+    ///
+    /// `Ok` with the generated request id string on success, `Err` on failure.
     pub async fn send_message(
         &self,
         to: Jid,
@@ -26,6 +198,21 @@ impl Client {
         Ok(request_id)
     }
 
+    /// Send a message to a JID, handling peer, group, and direct-message sending flows.
+    ///
+    /// This method serializes sends to the same chat, derives or reuses a request ID (or uses the provided override),
+    /// and prepares the outgoing stanza according to the destination:
+    /// - peer: prepares a peer stanza using per-device session/identity stores;
+    /// - group: prepares a group stanza, ensures the sender key state (with a retry that forces distribution if missing),
+    ///   and may update recent messages and group participant lists as needed;
+    /// - direct (DM): prepares a DM stanza and updates recent messages.
+    ///   For group and DM paths this method constructs and passes a ClientParallelProcessor to the underlying
+    ///   preparation functions to enable parallel SKDM encryption and distribution. The resulting stanza is sent
+    ///   via send_node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step of stanza preparation, key distribution, or sending fails.
     pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
@@ -110,6 +297,9 @@ impl Client {
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
+            // Create parallel processor for SKDM distribution
+            let parallel_processor = ClientParallelProcessor::new(store_adapter.clone());
+
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
                 identity_store: &mut store_adapter.identity_store,
@@ -130,6 +320,7 @@ impl Client {
                 request_id.clone(),
                 force_skdm,
                 edit.clone(),
+                Some(&parallel_processor), // Enable parallel processing
             )
             .await
             {
@@ -142,6 +333,11 @@ impl Client {
 
                         let mut store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
+
+                        // Create parallel processor for retry
+                        let parallel_processor_retry =
+                            ClientParallelProcessor::new(store_adapter_retry.clone());
+
                         let mut stores_retry = wacore::send::SignalStores {
                             session_store: &mut store_adapter_retry.session_store,
                             identity_store: &mut store_adapter_retry.identity_store,
@@ -162,6 +358,7 @@ impl Client {
                             request_id,
                             true, // Force distribution on retry
                             edit.clone(),
+                            Some(&parallel_processor_retry), // Enable parallel processing on retry
                         )
                         .await?
                     } else {
@@ -184,6 +381,9 @@ impl Client {
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
+            // Create parallel processor for DM encryption
+            let parallel_processor = ClientParallelProcessor::new(store_adapter.clone());
+
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
                 identity_store: &mut store_adapter.identity_store,
@@ -201,6 +401,7 @@ impl Client {
                 message.as_ref(),
                 request_id,
                 edit,
+                Some(&parallel_processor), // Enable parallel processing for DMs too
             )
             .await?
         };

@@ -188,15 +188,6 @@ impl BotBuilder {
     ///
     /// # Arguments
     /// * `backend` - The backend implementation that provides all storage operations
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
-    /// let bot = Bot::builder()
-    ///     .with_backend(backend)
-    ///     .build()
-    ///     .await?;
-    /// ```
     pub fn with_backend(mut self, backend: Arc<dyn Backend>) -> Self {
         self.backend = Some(backend);
         self
