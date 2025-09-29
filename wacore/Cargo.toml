@@ -39,7 +39,7 @@ prost = { version = "0.14.1", default-features = false }
 # Cryptography
 rand = { version = "0.9" }
 rand_core = "0.9"
-serde = { version = "1.0.226", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde-big-array = "0.5"
 sha1 = "0.10.6"
 sha2 = "0.10.6"
