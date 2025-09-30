@@ -10,7 +10,7 @@ members = [".", "wacore", "waproto"]
 flate2 = { version = "1.1.2", default-features = false, features = ["zlib-rs"] }
 rand = "0.9"
 rand_core = "0.9"
-thiserror = "2.0.15"
+thiserror = "2.0.17"
 tokio = { version = "1.47.1" }
 wacore-binary = { path = "./wacore/binary" }
 waproto = { path = "./waproto" }
