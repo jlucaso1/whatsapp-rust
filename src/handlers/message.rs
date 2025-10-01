@@ -1,6 +1,7 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
+use log::warn;
 use std::sync::Arc;
 use wacore_binary::node::Node;
 
@@ -30,11 +31,26 @@ impl StanzaHandler for MessageHandler {
         let client_clone = client.clone();
         let node_arc = Arc::new(node.clone());
 
-        // Process messages in parallel without per-chat locking
-        // The Signal protocol store has internal locking to prevent race conditions
-        // This allows new messages (like "ping") to be processed immediately
-        // even if there are many queued undecryptable messages from the same chat
         tokio::spawn(async move {
+            let info = match client_clone.parse_message_info(&node_arc).await {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        "Could not parse message info to acquire lock; dropping message. Error: {e:?}"
+                    );
+                    return;
+                }
+            };
+            let chat_jid = info.source.chat;
+
+            let mutex_arc = client_clone
+                .chat_locks
+                .entry(chat_jid)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone();
+
+            let _lock_guard = mutex_arc.lock().await;
+
             client_clone.handle_encrypted_message(node_arc).await;
         });
 

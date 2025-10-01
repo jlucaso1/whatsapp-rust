@@ -392,26 +392,31 @@ pub async fn prepare_group_stanza<
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
                 // If this is a LID JID and we have a phone number mapping, use it for device query
-                if base_jid.server == "lid" {
-                    if let Some(phone_jid) = group_info.lid_to_pn_map.get(&base_jid.user) {
-                        log::debug!("Using phone number {} for LID {} device query", phone_jid, base_jid);
-                        return phone_jid.to_non_ad();
-                    }
+                if base_jid.server == "lid"
+                    && let Some(phone_jid) = group_info.lid_to_pn_map.get(&base_jid.user)
+                {
+                    log::debug!(
+                        "Using phone number {} for LID {} device query",
+                        phone_jid,
+                        base_jid
+                    );
+                    return phone_jid.to_non_ad();
                 }
                 base_jid
             })
             .collect();
-        
+
         // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
         let own_jid_to_check = if own_base_jid.server == "lid" {
-            group_info.lid_to_pn_map
+            group_info
+                .lid_to_pn_map
                 .get(&own_base_jid.user)
                 .map(|pn| pn.to_non_ad())
                 .unwrap_or_else(|| own_base_jid.clone())
         } else {
             own_base_jid.clone()
         };
-        
+
         if !jids_to_resolve
             .iter()
             .any(|participant| participant.is_same_user_as(&own_jid_to_check))

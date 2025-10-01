@@ -75,70 +75,23 @@ The following example demonstrates a simple bot that can "pong" back text, image
 
 Check the file `src/main.rs` and run it with `cargo run`.
 
-## Current Status & Known Issues
-
-### ⚠️ Priority Issue: LID Message Decryption
-
-**Problem**: Messages from contacts using the new LID (Lightweight Identity) system cannot be decrypted when received in group chats if no prior 1-on-1 Signal session exists.
-
-**Technical Details**:
-
-- WhatsApp is migrating to a new identity system called LID (Lightweight Identity)
-- LID JIDs use format: `236395184570386.1:75@lid` (note the dot in the user portion)
-- When a LID user sends a group message and we don't have an established 1-on-1 Signal session with them, decryption fails with `SessionNotFound`
-- The client now handles this gracefully (no crashes, dispatches `UndecryptableMessage` event) but messages remain unreadable
-- The `offline` counter increases on each reconnection as the server keeps trying to deliver these messages
-
-**Why This Happens**:
-
-1. Group messages use the Signal Protocol's Sender Keys for efficiency
-2. To decrypt sender key distribution messages (SKDM), we need an established Signal session with the sender
-3. LID users may send group messages without ever having a 1-on-1 chat with us
-4. Without the session, we can't decrypt the SKDM, and thus can't decrypt any group messages from that user
-
-**Current Behavior**:
-
-- ✅ No crashes or panics
-- ✅ Graceful error handling with `UndecryptableMessage` events
-- ✅ Proper JID parsing for LID format (fixed dot-splitting issue)
-- ✅ Prevents retry loops by skipping group content when session establishment fails
-- ❌ Messages remain undecryptable until a 1-on-1 session is established
-
-**Potential Solutions** (to be implemented):
-
-1. Proactively request pre-keys for LID senders when encountering them in groups
-2. Send an empty message to LID contacts to force session establishment
-3. Implement a pre-key bundle fetch mechanism similar to whatsmeow's approach
-4. Handle session-less SKDM decryption if protocol allows
-
-See test `test_lid_group_message_without_session` in `src/message.rs` for reproduction case.
-
----
-
 ## Roadmap
 
 With the core messaging and media functionality now stable, the project can focus on expanding feature parity and improving robustness.
 
-1.  **Phase 1: Critical Fixes (In Progress)**
-
-    - [x] Fix LID JID parsing to handle dots in user portion
-    - [x] Graceful handling of SessionNotFound errors
-    - [x] Prevent retry loops for undecryptable messages
-    - [ ] **[HIGH PRIORITY]** Implement session establishment for LID contacts to decrypt group messages
-
-2.  **Phase 2: Robustness and Event Handling**
+1.  **Phase 2: Robustness and Event Handling**
 
     - [ ] Implement handlers for all receipt types (read, played, etc.).
     - [ ] Implement presence handling (`<presence>`).
     - [ ] Expand `usync` implementation for robust contact and profile synchronization.
 
-3.  **Phase 3: Expanded Message Types**
+2.  **Phase 3: Expanded Message Types**
 
     - [ ] Add support for sending and receiving reactions.
     - [ ] Implement support for polls and other interactive messages.
     - [ ] Handle message edits and revokes.
 
-4.  **Future Goals**
+3.  **Future Goals**
     - [ ] Profile management (setting status, profile pictures).
     - [ ] Explore newsletter and channel support.
 

@@ -31,7 +31,7 @@ impl Client {
 
         let mut participants = Vec::new();
         let mut lid_to_pn_map = std::collections::HashMap::new();
-        
+
         let addressing_mode_str = group_node
             .attrs()
             .optional_string("addressing_mode")
@@ -44,13 +44,13 @@ impl Client {
         for participant_node in group_node.get_children_by_tag("participant") {
             let participant_jid = participant_node.attrs().jid("jid");
             participants.push(participant_jid.clone());
-            
+
             // If this is a LID group, extract the phone_number mapping
-            if addressing_mode == crate::types::message::AddressingMode::Lid {
-                if let Some(phone_number) = participant_node.attrs().optional_jid("phone_number") {
-                    // Store mapping: LID user -> phone number JID (for device queries)
-                    lid_to_pn_map.insert(participant_jid.user.clone(), phone_number);
-                }
+            if addressing_mode == crate::types::message::AddressingMode::Lid
+                && let Some(phone_number) = participant_node.attrs().optional_jid("phone_number")
+            {
+                // Store mapping: LID user -> phone number JID (for device queries)
+                lid_to_pn_map.insert(participant_jid.user.clone(), phone_number);
             }
         }
 
