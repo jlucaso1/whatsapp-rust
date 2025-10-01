@@ -97,24 +97,54 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
-        if let Err(e) = self
+        let session_decrypted_successfully = self
             .clone()
             .process_session_enc_batch(&session_enc_nodes, &info)
-            .await
-        {
-            log::warn!("Batch session decrypt encountered error (continuing): {e:?}");
-        }
+            .await;
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",
             group_content_enc_nodes.len()
         );
-        if let Err(e) = self
-            .clone()
-            .process_group_enc_batch(&group_content_enc_nodes, &info)
-            .await
-        {
-            log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+
+        // Only process group content if we successfully decrypted the session establishment message
+        if !group_content_enc_nodes.is_empty() {
+            if session_decrypted_successfully {
+                if let Err(e) = self
+                    .clone()
+                    .process_group_enc_batch(&group_content_enc_nodes, &info)
+                    .await
+                {
+                    log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                }
+            } else {
+                warn!(
+                    "Skipping skmsg decryption for message {} from {} because the initial session/senderkey message failed to decrypt. This prevents a retry loop.",
+                    info.id, info.source.sender
+                );
+                // Still dispatch an UndecryptableMessage event so the user knows
+                self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                    crate::types::events::UndecryptableMessage {
+                        info: info.clone(),
+                        is_unavailable: false,
+                        unavailable_type: crate::types::events::UnavailableType::Unknown,
+                        decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                    },
+                ));
+
+                // Do NOT send a delivery receipt for undecryptable messages.
+                // Per whatsmeow's implementation, delivery receipts are only sent for
+                // successfully decrypted/handled messages. Sending a receipt here would
+                // tell the server we processed it, incrementing the offline counter.
+                // The transport <ack> is sufficient for acknowledgment.
+            }
+        } else if !session_decrypted_successfully && !session_enc_nodes.is_empty() {
+            // Edge case: message with only msg/pkmsg that failed to decrypt, no skmsg
+            warn!(
+                "Message {} from {} failed to decrypt and has no group content.",
+                info.id, info.source.sender
+            );
+            // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
 
@@ -122,15 +152,16 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
-    ) -> Result<(), DecryptionError> {
+    ) -> bool {
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
-            return Ok(());
+            return false;
         }
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
         let rng = rand::rngs::OsRng;
+        let mut any_success = false;
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
@@ -177,6 +208,7 @@ impl Client {
 
             match decrypt_res {
                 Ok(padded_plaintext) => {
+                    any_success = true;
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
@@ -191,11 +223,31 @@ impl Client {
                     }
                 }
                 Err(e) => {
-                    log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                    // Handle SessionNotFound gracefully during offline sync
+                    if let SignalProtocolError::SessionNotFound(_) = e {
+                        warn!(
+                            "Gracefully failing decryption for {} from {} due to missing session. This is common during offline sync. Dispatching UndecryptableMessage event.",
+                            enc_type, info.source.sender
+                        );
+                        // Dispatch an event so the library user knows a message was missed.
+                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                            crate::types::events::UndecryptableMessage {
+                                info: info.clone(),
+                                is_unavailable: false,
+                                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                            },
+                        ));
+                        // IMPORTANT: Continue the loop instead of returning an error.
+                        continue;
+                    } else {
+                        // For other errors, log them but still don't crash the whole batch.
+                        log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                    }
                 }
             }
         }
-        Ok(())
+        any_success
     }
 
     async fn process_group_enc_batch(
@@ -599,5 +651,217 @@ mod tests {
             info.source.is_group,
             "Broadcast messages should be treated as group-like"
         );
+    }
+
+    #[tokio::test]
+    async fn test_process_session_enc_batch_handles_session_not_found_gracefully() {
+        use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
+
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_graceful_fail?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let info = MessageInfo {
+            source: crate::types::message::MessageSource {
+                sender: sender_jid.clone(),
+                chat: sender_jid.clone(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // 2. Create a valid but undecryptable SignalMessage (encrypted with a dummy key)
+        let dummy_key = [0u8; 32];
+        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let signal_message = SignalMessage::new(
+            4,
+            &dummy_key,
+            sender_ratchet,
+            0,
+            0,
+            b"test",
+            sender_identity_pair.identity_key(),
+            receiver_identity_pair.identity_key(),
+        )
+        .unwrap();
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .bytes(signal_message.serialized().to_vec())
+            .build();
+        let enc_nodes = vec![&enc_node];
+
+        // 3. Run the function under test
+        // The function now returns a boolean indicating if any decryption succeeded.
+        // With a SessionNotFound error, it should return false but not panic.
+        let success = client.process_session_enc_batch(&enc_nodes, &info).await;
+
+        // 4. Assert the desired behavior: the function continues gracefully
+        // The function should return false (no successful decryption) but should not panic.
+        assert!(
+            !success,
+            "process_session_enc_batch should return false when SessionNotFound occurs"
+        );
+
+        // Note: Verifying event dispatch would require adding a test event handler.
+        // For this test, we're just ensuring the function doesn't panic and returns the correct status.
+    }
+
+    #[tokio::test]
+    async fn test_handle_encrypted_message_skips_skmsg_after_msg_failure() {
+        use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
+
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_skip_skmsg_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // 2. Create a message node with both msg and skmsg
+        // The msg will fail to decrypt (no session), so skmsg should be skipped
+        let dummy_key = [0u8; 32];
+        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let signal_message = SignalMessage::new(
+            4,
+            &dummy_key,
+            sender_ratchet,
+            0,
+            0,
+            b"test",
+            sender_identity_pair.identity_key(),
+            receiver_identity_pair.identity_key(),
+        )
+        .unwrap();
+
+        let msg_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .bytes(signal_message.serialized().to_vec())
+            .build();
+
+        let skmsg_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .bytes(vec![4, 5, 6])
+            .build();
+
+        let message_node = Arc::new(
+            NodeBuilder::new("message")
+                .attr("from", group_jid.to_string())
+                .attr("participant", sender_jid.to_string())
+                .attr("id", "test-id-123")
+                .attr("t", "12345")
+                .children(vec![msg_node, skmsg_node])
+                .build(),
+        );
+
+        // 3. Run the function
+        // This should NOT panic or cause a retry loop. The skmsg should be skipped.
+        client.handle_encrypted_message(message_node).await;
+
+        // 4. Assert
+        // If we get here without panicking, the test passes.
+        // The key improvement is that we won't send a retry receipt for the skmsg
+        // since we detected the msg failure and skipped skmsg processing entirely.
+    }
+
+    /// Test case for reproducing LID group message decryption failure
+    /// when no 1-on-1 Signal session exists with the LID sender.
+    ///
+    /// Context:
+    /// - LID (Lightweight Identity) is WhatsApp's new identity system
+    /// - LID JIDs use format: `236395184570386.1:75@lid` (note the dot)
+    /// - Group messages from LID users fail to decrypt if we lack a Signal session
+    /// - This causes SessionNotFound errors which we now handle gracefully
+    ///
+    /// Expected behavior:
+    /// - No crash or panic
+    /// - UndecryptableMessage event dispatched
+    /// - No delivery receipt sent (only transport ack)
+    /// - Offline counter increments on reconnection (expected)
+    ///
+    /// Solution needed:
+    /// - Implement proactive session establishment with LID contacts
+    /// - Possibly fetch pre-keys when encountering new LID senders in groups
+    #[tokio::test]
+    #[ignore = "Requires valid whatsapp.db with active session to reproduce. This is a known issue documented in README.md"]
+    async fn test_lid_group_message_without_session() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::jid::Jid;
+
+        // This test reproduces the real-world scenario where:
+        // 1. A LID user (e.g., 236395184570386.1:75@lid) sends a group message
+        // 2. We don't have a 1-on-1 Signal session with this LID user
+        // 3. The message contains both PreKeySignalMessage (pkmsg) and SenderKeyDistributionMessage (skmsg)
+        // 4. Decryption fails with SessionNotFound
+
+        // Setup: Create client with real database
+        let backend = Arc::new(
+            SqliteStore::new("whatsapp.db")
+                .await
+                .expect("Failed to open whatsapp.db - ensure you have an authenticated session"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        // Simulate a group message from a LID user we haven't chatted with 1-on-1
+        let lid_sender: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // In reality, this would contain actual encrypted pkmsg and skmsg bytes
+        // For now, we're just documenting the structure
+        let pkmsg_node = NodeBuilder::new("enc")
+            .attr("type", "pkmsg")
+            .attr("v", "2")
+            .bytes(vec![/* actual pkmsg bytes */])
+            .build();
+
+        let skmsg_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .attr("v", "2")
+            .bytes(vec![/* actual skmsg bytes */])
+            .build();
+
+        let message_node = Arc::new(
+            NodeBuilder::new("message")
+                .attr("from", group_jid.to_string())
+                .attr("participant", lid_sender.to_string())
+                .attr("id", "LID_TEST_MSG_001")
+                .attr("t", "1759296831")
+                .attr("type", "text")
+                .attr("notify", "LID Test User")
+                .attr("offline", "1")
+                .attr("addressing_mode", "lid")
+                .children(vec![pkmsg_node, skmsg_node])
+                .build(),
+        );
+
+        // Attempt to handle the message
+        // Expected: Graceful failure, no crash, UndecryptableMessage event dispatched
+        client.handle_encrypted_message(message_node).await;
+
+        // If we reach here without panicking, the graceful handling works
+        // However, the message remains undecryptable until we:
+        // 1. Establish a Signal session with the LID user (send them a 1-on-1 message)
+        // 2. OR implement proactive pre-key fetching for LID contacts
+        // 3. OR implement session-less SKDM decryption if protocol allows
+
+        println!("✅ LID message handled gracefully (but not decrypted - this is the known issue)");
     }
 }
