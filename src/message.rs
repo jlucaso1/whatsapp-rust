@@ -151,7 +151,7 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
-        let session_decrypted_successfully = self
+        let (session_decrypted_successfully, session_had_duplicates) = self
             .clone()
             .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
             .await;
@@ -163,11 +163,13 @@ impl Client {
 
         // Only process group content if:
         // 1. There were no session messages (session already exists), OR
-        // 2. Session messages were successfully decrypted
-        // Skip only if session messages FAILED to decrypt (not just absent)
+        // 2. Session messages were successfully decrypted, OR
+        // 3. Session messages were duplicates (already processed, so session exists)
+        // Skip only if session messages FAILED to decrypt (not duplicates, not absent)
         if !group_content_enc_nodes.is_empty() {
-            let should_process_skmsg =
-                session_enc_nodes.is_empty() || session_decrypted_successfully;
+            let should_process_skmsg = session_enc_nodes.is_empty()
+                || session_decrypted_successfully
+                || session_had_duplicates;
 
             if should_process_skmsg {
                 if let Err(e) = self
@@ -182,28 +184,35 @@ impl Client {
                     log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
                 }
             } else {
-                // Only skip if there WERE session messages that FAILED
-                warn!(
-                    "Skipping skmsg decryption for message {} from {} because the initial session/senderkey message failed to decrypt. This prevents a retry loop.",
-                    info.id, info.source.sender
-                );
-                // Still dispatch an UndecryptableMessage event so the user knows
-                self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                    crate::types::events::UndecryptableMessage {
-                        info: info.clone(),
-                        is_unavailable: false,
-                        unavailable_type: crate::types::events::UnavailableType::Unknown,
-                        decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                    },
-                ));
+                // Only show warning if session messages actually FAILED (not duplicates)
+                if !session_had_duplicates {
+                    warn!(
+                        "Skipping skmsg decryption for message {} from {} because the initial session/senderkey message failed to decrypt. This prevents a retry loop.",
+                        info.id, info.source.sender
+                    );
+                    // Still dispatch an UndecryptableMessage event so the user knows
+                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                        crate::types::events::UndecryptableMessage {
+                            info: info.clone(),
+                            is_unavailable: false,
+                            unavailable_type: crate::types::events::UnavailableType::Unknown,
+                            decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                        },
+                    ));
 
-                // Do NOT send a delivery receipt for undecryptable messages.
-                // Per whatsmeow's implementation, delivery receipts are only sent for
-                // successfully decrypted/handled messages. Sending a receipt here would
-                // tell the server we processed it, incrementing the offline counter.
-                // The transport <ack> is sufficient for acknowledgment.
+                    // Do NOT send a delivery receipt for undecryptable messages.
+                    // Per whatsmeow's implementation, delivery receipts are only sent for
+                    // successfully decrypted/handled messages. Sending a receipt here would
+                    // tell the server we processed it, incrementing the offline counter.
+                    // The transport <ack> is sufficient for acknowledgment.
+                }
+                // If session_had_duplicates is true, we silently skip (no warning, no event)
+                // because the message was already processed in a previous session
             }
-        } else if !session_decrypted_successfully && !session_enc_nodes.is_empty() {
+        } else if !session_decrypted_successfully
+            && !session_had_duplicates
+            && !session_enc_nodes.is_empty()
+        {
             // Edge case: message with only msg/pkmsg that failed to decrypt, no skmsg
             warn!(
                 "Message {} from {} failed to decrypt and has no group content.",
@@ -218,16 +227,18 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         sender_encryption_jid: &Jid,
-    ) -> bool {
+    ) -> (bool, bool) {
+        // Returns (any_success, any_duplicate)
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
-            return false;
+            return (false, false);
         }
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
         let rng = rand::rngs::OsRng;
         let mut any_success = false;
+        let mut any_duplicate = false;
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
@@ -289,6 +300,18 @@ impl Client {
                     }
                 }
                 Err(e) => {
+                    // Handle DuplicatedMessage: This is expected when messages are redelivered during reconnection
+                    if let SignalProtocolError::DuplicatedMessage(chain, counter) = e {
+                        log::debug!(
+                            "Skipping already-processed message from {} (chain {}, counter {}). This is normal during reconnection.",
+                            info.source.sender,
+                            chain,
+                            counter
+                        );
+                        // Mark that we saw a duplicate so we can skip skmsg without showing error
+                        any_duplicate = true;
+                        continue;
+                    }
                     // Handle SessionNotFound gracefully during offline sync
                     if let SignalProtocolError::SessionNotFound(_) = e {
                         warn!(
@@ -313,7 +336,7 @@ impl Client {
                 }
             }
         }
-        any_success
+        (any_success, any_duplicate)
     }
 
     async fn process_group_enc_batch(
@@ -371,6 +394,16 @@ impl Client {
                     {
                         log::warn!("Failed processing group plaintext (batch): {e:?}");
                     }
+                }
+                Err(SignalProtocolError::DuplicatedMessage(iteration, counter)) => {
+                    log::debug!(
+                        "Skipping already-processed sender key message from {} in group {} (iteration {}, counter {}). This is normal during reconnection.",
+                        info.source.sender,
+                        info.source.chat,
+                        iteration,
+                        counter
+                    );
+                    // This is expected when messages are redelivered, just continue silently
                 }
                 Err(SignalProtocolError::NoSenderKeyState) => {
                     warn!(
@@ -796,17 +829,17 @@ mod tests {
         let enc_nodes = vec![&enc_node];
 
         // 3. Run the function under test
-        // The function now returns a boolean indicating if any decryption succeeded.
-        // With a SessionNotFound error, it should return false but not panic.
-        let success = client
+        // The function now returns (any_success, any_duplicate).
+        // With a SessionNotFound error, it should return (false, false) but not panic.
+        let (success, had_duplicates) = client
             .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
             .await;
 
         // 4. Assert the desired behavior: the function continues gracefully
-        // The function should return false (no successful decryption) but should not panic.
+        // The function should return (false, false) (no successful decryption, no duplicates) but should not panic.
         assert!(
-            !success,
-            "process_session_enc_batch should return false when SessionNotFound occurs"
+            !success && !had_duplicates,
+            "process_session_enc_batch should return (false, false) when SessionNotFound occurs"
         );
 
         // Note: Verifying event dispatch would require adding a test event handler.
