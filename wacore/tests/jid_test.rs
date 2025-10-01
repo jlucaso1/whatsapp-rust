@@ -59,15 +59,24 @@ fn test_legacy_and_agent_jid_parsing() {
     // This is the primary failing case. The parser incorrectly identifies '.13' as an agent.
     let legacy_jid_str = "1234567890.13@s.whatsapp.net";
     let legacy_jid = Jid::from_str(legacy_jid_str).unwrap();
-    assert_eq!(legacy_jid.user, "1234567890", "Legacy JID user part is incorrect");
+    assert_eq!(
+        legacy_jid.user, "1234567890",
+        "Legacy JID user part is incorrect"
+    );
     assert_eq!(legacy_jid.device, 13, "Legacy JID device part should be 13");
     assert_eq!(legacy_jid.agent, 0, "Legacy JID agent part should be 0");
-    assert_eq!(legacy_jid.server, "s.whatsapp.net", "Legacy JID server part is incorrect");
+    assert_eq!(
+        legacy_jid.server, "s.whatsapp.net",
+        "Legacy JID server part is incorrect"
+    );
 
     // Test case 2: Modern companion device JID (for comparison)
     let modern_jid_str = "1234567890:5@s.whatsapp.net";
     let modern_jid = Jid::from_str(modern_jid_str).unwrap();
-    assert_eq!(modern_jid.user, "1234567890", "Modern JID user part is incorrect");
+    assert_eq!(
+        modern_jid.user, "1234567890",
+        "Modern JID user part is incorrect"
+    );
     assert_eq!(modern_jid.device, 5, "Modern JID device part should be 5");
     assert_eq!(modern_jid.agent, 0, "Modern JID agent part should be 0");
 
@@ -75,8 +84,14 @@ fn test_legacy_and_agent_jid_parsing() {
     // This ensures we don't break agent parsing on other JID types.
     let agent_jid_str = "987654321.1@lid";
     let agent_jid = Jid::from_str(agent_jid_str).unwrap();
-    assert_eq!(agent_jid.user, "987654321", "Agent JID user part is incorrect");
+    assert_eq!(
+        agent_jid.user, "987654321",
+        "Agent JID user part is incorrect"
+    );
     assert_eq!(agent_jid.agent, 1, "Agent JID agent part should be 1");
     assert_eq!(agent_jid.device, 0, "Agent JID device part should be 0");
-    assert_eq!(agent_jid.server, "lid", "Agent JID server part is incorrect");
+    assert_eq!(
+        agent_jid.server, "lid",
+        "Agent JID server part is incorrect"
+    );
 }
