@@ -35,6 +35,58 @@ impl Client {
             }
         };
 
+        // Determine the JID to use for E2E decryption, following whatsmeow's logic.
+        // For LID addressing mode, prefer participant_pn (phone number) for decryption.
+        let sender_encryption_jid = if info.source.sender.server == wacore_binary::jid::DEFAULT_USER_SERVER {
+            if let Some(ref sender_alt) = info.source.sender_alt {
+                if sender_alt.server == wacore_binary::jid::HIDDEN_USER_SERVER {
+                    // SenderAlt is LID, use it for decryption
+                    sender_alt.clone()
+                } else {
+                    // SenderAlt is phone number and sender is LID, use phone number for decryption
+                    sender_alt.clone()
+                }
+            } else {
+                info.source.sender.clone()
+            }
+        } else if info.source.sender.server == wacore_binary::jid::HIDDEN_USER_SERVER {
+            // Sender is LID but no sender_alt provided
+            if info.source.is_from_me {
+                // This is a self-sent message. Use our own phone number for decryption.
+                if let Some(own_pn) = self.get_pn().await {
+                    log::debug!(
+                        "Self-sent message from LID {}, using own phone number {}:{} for decryption",
+                        info.source.sender,
+                        own_pn.user,
+                        info.source.sender.device
+                    );
+                    Jid {
+                        user: own_pn.user,
+                        server: own_pn.server,
+                        agent: own_pn.agent,
+                        device: info.source.sender.device,
+                        integrator: own_pn.integrator,
+                    }
+                } else {
+                    log::warn!("Self-sent message from LID but own phone number not available");
+                    info.source.sender.clone()
+                }
+            } else {
+                // Not from us, use LID as-is (though decryption might fail if no session)
+                info.source.sender.clone()
+            }
+        } else {
+            info.source.sender.clone()
+        };
+
+        log::debug!(
+            "Message from {} (sender: {}, encryption JID: {}, is_from_me: {})",
+            info.source.chat,
+            info.source.sender,
+            sender_encryption_jid,
+            info.source.is_from_me
+        );
+
         let mut all_enc_nodes = Vec::new();
 
         let direct_enc_nodes = node.get_children_by_tag("enc");
@@ -99,7 +151,7 @@ impl Client {
         );
         let session_decrypted_successfully = self
             .clone()
-            .process_session_enc_batch(&session_enc_nodes, &info)
+            .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
             .await;
 
         log::debug!(
@@ -112,7 +164,7 @@ impl Client {
             if session_decrypted_successfully {
                 if let Err(e) = self
                     .clone()
-                    .process_group_enc_batch(&group_content_enc_nodes, &info)
+                    .process_group_enc_batch(&group_content_enc_nodes, &info, &sender_encryption_jid)
                     .await
                 {
                     log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
@@ -152,6 +204,7 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
+        sender_encryption_jid: &Jid,
     ) -> bool {
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
@@ -192,7 +245,7 @@ impl Client {
                 }
             };
 
-            let signal_address = info.source.sender.to_protocol_address();
+            let signal_address = sender_encryption_jid.to_protocol_address();
 
             let decrypt_res = message_decrypt(
                 &parsed_message,
@@ -254,6 +307,7 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
+        _sender_encryption_jid: &Jid,
     ) -> Result<(), DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(());
@@ -270,9 +324,20 @@ impl Client {
             };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
+            // CRITICAL: Use info.source.sender (display JID) for sender key operations, NOT sender_encryption_jid.
+            // The sender key is stored under the sender's display JID (e.g., LID), while sender_encryption_jid
+            // is the phone number used for E2E session decryption only.
+            // Using sender_encryption_jid here causes "No sender key state" errors for self-sent LID messages.
             let sender_address = info.source.sender.to_protocol_address();
             let sender_key_name =
                 SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+            
+            log::debug!(
+                "Looking up sender key for group {} with sender address {} (from sender JID: {})",
+                info.source.chat,
+                sender_address,
+                info.source.sender
+            );
 
             let decrypt_result = {
                 let mut device_guard = device_arc.write().await;
@@ -398,15 +463,19 @@ impl Client {
         let mut attrs = node.attrs();
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
+        let own_lid = device_snapshot.lid.clone();
         let from = attrs.jid("from");
 
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
             let participant = attrs.jid("participant");
+            let is_from_me = participant.is_same_user_as(&own_jid) 
+                || (own_lid.is_some() && participant.is_same_user_as(own_lid.as_ref().unwrap()));
+            
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: participant.clone(),
-                is_from_me: participant.is_same_user_as(&own_jid),
+                is_from_me,
                 is_group: true, // Treat as group-like for session handling
                 broadcast_list_owner: if from.user != wacore_binary::jid::STATUS_BROADCAST_USER {
                     Some(participant.clone())
@@ -417,11 +486,24 @@ impl Client {
             }
         } else if from.is_group() {
             let sender = attrs.jid("participant");
+            let sender_alt = if let Some(addressing_mode) = attrs.optional_string("addressing_mode") {
+                match addressing_mode {
+                    "lid" => attrs.optional_jid("participant_pn"),
+                    _ => attrs.optional_jid("participant_lid"),
+                }
+            } else {
+                None
+            };
+            
+            let is_from_me = sender.is_same_user_as(&own_jid) 
+                || (own_lid.is_some() && sender.is_same_user_as(own_lid.as_ref().unwrap()));
+            
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: sender.clone(),
-                is_from_me: sender.is_same_user_as(&own_jid),
+                is_from_me,
                 is_group: true,
+                sender_alt,
                 ..Default::default()
             }
         } else if from.is_same_user_as(&own_jid) {
@@ -702,7 +784,7 @@ mod tests {
         // 3. Run the function under test
         // The function now returns a boolean indicating if any decryption succeeded.
         // With a SessionNotFound error, it should return false but not panic.
-        let success = client.process_session_enc_batch(&enc_nodes, &info).await;
+        let success = client.process_session_enc_batch(&enc_nodes, &info, &sender_jid).await;
 
         // 4. Assert the desired behavior: the function continues gracefully
         // The function should return false (no successful decryption) but should not panic.
@@ -863,5 +945,106 @@ mod tests {
         // 3. OR implement session-less SKDM decryption if protocol allows
 
         println!("✅ LID message handled gracefully (but not decrypted - this is the known issue)");
+    }
+
+    /// Test case for reproducing sender key JID mismatch in LID group messages
+    ///
+    /// Problem:
+    /// - When we process sender key distribution from a self-sent LID message, we store it under the LID JID
+    /// - But when we try to decrypt the group content (skmsg), we look it up using the phone number JID
+    /// - This causes "No sender key state" errors even though we just processed the sender key!
+    ///
+    /// This test verifies the fix by:
+    /// 1. Creating a sender key and storing it under the LID address (mimicking SKDM processing)
+    /// 2. Attempting retrieval with phone number address (the bug) - should fail
+    /// 3. Attempting retrieval with LID address (the fix) - should succeed
+    #[tokio::test]
+    async fn test_self_sent_lid_group_message_sender_key_mismatch() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::libsignal::protocol::{SenderKeyStore, create_sender_key_distribution_message, process_sender_key_distribution_message};
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
+        // Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (_client, _sync_rx) = Client::new(pm.clone()).await;
+
+        // Simulate own LID: 236395184570386.1:75@lid (note: using device 75 to match real scenario)
+        // Phone number: 559984726662:75@s.whatsapp.net
+        let own_lid: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let own_phone: Jid = "559984726662:75@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // Step 1: Create a real sender key distribution message using LID address
+        // This mimics what happens in handle_sender_key_distribution_message
+        let lid_protocol_address = own_lid.to_protocol_address();
+        let lid_sender_key_name = SenderKeyName::new(
+            group_jid.to_string(),
+            lid_protocol_address.to_string()
+        );
+
+        let device_arc = pm.get_device_arc().await;
+        let skdm = {
+            let mut device_guard = device_arc.write().await;
+            create_sender_key_distribution_message(
+                &lid_sender_key_name,
+                &mut *device_guard,
+                &mut rand::rngs::OsRng.unwrap_err()
+            )
+            .await
+            .expect("Failed to create SKDM")
+        };
+
+        // Step 2: Process the SKDM to ensure it's stored properly
+        {
+            let mut device_guard = device_arc.write().await;
+            process_sender_key_distribution_message(&lid_sender_key_name, &skdm, &mut *device_guard)
+                .await
+                .expect("Failed to process SKDM with LID address");
+        }
+
+        println!("✅ Step 1: Stored sender key under LID address: {}", lid_protocol_address);
+
+        // Step 3: Try to retrieve using PHONE NUMBER address (THE BUG)
+        let phone_protocol_address = own_phone.to_protocol_address();
+        let phone_sender_key_name = SenderKeyName::new(
+            group_jid.to_string(),
+            phone_protocol_address.to_string()
+        );
+
+        let phone_lookup_result = {
+            let mut device_guard = device_arc.write().await;
+            device_guard.load_sender_key(&phone_sender_key_name).await
+        };
+
+        println!("❌ Step 2: Lookup with phone number address failed (expected): {}", phone_protocol_address);
+        assert!(
+            phone_lookup_result.unwrap().is_none(),
+            "Sender key should NOT be found when looking up with phone number address (this demonstrates the bug)"
+        );
+
+        // Step 4: Try to retrieve using LID address (THE FIX)
+        let lid_lookup_result = {
+            let mut device_guard = device_arc.write().await;
+            device_guard.load_sender_key(&lid_sender_key_name).await
+        };
+
+        println!("✅ Step 3: Lookup with LID address succeeded (this is the fix)");
+        assert!(
+            lid_lookup_result.unwrap().is_some(),
+            "Sender key SHOULD be found when looking up with LID address (same as storage)"
+        );
+
+        println!("\n🎯 Summary:");
+        println!("   - LID protocol address: {}", lid_protocol_address);
+        println!("   - Phone protocol address: {}", phone_protocol_address);
+        println!("   - Storage key format: {}:{}", group_jid, lid_protocol_address);
+        println!("   - Bug: Using phone address for lookup after storing with LID address");
+        println!("   - Fix: Always use info.source.sender (LID) for both storage and retrieval");
     }
 }

@@ -8,6 +8,9 @@ use wacore_binary::jid::Jid;
 pub struct GroupInfo {
     pub participants: Vec<Jid>,
     pub addressing_mode: AddressingMode,
+    /// Maps LID JIDs to their corresponding phone number JIDs
+    /// This is used for device queries since LID usync queries may not work
+    pub lid_to_pn_map: HashMap<String, Jid>,
 }
 
 #[async_trait]
