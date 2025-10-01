@@ -206,7 +206,6 @@ impl<'a> JidRef<'a> {
 
 impl FromStr for Jid {
     type Err = JidError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (user_part, server) = match s.split_once('@') {
             Some((u, s)) => (u, s.to_string()),
@@ -217,27 +216,32 @@ impl FromStr for Jid {
             return Ok(Jid::new("", &server));
         }
 
-        let (user_base, device_str) = match user_part.rsplit_once(':') {
-            Some((u, d)) => (u, Some(d)),
-            None => (user_part, None),
-        };
+        let mut user = user_part;
+        let mut device = 0;
+        let mut agent = 0;
 
-        let (user, agent_str) = match user_base.rsplit_once('.') {
-            Some((u, a)) => (u, Some(a)),
-            None => (user_base, None),
-        };
+        // The newer `user:device` format is unambiguous and checked first.
+        if let Some((u, d_str)) = user_part.rsplit_once(':') {
+            user = u;
+            device = d_str.parse()?;
+        // The legacy `user.device` format is ambiguous with `user.agent`.
+        // We use the server to differentiate, as per the specification.
+        } else if let Some((u, last_part)) = user_part.rsplit_once('.') {
+            // Only parse if the part after the dot is numeric.
+            if let Ok(num_val) = last_part.parse::<u16>() {
+                // For `s.whatsapp.net`, a dot indicates a legacy device ID.
+                if server == DEFAULT_USER_SERVER {
+                    user = u;
+                    device = num_val;
+                // For other servers (like 'lid'), it's an agent.
+                } else {
+                    user = u;
+                    agent = num_val as u8; // agent is a u8
+                }
+            }
+        }
 
-        let agent = if let Some(a_str) = agent_str {
-            a_str.parse()?
-        } else {
-            0
-        };
-        let device = if let Some(d_str) = device_str {
-            d_str.parse()?
-        } else {
-            0
-        };
-
+        // If no valid separators were found, the entire user_part is the user.
         Ok(Jid {
             user: user.to_string(),
             server,
