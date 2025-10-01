@@ -348,7 +348,22 @@ impl Client {
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
         let from = attrs.jid("from");
 
-        let mut source = if from.is_group() {
+        let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
+            // This is the new logic block for handling all broadcast messages, including status.
+            let participant = attrs.jid("participant");
+            crate::types::message::MessageSource {
+                chat: from.clone(),
+                sender: participant.clone(),
+                is_from_me: participant.is_same_user_as(&own_jid),
+                is_group: true, // Treat as group-like for session handling
+                broadcast_list_owner: if from.user != wacore_binary::jid::STATUS_BROADCAST_USER {
+                    Some(participant.clone())
+                } else {
+                    None
+                },
+                ..Default::default()
+            }
+        } else if from.is_group() {
             let sender = attrs.jid("participant");
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -527,5 +542,62 @@ impl Client {
                 sender_jid
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::persistence_manager::PersistenceManager;
+    use crate::store::sqlite_store::SqliteStore;
+    use std::sync::Arc;
+    use wacore_binary::builder::NodeBuilder;
+    use wacore_binary::jid::Jid;
+
+    #[tokio::test]
+    async fn test_parse_message_info_for_status_broadcast() {
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_status_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        let participant_jid_str = "556899336555:42@s.whatsapp.net";
+        let status_broadcast_jid_str = "status@broadcast";
+
+        // 2. Create the test node mirroring the logs
+        let node = NodeBuilder::new("message")
+            .attr("from", status_broadcast_jid_str)
+            .attr("id", "8A8CCCC7E6E466D9EE8CA11A967E485A")
+            .attr("participant", participant_jid_str)
+            .attr("t", "1759295366")
+            .attr("type", "media")
+            .build();
+
+        // 3. Run the function under test
+        let info = client
+            .parse_message_info(&node)
+            .await
+            .expect("parse_message_info should not fail");
+
+        // 4. Assert the correct behavior
+        let expected_sender: Jid = participant_jid_str.parse().unwrap();
+        let expected_chat: Jid = status_broadcast_jid_str.parse().unwrap();
+
+        assert_eq!(
+            info.source.sender, expected_sender,
+            "The sender should be the 'participant' JID, not 'status@broadcast'"
+        );
+        assert_eq!(
+            info.source.chat, expected_chat,
+            "The chat should be 'status@broadcast'"
+        );
+        assert!(
+            info.source.is_group,
+            "Broadcast messages should be treated as group-like"
+        );
     }
 }
