@@ -76,7 +76,7 @@ fn build_base_client_payload(
     }
 }
 
-static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
+pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
     version: Some(wa::device_props::AppVersion {
         primary: Some(0),
@@ -159,6 +159,21 @@ impl Device {
             app_version_tertiary: 1023868176,
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
+        }
+    }
+
+    /// Returns the default OS string used for device props
+    pub fn default_os() -> &'static str {
+        "rust"
+    }
+
+    /// Returns the default device props version
+    pub fn default_device_props_version() -> wa::device_props::AppVersion {
+        wa::device_props::AppVersion {
+            primary: Some(0),
+            secondary: Some(1),
+            tertiary: Some(0),
+            ..Default::default()
         }
     }
 

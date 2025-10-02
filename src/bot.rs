@@ -540,8 +540,11 @@ mod tests {
 
         // Verify only OS was overridden, version should be default
         assert_eq!(device.device_props.os, Some(custom_os));
-        // Version should be None (default) since we didn't override it
-        assert_eq!(device.device_props.version, None);
+        // Version should be the default since we didn't override it
+        assert_eq!(
+            device.device_props.version,
+            Some(wacore::store::Device::default_device_props_version())
+        );
     }
 
     #[tokio::test]
@@ -566,9 +569,12 @@ mod tests {
         let persistence_manager = client.persistence_manager();
         let device = persistence_manager.get_device_snapshot().await;
 
-        // Verify only version was overridden, OS should be default
+        // Verify only version was overridden, OS should be default ("rust")
         assert_eq!(device.device_props.version, Some(custom_version));
-        // OS should be None (default) since we didn't override it
-        assert_eq!(device.device_props.os, None);
+        // OS should be the default since we didn't override it
+        assert_eq!(
+            device.device_props.os,
+            Some(wacore::store::Device::default_os().to_string())
+        );
     }
 }
