@@ -80,18 +80,60 @@ fn test_legacy_and_agent_jid_parsing() {
     assert_eq!(modern_jid.device, 5, "Modern JID device part should be 5");
     assert_eq!(modern_jid.agent, 0, "Modern JID agent part should be 0");
 
-    // Test case 3: JID with an agent on a non-PN server (e.g., LID)
-    // This ensures we don't break agent parsing on other JID types.
-    let agent_jid_str = "987654321.1@lid";
-    let agent_jid = Jid::from_str(agent_jid_str).unwrap();
+    // Test case 3: LID JID with dot in user part (without device)
+    // LID user identifiers can contain dots that are part of the identity.
+    // The dot should NOT be parsed as an agent separator for LID JIDs.
+    let lid_nodot_str = "987654321.1@lid";
+    let lid_nodot = Jid::from_str(lid_nodot_str).unwrap();
     assert_eq!(
-        agent_jid.user, "987654321",
-        "Agent JID user part is incorrect"
+        lid_nodot.user, "987654321.1",
+        "LID user part with dot should be preserved"
     );
-    assert_eq!(agent_jid.agent, 1, "Agent JID agent part should be 1");
-    assert_eq!(agent_jid.device, 0, "Agent JID device part should be 0");
     assert_eq!(
-        agent_jid.server, "lid",
-        "Agent JID server part is incorrect"
+        lid_nodot.agent, 0,
+        "LID agent should be 0 (dots are not agent separators)"
+    );
+    assert_eq!(lid_nodot.device, 0, "LID device part should be 0");
+    assert_eq!(lid_nodot.server, "lid", "LID server part is incorrect");
+}
+
+#[test]
+fn test_lid_jid_with_dot_in_user_part() {
+    // This is the problematic JID from the logs. The user part is "236395184570386.1".
+    // The old parser would incorrectly split this, creating user="236395184570386" and agent=1.
+    let lid_jid_str = "236395184570386.1:75@lid";
+    let lid_jid = Jid::from_str(lid_jid_str).unwrap();
+
+    // Assert that the user part is parsed correctly, including the dot.
+    assert_eq!(
+        lid_jid.user, "236395184570386.1",
+        "LID user part with a dot was parsed incorrectly"
+    );
+
+    // Assert that the agent is not incorrectly parsed from the user part.
+    assert_eq!(
+        lid_jid.agent, 0,
+        "LID JIDs should not have an agent part parsed from a dot"
+    );
+
+    // Assert that the device is still parsed correctly.
+    assert_eq!(lid_jid.device, 75, "LID device part was parsed incorrectly");
+
+    // Assert the server is correct.
+    assert_eq!(lid_jid.server, "lid", "LID server part is incorrect");
+
+    // CRITICAL: Test that to_protocol_address doesn't add an unwanted _1 suffix
+    // The bug manifests when creating the ProtocolAddress, resulting in "236395184570386.1_1"
+    use wacore::types::jid::JidExt as CoreJidExt;
+    let protocol_addr = lid_jid.to_protocol_address();
+    assert_eq!(
+        protocol_addr.name(),
+        "236395184570386.1",
+        "ProtocolAddress should not have agent suffix for LID with dot in user part"
+    );
+    assert_eq!(
+        u32::from(protocol_addr.device_id()),
+        75,
+        "ProtocolAddress device_id is incorrect"
     );
 }
