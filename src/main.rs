@@ -44,6 +44,8 @@ fn main() {
 
         let mut bot = Bot::builder()
             .with_backend(backend)
+            // Optional: Override the WhatsApp version (normally auto-fetched)
+            // .with_version((2, 3000, 1027868167))
             .on_event(move |event, client| {
                 async move {
                     match event {
