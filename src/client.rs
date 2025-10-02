@@ -2,6 +2,7 @@ mod context_impl;
 
 use crate::handshake;
 use crate::pair;
+use crate::pair_code::PhoneLinkingCache;
 use anyhow::anyhow;
 use dashmap::DashMap;
 use rand::RngCore;
@@ -92,14 +93,6 @@ pub enum RecentMessageError {
     ResponseTimeout,
     #[error("Manager task panicked or was dropped")]
     TaskDropped,
-}
-
-#[derive(Clone)]
-pub struct PhoneLinkingCache {
-    pub jid: Jid,
-    pub key_pair: wacore::libsignal::protocol::KeyPair,
-    pub linking_code: String,
-    pub pairing_ref: String,
 }
 
 pub struct Client {
@@ -1353,163 +1346,5 @@ impl Client {
                 );
             }
         }
-    }
-
-    /// Generates a pairing code that can be used to link to a phone without scanning a QR code.
-    ///
-    /// You must connect the client normally before calling this (which means you'll also receive a QR code
-    /// event, but that can be ignored when doing code pairing). You should also wait for `*events.Connected` before
-    /// calling this to ensure the connection is fully established. If using `Client::connect()`, wait for
-    /// the first item in the channel. Alternatively, sleeping for a second after calling connect will probably work too.
-    ///
-    /// The exact expiry of pairing codes is unknown, but QR codes are always generated and the login websocket is closed
-    /// after the QR codes run out, which means there's a 160-second time limit. It is recommended to generate the pairing
-    /// code immediately after connecting to the websocket to have the maximum time.
-    ///
-    /// The client_type parameter must be one of the PairClientType constants, but which one doesn't matter.
-    /// The client_display_name must be formatted as `Browser (OS)`, and only common browsers/OSes are allowed
-    /// (the server will validate it and return 400 if it's wrong).
-    ///
-    /// See https://faq.whatsapp.com/1324084875126592 for more info
-    pub async fn pair_phone(
-        &self,
-        phone: String,
-        show_push_notification: bool,
-        client_type: PairClientType,
-        client_display_name: String,
-    ) -> Result<String, anyhow::Error> {
-        if self.phone_linking_cache.lock().await.is_some() {
-            return Err(anyhow::anyhow!("Pairing already in progress"));
-        }
-
-        // Clean phone number - remove non-digits
-        let phone = phone
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect::<String>();
-        if phone.len() <= 6 {
-            return Err(anyhow::anyhow!("Phone number too short"));
-        }
-        if phone.starts_with('0') {
-            return Err(anyhow::anyhow!(
-                "Phone number should not start with 0 (use international format)"
-            ));
-        }
-
-        let jid = format!("{}@s.whatsapp.net", phone).parse::<Jid>()?;
-
-        // Generate ephemeral key pair and linking code using wacore utilities
-        let (ephemeral_key_pair, ephemeral_key, encoded_linking_code) =
-            wacore::pair::PairUtils::generate_companion_ephemeral_key()?;
-
-        // Send IQ request
-        let link_code_companion_reg = NodeBuilder::new("link_code_companion_reg")
-            .attr("jid", jid.to_string())
-            .attr("stage", "companion_hello")
-            .attr(
-                "should_show_push_notification",
-                if show_push_notification {
-                    "true"
-                } else {
-                    "false"
-                },
-            )
-            .children(vec![
-                NodeBuilder::new("link_code_pairing_wrapped_companion_ephemeral_pub")
-                    .bytes(ephemeral_key)
-                    .build(),
-                NodeBuilder::new("companion_server_auth_key_pub")
-                    .bytes(
-                        self.core
-                            .device
-                            .noise_key
-                            .public_key
-                            .public_key_bytes()
-                            .to_vec(),
-                    )
-                    .build(),
-                NodeBuilder::new("companion_platform_id")
-                    .bytes(vec![b'0' + (client_type as u8)])
-                    .build(),
-                NodeBuilder::new("companion_platform_display")
-                    .bytes(client_display_name)
-                    .build(),
-                NodeBuilder::new("link_code_pairing_nonce")
-                    .bytes(vec![0])
-                    .build(),
-            ])
-            .build();
-
-        let resp = self
-            .send_iq(crate::request::InfoQuery {
-                namespace: "md",
-                query_type: crate::request::InfoQueryType::Set,
-                to: "s.whatsapp.net".parse().unwrap(),
-                target: None,
-                id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![
-                    link_code_companion_reg,
-                ])),
-                timeout: None,
-            })
-            .await?;
-
-        // Extract pairing reference from response
-        let link_code_companion_regs = resp.get_children_by_tag("link_code_companion_reg");
-        if link_code_companion_regs.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No link_code_companion_reg found in response"
-            ));
-        }
-        let link_code_companion_reg = &link_code_companion_regs[0];
-        let pairing_ref_nodes =
-            link_code_companion_reg.get_children_by_tag("link_code_pairing_ref");
-        if pairing_ref_nodes.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No link_code_pairing_ref found in response"
-            ));
-        }
-        let pairing_ref_node = &pairing_ref_nodes[0];
-        let pairing_ref = match &pairing_ref_node.content {
-            Some(wacore_binary::node::NodeContent::Bytes(bytes)) => {
-                String::from_utf8(bytes.clone())?
-            }
-            _ => return Err(anyhow::anyhow!("Unexpected pairing ref content type")),
-        };
-
-        // Store pairing state
-        *self.phone_linking_cache.lock().await = Some(PhoneLinkingCache {
-            jid,
-            key_pair: ephemeral_key_pair,
-            linking_code: encoded_linking_code.clone(),
-            pairing_ref,
-        });
-
-        // Return formatted pairing code (XXXX-XXXX)
-        Ok(format!(
-            "{}-{}",
-            &encoded_linking_code[0..4],
-            &encoded_linking_code[4..8]
-        ))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairClientType {
-    Unknown = 0,
-    Chrome = 1,
-    Edge = 2,
-    Firefox = 3,
-    IE = 4,
-    Opera = 5,
-    Safari = 6,
-    Electron = 7,
-    UWP = 8,
-    OtherWebClient = 9,
-}
-
-impl From<PairClientType> for i32 {
-    fn from(client_type: PairClientType) -> i32 {
-        client_type as i32
     }
 }
