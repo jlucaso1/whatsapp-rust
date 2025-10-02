@@ -4,7 +4,7 @@ use crate::types::events::Event;
 use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
-use wacore::request::{InfoQuery, InfoQueryType};
+use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::node::NodeContent;
 use wacore_binary::{jid::SERVER_JID, node::Node};
@@ -120,6 +120,9 @@ async fn handle_pairing_code_notification(client: &Arc<Client>, node: &Node) {
     match stage.as_str() {
         "primary_hello" => {
             handle_primary_hello(client, link_code_node).await;
+        }
+        "refresh_code" => {
+            handle_refresh_code(client, link_code_node).await;
         }
         _ => {
             warn!(target: "Client/Pairing", "Unknown pairing stage: {}", stage);
@@ -296,7 +299,7 @@ async fn handle_primary_hello(client: &Arc<Client>, link_code_node: &Node) {
 
     info!(target: "Client/Pairing", "Successfully processed primary_hello, sending companion_finish");
 
-    // Send companion_finish IQ
+    // Send companion_finish IQ (don't wait for response, similar to Go implementation)
     let companion_finish_content = NodeBuilder::new("link_code_companion_reg")
         .attr("jid", cache.jid.to_string())
         .attr("stage", "companion_finish")
@@ -319,22 +322,49 @@ async fn handle_primary_hello(client: &Arc<Client>, link_code_node: &Node) {
         ])
         .build();
 
-    let iq = InfoQuery {
-        namespace: "md",
-        query_type: InfoQueryType::Set,
-        to: SERVER_JID.parse().unwrap(),
-        target: None,
-        id: None,
-        content: Some(NodeContent::Nodes(vec![companion_finish_content])),
-        timeout: None,
-    };
+    let iq_node = RequestUtils::new("".to_string()).build_iq_node(
+        &InfoQuery {
+            namespace: "md",
+            query_type: InfoQueryType::Set,
+            to: SERVER_JID.parse().unwrap(),
+            target: None,
+            id: Some(client.generate_request_id()),
+            content: Some(NodeContent::Nodes(vec![companion_finish_content])),
+            timeout: None,
+        },
+        None,
+    );
 
-    match client.send_iq(iq).await {
+    match client.send_node(iq_node).await {
         Ok(_) => {
             info!(target: "Client/Pairing", "Successfully sent companion_finish, pairing should complete");
+            // Clear the pairing cache as the pairing process is now complete
+            *client.phone_linking_cache.lock().await = None;
         }
         Err(e) => {
             warn!(target: "Client/Pairing", "Failed to send companion_finish: {:?}", e);
         }
     }
+}
+
+async fn handle_refresh_code(client: &Arc<Client>, link_code_node: &Node) {
+    info!(target: "Client/Pairing", "Received refresh_code notification - pairing may be in progress");
+
+    // Extract pairing reference to verify it matches our cached pairing
+    let pairing_ref_nodes = link_code_node.get_children_by_tag("link_code_pairing_ref");
+    if let Some(pairing_ref_node) = pairing_ref_nodes.first()
+        && let Some(wacore_binary::node::NodeContent::Bytes(bytes)) = &pairing_ref_node.content
+            && let Ok(pairing_ref) = String::from_utf8(bytes.clone()) {
+                // Check if this matches our cached pairing
+                let cache = client.phone_linking_cache.lock().await.clone();
+                if let Some(cached) = cache {
+                    if pairing_ref == cached.pairing_ref {
+                        info!(target: "Client/Pairing", "Refresh code matches our pairing - waiting for completion");
+                        // The pairing might still be in progress on the server side
+                        // We should wait for either a success or failure notification
+                    } else {
+                        warn!(target: "Client/Pairing", "Refresh code pairing ref doesn't match our cached pairing");
+                    }
+                }
+            }
 }

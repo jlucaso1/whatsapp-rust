@@ -454,7 +454,7 @@ impl PairUtils {
 
         // Derive encryption key from shared secret
         let key_bundle_encryption_key = {
-            let hk = Hkdf::<Sha256>::new(None, shared_secret);
+            let hk = Hkdf::<Sha256>::new(Some(&key_bundle_salt), shared_secret);
             let mut result = [0u8; 32];
             hk.expand(b"link_code_pairing_key_bundle_encryption_key", &mut result)
                 .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
