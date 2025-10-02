@@ -141,6 +141,7 @@ pub struct BotBuilder {
     device_id: Option<i32>,
     // The only way to configure storage
     backend: Option<Arc<dyn Backend>>,
+    override_version: Option<(u32, u32, u32)>,
 }
 
 impl BotBuilder {
@@ -202,6 +203,27 @@ impl BotBuilder {
         self
     }
 
+    /// Override the WhatsApp version used by the client.
+    ///
+    /// By default, the client will automatically fetch the latest version from WhatsApp's servers.
+    /// Use this method to force a specific version instead.
+    ///
+    /// # Arguments
+    /// * `version` - A tuple of (primary, secondary, tertiary) version numbers
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_version((2, 3000, 1027868167))
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_version(mut self, version: (u32, u32, u32)) -> Self {
+        self.override_version = Some(version);
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -237,7 +259,8 @@ impl BotBuilder {
 
         spawn_preconnect_task().await;
 
-        crate::version::resolve_and_update_version(&persistence_manager, None).await;
+        crate::version::resolve_and_update_version(&persistence_manager, self.override_version)
+            .await;
 
         info!("Creating client...");
         let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
@@ -394,5 +417,27 @@ mod tests {
                 .to_string()
                 .contains("Backend is required")
         );
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_version_override() {
+        let backend = create_test_sqlite_backend().await;
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_version((2, 3000, 123456789))
+            .build()
+            .await
+            .expect("Failed to build bot with version override");
+
+        // Verify the bot was created successfully
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+
+        // Check that the version was set correctly
+        let device_snapshot = persistence_manager.get_device_snapshot().await;
+        assert_eq!(device_snapshot.app_version_primary, 2);
+        assert_eq!(device_snapshot.app_version_secondary, 3000);
+        assert_eq!(device_snapshot.app_version_tertiary, 123456789);
     }
 }
