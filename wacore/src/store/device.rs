@@ -76,7 +76,7 @@ fn build_base_client_payload(
     }
 }
 
-static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
+pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
     version: Some(wa::device_props::AppVersion {
         primary: Some(0),
@@ -110,6 +110,8 @@ pub struct Device {
     pub app_version_secondary: u32,
     pub app_version_tertiary: u32,
     pub app_version_last_fetched_ms: i64,
+    #[serde(skip)]
+    pub device_props: wa::DeviceProps,
 }
 
 impl Default for Device {
@@ -156,11 +158,40 @@ impl Device {
             app_version_secondary: 3000,
             app_version_tertiary: 1023868176,
             app_version_last_fetched_ms: 0,
+            device_props: DEVICE_PROPS.clone(),
+        }
+    }
+
+    /// Returns the default OS string used for device props
+    pub fn default_os() -> &'static str {
+        "rust"
+    }
+
+    /// Returns the default device props version
+    pub fn default_device_props_version() -> wa::device_props::AppVersion {
+        wa::device_props::AppVersion {
+            primary: Some(0),
+            secondary: Some(1),
+            tertiary: Some(0),
+            ..Default::default()
         }
     }
 
     pub fn is_ready_for_presence(&self) -> bool {
         self.pn.is_some() && !self.push_name.is_empty()
+    }
+
+    pub fn set_device_props(
+        &mut self,
+        os: Option<String>,
+        version: Option<wa::device_props::AppVersion>,
+    ) {
+        if let Some(os) = os {
+            self.device_props.os = Some(os);
+        }
+        if let Some(version) = version {
+            self.device_props.version = Some(version);
+        }
     }
 
     pub fn get_client_payload(&self) -> wa::ClientPayload {
@@ -193,7 +224,7 @@ impl Device {
         };
         let mut payload = build_base_client_payload(app_version);
 
-        let device_props_bytes = DEVICE_PROPS.encode_to_vec();
+        let device_props_bytes = self.device_props.encode_to_vec();
 
         let version = payload
             .user_agent
