@@ -9,6 +9,7 @@ pub enum DeviceCommand {
     SetPushName(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
     SetAppVersion((u32, u32, u32)),
+    SetAdvSecretKey([u8; 32]),
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -30,6 +31,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
             device.app_version_secondary = s;
             device.app_version_tertiary = t;
             device.app_version_last_fetched_ms = chrono::Utc::now().timestamp_millis();
+        }
+        DeviceCommand::SetAdvSecretKey(key) => {
+            device.adv_secret_key = key;
         }
     }
 }

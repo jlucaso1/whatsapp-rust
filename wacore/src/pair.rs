@@ -1,10 +1,13 @@
+use crate::libsignal::crypto::Aes256Ctr32;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
+use base32;
 use base64::Engine as _;
 use base64::prelude::*;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use pbkdf2::pbkdf2;
 use prost::Message;
 use rand::TryRngCore;
 use sha2::Sha256;
@@ -350,5 +353,156 @@ impl PairUtils {
     /// Helper to concatenate multiple byte slices into a single Vec.
     fn concat_bytes(slices: &[&[u8]]) -> Vec<u8> {
         slices.iter().flat_map(|s| s.iter().cloned()).collect()
+    }
+
+    /// Generates a companion ephemeral key pair and encrypts it with a pairing code
+    pub fn generate_companion_ephemeral_key() -> Result<(KeyPair, Vec<u8>, String), anyhow::Error> {
+        let ephemeral_key_pair =
+            KeyPair::generate(&mut rand::rngs::OsRng::unwrap_err(rand_core::OsRng));
+
+        // Generate random salt and IV
+        let salt = rand::random::<[u8; 32]>();
+        let iv = rand::random::<[u8; 16]>();
+        let linking_code_bytes = rand::random::<[u8; 5]>();
+
+        // Encode linking code to base32
+        let linking_code = base32::encode(
+            base32::Alphabet::RFC4648 { padding: false },
+            &linking_code_bytes,
+        );
+
+        // Derive encryption key from linking code using PBKDF2
+        let mut link_code_key = [0u8; 32];
+        pbkdf2::<Hmac<Sha256>>(linking_code.as_bytes(), &salt, 2 << 16, &mut link_code_key)
+            .map_err(|_| anyhow::anyhow!("PBKDF2 key derivation failed"))?;
+
+        // Encrypt the ephemeral public key
+        let pubkey_bytes = ephemeral_key_pair.public_key.public_key_bytes();
+        let mut encrypted_pubkey = [0u8; 32];
+        encrypted_pubkey.copy_from_slice(pubkey_bytes);
+
+        let mut cipher_ctr = Aes256Ctr32::from_key(&link_code_key, &iv[0..12], 0)?;
+        cipher_ctr.process(&mut encrypted_pubkey);
+
+        // Construct the wrapped key bundle: salt(32) + iv(16) + encrypted_pubkey(32)
+        let mut ephemeral_key = Vec::with_capacity(80);
+        ephemeral_key.extend_from_slice(&salt);
+        ephemeral_key.extend_from_slice(&iv);
+        ephemeral_key.extend_from_slice(&encrypted_pubkey);
+
+        Ok((ephemeral_key_pair, ephemeral_key, linking_code))
+    }
+
+    /// Decrypts the primary device's ephemeral public key using the pairing code
+    pub fn decrypt_primary_ephemeral_pub(
+        linking_code: &str,
+        wrapped_primary_ephemeral_pub: &[u8],
+    ) -> Result<[u8; 32], anyhow::Error> {
+        if wrapped_primary_ephemeral_pub.len() != 80 {
+            return Err(anyhow::anyhow!(
+                "Invalid wrapped primary ephemeral pub length"
+            ));
+        }
+
+        let salt = &wrapped_primary_ephemeral_pub[0..32];
+        let iv = &wrapped_primary_ephemeral_pub[32..48];
+        let encrypted_pubkey = &wrapped_primary_ephemeral_pub[48..80];
+
+        // Derive decryption key from linking code using PBKDF2
+        let mut link_code_key = [0u8; 32];
+        pbkdf2::<Hmac<Sha256>>(linking_code.as_bytes(), salt, 2 << 16, &mut link_code_key)
+            .map_err(|_| anyhow::anyhow!("PBKDF2 key derivation failed"))?;
+
+        // Decrypt the primary ephemeral public key
+        let mut decrypted_pubkey = encrypted_pubkey.to_vec();
+
+        let mut cipher_ctr = Aes256Ctr32::from_key(&link_code_key, &iv[0..12], 0)?;
+        cipher_ctr.process(&mut decrypted_pubkey);
+
+        let primary_ephemeral_pub: [u8; 32] = decrypted_pubkey
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid decrypted public key length"))?;
+
+        Ok(primary_ephemeral_pub)
+    }
+
+    /// Computes the shared secret for pairing code authentication
+    pub fn compute_pairing_shared_secret(
+        companion_ephemeral_priv: &crate::libsignal::protocol::PrivateKey,
+        primary_ephemeral_pub: &[u8; 32],
+    ) -> Result<[u8; 32], anyhow::Error> {
+        let primary_public_key = PublicKey::from_djb_public_key_bytes(primary_ephemeral_pub)?;
+        let shared_secret_box =
+            companion_ephemeral_priv.calculate_agreement(&primary_public_key)?;
+        let shared_secret: [u8; 32] = shared_secret_box
+            .as_ref()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid shared secret length"))?;
+        Ok(shared_secret)
+    }
+
+    /// Encrypts the key bundle containing identity keys and randomness
+    pub fn encrypt_key_bundle(
+        shared_secret: &[u8; 32],
+        companion_identity_pub: &[u8; 32],
+        primary_identity_pub: &[u8; 32],
+        adv_secret_random: &[u8; 32],
+    ) -> Result<Vec<u8>, anyhow::Error> {
+        // Create salt and nonce for key bundle encryption
+        let key_bundle_salt = rand::random::<[u8; 32]>();
+        let key_bundle_nonce = rand::random::<[u8; 12]>();
+
+        // Derive encryption key from shared secret
+        let key_bundle_encryption_key = {
+            let hk = Hkdf::<Sha256>::new(None, shared_secret);
+            let mut result = [0u8; 32];
+            hk.expand(b"link_code_pairing_key_bundle_encryption_key", &mut result)
+                .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
+            result
+        };
+
+        // Create plaintext key bundle: companion_identity_pub + primary_identity_pub + adv_secret_random
+        let mut plaintext_key_bundle = Vec::with_capacity(96);
+        plaintext_key_bundle.extend_from_slice(companion_identity_pub);
+        plaintext_key_bundle.extend_from_slice(primary_identity_pub);
+        plaintext_key_bundle.extend_from_slice(adv_secret_random);
+
+        // Encrypt the key bundle
+        let cipher = Aes256Gcm::new_from_slice(&key_bundle_encryption_key)
+            .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
+        let nonce = aes_gcm::Nonce::from_slice(&key_bundle_nonce);
+        let payload = Payload {
+            msg: &plaintext_key_bundle,
+            aad: b"",
+        };
+        let encrypted_key_bundle = cipher
+            .encrypt(nonce, payload)
+            .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
+
+        // Construct wrapped key bundle: salt(32) + nonce(12) + encrypted_bundle
+        let mut wrapped_key_bundle = Vec::with_capacity(32 + 12 + encrypted_key_bundle.len());
+        wrapped_key_bundle.extend_from_slice(&key_bundle_salt);
+        wrapped_key_bundle.extend_from_slice(&key_bundle_nonce);
+        wrapped_key_bundle.extend_from_slice(&encrypted_key_bundle);
+
+        Ok(wrapped_key_bundle)
+    }
+
+    /// Computes the ADV secret key for pairing code authentication
+    pub fn compute_adv_secret(
+        ephemeral_shared_secret: &[u8; 32],
+        identity_shared_secret: &[u8; 32],
+        adv_secret_random: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut adv_secret_input = Vec::with_capacity(96);
+        adv_secret_input.extend_from_slice(ephemeral_shared_secret);
+        adv_secret_input.extend_from_slice(identity_shared_secret);
+        adv_secret_input.extend_from_slice(adv_secret_random);
+
+        let hk = Hkdf::<Sha256>::new(None, &adv_secret_input);
+        let mut adv_secret = [0u8; 32];
+        hk.expand(b"adv_secret", &mut adv_secret)
+            .expect("HKDF expand should not fail for adv_secret");
+        adv_secret
     }
 }
