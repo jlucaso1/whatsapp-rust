@@ -367,7 +367,7 @@ impl PairUtils {
 
         // Encode linking code to base32
         let linking_code = base32::encode(
-            base32::Alphabet::RFC4648 { padding: false },
+            base32::Alphabet::Rfc4648 { padding: false },
             &linking_code_bytes,
         );
 

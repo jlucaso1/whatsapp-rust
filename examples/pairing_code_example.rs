@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::PairingQrCode { code, timeout } => {
                     info!("📱 QR Code available (valid for {}s):", timeout.as_secs());
                     info!("   {}", code);
-                    info!("   � You can scan this if you prefer QR pairing");
+                    info!("   👉 You can scan this if you prefer QR pairing");
                 }
                 Event::PairingCode { code } => {
                     info!("🎯 PAIRING CODE GENERATED!");
@@ -113,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    info!("� Initiating phone pairing for: {}", phone);
+    info!("📱 Initiating phone pairing for: {}", phone);
 
     // Initiate phone pairing
     match bot
@@ -130,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("✅ Pairing initiated successfully!");
             info!("🎯 PAIRING CODE: {}", pairing_code);
             println!(
-                "\n�🔥🔥 ENTER THIS CODE ON YOUR PHONE: {} 🔥🔥🔥\n",
+                "\n📱🔥🔥 ENTER THIS CODE ON YOUR PHONE: {} 🔥🔥🔥\n",
                 pairing_code
             );
             info!("   📱 Instructions:");
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             error!("❌ Failed to initiate phone pairing: {}", e);
-            error!("   � Make sure:");
+            error!("   ⚠️ Make sure:");
             error!("      - Your phone number is correct and in international format");
             error!("      - WhatsApp is installed and working on your phone");
             error!("      - You're not already logged in with this device");
@@ -162,10 +162,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            info!("� Received Ctrl+C, shutting down...");
+            info!("🛑 Received Ctrl+C, shutting down...");
         }
     }
 
-    info!("� Pairing example completed");
+    info!("✅ Pairing example completed");
     Ok(())
 }

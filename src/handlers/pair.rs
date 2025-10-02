@@ -270,7 +270,15 @@ async fn handle_primary_hello(client: &Arc<Client>, link_code_node: &Node) {
         Ok(_) => {
             info!(target: "Client/Pairing", "Successfully sent companion_finish, pairing should complete");
             // Clear the pairing cache as the pairing process is now complete
-            *client.phone_linking_cache.lock().await = None;
+            // But only if it still refers to the same pairing session we just completed
+            let mut cache_guard = client.phone_linking_cache.lock().await;
+            if let Some(current_cache) = &*cache_guard {
+                if current_cache.pairing_ref == pairing_ref {
+                    *cache_guard = None;
+                } else {
+                    info!(target: "Client/Pairing", "Pairing cache was replaced by another session, leaving it untouched");
+                }
+            }
         }
         Err(e) => {
             warn!(target: "Client/Pairing", "Failed to send companion_finish: {:?}", e);
