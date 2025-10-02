@@ -354,17 +354,18 @@ async fn handle_refresh_code(client: &Arc<Client>, link_code_node: &Node) {
     let pairing_ref_nodes = link_code_node.get_children_by_tag("link_code_pairing_ref");
     if let Some(pairing_ref_node) = pairing_ref_nodes.first()
         && let Some(wacore_binary::node::NodeContent::Bytes(bytes)) = &pairing_ref_node.content
-            && let Ok(pairing_ref) = String::from_utf8(bytes.clone()) {
-                // Check if this matches our cached pairing
-                let cache = client.phone_linking_cache.lock().await.clone();
-                if let Some(cached) = cache {
-                    if pairing_ref == cached.pairing_ref {
-                        info!(target: "Client/Pairing", "Refresh code matches our pairing - waiting for completion");
-                        // The pairing might still be in progress on the server side
-                        // We should wait for either a success or failure notification
-                    } else {
-                        warn!(target: "Client/Pairing", "Refresh code pairing ref doesn't match our cached pairing");
-                    }
-                }
+        && let Ok(pairing_ref) = String::from_utf8(bytes.clone())
+    {
+        // Check if this matches our cached pairing
+        let cache = client.phone_linking_cache.lock().await.clone();
+        if let Some(cached) = cache {
+            if pairing_ref == cached.pairing_ref {
+                info!(target: "Client/Pairing", "Refresh code matches our pairing - waiting for completion");
+                // The pairing might still be in progress on the server side
+                // We should wait for either a success or failure notification
+            } else {
+                warn!(target: "Client/Pairing", "Refresh code pairing ref doesn't match our cached pairing");
             }
+        }
+    }
 }
