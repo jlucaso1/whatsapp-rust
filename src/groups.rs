@@ -30,6 +30,8 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
 
         let mut participants = Vec::new();
+        let mut lid_to_pn_map = std::collections::HashMap::new();
+
         let addressing_mode_str = group_node
             .attrs()
             .optional_string("addressing_mode")
@@ -40,13 +42,22 @@ impl Client {
         };
 
         for participant_node in group_node.get_children_by_tag("participant") {
-            participants.push(participant_node.attrs().jid("jid"));
+            let participant_jid = participant_node.attrs().jid("jid");
+            participants.push(participant_jid.clone());
+
+            // If this is a LID group, extract the phone_number mapping
+            if addressing_mode == crate::types::message::AddressingMode::Lid
+                && let Some(phone_number) = participant_node.attrs().optional_jid("phone_number")
+            {
+                // Store mapping: LID user -> phone number JID (for device queries)
+                lid_to_pn_map.insert(participant_jid.user.clone(), phone_number);
+            }
         }
 
-        let info = GroupInfo {
-            participants,
-            addressing_mode,
-        };
+        let mut info = GroupInfo::new(participants, addressing_mode);
+        if !lid_to_pn_map.is_empty() {
+            info.set_lid_to_pn_map(lid_to_pn_map);
+        }
         self.group_cache.insert(jid.clone(), info.clone());
 
         Ok(info)

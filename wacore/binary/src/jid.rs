@@ -141,7 +141,11 @@ impl Jid {
     pub fn actual_agent(&self) -> u8 {
         match self.server.as_str() {
             DEFAULT_USER_SERVER => 0,
-            HIDDEN_USER_SERVER => 1,
+            // For LID (HIDDEN_USER_SERVER), use the parsed agent value.
+            // LID user identifiers can contain dots (e.g., "236395184570386.1"),
+            // which are part of the identity, not agent separators.
+            // Only non-device LID JIDs (without ':') may have an agent suffix.
+            HIDDEN_USER_SERVER => self.agent,
             _ => self.agent,
         }
     }
@@ -216,32 +220,48 @@ impl FromStr for Jid {
             return Ok(Jid::new("", &server));
         }
 
+        // Special handling for LID JIDs, as their user part can contain dots
+        // that should not be interpreted as agent separators.
+        if server == HIDDEN_USER_SERVER {
+            let (user, device) = if let Some((u, d_str)) = user_part.rsplit_once(':') {
+                (u, d_str.parse()?)
+            } else {
+                (user_part, 0)
+            };
+            return Ok(Jid {
+                user: user.to_string(),
+                server,
+                device,
+                agent: 0,
+                integrator: 0,
+            });
+        }
+
+        // Fallback to existing logic for other JID types (s.whatsapp.net, etc.)
         let mut user = user_part;
         let mut device = 0;
         let mut agent = 0;
 
-        // The newer `user:device` format is unambiguous and checked first.
         if let Some((u, d_str)) = user_part.rsplit_once(':') {
             user = u;
             device = d_str.parse()?;
-        // The legacy `user.device` format is ambiguous with `user.agent`.
-        // We use the server to differentiate, as per the specification.
-        } else if let Some((u, last_part)) = user_part.rsplit_once('.') {
-            // Only parse if the part after the dot is numeric.
-            if let Ok(num_val) = last_part.parse::<u16>() {
-                // For `s.whatsapp.net`, a dot indicates a legacy device ID.
-                if server == DEFAULT_USER_SERVER {
-                    user = u;
-                    device = num_val;
-                // For other servers (like 'lid'), it's an agent.
-                } else {
-                    user = u;
-                    agent = num_val as u8; // agent is a u8
+        } else if let Some((u, last_part)) = user_part.rsplit_once('.')
+            && let Ok(num_val) = last_part.parse::<u16>()
+        {
+            if server == DEFAULT_USER_SERVER {
+                user = u;
+                device = num_val;
+            } else {
+                user = u;
+                if num_val > u8::MAX as u16 {
+                    return Err(JidError::InvalidFormat(format!(
+                        "Agent component out of range: {num_val}"
+                    )));
                 }
+                agent = num_val as u8;
             }
         }
 
-        // If no valid separators were found, the entire user_part is the user.
         Ok(Jid {
             user: user.to_string(),
             server,

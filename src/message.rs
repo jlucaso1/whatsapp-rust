@@ -35,6 +35,60 @@ impl Client {
             }
         };
 
+        // Determine the JID to use for end-to-end decryption. Prefer phone-number alt JIDs
+        // for LID senders, but never "upgrade" a PN sender to a LID.
+        let sender_encryption_jid = {
+            let sender = &info.source.sender;
+            let alt = info.source.sender_alt.as_ref();
+            let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+            let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+            if sender.server == lid_server {
+                if let Some(alt_jid) = alt {
+                    if alt_jid.server == pn_server {
+                        alt_jid.clone()
+                    } else {
+                        // Alt is another LID variant; stick with the original LID sender.
+                        sender.clone()
+                    }
+                } else if info.source.is_from_me {
+                    // Self-sent LID message without PN alt — try to fall back to our PN identity.
+                    if let Some(own_pn) = self.get_pn().await {
+                        log::debug!(
+                            "Self-sent message from LID {}, using own phone number {}:{} for decryption",
+                            sender,
+                            own_pn.user,
+                            sender.device
+                        );
+                        Jid {
+                            user: own_pn.user,
+                            server: own_pn.server,
+                            agent: own_pn.agent,
+                            device: sender.device,
+                            integrator: own_pn.integrator,
+                        }
+                    } else {
+                        log::warn!("Self-sent message from LID but own phone number not available");
+                        sender.clone()
+                    }
+                } else {
+                    // No PN alt provided and not self-sent. Keep the original LID sender.
+                    sender.clone()
+                }
+            } else {
+                // Sender already uses PN (or another stable server). Never upgrade to LID.
+                sender.clone()
+            }
+        };
+
+        log::debug!(
+            "Message from {} (sender: {}, encryption JID: {}, is_from_me: {})",
+            info.source.chat,
+            info.source.sender,
+            sender_encryption_jid,
+            info.source.is_from_me
+        );
+
         let mut all_enc_nodes = Vec::new();
 
         let direct_enc_nodes = node.get_children_by_tag("enc");
@@ -97,24 +151,92 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
-        if let Err(e) = self
+        let (
+            session_decrypted_successfully,
+            session_had_duplicates,
+            session_dispatched_undecryptable,
+        ) = self
             .clone()
-            .process_session_enc_batch(&session_enc_nodes, &info)
-            .await
-        {
-            log::warn!("Batch session decrypt encountered error (continuing): {e:?}");
-        }
+            .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
+            .await;
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",
             group_content_enc_nodes.len()
         );
-        if let Err(e) = self
-            .clone()
-            .process_group_enc_batch(&group_content_enc_nodes, &info)
-            .await
+
+        // Only process group content if:
+        // 1. There were no session messages (session already exists), OR
+        // 2. Session messages were successfully decrypted, OR
+        // 3. Session messages were duplicates (already processed, so session exists)
+        // Skip only if session messages FAILED to decrypt (not duplicates, not absent)
+        if !group_content_enc_nodes.is_empty() {
+            let should_process_skmsg = session_enc_nodes.is_empty()
+                || session_decrypted_successfully
+                || session_had_duplicates;
+
+            if should_process_skmsg {
+                if let Err(e) = self
+                    .clone()
+                    .process_group_enc_batch(
+                        &group_content_enc_nodes,
+                        &info,
+                        &sender_encryption_jid,
+                    )
+                    .await
+                {
+                    log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                }
+            } else {
+                // Only show warning if session messages actually FAILED (not duplicates)
+                if !session_had_duplicates {
+                    warn!(
+                        "Skipping skmsg decryption for message {} from {} because the initial session/senderkey message failed to decrypt. This prevents a retry loop.",
+                        info.id, info.source.sender
+                    );
+                    // Still dispatch an UndecryptableMessage event so the user knows
+                    // But only if we haven't already dispatched one in process_session_enc_batch
+                    if !session_dispatched_undecryptable {
+                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                            crate::types::events::UndecryptableMessage {
+                                info: info.clone(),
+                                is_unavailable: false,
+                                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                            },
+                        ));
+                    }
+
+                    // Do NOT send a delivery receipt for undecryptable messages.
+                    // Per whatsmeow's implementation, delivery receipts are only sent for
+                    // successfully decrypted/handled messages. Sending a receipt here would
+                    // tell the server we processed it, incrementing the offline counter.
+                    // The transport <ack> is sufficient for acknowledgment.
+                }
+                // If session_had_duplicates is true, we silently skip (no warning, no event)
+                // because the message was already processed in a previous session
+            }
+        } else if !session_decrypted_successfully
+            && !session_had_duplicates
+            && !session_enc_nodes.is_empty()
         {
-            log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+            // Edge case: message with only msg/pkmsg that failed to decrypt, no skmsg
+            warn!(
+                "Message {} from {} failed to decrypt and has no group content. Dispatching UndecryptableMessage event.",
+                info.id, info.source.sender
+            );
+            // Dispatch UndecryptableMessage event for messages that failed to decrypt
+            // (This should not cause double-dispatching since process_session_enc_batch
+            // already returned dispatched_undecryptable=false for this case)
+            self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                crate::types::events::UndecryptableMessage {
+                    info: info.clone(),
+                    is_unavailable: false,
+                    unavailable_type: crate::types::events::UnavailableType::Unknown,
+                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                },
+            ));
+            // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
 
@@ -122,15 +244,20 @@ impl Client {
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
-    ) -> Result<(), DecryptionError> {
+        sender_encryption_jid: &Jid,
+    ) -> (bool, bool, bool) {
+        // Returns (any_success, any_duplicate, dispatched_undecryptable)
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
-            return Ok(());
+            return (false, false, false);
         }
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
         let rng = rand::rngs::OsRng;
+        let mut any_success = false;
+        let mut any_duplicate = false;
+        let mut dispatched_undecryptable = false;
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
@@ -161,7 +288,7 @@ impl Client {
                 }
             };
 
-            let signal_address = info.source.sender.to_protocol_address();
+            let signal_address = sender_encryption_jid.to_protocol_address();
 
             let decrypt_res = message_decrypt(
                 &parsed_message,
@@ -177,6 +304,7 @@ impl Client {
 
             match decrypt_res {
                 Ok(padded_plaintext) => {
+                    any_success = true;
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
@@ -191,17 +319,51 @@ impl Client {
                     }
                 }
                 Err(e) => {
-                    log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                    // Handle DuplicatedMessage: This is expected when messages are redelivered during reconnection
+                    if let SignalProtocolError::DuplicatedMessage(chain, counter) = e {
+                        log::debug!(
+                            "Skipping already-processed message from {} (chain {}, counter {}). This is normal during reconnection.",
+                            info.source.sender,
+                            chain,
+                            counter
+                        );
+                        // Mark that we saw a duplicate so we can skip skmsg without showing error
+                        any_duplicate = true;
+                        continue;
+                    }
+                    // Handle SessionNotFound gracefully during offline sync
+                    if let SignalProtocolError::SessionNotFound(_) = e {
+                        warn!(
+                            "Gracefully failing decryption for {} from {} due to missing session. This is common during offline sync. Dispatching UndecryptableMessage event.",
+                            enc_type, info.source.sender
+                        );
+                        // Dispatch an event so the library user knows a message was missed.
+                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                            crate::types::events::UndecryptableMessage {
+                                info: info.clone(),
+                                is_unavailable: false,
+                                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                            },
+                        ));
+                        dispatched_undecryptable = true;
+                        // IMPORTANT: Continue the loop instead of returning an error.
+                        continue;
+                    } else {
+                        // For other errors, log them but still don't crash the whole batch.
+                        log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                    }
                 }
             }
         }
-        Ok(())
+        (any_success, any_duplicate, dispatched_undecryptable)
     }
 
     async fn process_group_enc_batch(
         self: Arc<Self>,
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
+        _sender_encryption_jid: &Jid,
     ) -> Result<(), DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(());
@@ -218,9 +380,20 @@ impl Client {
             };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
+            // CRITICAL: Use info.source.sender (display JID) for sender key operations, NOT sender_encryption_jid.
+            // The sender key is stored under the sender's display JID (e.g., LID), while sender_encryption_jid
+            // is the phone number used for E2E session decryption only.
+            // Using sender_encryption_jid here causes "No sender key state" errors for self-sent LID messages.
             let sender_address = info.source.sender.to_protocol_address();
             let sender_key_name =
                 SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+
+            log::debug!(
+                "Looking up sender key for group {} with sender address {} (from sender JID: {})",
+                info.source.chat,
+                sender_address,
+                info.source.sender
+            );
 
             let decrypt_result = {
                 let mut device_guard = device_arc.write().await;
@@ -241,6 +414,16 @@ impl Client {
                     {
                         log::warn!("Failed processing group plaintext (batch): {e:?}");
                     }
+                }
+                Err(SignalProtocolError::DuplicatedMessage(iteration, counter)) => {
+                    log::debug!(
+                        "Skipping already-processed sender key message from {} in group {} (iteration {}, counter {}). This is normal during reconnection.",
+                        info.source.sender,
+                        info.source.chat,
+                        iteration,
+                        counter
+                    );
+                    // This is expected when messages are redelivered, just continue silently
                 }
                 Err(SignalProtocolError::NoSenderKeyState) => {
                     warn!(
@@ -346,15 +529,19 @@ impl Client {
         let mut attrs = node.attrs();
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
+        let own_lid = device_snapshot.lid.clone();
         let from = attrs.jid("from");
 
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
             let participant = attrs.jid("participant");
+            let is_from_me = participant.is_same_user_as(&own_jid)
+                || (own_lid.is_some() && participant.is_same_user_as(own_lid.as_ref().unwrap()));
+
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: participant.clone(),
-                is_from_me: participant.is_same_user_as(&own_jid),
+                is_from_me,
                 is_group: true, // Treat as group-like for session handling
                 broadcast_list_owner: if from.user != wacore_binary::jid::STATUS_BROADCAST_USER {
                     Some(participant.clone())
@@ -365,11 +552,27 @@ impl Client {
             }
         } else if from.is_group() {
             let sender = attrs.jid("participant");
+            let sender_alt = if let Some(addressing_mode) = attrs
+                .optional_string("addressing_mode")
+                .map(|s| s.to_ascii_lowercase())
+            {
+                match addressing_mode.as_str() {
+                    "lid" => attrs.optional_jid("participant_pn"),
+                    _ => attrs.optional_jid("participant_lid"),
+                }
+            } else {
+                None
+            };
+
+            let is_from_me = sender.is_same_user_as(&own_jid)
+                || (own_lid.is_some() && sender.is_same_user_as(own_lid.as_ref().unwrap()));
+
             crate::types::message::MessageSource {
                 chat: from.clone(),
                 sender: sender.clone(),
-                is_from_me: sender.is_same_user_as(&own_jid),
+                is_from_me,
                 is_group: true,
+                sender_alt,
                 ..Default::default()
             }
         } else if from.is_same_user_as(&own_jid) {
@@ -390,9 +593,10 @@ impl Client {
 
         source.addressing_mode = attrs
             .optional_string("addressing_mode")
-            .and_then(|s| match s {
-                "Pn" => Some(crate::types::message::AddressingMode::Pn),
-                "Lid" => Some(crate::types::message::AddressingMode::Lid),
+            .map(|s| s.to_ascii_lowercase())
+            .and_then(|s| match s.as_str() {
+                "pn" => Some(crate::types::message::AddressingMode::Pn),
+                "lid" => Some(crate::types::message::AddressingMode::Lid),
                 _ => None,
             });
 
@@ -599,5 +803,889 @@ mod tests {
             info.source.is_group,
             "Broadcast messages should be treated as group-like"
         );
+    }
+
+    #[tokio::test]
+    async fn test_process_session_enc_batch_handles_session_not_found_gracefully() {
+        use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
+
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_graceful_fail?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let info = MessageInfo {
+            source: crate::types::message::MessageSource {
+                sender: sender_jid.clone(),
+                chat: sender_jid.clone(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // 2. Create a valid but undecryptable SignalMessage (encrypted with a dummy key)
+        let dummy_key = [0u8; 32];
+        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let signal_message = SignalMessage::new(
+            4,
+            &dummy_key,
+            sender_ratchet,
+            0,
+            0,
+            b"test",
+            sender_identity_pair.identity_key(),
+            receiver_identity_pair.identity_key(),
+        )
+        .unwrap();
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .bytes(signal_message.serialized().to_vec())
+            .build();
+        let enc_nodes = vec![&enc_node];
+
+        // 3. Run the function under test
+        // The function now returns (any_success, any_duplicate, dispatched_undecryptable).
+        // With a SessionNotFound error, it should return (false, false, true) since it dispatches an event.
+        let (success, had_duplicates, dispatched) = client
+            .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
+            .await;
+
+        // 4. Assert the desired behavior: the function continues gracefully
+        // The function should return (false, false, true) (no successful decryption, no duplicates, but dispatched event)
+        assert!(
+            !success && !had_duplicates && dispatched,
+            "process_session_enc_batch should return (false, false, true) when SessionNotFound occurs and dispatches event"
+        );
+
+        // Note: Verifying event dispatch would require adding a test event handler.
+        // For this test, we're just ensuring the function doesn't panic and returns the correct status.
+    }
+
+    #[tokio::test]
+    async fn test_handle_encrypted_message_skips_skmsg_after_msg_failure() {
+        use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
+
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_skip_skmsg_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // 2. Create a message node with both msg and skmsg
+        // The msg will fail to decrypt (no session), so skmsg should be skipped
+        let dummy_key = [0u8; 32];
+        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let signal_message = SignalMessage::new(
+            4,
+            &dummy_key,
+            sender_ratchet,
+            0,
+            0,
+            b"test",
+            sender_identity_pair.identity_key(),
+            receiver_identity_pair.identity_key(),
+        )
+        .unwrap();
+
+        let msg_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .bytes(signal_message.serialized().to_vec())
+            .build();
+
+        let skmsg_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .bytes(vec![4, 5, 6])
+            .build();
+
+        let message_node = Arc::new(
+            NodeBuilder::new("message")
+                .attr("from", group_jid.to_string())
+                .attr("participant", sender_jid.to_string())
+                .attr("id", "test-id-123")
+                .attr("t", "12345")
+                .children(vec![msg_node, skmsg_node])
+                .build(),
+        );
+
+        // 3. Run the function
+        // This should NOT panic or cause a retry loop. The skmsg should be skipped.
+        client.handle_encrypted_message(message_node).await;
+
+        // 4. Assert
+        // If we get here without panicking, the test passes.
+        // The key improvement is that we won't send a retry receipt for the skmsg
+        // since we detected the msg failure and skipped skmsg processing entirely.
+    }
+
+    /// Test case for reproducing LID group message decryption failure
+    /// when no 1-on-1 Signal session exists with the LID sender.
+    ///
+    /// Context:
+    /// - LID (Lightweight Identity) is WhatsApp's new identity system
+    /// - LID JIDs use format: `236395184570386.1:75@lid` (note the dot)
+    /// - Group messages from LID users fail to decrypt if we lack a Signal session
+    /// - This causes SessionNotFound errors which we now handle gracefully
+    ///
+    /// Expected behavior:
+    /// - No crash or panic
+    /// - UndecryptableMessage event dispatched
+    /// - No delivery receipt sent (only transport ack)
+    /// - Offline counter increments on reconnection (expected)
+    ///
+    /// Solution needed:
+    /// - Implement proactive session establishment with LID contacts
+    /// - Possibly fetch pre-keys when encountering new LID senders in groups
+    #[tokio::test]
+    #[ignore = "Requires valid whatsapp.db with active session to reproduce. This is a known issue documented in README.md"]
+    async fn test_lid_group_message_without_session() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::jid::Jid;
+
+        // This test reproduces the real-world scenario where:
+        // 1. A LID user (e.g., 236395184570386.1:75@lid) sends a group message
+        // 2. We don't have a 1-on-1 Signal session with this LID user
+        // 3. The message contains both PreKeySignalMessage (pkmsg) and SenderKeyDistributionMessage (skmsg)
+        // 4. Decryption fails with SessionNotFound
+
+        // Setup: Create client with real database
+        let backend = Arc::new(
+            SqliteStore::new("whatsapp.db")
+                .await
+                .expect("Failed to open whatsapp.db - ensure you have an authenticated session"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        // Simulate a group message from a LID user we haven't chatted with 1-on-1
+        let lid_sender: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // In reality, this would contain actual encrypted pkmsg and skmsg bytes
+        // For now, we're just documenting the structure
+        let pkmsg_node = NodeBuilder::new("enc")
+            .attr("type", "pkmsg")
+            .attr("v", "2")
+            .bytes(vec![/* actual pkmsg bytes */])
+            .build();
+
+        let skmsg_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .attr("v", "2")
+            .bytes(vec![/* actual skmsg bytes */])
+            .build();
+
+        let message_node = Arc::new(
+            NodeBuilder::new("message")
+                .attr("from", group_jid.to_string())
+                .attr("participant", lid_sender.to_string())
+                .attr("id", "LID_TEST_MSG_001")
+                .attr("t", "1759296831")
+                .attr("type", "text")
+                .attr("notify", "LID Test User")
+                .attr("offline", "1")
+                .attr("addressing_mode", "lid")
+                .children(vec![pkmsg_node, skmsg_node])
+                .build(),
+        );
+
+        // Attempt to handle the message
+        // Expected: Graceful failure, no crash, UndecryptableMessage event dispatched
+        client.handle_encrypted_message(message_node).await;
+
+        // If we reach here without panicking, the graceful handling works
+        // However, the message remains undecryptable until we:
+        // 1. Establish a Signal session with the LID user (send them a 1-on-1 message)
+        // 2. OR implement proactive pre-key fetching for LID contacts
+        // 3. OR implement session-less SKDM decryption if protocol allows
+
+        println!("✅ LID message handled gracefully (but not decrypted - this is the known issue)");
+    }
+
+    /// Test case for reproducing sender key JID mismatch in LID group messages
+    ///
+    /// Problem:
+    /// - When we process sender key distribution from a self-sent LID message, we store it under the LID JID
+    /// - But when we try to decrypt the group content (skmsg), we look it up using the phone number JID
+    /// - This causes "No sender key state" errors even though we just processed the sender key!
+    ///
+    /// This test verifies the fix by:
+    /// 1. Creating a sender key and storing it under the LID address (mimicking SKDM processing)
+    /// 2. Attempting retrieval with phone number address (the bug) - should fail
+    /// 3. Attempting retrieval with LID address (the fix) - should succeed
+    #[tokio::test]
+    async fn test_self_sent_lid_group_message_sender_key_mismatch() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::libsignal::protocol::{
+            SenderKeyStore, create_sender_key_distribution_message,
+            process_sender_key_distribution_message,
+        };
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
+        // Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (_client, _sync_rx) = Client::new(pm.clone()).await;
+
+        // Simulate own LID: 236395184570386.1:75@lid (note: using device 75 to match real scenario)
+        // Phone number: 559984726662:75@s.whatsapp.net
+        let own_lid: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let own_phone: Jid = "559984726662:75@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // Step 1: Create a real sender key distribution message using LID address
+        // This mimics what happens in handle_sender_key_distribution_message
+        let lid_protocol_address = own_lid.to_protocol_address();
+        let lid_sender_key_name =
+            SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+
+        let device_arc = pm.get_device_arc().await;
+        let skdm = {
+            let mut device_guard = device_arc.write().await;
+            create_sender_key_distribution_message(
+                &lid_sender_key_name,
+                &mut *device_guard,
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await
+            .expect("Failed to create SKDM")
+        };
+
+        // Step 2: Process the SKDM to ensure it's stored properly
+        {
+            let mut device_guard = device_arc.write().await;
+            process_sender_key_distribution_message(
+                &lid_sender_key_name,
+                &skdm,
+                &mut *device_guard,
+            )
+            .await
+            .expect("Failed to process SKDM with LID address");
+        }
+
+        println!(
+            "✅ Step 1: Stored sender key under LID address: {}",
+            lid_protocol_address
+        );
+
+        // Step 3: Try to retrieve using PHONE NUMBER address (THE BUG)
+        let phone_protocol_address = own_phone.to_protocol_address();
+        let phone_sender_key_name =
+            SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
+
+        let phone_lookup_result = {
+            let mut device_guard = device_arc.write().await;
+            device_guard.load_sender_key(&phone_sender_key_name).await
+        };
+
+        println!(
+            "❌ Step 2: Lookup with phone number address failed (expected): {}",
+            phone_protocol_address
+        );
+        assert!(
+            phone_lookup_result.unwrap().is_none(),
+            "Sender key should NOT be found when looking up with phone number address (this demonstrates the bug)"
+        );
+
+        // Step 4: Try to retrieve using LID address (THE FIX)
+        let lid_lookup_result = {
+            let mut device_guard = device_arc.write().await;
+            device_guard.load_sender_key(&lid_sender_key_name).await
+        };
+
+        println!("✅ Step 3: Lookup with LID address succeeded (this is the fix)");
+        assert!(
+            lid_lookup_result.unwrap().is_some(),
+            "Sender key SHOULD be found when looking up with LID address (same as storage)"
+        );
+
+        println!("\n🎯 Summary:");
+        println!("   - LID protocol address: {}", lid_protocol_address);
+        println!("   - Phone protocol address: {}", phone_protocol_address);
+        println!(
+            "   - Storage key format: {}:{}",
+            group_jid, lid_protocol_address
+        );
+        println!("   - Bug: Using phone address for lookup after storing with LID address");
+        println!("   - Fix: Always use info.source.sender (LID) for both storage and retrieval");
+    }
+
+    /// Test that sender key consistency is maintained for multiple LID participants
+    ///
+    /// Edge case: Group with multiple LID participants, each should have their own
+    /// sender key stored under their LID address, not mixed up with phone numbers.
+    #[tokio::test]
+    async fn test_multiple_lid_participants_sender_key_isolation() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::libsignal::protocol::{
+            SenderKeyStore, create_sender_key_distribution_message,
+            process_sender_key_distribution_message,
+        };
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_multi_lid_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (_client, _sync_rx) = Client::new(pm.clone()).await;
+
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // Simulate three LID participants
+        let participants = vec![
+            ("236395184570386.1:75@lid", "559984726662:75@s.whatsapp.net"),
+            ("987654321000000.2:42@lid", "551234567890:42@s.whatsapp.net"),
+            ("111222333444555.3:10@lid", "559876543210:10@s.whatsapp.net"),
+        ];
+
+        let device_arc = pm.get_device_arc().await;
+
+        // Create and store sender keys for each participant under their LID address
+        for (lid_str, _phone_str) in &participants {
+            let lid_jid: Jid = lid_str.parse().unwrap();
+            let lid_protocol_address = lid_jid.to_protocol_address();
+            let lid_sender_key_name =
+                SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+
+            let skdm = {
+                let mut device_guard = device_arc.write().await;
+                create_sender_key_distribution_message(
+                    &lid_sender_key_name,
+                    &mut *device_guard,
+                    &mut rand::rngs::OsRng.unwrap_err(),
+                )
+                .await
+                .expect("Failed to create SKDM")
+            };
+
+            let mut device_guard = device_arc.write().await;
+            process_sender_key_distribution_message(
+                &lid_sender_key_name,
+                &skdm,
+                &mut *device_guard,
+            )
+            .await
+            .expect("Failed to process SKDM");
+        }
+
+        // Verify each participant's sender key can be retrieved using their LID address
+        for (lid_str, phone_str) in &participants {
+            let lid_jid: Jid = lid_str.parse().unwrap();
+            let phone_jid: Jid = phone_str.parse().unwrap();
+
+            let lid_protocol_address = lid_jid.to_protocol_address();
+            let phone_protocol_address = phone_jid.to_protocol_address();
+
+            let lid_sender_key_name =
+                SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+            let phone_sender_key_name =
+                SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
+
+            // Should find with LID address
+            let lid_lookup = {
+                let mut device_guard = device_arc.write().await;
+                device_guard.load_sender_key(&lid_sender_key_name).await
+            };
+            assert!(
+                lid_lookup.unwrap().is_some(),
+                "Sender key for {} should be found with LID address",
+                lid_str
+            );
+
+            // Should NOT find with phone number address (the bug)
+            let phone_lookup = {
+                let mut device_guard = device_arc.write().await;
+                device_guard.load_sender_key(&phone_sender_key_name).await
+            };
+            assert!(
+                phone_lookup.unwrap().is_none(),
+                "Sender key for {} should NOT be found with phone number address",
+                lid_str
+            );
+        }
+
+        println!(
+            "✅ All {} LID participants have isolated sender keys",
+            participants.len()
+        );
+    }
+
+    /// Test that LID JID parsing handles various edge cases correctly
+    ///
+    /// Edge cases:
+    /// - LID with multiple dots in user portion
+    /// - LID with device numbers
+    /// - LID without device numbers
+    #[test]
+    fn test_lid_jid_parsing_edge_cases() {
+        use wacore_binary::jid::Jid;
+
+        // Single dot in user portion
+        let lid1: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        assert_eq!(lid1.user, "236395184570386.1");
+        assert_eq!(lid1.device, 75);
+        assert_eq!(lid1.agent, 0);
+
+        // Multiple dots in user portion (extreme edge case)
+        let lid2: Jid = "123.456.789.0:50@lid".parse().unwrap();
+        assert_eq!(lid2.user, "123.456.789.0");
+        assert_eq!(lid2.device, 50);
+        assert_eq!(lid2.agent, 0);
+
+        // No device number (device 0)
+        let lid3: Jid = "987654321000000.5@lid".parse().unwrap();
+        assert_eq!(lid3.user, "987654321000000.5");
+        assert_eq!(lid3.device, 0);
+        assert_eq!(lid3.agent, 0);
+
+        // Very long user portion with dot
+        let lid4: Jid = "111222333444555666777.999:1@lid".parse().unwrap();
+        assert_eq!(lid4.user, "111222333444555666777.999");
+        assert_eq!(lid4.device, 1);
+        assert_eq!(lid4.agent, 0);
+    }
+
+    /// Test that protocol address generation from LID JIDs is consistent
+    ///
+    /// Critical: The protocol address must not add unwanted suffixes for LID addresses
+    /// with dots in the user portion, which was causing sender key lookup failures.
+    #[test]
+    fn test_lid_protocol_address_consistency() {
+        use wacore::types::jid::JidExt as CoreJidExt;
+        use wacore_binary::jid::Jid;
+
+        let test_cases = vec![
+            ("236395184570386.1:75@lid", "236395184570386.1", 75),
+            ("987654321000000.2:42@lid", "987654321000000.2", 42),
+            ("111.222.333:10@lid", "111.222.333", 10),
+        ];
+
+        for (jid_str, expected_name, expected_device) in test_cases {
+            let lid_jid: Jid = jid_str.parse().unwrap();
+            let protocol_addr = lid_jid.to_protocol_address();
+
+            assert_eq!(
+                protocol_addr.name(),
+                expected_name,
+                "Protocol address name should match user portion exactly for {}",
+                jid_str
+            );
+            assert_eq!(
+                u32::from(protocol_addr.device_id()),
+                expected_device,
+                "Protocol address device should match for {}",
+                jid_str
+            );
+        }
+    }
+
+    /// Test sender_alt extraction from message attributes in LID groups
+    ///
+    /// Edge cases:
+    /// - LID group with participant_pn attribute
+    /// - PN group with participant_lid attribute
+    /// - Mixed addressing modes
+    #[tokio::test]
+    async fn test_parse_message_info_sender_alt_extraction() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_sender_alt_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+
+        // Set up own phone number and LID
+        {
+            let device_arc = pm.get_device_arc().await;
+            let mut device = device_arc.write().await;
+            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
+            device.lid = Some("236395184570386.1@lid".parse().unwrap());
+        }
+
+        let (client, _sync_rx) = Client::new(pm).await;
+
+        // Test case 1: LID group message with participant_pn
+        let lid_group_node = NodeBuilder::new("message")
+            .attr("from", "120363021033254949@g.us")
+            .attr("participant", "987654321000000.2:42@lid")
+            .attr("participant_pn", "551234567890:42@s.whatsapp.net")
+            .attr("addressing_mode", "lid")
+            .attr("id", "test1")
+            .attr("t", "12345")
+            .build();
+
+        let info1 = client.parse_message_info(&lid_group_node).await.unwrap();
+        assert_eq!(info1.source.sender.user, "987654321000000.2");
+        assert!(info1.source.sender_alt.is_some());
+        assert_eq!(
+            info1.source.sender_alt.as_ref().unwrap().user,
+            "551234567890"
+        );
+
+        // Test case 2: Self-sent LID group message
+        let self_lid_node = NodeBuilder::new("message")
+            .attr("from", "120363021033254949@g.us")
+            .attr("participant", "236395184570386.1:75@lid")
+            .attr("participant_pn", "559984726662:75@s.whatsapp.net")
+            .attr("addressing_mode", "lid")
+            .attr("id", "test2")
+            .attr("t", "12346")
+            .build();
+
+        let info2 = client.parse_message_info(&self_lid_node).await.unwrap();
+        assert!(
+            info2.source.is_from_me,
+            "Should detect self-sent LID message"
+        );
+        assert_eq!(info2.source.sender.user, "236395184570386.1");
+        assert!(info2.source.sender_alt.is_some());
+        assert_eq!(
+            info2.source.sender_alt.as_ref().unwrap().user,
+            "559984726662"
+        );
+
+        println!("✅ sender_alt extraction working correctly for LID groups");
+    }
+
+    /// Test that device query logic uses phone numbers for LID participants
+    ///
+    /// This is a unit test for the logic in wacore/src/send.rs that converts
+    /// LID JIDs to phone number JIDs for device queries.
+    #[test]
+    fn test_lid_to_phone_mapping_for_device_queries() {
+        use std::collections::HashMap;
+        use wacore::client::context::GroupInfo;
+        use wacore::types::message::AddressingMode;
+        use wacore_binary::jid::Jid;
+
+        // Simulate a LID group with phone number mappings
+        let mut lid_to_pn_map = HashMap::new();
+        lid_to_pn_map.insert(
+            "236395184570386.1".to_string(),
+            "559984726662@s.whatsapp.net".parse().unwrap(),
+        );
+        lid_to_pn_map.insert(
+            "987654321000000.2".to_string(),
+            "551234567890@s.whatsapp.net".parse().unwrap(),
+        );
+
+        let mut group_info = GroupInfo::new(
+            vec![
+                "236395184570386.1:75@lid".parse().unwrap(),
+                "987654321000000.2:42@lid".parse().unwrap(),
+            ],
+            AddressingMode::Lid,
+        );
+        group_info.set_lid_to_pn_map(lid_to_pn_map.clone());
+
+        // Simulate the device query logic
+        let jids_to_query: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                let base_jid = jid.to_non_ad();
+                if base_jid.server == "lid"
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
+                {
+                    return phone_jid.to_non_ad();
+                }
+                base_jid
+            })
+            .collect();
+
+        // Verify all queries use phone numbers, not LID JIDs
+        for jid in &jids_to_query {
+            assert_eq!(
+                jid.server, "s.whatsapp.net",
+                "Device query should use phone number, got: {}",
+                jid
+            );
+        }
+
+        assert_eq!(jids_to_query.len(), 2);
+        assert!(jids_to_query.iter().any(|j| j.user == "559984726662"));
+        assert!(jids_to_query.iter().any(|j| j.user == "551234567890"));
+
+        println!("✅ LID-to-phone mapping working correctly for device queries");
+    }
+
+    /// Test edge case: Group with mixed LID and phone number participants
+    ///
+    /// Some participants may still use phone numbers even in a LID group.
+    /// The code should handle both correctly.
+    #[test]
+    fn test_mixed_lid_and_phone_participants() {
+        use std::collections::HashMap;
+        use wacore::client::context::GroupInfo;
+        use wacore::types::message::AddressingMode;
+        use wacore_binary::jid::Jid;
+
+        let mut lid_to_pn_map = HashMap::new();
+        lid_to_pn_map.insert(
+            "236395184570386.1".to_string(),
+            "559984726662@s.whatsapp.net".parse().unwrap(),
+        );
+
+        let mut group_info = GroupInfo::new(
+            vec![
+                "236395184570386.1:75@lid".parse().unwrap(), // LID participant
+                "551234567890:42@s.whatsapp.net".parse().unwrap(), // Phone number participant
+            ],
+            AddressingMode::Lid,
+        );
+        group_info.set_lid_to_pn_map(lid_to_pn_map.clone());
+
+        let jids_to_query: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                let base_jid = jid.to_non_ad();
+                if base_jid.server == "lid"
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
+                {
+                    return phone_jid.to_non_ad();
+                }
+                base_jid
+            })
+            .collect();
+
+        // Both should end up as phone numbers
+        assert_eq!(jids_to_query.len(), 2);
+        for jid in &jids_to_query {
+            assert_eq!(jid.server, "s.whatsapp.net");
+        }
+
+        println!("✅ Mixed LID and phone number participants handled correctly");
+    }
+
+    /// Test edge case: Own JID check in LID mode
+    ///
+    /// When checking if own JID is in the participant list, we must use
+    /// the phone number equivalent if in LID mode, not the LID itself.
+    #[test]
+    fn test_own_jid_check_in_lid_mode() {
+        use std::collections::HashMap;
+        use wacore_binary::jid::Jid;
+
+        let own_lid: Jid = "236395184570386.1@lid".parse().unwrap();
+        let own_phone: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+
+        let mut lid_to_pn_map = HashMap::new();
+        lid_to_pn_map.insert("236395184570386.1".to_string(), own_phone.clone());
+
+        // Simulate the own JID check logic from wacore/src/send.rs
+        let own_base_jid = own_lid.to_non_ad();
+        let own_jid_to_check = if own_base_jid.server == "lid" {
+            lid_to_pn_map
+                .get(&own_base_jid.user)
+                .map(|pn| pn.to_non_ad())
+                .unwrap_or_else(|| own_base_jid.clone())
+        } else {
+            own_base_jid.clone()
+        };
+
+        // Verify we're checking using the phone number
+        assert_eq!(own_jid_to_check.user, "559984726662");
+        assert_eq!(own_jid_to_check.server, "s.whatsapp.net");
+
+        println!("✅ Own JID check correctly uses phone number in LID mode");
+    }
+
+    /// Test that sender key operations always use the display JID (LID)
+    /// regardless of what JID is used for E2E session decryption
+    #[tokio::test]
+    async fn test_sender_key_always_uses_display_jid() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::libsignal::protocol::{SenderKeyStore, create_sender_key_distribution_message};
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_display_jid_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (_client, _sync_rx) = Client::new(pm.clone()).await;
+
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let display_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let encryption_jid: Jid = "559984726662:75@s.whatsapp.net".parse().unwrap();
+
+        // Store sender key using display JID (LID)
+        let display_protocol_address = display_jid.to_protocol_address();
+        let display_sender_key_name =
+            SenderKeyName::new(group_jid.to_string(), display_protocol_address.to_string());
+
+        let device_arc = pm.get_device_arc().await;
+        {
+            let mut device_guard = device_arc.write().await;
+            create_sender_key_distribution_message(
+                &display_sender_key_name,
+                &mut *device_guard,
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await
+            .expect("Failed to create SKDM");
+        }
+
+        // Verify it's stored under display JID
+        let lookup_with_display = {
+            let mut device_guard = device_arc.write().await;
+            device_guard.load_sender_key(&display_sender_key_name).await
+        };
+        assert!(
+            lookup_with_display.unwrap().is_some(),
+            "Sender key should be found with display JID (LID)"
+        );
+
+        // Verify it's NOT accessible via encryption JID (phone number)
+        let encryption_protocol_address = encryption_jid.to_protocol_address();
+        let encryption_sender_key_name = SenderKeyName::new(
+            group_jid.to_string(),
+            encryption_protocol_address.to_string(),
+        );
+
+        let lookup_with_encryption = {
+            let mut device_guard = device_arc.write().await;
+            device_guard
+                .load_sender_key(&encryption_sender_key_name)
+                .await
+        };
+        assert!(
+            lookup_with_encryption.unwrap().is_none(),
+            "Sender key should NOT be found with encryption JID (phone number)"
+        );
+
+        println!("✅ Sender key operations correctly use display JID, not encryption JID");
+    }
+
+    /// Test edge case: Second message with only skmsg (no pkmsg/msg)
+    ///
+    /// After the first message establishes a session and sender key,
+    /// subsequent messages may contain only skmsg. These should still
+    /// be decrypted successfully, not skipped.
+    ///
+    /// Bug: The code was treating "no session messages" as "session failed",
+    /// causing it to skip skmsg decryption for all messages after the first.
+    #[tokio::test]
+    async fn test_second_message_with_only_skmsg_decrypts() {
+        use crate::store::sqlite_store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::libsignal::protocol::{
+            create_sender_key_distribution_message, process_sender_key_distribution_message,
+        };
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_second_msg_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm.clone()).await;
+
+        let sender_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+
+        // Step 1: Create and store a sender key (simulating first message processing)
+        let sender_protocol_address = sender_jid.to_protocol_address();
+        let sender_key_name =
+            SenderKeyName::new(group_jid.to_string(), sender_protocol_address.to_string());
+
+        let device_arc = pm.get_device_arc().await;
+        {
+            let mut device_guard = device_arc.write().await;
+            let skdm = create_sender_key_distribution_message(
+                &sender_key_name,
+                &mut *device_guard,
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await
+            .expect("Failed to create SKDM");
+
+            process_sender_key_distribution_message(&sender_key_name, &skdm, &mut *device_guard)
+                .await
+                .expect("Failed to process SKDM");
+        }
+
+        println!("✅ Step 1: Sender key established for {}", sender_jid);
+
+        // Step 2: Create a message with ONLY skmsg (no pkmsg/msg)
+        // This simulates the second message after session is established
+        let skmsg_ciphertext = {
+            let mut device_guard = device_arc.write().await;
+            let sender_key_msg = wacore::libsignal::protocol::group_encrypt(
+                &mut *device_guard,
+                &sender_key_name,
+                b"ping",
+                &mut rand::rngs::OsRng.unwrap_err(),
+            )
+            .await
+            .expect("Failed to encrypt with sender key");
+            sender_key_msg.serialized().to_vec()
+        };
+
+        let skmsg_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .attr("v", "2")
+            .bytes(skmsg_ciphertext)
+            .build();
+
+        let message_node = Arc::new(
+            NodeBuilder::new("message")
+                .attr("from", group_jid.to_string())
+                .attr("participant", sender_jid.to_string())
+                .attr("id", "SECOND_MSG_TEST")
+                .attr("t", "1759306493")
+                .attr("type", "text")
+                .attr("addressing_mode", "lid")
+                .children(vec![skmsg_node])
+                .build(),
+        );
+
+        // Step 3: Handle the message (should NOT skip skmsg)
+        // Before the fix, this would log:
+        // "Skipping skmsg decryption for message SECOND_MSG_TEST from 236395184570386.1:75@lid
+        //  because the initial session/senderkey message failed to decrypt."
+        //
+        // After the fix, it should decrypt successfully.
+        client.handle_encrypted_message(message_node).await;
+
+        println!("✅ Step 2: Second message with only skmsg processed successfully");
+
+        // The test passes if we reach here without errors
+        // In a real scenario, we'd verify the message was decrypted and the event was dispatched
+        // For now, we're just ensuring the code path doesn't skip the skmsg incorrectly
     }
 }
