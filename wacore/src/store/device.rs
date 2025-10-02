@@ -110,6 +110,8 @@ pub struct Device {
     pub app_version_secondary: u32,
     pub app_version_tertiary: u32,
     pub app_version_last_fetched_ms: i64,
+    #[serde(skip)]
+    pub device_props: wa::DeviceProps,
 }
 
 impl Default for Device {
@@ -156,11 +158,25 @@ impl Device {
             app_version_secondary: 3000,
             app_version_tertiary: 1023868176,
             app_version_last_fetched_ms: 0,
+            device_props: DEVICE_PROPS.clone(),
         }
     }
 
     pub fn is_ready_for_presence(&self) -> bool {
         self.pn.is_some() && !self.push_name.is_empty()
+    }
+
+    pub fn set_device_props(
+        &mut self,
+        os: Option<String>,
+        version: Option<wa::device_props::AppVersion>,
+    ) {
+        if let Some(os) = os {
+            self.device_props.os = Some(os);
+        }
+        if let Some(version) = version {
+            self.device_props.version = Some(version);
+        }
     }
 
     pub fn get_client_payload(&self) -> wa::ClientPayload {
@@ -193,7 +209,7 @@ impl Device {
         };
         let mut payload = build_base_client_payload(app_version);
 
-        let device_props_bytes = DEVICE_PROPS.encode_to_vec();
+        let device_props_bytes = self.device_props.encode_to_vec();
 
         let version = payload
             .user_agent

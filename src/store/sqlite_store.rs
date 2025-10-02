@@ -402,6 +402,7 @@ impl SqliteStore {
                 app_version_secondary: app_version_secondary as u32,
                 app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
                 app_version_last_fetched_ms,
+                device_props: wa::DeviceProps::default(),
             }))
         } else {
             Ok(None)
@@ -679,6 +680,7 @@ impl SqliteStore {
                 app_version_secondary: app_version_secondary as u32,
                 app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
                 app_version_last_fetched_ms,
+                device_props: wa::DeviceProps::default(),
             }))
         } else {
             Ok(None)
