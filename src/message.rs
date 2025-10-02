@@ -35,50 +35,50 @@ impl Client {
             }
         };
 
-        // Determine the JID to use for E2E decryption, following whatsmeow's logic.
-        // For LID addressing mode, prefer participant_pn (phone number) for decryption.
-        let sender_encryption_jid = if info.source.sender.server
-            == wacore_binary::jid::DEFAULT_USER_SERVER
-        {
-            if let Some(ref sender_alt) = info.source.sender_alt {
-                if sender_alt.server == wacore_binary::jid::HIDDEN_USER_SERVER {
-                    // SenderAlt is LID, use it for decryption
-                    sender_alt.clone()
-                } else {
-                    // SenderAlt is phone number and sender is LID, use phone number for decryption
-                    sender_alt.clone()
-                }
-            } else {
-                info.source.sender.clone()
-            }
-        } else if info.source.sender.server == wacore_binary::jid::HIDDEN_USER_SERVER {
-            // Sender is LID but no sender_alt provided
-            if info.source.is_from_me {
-                // This is a self-sent message. Use our own phone number for decryption.
-                if let Some(own_pn) = self.get_pn().await {
-                    log::debug!(
-                        "Self-sent message from LID {}, using own phone number {}:{} for decryption",
-                        info.source.sender,
-                        own_pn.user,
-                        info.source.sender.device
-                    );
-                    Jid {
-                        user: own_pn.user,
-                        server: own_pn.server,
-                        agent: own_pn.agent,
-                        device: info.source.sender.device,
-                        integrator: own_pn.integrator,
+        // Determine the JID to use for end-to-end decryption. Prefer phone-number alt JIDs
+        // for LID senders, but never "upgrade" a PN sender to a LID.
+        let sender_encryption_jid = {
+            let sender = &info.source.sender;
+            let alt = info.source.sender_alt.as_ref();
+            let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+            let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+            if sender.server == lid_server {
+                if let Some(alt_jid) = alt {
+                    if alt_jid.server == pn_server {
+                        alt_jid.clone()
+                    } else {
+                        // Alt is another LID variant; stick with the original LID sender.
+                        sender.clone()
+                    }
+                } else if info.source.is_from_me {
+                    // Self-sent LID message without PN alt — try to fall back to our PN identity.
+                    if let Some(own_pn) = self.get_pn().await {
+                        log::debug!(
+                            "Self-sent message from LID {}, using own phone number {}:{} for decryption",
+                            sender,
+                            own_pn.user,
+                            sender.device
+                        );
+                        Jid {
+                            user: own_pn.user,
+                            server: own_pn.server,
+                            agent: own_pn.agent,
+                            device: sender.device,
+                            integrator: own_pn.integrator,
+                        }
+                    } else {
+                        log::warn!("Self-sent message from LID but own phone number not available");
+                        sender.clone()
                     }
                 } else {
-                    log::warn!("Self-sent message from LID but own phone number not available");
-                    info.source.sender.clone()
+                    // No PN alt provided and not self-sent. Keep the original LID sender.
+                    sender.clone()
                 }
             } else {
-                // Not from us, use LID as-is (though decryption might fail if no session)
-                info.source.sender.clone()
+                // Sender already uses PN (or another stable server). Never upgrade to LID.
+                sender.clone()
             }
-        } else {
-            info.source.sender.clone()
         };
 
         log::debug!(
@@ -532,9 +532,11 @@ impl Client {
             }
         } else if from.is_group() {
             let sender = attrs.jid("participant");
-            let sender_alt = if let Some(addressing_mode) = attrs.optional_string("addressing_mode")
+            let sender_alt = if let Some(addressing_mode) = attrs
+                .optional_string("addressing_mode")
+                .map(|s| s.to_ascii_lowercase())
             {
-                match addressing_mode {
+                match addressing_mode.as_str() {
                     "lid" => attrs.optional_jid("participant_pn"),
                     _ => attrs.optional_jid("participant_lid"),
                 }
@@ -571,9 +573,10 @@ impl Client {
 
         source.addressing_mode = attrs
             .optional_string("addressing_mode")
-            .and_then(|s| match s {
-                "Pn" => Some(crate::types::message::AddressingMode::Pn),
-                "Lid" => Some(crate::types::message::AddressingMode::Lid),
+            .map(|s| s.to_ascii_lowercase())
+            .and_then(|s| match s.as_str() {
+                "pn" => Some(crate::types::message::AddressingMode::Pn),
+                "lid" => Some(crate::types::message::AddressingMode::Lid),
                 _ => None,
             });
 
@@ -1375,14 +1378,14 @@ mod tests {
             "551234567890@s.whatsapp.net".parse().unwrap(),
         );
 
-        let group_info = GroupInfo {
-            participants: vec![
+        let mut group_info = GroupInfo::new(
+            vec![
                 "236395184570386.1:75@lid".parse().unwrap(),
                 "987654321000000.2:42@lid".parse().unwrap(),
             ],
-            addressing_mode: AddressingMode::Lid,
-            lid_to_pn_map: lid_to_pn_map.clone(),
-        };
+            AddressingMode::Lid,
+        );
+        group_info.set_lid_to_pn_map(lid_to_pn_map.clone());
 
         // Simulate the device query logic
         let jids_to_query: Vec<Jid> = group_info
@@ -1391,7 +1394,7 @@ mod tests {
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
                 if base_jid.server == "lid"
-                    && let Some(phone_jid) = group_info.lid_to_pn_map.get(&base_jid.user)
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     return phone_jid.to_non_ad();
                 }
@@ -1432,14 +1435,14 @@ mod tests {
             "559984726662@s.whatsapp.net".parse().unwrap(),
         );
 
-        let group_info = GroupInfo {
-            participants: vec![
+        let mut group_info = GroupInfo::new(
+            vec![
                 "236395184570386.1:75@lid".parse().unwrap(), // LID participant
                 "551234567890:42@s.whatsapp.net".parse().unwrap(), // Phone number participant
             ],
-            addressing_mode: AddressingMode::Lid,
-            lid_to_pn_map: lid_to_pn_map.clone(),
-        };
+            AddressingMode::Lid,
+        );
+        group_info.set_lid_to_pn_map(lid_to_pn_map.clone());
 
         let jids_to_query: Vec<Jid> = group_info
             .participants
@@ -1447,7 +1450,7 @@ mod tests {
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
                 if base_jid.server == "lid"
-                    && let Some(phone_jid) = group_info.lid_to_pn_map.get(&base_jid.user)
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     return phone_jid.to_non_ad();
                 }

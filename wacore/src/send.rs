@@ -112,9 +112,9 @@ where
     }
 
     if !jids_needing_prekeys.is_empty() {
-        log::info!(
-            "Fetching prekeys for devices without sessions: {:?}",
-            jids_needing_prekeys
+        log::debug!(
+            "Fetching prekeys for {} devices without sessions",
+            jids_needing_prekeys.len()
         );
         let prekey_bundles = resolver
             .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
@@ -393,7 +393,7 @@ pub async fn prepare_group_stanza<
                 let base_jid = jid.to_non_ad();
                 // If this is a LID JID and we have a phone number mapping, use it for device query
                 if base_jid.server == "lid"
-                    && let Some(phone_jid) = group_info.lid_to_pn_map.get(&base_jid.user)
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     log::debug!(
                         "Using phone number {} for LID {} device query",
@@ -409,8 +409,7 @@ pub async fn prepare_group_stanza<
         // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
         let own_jid_to_check = if own_base_jid.server == "lid" {
             group_info
-                .lid_to_pn_map
-                .get(&own_base_jid.user)
+                .phone_jid_for_lid_user(&own_base_jid.user)
                 .map(|pn| pn.to_non_ad())
                 .unwrap_or_else(|| own_base_jid.clone())
         } else {
@@ -427,18 +426,20 @@ pub async fn prepare_group_stanza<
         let mut seen_users = HashSet::new();
         jids_to_resolve.retain(|jid| seen_users.insert((jid.user.clone(), jid.server.clone())));
 
-        log::info!("Resolving devices for participants: {:?}", jids_to_resolve);
+        log::debug!(
+            "Resolving devices for {} participants",
+            jids_to_resolve.len()
+        );
 
         let mut distribution_list = resolver.resolve_devices(&jids_to_resolve).await?;
 
         let mut seen = HashSet::new();
         distribution_list.retain(|jid| seen.insert(jid.to_string()));
 
-        log::info!(
-            "SKDM distribution list for {} resolved to {} devices: {:?}",
+        log::debug!(
+            "SKDM distribution list for {} resolved to {} devices",
             to_jid,
             distribution_list.len(),
-            distribution_list
         );
 
         resolved_devices_for_phash = Some(distribution_list.clone());

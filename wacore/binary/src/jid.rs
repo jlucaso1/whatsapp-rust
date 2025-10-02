@@ -253,6 +253,11 @@ impl FromStr for Jid {
                 device = num_val;
             } else {
                 user = u;
+                if num_val > u8::MAX as u16 {
+                    return Err(JidError::InvalidFormat(format!(
+                        "Agent component out of range: {num_val}"
+                    )));
+                }
                 agent = num_val as u8;
             }
         }

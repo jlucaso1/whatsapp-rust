@@ -54,11 +54,10 @@ impl Client {
             }
         }
 
-        let info = GroupInfo {
-            participants,
-            addressing_mode,
-            lid_to_pn_map,
-        };
+        let mut info = GroupInfo::new(participants, addressing_mode);
+        if !lid_to_pn_map.is_empty() {
+            info.set_lid_to_pn_map(lid_to_pn_map);
+        }
         self.group_cache.insert(jid.clone(), info.clone());
 
         Ok(info)
