@@ -142,6 +142,7 @@ pub struct BotBuilder {
     // The only way to configure storage
     backend: Option<Arc<dyn Backend>>,
     override_version: Option<(u32, u32, u32)>,
+    os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
 }
 
 impl BotBuilder {
@@ -224,6 +225,47 @@ impl BotBuilder {
         self
     }
 
+    /// Override the OS information sent to WhatsApp servers.
+    /// This allows customizing the device properties that WhatsApp sees.
+    ///
+    /// # Arguments
+    /// * `os_name` - Optional OS name (e.g., "Android", "iOS", "Windows")
+    /// * `version` - Optional OS version as AppVersion struct
+    ///
+    /// You can pass `None` for either parameter to keep the default value.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use waproto::whatsapp::device_props;
+    ///
+    /// // Set only OS name, keep default version
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_os_info(Some("Android".to_string()), None)
+    ///     .build()
+    ///     .await?;
+    ///
+    /// // Set only version, keep default OS
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_os_info(None, Some(device_props::AppVersion {
+    ///         primary: Some(10),
+    ///         secondary: Some(0),
+    ///         tertiary: Some(0),
+    ///         ..Default::default()
+    ///     }))
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_os_info(
+        mut self,
+        os_name: Option<String>,
+        version: Option<wa::device_props::AppVersion>,
+    ) -> Self {
+        self.os_info = Some((os_name, version));
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -261,6 +303,16 @@ impl BotBuilder {
 
         crate::version::resolve_and_update_version(&persistence_manager, self.override_version)
             .await;
+
+        // Apply OS info override if specified
+        if let Some((os_name, version)) = self.os_info {
+            info!("Applying OS info override: {:?} {:?}", os_name, version);
+            persistence_manager
+                .modify_device(|device| {
+                    device.set_device_props(os_name, version);
+                })
+                .await;
+        }
 
         info!("Creating client...");
         let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
@@ -439,5 +491,90 @@ mod tests {
         assert_eq!(device_snapshot.app_version_primary, 2);
         assert_eq!(device_snapshot.app_version_secondary, 3000);
         assert_eq!(device_snapshot.app_version_tertiary, 123456789);
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_os_info_override() {
+        let backend = create_test_sqlite_backend().await;
+
+        let custom_os = "CustomOS".to_string();
+        let custom_version = wa::device_props::AppVersion {
+            primary: Some(99),
+            secondary: Some(88),
+            tertiary: Some(77),
+            ..Default::default()
+        };
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_os_info(Some(custom_os.clone()), Some(custom_version))
+            .build()
+            .await
+            .expect("Failed to build bot with OS info override");
+
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+        let device = persistence_manager.get_device_snapshot().await;
+
+        // Verify the OS info was overridden
+        assert_eq!(device.device_props.os, Some(custom_os));
+        assert_eq!(device.device_props.version, Some(custom_version));
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_os_only_override() {
+        let backend = create_test_sqlite_backend().await;
+
+        let custom_os = "CustomOS".to_string();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_os_info(Some(custom_os.clone()), None)
+            .build()
+            .await
+            .expect("Failed to build bot with OS only override");
+
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+        let device = persistence_manager.get_device_snapshot().await;
+
+        // Verify only OS was overridden, version should be default
+        assert_eq!(device.device_props.os, Some(custom_os));
+        // Version should be the default since we didn't override it
+        assert_eq!(
+            device.device_props.version,
+            Some(wacore::store::Device::default_device_props_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_version_only_override() {
+        let backend = create_test_sqlite_backend().await;
+
+        let custom_version = wa::device_props::AppVersion {
+            primary: Some(99),
+            secondary: Some(88),
+            tertiary: Some(77),
+            ..Default::default()
+        };
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_os_info(None, Some(custom_version))
+            .build()
+            .await
+            .expect("Failed to build bot with version only override");
+
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+        let device = persistence_manager.get_device_snapshot().await;
+
+        // Verify only version was overridden, OS should be default ("rust")
+        assert_eq!(device.device_props.version, Some(custom_version));
+        // OS should be the default since we didn't override it
+        assert_eq!(
+            device.device_props.os,
+            Some(wacore::store::Device::default_os().to_string())
+        );
     }
 }
