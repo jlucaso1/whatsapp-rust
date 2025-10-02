@@ -151,7 +151,11 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
-        let (session_decrypted_successfully, session_had_duplicates) = self
+        let (
+            session_decrypted_successfully,
+            session_had_duplicates,
+            session_dispatched_undecryptable,
+        ) = self
             .clone()
             .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
             .await;
@@ -191,14 +195,17 @@ impl Client {
                         info.id, info.source.sender
                     );
                     // Still dispatch an UndecryptableMessage event so the user knows
-                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                        crate::types::events::UndecryptableMessage {
-                            info: info.clone(),
-                            is_unavailable: false,
-                            unavailable_type: crate::types::events::UnavailableType::Unknown,
-                            decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                        },
-                    ));
+                    // But only if we haven't already dispatched one in process_session_enc_batch
+                    if !session_dispatched_undecryptable {
+                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                            crate::types::events::UndecryptableMessage {
+                                info: info.clone(),
+                                is_unavailable: false,
+                                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                            },
+                        ));
+                    }
 
                     // Do NOT send a delivery receipt for undecryptable messages.
                     // Per whatsmeow's implementation, delivery receipts are only sent for
@@ -215,9 +222,20 @@ impl Client {
         {
             // Edge case: message with only msg/pkmsg that failed to decrypt, no skmsg
             warn!(
-                "Message {} from {} failed to decrypt and has no group content.",
+                "Message {} from {} failed to decrypt and has no group content. Dispatching UndecryptableMessage event.",
                 info.id, info.source.sender
             );
+            // Dispatch UndecryptableMessage event for messages that failed to decrypt
+            // (This should not cause double-dispatching since process_session_enc_batch
+            // already returned dispatched_undecryptable=false for this case)
+            self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                crate::types::events::UndecryptableMessage {
+                    info: info.clone(),
+                    is_unavailable: false,
+                    unavailable_type: crate::types::events::UnavailableType::Unknown,
+                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                },
+            ));
             // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
@@ -227,11 +245,11 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         sender_encryption_jid: &Jid,
-    ) -> (bool, bool) {
-        // Returns (any_success, any_duplicate)
+    ) -> (bool, bool, bool) {
+        // Returns (any_success, any_duplicate, dispatched_undecryptable)
         use wacore::libsignal::protocol::CiphertextMessage;
         if enc_nodes.is_empty() {
-            return (false, false);
+            return (false, false, false);
         }
 
         let mut adapter =
@@ -239,6 +257,7 @@ impl Client {
         let rng = rand::rngs::OsRng;
         let mut any_success = false;
         let mut any_duplicate = false;
+        let mut dispatched_undecryptable = false;
 
         for enc_node in enc_nodes {
             let ciphertext = match &enc_node.content {
@@ -327,6 +346,7 @@ impl Client {
                                 decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
                             },
                         ));
+                        dispatched_undecryptable = true;
                         // IMPORTANT: Continue the loop instead of returning an error.
                         continue;
                     } else {
@@ -336,7 +356,7 @@ impl Client {
                 }
             }
         }
-        (any_success, any_duplicate)
+        (any_success, any_duplicate, dispatched_undecryptable)
     }
 
     async fn process_group_enc_batch(
@@ -832,17 +852,17 @@ mod tests {
         let enc_nodes = vec![&enc_node];
 
         // 3. Run the function under test
-        // The function now returns (any_success, any_duplicate).
-        // With a SessionNotFound error, it should return (false, false) but not panic.
-        let (success, had_duplicates) = client
+        // The function now returns (any_success, any_duplicate, dispatched_undecryptable).
+        // With a SessionNotFound error, it should return (false, false, true) since it dispatches an event.
+        let (success, had_duplicates, dispatched) = client
             .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
             .await;
 
         // 4. Assert the desired behavior: the function continues gracefully
-        // The function should return (false, false) (no successful decryption, no duplicates) but should not panic.
+        // The function should return (false, false, true) (no successful decryption, no duplicates, but dispatched event)
         assert!(
-            !success && !had_duplicates,
-            "process_session_enc_batch should return (false, false) when SessionNotFound occurs"
+            !success && !had_duplicates && dispatched,
+            "process_session_enc_batch should return (false, false, true) when SessionNotFound occurs and dispatches event"
         );
 
         // Note: Verifying event dispatch would require adding a test event handler.
