@@ -2,12 +2,15 @@ mod context_impl;
 
 use crate::handshake;
 use crate::pair;
+use crate::pair_code::PhoneLinkingCache;
 use anyhow::anyhow;
 use dashmap::DashMap;
+use rand::RngCore;
+use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::JidExt;
+use wacore_binary::jid::{Jid, JidExt, SERVER_JID};
 use wacore_binary::node::Node;
 
 use crate::appstate_sync::AppStateProcessor;
@@ -19,12 +22,6 @@ use crate::types::presence::Presence;
 // keep single DashMap import above
 
 use log::{debug, error, info, warn};
-
-use rand::RngCore;
-use scopeguard;
-use std::collections::{HashMap, HashSet, VecDeque};
-use wacore_binary::jid::Jid;
-use wacore_binary::jid::SERVER_JID;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -142,6 +139,9 @@ pub struct Client {
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 
+    /// Phone linking cache for pairing code authentication
+    pub(crate) phone_linking_cache: Arc<Mutex<Option<PhoneLinkingCache>>>,
+
     pub(crate) send_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 
     /// Custom handlers for encrypted message types
@@ -241,6 +241,7 @@ impl Client {
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
+            phone_linking_cache: Arc::new(Mutex::new(None)),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             stanza_router: Self::create_stanza_router(),

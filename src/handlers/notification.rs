@@ -4,7 +4,8 @@ use crate::types::events::Event;
 use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
-use wacore_binary::{jid::SERVER_JID, node::Node};
+use wacore_binary::jid::SERVER_JID;
+use wacore_binary::node::Node;
 
 /// Handler for `<notification>` stanzas.
 ///
@@ -12,6 +13,7 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 /// - Encrypt notifications (key upload requests)
 /// - Server sync notifications
 /// - Account sync notifications (push name updates)
+/// - Pairing code notifications
 #[derive(Default)]
 pub struct NotificationHandler;
 
@@ -82,6 +84,9 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                     .event_bus
                     .dispatch(&Event::Notification(node.clone()));
             }
+        }
+        "link_code_companion_reg" => {
+            crate::handlers::pair::PairHandler::handle_notification(client, node).await;
         }
         _ => {
             warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");

@@ -52,6 +52,9 @@ pub enum Event {
         code: String,
         timeout: std::time::Duration,
     },
+    PairingCode {
+        code: String,
+    },
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
