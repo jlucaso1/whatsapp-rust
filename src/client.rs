@@ -546,10 +546,8 @@ impl Client {
 
     /// Determine if a node should be acknowledged with <ack/>.
     fn should_ack(&self, node: &Node) -> bool {
-        matches!(
-            node.tag.as_str(),
-            "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
+        matches!(node.tag.as_str(), "receipt" | "notification" | "call")
+            && node.attrs.contains_key("id")
             && node.attrs.contains_key("from")
     }
 
@@ -1345,5 +1343,65 @@ impl Client {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wacore_binary::builder::NodeBuilder;
+
+    #[tokio::test]
+    async fn test_ack_behavior_for_incoming_stanzas() {
+        let backend = Arc::new(
+            crate::store::sqlite_store::SqliteStore::new(":memory:")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(pm).await;
+
+        // 1. A standard <message> stanza.
+        // This should NOT be acknowledged to avoid fingerprinting.
+        let message_node = NodeBuilder::new("message")
+            .attr("from", "12345@s.whatsapp.net")
+            .attr("id", "MSG-1")
+            .build();
+
+        // 2. A <receipt> stanza.
+        // These MUST be acknowledged for the server to know we've processed them.
+        let receipt_node = NodeBuilder::new("receipt")
+            .attr("from", "s.whatsapp.net")
+            .attr("id", "RCPT-1")
+            .build();
+
+        // 3. A <notification> stanza.
+        // These also require an acknowledgment.
+        let notification_node = NodeBuilder::new("notification")
+            .attr("from", "s.whatsapp.net")
+            .attr("id", "NOTIF-1")
+            .build();
+
+        // --- Assertions ---
+
+        // Verify that <message> stanzas are now ignored for ack purposes.
+        assert!(
+            !client.should_ack(&message_node),
+            "should_ack must return FALSE for <message> stanzas to align with official client behavior and prevent fingerprinting."
+        );
+
+        // Verify that we still ack other critical stanzas (regression check).
+        assert!(
+            client.should_ack(&receipt_node),
+            "should_ack must still return TRUE for <receipt> stanzas."
+        );
+        assert!(
+            client.should_ack(&notification_node),
+            "should_ack must still return TRUE for <notification> stanzas."
+        );
+
+        info!(
+            "✅ test_ack_behavior_for_incoming_stanzas passed: Client correctly differentiates which stanzas to acknowledge."
+        );
     }
 }

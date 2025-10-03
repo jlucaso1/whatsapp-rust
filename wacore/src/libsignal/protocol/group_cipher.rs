@@ -79,7 +79,7 @@ fn get_sender_key(state: &mut SenderKeyState, iteration: u32) -> Result<SenderMe
         if let Some(smk) = state.remove_sender_message_key(iteration) {
             return Ok(smk);
         } else {
-            log::info!("SenderKey Duplicate message for iteration: {iteration}");
+            log::debug!("SenderKey Duplicate message for iteration: {iteration}");
             return Err(SignalProtocolError::DuplicatedMessage(
                 current_iteration,
                 iteration,

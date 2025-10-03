@@ -706,7 +706,7 @@ fn get_or_create_message_key(
         return match state.get_message_keys(their_ephemeral, counter)? {
             Some(keys) => Ok(keys),
             None => {
-                log::info!("{remote_address} Duplicate message for counter: {counter}");
+                log::debug!("{remote_address} Duplicate message for counter: {counter}");
                 Err(SignalProtocolError::DuplicatedMessage(chain_index, counter))
             }
         };
