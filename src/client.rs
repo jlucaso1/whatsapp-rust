@@ -546,8 +546,10 @@ impl Client {
 
     /// Determine if a node should be acknowledged with <ack/>.
     fn should_ack(&self, node: &Node) -> bool {
-        matches!(node.tag.as_str(), "receipt" | "notification" | "call")
-            && node.attrs.contains_key("id")
+        matches!(
+            node.tag.as_str(),
+            "message" | "receipt" | "notification" | "call"
+        ) && node.attrs.contains_key("id")
             && node.attrs.contains_key("from")
     }
 
@@ -1361,13 +1363,6 @@ mod tests {
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _rx) = Client::new(pm).await;
 
-        // 1. A standard <message> stanza.
-        // This should NOT be acknowledged to avoid fingerprinting.
-        let message_node = NodeBuilder::new("message")
-            .attr("from", "12345@s.whatsapp.net")
-            .attr("id", "MSG-1")
-            .build();
-
         // 2. A <receipt> stanza.
         // These MUST be acknowledged for the server to know we've processed them.
         let receipt_node = NodeBuilder::new("receipt")
@@ -1383,12 +1378,6 @@ mod tests {
             .build();
 
         // --- Assertions ---
-
-        // Verify that <message> stanzas are now ignored for ack purposes.
-        assert!(
-            !client.should_ack(&message_node),
-            "should_ack must return FALSE for <message> stanzas to align with official client behavior and prevent fingerprinting."
-        );
 
         // Verify that we still ack other critical stanzas (regression check).
         assert!(
