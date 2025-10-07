@@ -30,6 +30,28 @@ fn test_node_with_attributes_and_content_with_ref() {
 }
 
 #[test]
+fn test_attr_parser_ref_zero_copy_access() {
+    let original_node = NodeBuilder::new("iq")
+        .attrs([("xmlns", "test"), ("type", "result"), ("id", "123")])
+        .build();
+
+    let marshaled_with_flag = marshal(&original_node).expect("Marshal failed");
+    let node_ref = unmarshal_ref(&marshaled_with_flag[1..]).expect("unmarshal_ref failed");
+
+    let mut parser = node_ref.attr_parser();
+    assert_eq!(parser.string("xmlns"), "test");
+    assert_eq!(parser.optional_string("type"), Some("result"));
+    assert!(parser.ok());
+    parser
+        .finish()
+        .expect("Expected parser to finish without errors");
+
+    let mut parser_with_error = node_ref.attr_parser();
+    assert!(!parser_with_error.bool("missing"));
+    assert!(parser_with_error.finish().is_err());
+}
+
+#[test]
 fn test_node_with_children_with_ref() {
     let child1 = NodeBuilder::new("child1").build();
     let child2 = NodeBuilder::new("child2").attr("id", "123").build();

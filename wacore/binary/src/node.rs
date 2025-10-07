@@ -1,4 +1,4 @@
-use crate::attrs::AttrParser;
+use crate::attrs::{AttrParser, AttrParserRef};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -94,6 +94,10 @@ impl<'a> NodeRef<'a> {
             attrs,
             content: content.map(Box::new),
         }
+    }
+
+    pub fn attr_parser(&'a self) -> AttrParserRef<'a> {
+        AttrParserRef::new(self)
     }
 
     pub fn children(&self) -> Option<&[NodeRef<'a>]> {

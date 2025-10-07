@@ -10,5 +10,6 @@ pub mod node;
 pub mod token;
 pub mod util;
 
+pub use attrs::{AttrParser, AttrParserRef};
 pub use error::{BinaryError, Result};
 pub use node::{Node, NodeRef};
