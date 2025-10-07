@@ -7,6 +7,7 @@ authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 readme = "README.md"
+description = "Rust client for WhatsApp Web"
 
 [workspace]
 members = [".", "wacore", "waproto"]
@@ -17,8 +18,8 @@ rand = "0.9"
 rand_core = "0.9"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1" }
-wacore-binary = { path = "./wacore/binary" }
-waproto = { path = "./waproto" }
+wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
+waproto = { path = "./waproto", version = "0.1.0" }
 
 [dependencies]
 
@@ -79,7 +80,7 @@ ureq = { version = "3.1.0", default-features = false, features = [
     "rustls",
     "json",
 ] }
-wacore = { path = "./wacore" }
+wacore = { path = "./wacore", version = "0.1.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
 
