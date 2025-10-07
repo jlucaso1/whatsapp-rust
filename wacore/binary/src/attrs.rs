@@ -6,12 +6,12 @@ use crate::jid::Jid;
 use crate::node::{Attrs, Node, NodeRef};
 
 pub struct AttrParser<'a> {
-    attrs: &'a Attrs,
+    pub attrs: &'a Attrs,
     pub errors: Vec<BinaryError>,
 }
 
 pub struct AttrParserRef<'a> {
-    attrs: &'a [(Cow<'a, str>, Cow<'a, str>)],
+    pub attrs: &'a [(Cow<'a, str>, Cow<'a, str>)],
     pub errors: Vec<BinaryError>,
 }
 
