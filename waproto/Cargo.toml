@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
+description = "Protocol Buffers definitions for WhatsApp"
 
 [dependencies]
 prost = { version = "0.14.1", features = ["derive"] }
