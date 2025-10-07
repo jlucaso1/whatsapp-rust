@@ -154,6 +154,7 @@ impl<W: Write> Encoder<W> {
 
     fn write_content(&mut self, content: &NodeContent) -> Result<()> {
         match content {
+            NodeContent::String(s) => self.write_string(s), // <--- ADD THIS LINE
             NodeContent::Bytes(bytes) => self.write_bytes_with_len(bytes),
             NodeContent::Nodes(nodes) => {
                 self.write_list_start(nodes.len());

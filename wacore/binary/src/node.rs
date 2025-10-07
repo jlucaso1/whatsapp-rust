@@ -10,12 +10,14 @@ pub type NodeVec<'a> = Vec<NodeRef<'a>>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
     Bytes(Vec<u8>),
+    String(String),
     Nodes(Vec<Node>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
+    String(Cow<'a, str>),
     Nodes(Box<NodeVec<'a>>),
 }
 
@@ -154,6 +156,7 @@ impl<'a> NodeRef<'a> {
                 .collect::<HashMap<String, String>>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
+                NodeContentRef::String(s) => NodeContent::String(s.to_string()),
                 NodeContentRef::Nodes(nodes) => {
                     NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
                 }
