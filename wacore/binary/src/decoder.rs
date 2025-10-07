@@ -264,6 +264,16 @@ impl<'a> Decoder<'a> {
         let tag = self.read_u8()?;
         match tag {
             token::LIST_EMPTY => Ok(None),
+
+            token::LIST_8 | token::LIST_16 => {
+                let size = self.read_list_size(tag)?;
+                let mut nodes = NodeVec::with_capacity(size);
+                for _ in 0..size {
+                    nodes.push(self.read_node_ref()?);
+                }
+                Ok(Some(NodeContentRef::Nodes(Box::new(nodes))))
+            }
+
             token::BINARY_8 => {
                 let len = self.read_u8()? as usize;
                 let bytes = self.read_bytes(len)?;
@@ -279,14 +289,15 @@ impl<'a> Decoder<'a> {
                 let bytes = self.read_bytes(len)?;
                 Ok(Some(NodeContentRef::Bytes(Cow::Borrowed(bytes))))
             }
-            // It's a list of child nodes
+
             _ => {
-                let size = self.read_list_size(tag)?;
-                let mut nodes = NodeVec::with_capacity(size);
-                for _ in 0..size {
-                    nodes.push(self.read_node_ref()?);
+                self.position -= 1;
+                let string_content = self.read_value_as_string()?;
+
+                match string_content {
+                    Some(s) => Ok(Some(NodeContentRef::String(s))),
+                    None => Ok(None),
                 }
-                Ok(Some(NodeContentRef::Nodes(Box::new(nodes))))
             }
         }
     }

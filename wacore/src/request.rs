@@ -128,6 +128,7 @@ impl RequestUtils {
         if let Some(content) = &query.content {
             match content {
                 NodeContent::Bytes(b) => builder = builder.bytes(b.clone()),
+                NodeContent::String(s) => builder = builder.string_content(s.clone()),
                 NodeContent::Nodes(n) => builder = builder.children(n.clone()),
             }
         }

@@ -43,6 +43,11 @@ impl NodeBuilder {
         self
     }
 
+    pub fn string_content(mut self, s: impl Into<String>) -> Self {
+        self.content = Some(NodeContent::String(s.into()));
+        self
+    }
+
     pub fn build(self) -> Node {
         Node {
             tag: self.tag,
