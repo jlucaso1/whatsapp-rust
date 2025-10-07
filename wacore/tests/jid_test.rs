@@ -37,7 +37,7 @@ fn test_jid_parsing_and_serialization() {
 
 #[test]
 fn test_invalid_jid_parsing() {
-    assert!(Jid::from_str("invalidjid").is_ok());
+    assert!(Jid::from_str("invalidjid").is_err());
 
     assert!(Jid::from_str("user@server:device").is_ok());
 }

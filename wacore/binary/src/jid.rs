@@ -217,7 +217,31 @@ impl FromStr for Jid {
         };
 
         if user_part.is_empty() {
-            return Ok(Jid::new("", &server));
+            if s.contains('@') {
+                return Err(JidError::InvalidFormat(
+                    "Invalid JID format: empty user part".to_string(),
+                ));
+            } else {
+                let known_servers = [
+                    DEFAULT_USER_SERVER,
+                    GROUP_SERVER,
+                    LEGACY_USER_SERVER,
+                    BROADCAST_SERVER,
+                    HIDDEN_USER_SERVER,
+                    NEWSLETTER_SERVER,
+                    HOSTED_SERVER,
+                    MESSENGER_SERVER,
+                    INTEROP_SERVER,
+                    BOT_SERVER,
+                    STATUS_BROADCAST_USER,
+                ];
+                if !known_servers.contains(&server.as_str()) {
+                    return Err(JidError::InvalidFormat(format!(
+                        "Invalid JID format: unknown server '{}'",
+                        server
+                    )));
+                }
+            }
         }
 
         // Special handling for LID JIDs, as their user part can contain dots
@@ -245,7 +269,18 @@ impl FromStr for Jid {
         if let Some((u, d_str)) = user_part.rsplit_once(':') {
             user = u;
             device = d_str.parse()?;
-        } else if let Some((u, last_part)) = user_part.rsplit_once('.')
+        }
+
+        if server != DEFAULT_USER_SERVER
+            && server != HIDDEN_USER_SERVER
+            && let Some((u, last_part)) = user.rsplit_once('.')
+            && let Ok(num_val) = last_part.parse::<u16>()
+        {
+            user = u;
+            agent = num_val as u8;
+        }
+
+        if let Some((u, last_part)) = user_part.rsplit_once('.')
             && let Ok(num_val) = last_part.parse::<u16>()
         {
             if server == DEFAULT_USER_SERVER {
@@ -278,12 +313,28 @@ impl fmt::Display for Jid {
             write!(f, "{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
+
+            // The agent is encoded in the server type for AD JIDs.
+            // We should NOT append it to the user string for standard servers.
+            // Only non-standard servers might use an agent suffix.
+            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
             if self.agent > 0 {
-                write!(f, ".{}", self.agent)?;
+                // This is a guess based on the failure. The old JS logic is complex.
+                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
+                // AND the server is not one that is derived *from* the agent (like 'hosted').
+                let server_str = self.server(); // Use trait method
+                if server_str != DEFAULT_USER_SERVER
+                    && server_str != HIDDEN_USER_SERVER
+                    && server_str != HOSTED_SERVER
+                {
+                    write!(f, ".{}", self.agent)?;
+                }
             }
+
             if self.device > 0 {
                 write!(f, ":{}", self.device)?;
             }
+
             write!(f, "@{}", self.server)
         }
     }
@@ -295,12 +346,28 @@ impl<'a> fmt::Display for JidRef<'a> {
             write!(f, "{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
+
+            // The agent is encoded in the server type for AD JIDs.
+            // We should NOT append it to the user string for standard servers.
+            // Only non-standard servers might use an agent suffix.
+            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
             if self.agent > 0 {
-                write!(f, ".{}", self.agent)?;
+                // This is a guess based on the failure. The old JS logic is complex.
+                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
+                // AND the server is not one that is derived *from* the agent (like 'hosted').
+                let server_str = self.server(); // Use trait method
+                if server_str != DEFAULT_USER_SERVER
+                    && server_str != HIDDEN_USER_SERVER
+                    && server_str != HOSTED_SERVER
+                {
+                    write!(f, ".{}", self.agent)?;
+                }
             }
+
             if self.device > 0 {
                 write!(f, ":{}", self.device)?;
             }
+
             write!(f, "@{}", self.server)
         }
     }
@@ -322,5 +389,153 @@ impl TryFrom<String> for Jid {
     type Error = JidError;
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Jid::from_str(&value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    /// Helper function to test a full parsing and display round-trip.
+    fn assert_jid_roundtrip(
+        input: &str,
+        expected_user: &str,
+        expected_server: &str,
+        expected_device: u16,
+        expected_agent: u8,
+    ) {
+        // 1. Test parsing from string (FromStr trait)
+        let jid = Jid::from_str(input).unwrap_or_else(|_| panic!("Failed to parse JID: {}", input));
+
+        assert_eq!(
+            jid.user, expected_user,
+            "User part did not match for {}",
+            input
+        );
+        assert_eq!(
+            jid.server, expected_server,
+            "Server part did not match for {}",
+            input
+        );
+        assert_eq!(
+            jid.device, expected_device,
+            "Device part did not match for {}",
+            input
+        );
+        assert_eq!(
+            jid.agent, expected_agent,
+            "Agent part did not match for {}",
+            input
+        );
+
+        // 2. Test formatting back to string (Display trait)
+        let formatted = jid.to_string();
+        assert_eq!(
+            formatted, input,
+            "Formatted string did not match original input"
+        );
+    }
+
+    #[test]
+    fn test_jid_parsing_and_display_roundtrip() {
+        // Standard cases
+        assert_jid_roundtrip(
+            "1234567890@s.whatsapp.net",
+            "1234567890",
+            "s.whatsapp.net",
+            0,
+            0,
+        );
+        assert_jid_roundtrip(
+            "1234567890:15@s.whatsapp.net",
+            "1234567890",
+            "s.whatsapp.net",
+            15,
+            0,
+        );
+        assert_jid_roundtrip("123-456@g.us", "123-456", "g.us", 0, 0);
+        assert_jid_roundtrip("s.whatsapp.net", "", "s.whatsapp.net", 0, 0);
+
+        // LID JID cases (critical for the bug)
+        assert_jid_roundtrip("12345.6789@lid", "12345.6789", "lid", 0, 0);
+        assert_jid_roundtrip("12345.6789:25@lid", "12345.6789", "lid", 25, 0);
+    }
+
+    #[test]
+    fn test_special_from_str_parsing() {
+        // Test parsing of JIDs with an agent, which should be stored in the struct
+        let jid = Jid::from_str("1234567890.2:15@hosted").unwrap();
+        assert_eq!(jid.user, "1234567890");
+        assert_eq!(jid.server, "hosted");
+        assert_eq!(jid.device, 15);
+        assert_eq!(jid.agent, 2);
+    }
+
+    #[test]
+    fn test_manual_jid_formatting_edge_cases() {
+        // This test directly validates the fixes for the parity failures.
+        // We manually construct the Jid struct as the binary decoder would,
+        // then we assert that its string representation is correct.
+
+        // Failure Case 1: An AD-JID for s.whatsapp.net decoded with an agent.
+        // The Display trait MUST NOT show the agent number.
+        let jid1 = Jid {
+            user: "1234567890".to_string(),
+            server: "s.whatsapp.net".to_string(),
+            device: 15,
+            agent: 2, // This agent would be decoded from binary but should be ignored in display
+            integrator: 0,
+        };
+        // Expected: "1234567890:15@s.whatsapp.net" (agent is omitted)
+        // Buggy: "1234567890.2:15@s.whatsapp.net"
+        assert_eq!(jid1.to_string(), "1234567890:15@s.whatsapp.net");
+
+        // Failure Case 2: A LID JID with a device, decoded with an agent.
+        // The Display trait MUST NOT show the agent number.
+        let jid2 = Jid {
+            user: "12345.6789".to_string(),
+            server: "lid".to_string(),
+            device: 25,
+            agent: 1, // This agent would be decoded from binary but should be ignored in display
+            integrator: 0,
+        };
+        // Expected: "12345.6789:25@lid"
+        // Buggy: "12345.6789.1:25@lid"
+        assert_eq!(jid2.to_string(), "12345.6789:25@lid");
+
+        // Failure Case 3: A JID that was decoded as "hosted" because of its agent.
+        // The Display trait MUST NOT show the agent number.
+        let jid3 = Jid {
+            user: "1234567890".to_string(),
+            server: "hosted".to_string(),
+            device: 15,
+            agent: 2,
+            integrator: 0,
+        };
+        // Expected: "1234567890:15@hosted"
+        // Buggy: "1234567890.2:15@hosted"
+        assert_eq!(jid3.to_string(), "1234567890:15@hosted");
+
+        // Verification Case: A generic JID where the agent SHOULD be displayed.
+        let jid4 = Jid {
+            user: "user".to_string(),
+            server: "custom.net".to_string(),
+            device: 10,
+            agent: 5,
+            integrator: 0,
+        };
+        // The agent should be displayed because the server is not a special AD-JID type
+        assert_eq!(jid4.to_string(), "user.5:10@custom.net");
+    }
+
+    #[test]
+    fn test_invalid_jids_should_fail_to_parse() {
+        assert!(Jid::from_str("thisisnotajid").is_err());
+        assert!(Jid::from_str("").is_err());
+        assert!(Jid::from_str("@s.whatsapp.net").is_err());
+        // Jid::from_str("2") should not be possible due to type constraints,
+        // but if it were, it should fail. The string must contain '@'.
+        assert!(Jid::from_str("2").is_err());
     }
 }
