@@ -2,7 +2,6 @@
 ///
 /// This crate provides a concrete implementation of the Transport trait
 /// using tokio-websockets.
-
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
 use futures_util::stream::{SplitSink, SplitStream};
@@ -10,8 +9,8 @@ use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
 
 /// An event produced by the transport layer.
@@ -30,7 +29,7 @@ pub enum TransportEvent {
 pub trait Transport: Send + Sync {
     /// Sends a binary frame to the server.
     async fn send_frame(&self, frame: &[u8]) -> Result<(), anyhow::Error>;
-    
+
     /// Closes the connection.
     async fn disconnect(&self);
 }

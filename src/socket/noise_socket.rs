@@ -14,11 +14,7 @@ pub struct NoiseSocket {
 }
 
 impl NoiseSocket {
-    pub fn new(
-        transport: Arc<dyn Transport>,
-        write_key: Aes256Gcm,
-        read_key: Aes256Gcm,
-    ) -> Self {
+    pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
         Self {
             transport,
             write_key,

@@ -2,7 +2,6 @@
 ///
 /// This module re-exports the transport traits from the tokio-transport crate.
 /// Users can implement their own transport by implementing these traits.
-
 pub use whatsapp_rust_tokio_transport::{Transport, TransportEvent, TransportFactory};
 
 #[cfg(test)]
@@ -25,6 +24,7 @@ pub mod mock {
     }
 
     /// A mock transport factory for testing
+    #[derive(Default)]
     pub struct MockTransportFactory;
 
     impl MockTransportFactory {

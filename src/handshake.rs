@@ -61,9 +61,5 @@ pub async fn do_handshake(
     let (write_key, read_key) = handshake_state.finish()?;
     info!(target: "Client", "Handshake complete, switching to encrypted communication");
 
-    Ok(Arc::new(NoiseSocket::new(
-        transport,
-        write_key,
-        read_key,
-    )))
+    Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
 }

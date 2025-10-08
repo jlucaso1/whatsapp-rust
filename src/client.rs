@@ -110,7 +110,8 @@ pub struct Client {
     pub(crate) shutdown_notifier: Arc<Notify>,
 
     pub(crate) transport: Arc<Mutex<Option<Arc<dyn crate::transport::Transport>>>>,
-    pub(crate) transport_events: Arc<Mutex<Option<mpsc::Receiver<crate::transport::TransportEvent>>>>,
+    pub(crate) transport_events:
+        Arc<Mutex<Option<mpsc::Receiver<crate::transport::TransportEvent>>>>,
     pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
@@ -352,12 +353,9 @@ impl Client {
 
         // Wait for Connected event or process handshake with FrameReceived events
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let noise_socket = handshake::do_handshake(
-            &device_snapshot,
-            transport.clone(),
-            &mut transport_events,
-        )
-        .await?;
+        let noise_socket =
+            handshake::do_handshake(&device_snapshot, transport.clone(), &mut transport_events)
+                .await?;
 
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
@@ -1373,7 +1371,11 @@ mod tests {
                 .expect("Failed to create in-memory backend for test"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _rx) = Client::new(pm, Arc::new(crate::transport::mock::MockTransportFactory::new())).await;
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+        )
+        .await;
 
         // 2. A <receipt> stanza.
         // These MUST be acknowledged for the server to know we've processed them.

@@ -508,7 +508,10 @@ mod tests {
     async fn test_bot_builder_missing_backend() {
         // Try to build without setting a backend
         let transport = TokioWebSocketTransportFactory::new();
-        let result = Bot::builder().with_transport_factory(transport).build().await;
+        let result = Bot::builder()
+            .with_transport_factory(transport)
+            .build()
+            .await;
 
         // This should fail
         assert!(result.is_err());
