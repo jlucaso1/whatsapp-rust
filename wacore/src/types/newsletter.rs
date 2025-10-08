@@ -56,7 +56,7 @@ pub enum NewsletterRole {
     Owner,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterMetadata {
     pub id: Jid,
     pub state: WrappedNewsletterState,
@@ -105,7 +105,7 @@ pub struct NewsletterText {
     pub update_time: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterMessage {
     pub message_server_id: MessageServerId,
     pub message_id: MessageId,
