@@ -73,6 +73,9 @@ impl SqliteStore {
         const MAX_CONNS: usize = 4;
         let pool_clone = pool.clone();
         tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
+            // Collect all connections first to ensure we get distinct pool slots
+            let mut connections = Vec::with_capacity(MAX_CONNS);
+
             for _ in 0..MAX_CONNS {
                 let mut conn = pool_clone
                     .get()
@@ -89,9 +92,11 @@ impl SqliteStore {
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                // Connection is automatically returned to pool when dropped
-                drop(conn);
+                // Keep connection alive by storing it in the Vec
+                connections.push(conn);
             }
+
+            // All connections are returned to pool when Vec is dropped here
             Ok(())
         })
         .await
