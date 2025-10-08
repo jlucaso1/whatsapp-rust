@@ -134,20 +134,28 @@ impl Bot {
     }
 }
 
-#[derive(Default)]
 pub struct BotBuilder {
     event_handler: Option<EventHandlerCallback>,
     custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
     device_id: Option<i32>,
     // The only way to configure storage
     backend: Option<Arc<dyn Backend>>,
+    transport_factory: Option<Arc<dyn crate::transport::TransportFactory>>,
     override_version: Option<(u32, u32, u32)>,
     os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
 }
 
 impl BotBuilder {
     fn new() -> Self {
-        Self::default()
+        Self {
+            event_handler: None,
+            custom_enc_handlers: HashMap::new(),
+            device_id: None,
+            backend: None,
+            transport_factory: None,
+            override_version: None,
+            os_info: None,
+        }
     }
 
     pub fn on_event<F, Fut>(mut self, handler: F) -> Self
@@ -201,6 +209,30 @@ impl BotBuilder {
     /// ```
     pub fn with_backend(mut self, backend: Arc<dyn Backend>) -> Self {
         self.backend = Some(backend);
+        self
+    }
+
+    /// Set the transport factory for creating network connections.
+    /// This is required to build a bot.
+    ///
+    /// # Arguments
+    /// * `factory` - The transport factory implementation
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+    ///
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_transport_factory(TokioWebSocketTransportFactory::new())
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_transport_factory<F>(mut self, factory: F) -> Self
+    where
+        F: crate::transport::TransportFactory + 'static,
+    {
+        self.transport_factory = Some(Arc::new(factory));
         self
     }
 
@@ -273,6 +305,12 @@ impl BotBuilder {
             )
         })?;
 
+        let transport_factory = self.transport_factory.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Transport factory is required. Use with_transport_factory() to set one."
+            )
+        })?;
+
         let persistence_manager = if let Some(device_id) = self.device_id {
             info!("Creating PersistenceManager for device ID: {}", device_id);
             Arc::new(
@@ -315,7 +353,8 @@ impl BotBuilder {
         }
 
         info!("Creating client...");
-        let (client, sync_task_receiver) = Client::new(persistence_manager.clone()).await;
+        let (client, sync_task_receiver) =
+            Client::new(persistence_manager.clone(), transport_factory).await;
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
@@ -352,6 +391,7 @@ async fn spawn_preconnect_task() {
 mod tests {
     use super::*;
     use crate::store::sqlite_store::SqliteStore;
+    use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
     async fn create_test_sqlite_backend() -> Arc<dyn Backend> {
         let temp_db = format!(
@@ -368,9 +408,11 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_single_device() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .build()
             .await
             .expect("Failed to build bot");
@@ -386,6 +428,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_multi_device() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         // First, we need to create device data for device ID 42
         let mut device = wacore::store::Device::new();
@@ -397,6 +440,7 @@ mod tests {
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .for_device(42)
             .build()
             .await
@@ -414,8 +458,10 @@ mod tests {
     async fn test_bot_builder_with_custom_backend() {
         // Create an in-memory backend for testing
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .build()
             .await
             .expect("Failed to build bot with custom backend");
@@ -432,6 +478,7 @@ mod tests {
     async fn test_bot_builder_with_custom_backend_specific_device() {
         // Create an in-memory backend for testing
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         // First, we need to create some device data for device ID 100
         let mut device = wacore::store::Device::new();
@@ -444,6 +491,7 @@ mod tests {
         // Build a bot with the custom backend for a specific device
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .for_device(100)
             .build()
             .await
@@ -459,7 +507,8 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_missing_backend() {
         // Try to build without setting a backend
-        let result = Bot::builder().build().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let result = Bot::builder().with_transport_factory(transport).build().await;
 
         // This should fail
         assert!(result.is_err());
@@ -472,11 +521,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bot_builder_missing_transport() {
+        // Try to build without setting a transport
+        let backend = create_test_sqlite_backend().await;
+        let result = Bot::builder().with_backend(backend).build().await;
+
+        // This should fail
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Transport factory is required")
+        );
+    }
+
+    #[tokio::test]
     async fn test_bot_builder_with_version_override() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_version((2, 3000, 123456789))
             .build()
             .await
@@ -496,6 +563,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_os_info_override() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         let custom_os = "CustomOS".to_string();
         let custom_version = wa::device_props::AppVersion {
@@ -507,6 +575,7 @@ mod tests {
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_os_info(Some(custom_os.clone()), Some(custom_version))
             .build()
             .await
@@ -524,11 +593,13 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_os_only_override() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         let custom_os = "CustomOS".to_string();
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_os_info(Some(custom_os.clone()), None)
             .build()
             .await
@@ -550,6 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_version_only_override() {
         let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
         let custom_version = wa::device_props::AppVersion {
             primary: Some(99),
@@ -560,6 +632,7 @@ mod tests {
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_os_info(None, Some(custom_version))
             .build()
             .await

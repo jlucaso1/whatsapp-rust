@@ -293,7 +293,7 @@ mod tests {
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _sync_rx) = Client::new(pm.clone()).await;
+        let (client, _sync_rx) = Client::new(pm.clone(), Arc::new(crate::transport::mock::MockTransportFactory::new())).await;
 
         let chat: Jid = "120363021033254949@g.us".parse().unwrap();
         let msg_id = "ABC123".to_string();

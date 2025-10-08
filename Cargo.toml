@@ -10,7 +10,7 @@ readme = "README.md"
 description = "Rust client for WhatsApp Web"
 
 [workspace]
-members = [".", "wacore", "waproto"]
+members = [".", "wacore", "waproto", "transports/tokio-transport"]
 
 [workspace.dependencies]
 flate2 = { version = "1.1.4", default-features = false, features = ["zlib-rs"] }
@@ -83,6 +83,7 @@ ureq = { version = "3.1.0", default-features = false, features = [
 wacore = { path = "./wacore", version = "0.1.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.1.0" }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }

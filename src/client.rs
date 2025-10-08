@@ -36,7 +36,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
-use crate::socket::{FrameSocket, NoiseSocket, SocketError};
+use crate::socket::{NoiseSocket, SocketError};
 use crate::sync_task::MajorSyncTask;
 
 const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -109,9 +109,10 @@ pub struct Client {
     pub(crate) is_running: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
 
-    pub(crate) frame_socket: Arc<Mutex<Option<FrameSocket>>>,
+    pub(crate) transport: Arc<Mutex<Option<Arc<dyn crate::transport::Transport>>>>,
+    pub(crate) transport_events: Arc<Mutex<Option<mpsc::Receiver<crate::transport::TransportEvent>>>>,
+    pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
-    pub(crate) frames_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<bytes::Bytes>>>>,
 
     pub(crate) response_waiters:
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<wacore_binary::Node>>>>,
@@ -157,6 +158,7 @@ pub struct Client {
 impl Client {
     pub async fn new(
         persistence_manager: Arc<PersistenceManager>,
+        transport_factory: Arc<dyn crate::transport::TransportFactory>,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
@@ -211,9 +213,10 @@ impl Client {
             is_running: Arc::new(AtomicBool::new(false)),
             shutdown_notifier: Arc::new(Notify::new()),
 
-            frame_socket: Arc::new(Mutex::new(None)),
+            transport: Arc::new(Mutex::new(None)),
+            transport_events: Arc::new(Mutex::new(None)),
+            transport_factory,
             noise_socket: Arc::new(Mutex::new(None)),
-            frames_rx: Arc::new(Mutex::new(None)),
 
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
@@ -344,15 +347,20 @@ impl Client {
             return Err(ClientError::AlreadyConnected.into());
         }
 
-        let (mut frame_socket, mut frames_rx) = FrameSocket::new();
-        frame_socket.connect().await?;
+        // Create transport using the factory
+        let (transport, mut transport_events) = self.transport_factory.create_transport().await?;
 
+        // Wait for Connected event or process handshake with FrameReceived events
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let noise_socket =
-            handshake::do_handshake(&device_snapshot, &mut frame_socket, &mut frames_rx).await?;
+        let noise_socket = handshake::do_handshake(
+            &device_snapshot,
+            transport.clone(),
+            &mut transport_events,
+        )
+        .await?;
 
-        *self.frame_socket.lock().await = Some(frame_socket);
-        *self.frames_rx.lock().await = Some(frames_rx);
+        *self.transport.lock().await = Some(transport);
+        *self.transport_events.lock().await = Some(transport_events);
         *self.noise_socket.lock().await = Some(noise_socket);
 
         let client_clone = self.clone();
@@ -372,25 +380,25 @@ impl Client {
             warn!("Failed to shutdown recent message manager: {}", e);
         }
 
-        if let Some(fs) = self.frame_socket.lock().await.as_mut() {
-            fs.close().await;
+        if let Some(transport) = self.transport.lock().await.as_ref() {
+            transport.disconnect().await;
         }
         self.cleanup_connection_state().await;
     }
 
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
-        *self.frame_socket.lock().await = None;
+        *self.transport.lock().await = None;
+        *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
-        *self.frames_rx.lock().await = None;
         self.retried_group_messages.clear();
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         info!(target: "Client", "Starting message processing loop...");
 
-        let mut rx_guard = self.frames_rx.lock().await;
-        let mut frames_rx = rx_guard
+        let mut rx_guard = self.transport_events.lock().await;
+        let mut transport_events = rx_guard
             .take()
             .ok_or_else(|| anyhow::anyhow!("Cannot start message loop: not connected"))?;
         drop(rx_guard);
@@ -402,21 +410,25 @@ impl Client {
                         info!(target: "Client", "Shutdown signaled. Exiting message loop.");
                         return Ok(());
                     },
-                    frame_opt = frames_rx.recv() => {
-                        match frame_opt {
-                            Some(encrypted_frame) => {
+                    event_opt = transport_events.recv() => {
+                        match event_opt {
+                            Some(crate::transport::TransportEvent::FrameReceived(encrypted_frame)) => {
                                 self.process_encrypted_frame(&encrypted_frame).await;
                             },
-                            None => {
+                            Some(crate::transport::TransportEvent::Disconnected) | None => {
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
-                                    info!("Socket disconnected unexpectedly.");
-                                    return Err(anyhow::anyhow!("Socket disconnected unexpectedly"));
+                                    info!("Transport disconnected unexpectedly.");
+                                    return Err(anyhow::anyhow!("Transport disconnected unexpectedly"));
                                 } else {
-                                    info!("Socket disconnected as expected.");
+                                    info!("Transport disconnected as expected.");
                                     return Ok(());
                                 }
+                            }
+                            Some(crate::transport::TransportEvent::Connected) => {
+                                // Already handled during handshake, but could be useful for logging
+                                debug!("Transport connected event received");
                             }
                     }
                 }
@@ -1361,7 +1373,7 @@ mod tests {
                 .expect("Failed to create in-memory backend for test"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _rx) = Client::new(pm).await;
+        let (client, _rx) = Client::new(pm, Arc::new(crate::transport::mock::MockTransportFactory::new())).await;
 
         // 2. A <receipt> stanza.
         // These MUST be acknowledged for the server to know we've processed them.

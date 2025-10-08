@@ -2440,6 +2440,23 @@ dependencies = [
  "wacore",
  "wacore-binary",
  "waproto",
+ "whatsapp-rust-tokio-transport",
+]
+
+[[package]]
+name = "whatsapp-rust-tokio-transport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "log",
+ "rustls",
+ "tokio",
+ "tokio-websockets",
+ "wacore-binary",
 ]
 
 [[package]]
