@@ -42,12 +42,17 @@ type DeviceRow = (
 #[derive(Clone)]
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
+    /// Semaphore to limit concurrent DB operations to prevent lock contention
+    pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
 }
+
+use std::sync::Arc;
 
 impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
         let pool = Pool::builder()
+            .max_size(4) // Limit concurrent connections to reduce memory and lock contention
             .build(manager)
             .map_err(|e| StoreError::Connection(e.to_string()))?;
 
@@ -58,15 +63,44 @@ impl SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             conn.run_pending_migrations(MIGRATIONS)
                 .map_err(|e| StoreError::Migration(e.to_string()))?;
-            let _ = diesel::sql_query("PRAGMA journal_mode=WAL;").execute(&mut conn);
-            let _ = diesel::sql_query("PRAGMA synchronous=NORMAL;").execute(&mut conn);
-            let _ = diesel::sql_query("PRAGMA busy_timeout = 15000;").execute(&mut conn);
             Ok(())
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        Ok(Self { pool })
+        // Prefill the pool and apply PRAGMAs to each connection
+        // This ensures all connections have proper settings including busy_timeout
+        const MAX_CONNS: usize = 4;
+        let pool_clone = pool.clone();
+        tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
+            for _ in 0..MAX_CONNS {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                // Apply PRAGMAs to each connection
+                diesel::sql_query("PRAGMA journal_mode = WAL;")
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                diesel::sql_query("PRAGMA synchronous = NORMAL;")
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                diesel::sql_query("PRAGMA busy_timeout = 15000;")
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                // Connection is automatically returned to pool when dropped
+                drop(conn);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(Self {
+            pool,
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONNS)),
+        })
     }
 
     pub fn begin_transaction(
@@ -106,6 +140,31 @@ impl SqliteStore {
         self.pool
             .get()
             .map_err(|e| StoreError::Connection(e.to_string()))
+    }
+
+    /// Execute a database operation with semaphore-based concurrency limiting
+    /// This prevents too many concurrent DB operations from causing lock contention
+    async fn with_semaphore<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = self
+            .db_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| StoreError::Database(format!("Failed to acquire DB semaphore: {}", e)))?;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let res = f();
+            drop(permit); // Release semaphore immediately after DB work
+            res
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(result)
     }
 
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
@@ -702,7 +761,7 @@ impl SqliteStore {
     ) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        self.with_semaphore(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -720,8 +779,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -752,7 +809,7 @@ impl SqliteStore {
     ) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        self.with_semaphore(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -766,7 +823,6 @@ impl SqliteStore {
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn get_session_for_device(
@@ -776,7 +832,7 @@ impl SqliteStore {
     ) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        self.with_semaphore(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -790,7 +846,6 @@ impl SqliteStore {
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn put_session_for_device(
@@ -802,7 +857,7 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address = address.to_string();
         let session = session.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        self.with_semaphore(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -820,8 +875,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
