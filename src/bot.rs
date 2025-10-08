@@ -5,13 +5,11 @@ use crate::types::enc_handler::EncHandler;
 use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
 use anyhow::Result;
-use http::Uri;
-use log::{debug, info, warn};
+use log::{info, warn};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task;
 use waproto::whatsapp as wa;
@@ -337,8 +335,6 @@ impl BotBuilder {
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
 
-        spawn_preconnect_task().await;
-
         crate::version::resolve_and_update_version(&persistence_manager, self.override_version)
             .await;
 
@@ -366,24 +362,6 @@ impl BotBuilder {
             sync_task_receiver: Some(sync_task_receiver),
             event_handler: self.event_handler,
         })
-    }
-}
-
-async fn spawn_preconnect_task() {
-    if let Ok(uri) = crate::socket::consts::URL.parse::<Uri>() {
-        if let Some(host) = uri.host() {
-            let port = uri.port_u16().unwrap_or(443);
-            let address = format!("{}:{}", host, port);
-
-            debug!(target: "Client/Preconnect", "Starting pre-connect to {}", address);
-            if let Err(e) = TcpStream::connect(&address).await {
-                warn!(target: "Client/Preconnect", "Pre-connection to {} failed: {}", address, e);
-            } else {
-                debug!(target: "Client/Preconnect", "Pre-connection to {} successful.", address);
-            }
-        }
-    } else {
-        warn!(target: "Client/Preconnect", "Could not parse WA_URL for pre-connect task.");
     }
 }
 
