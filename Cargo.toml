@@ -48,10 +48,12 @@ bytes = { version = "1.5", default-features = false }
 chrono = { version = "0.4" }
 dashmap = "6.1.0"
 env_logger = { version = "0.11", default-features = false }
-moka = { version = "0.12", features = ["future"] }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
+jemalloc-ctl = "0.5.4"
+jemallocator = "0.5.4"
 log = "0.4.27"
+moka = { version = "0.12", features = ["future"] }
 prost = { version = "0.14.1", default-features = false }
 
 # Cryptography
