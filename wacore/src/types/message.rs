@@ -1,14 +1,15 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum AddressingMode {
     Pn,
     Lid,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MessageSource {
     pub chat: Jid,
     pub sender: Jid,
@@ -26,13 +27,13 @@ impl MessageSource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DeviceSentMeta {
     pub destination_jid: String,
     pub phash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub enum EditAttribute {
     #[default]
     Empty,
@@ -72,21 +73,21 @@ impl EditAttribute {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum BotEditType {
     First,
     Inner,
     Last,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MsgBotInfo {
     pub edit_type: Option<BotEditType>,
     pub edit_target_id: Option<MessageId>,
     pub edit_sender_timestamp_ms: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MsgMetaInfo {
     pub target_id: Option<MessageId>,
     pub target_sender: Option<Jid>,
@@ -95,7 +96,7 @@ pub struct MsgMetaInfo {
     pub thread_message_sender_jid: Option<Jid>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MessageInfo {
     pub source: MessageSource,
     pub id: MessageId,

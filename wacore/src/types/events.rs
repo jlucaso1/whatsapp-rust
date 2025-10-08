@@ -3,6 +3,7 @@ use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, Newslett
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
+use serde::Serialize;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use wacore_binary::jid::{Jid, MessageId};
@@ -34,14 +35,14 @@ impl CoreEventBus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SelfPushNameUpdated {
     pub from_server: bool,
     pub old_name: String,
     pub new_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Event {
     Connected(Connected),
     Disconnected(Disconnected),
@@ -89,7 +90,7 @@ pub enum Event {
     StreamError(StreamError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PairSuccess {
     pub id: Jid,
     pub lid: Jid,
@@ -97,7 +98,7 @@ pub struct PairSuccess {
     pub platform: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PairError {
     pub id: Jid,
     pub lid: Jid,
@@ -106,37 +107,37 @@ pub struct PairError {
     pub error: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QrScannedWithoutMultidevice;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClientOutdated;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Connected;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct KeepAliveTimeout {
     pub error_count: i32,
     pub last_success: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct KeepAliveRestored;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LoggedOut {
     pub on_connect: bool,
     pub reason: ConnectFailureReason,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ManualLoginReconnect;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TempBanReason {
     SentToTooManyPeople,
     BlockedByUsers,
@@ -190,13 +191,14 @@ impl fmt::Display for TempBanReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TemporaryBan {
     pub code: TempBanReason,
     pub expire: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize)]
+
 pub enum ConnectFailureReason {
     Generic,
     LoggedOut,
@@ -270,28 +272,28 @@ impl ConnectFailureReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConnectFailure {
     pub reason: ConnectFailureReason,
     pub message: String,
     pub raw: Option<Node>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatRefreshError {
     pub error: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StreamError {
     pub code: String,
     pub raw: Option<Node>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Disconnected;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OfflineSyncPreview {
     pub total: i32,
     pub app_data_changes: i32,
@@ -300,24 +302,24 @@ pub struct OfflineSyncPreview {
     pub receipts: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DecryptFailMode {
     Show,
     Hide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum UnavailableType {
     Unknown,
     ViewOnce,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UndecryptableMessage {
     pub info: MessageInfo,
     pub is_unavailable: bool,
@@ -325,7 +327,7 @@ pub struct UndecryptableMessage {
     pub decrypt_fail_mode: DecryptFailMode,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Receipt {
     pub source: crate::types::message::MessageSource,
     pub message_ids: Vec<MessageId>,
@@ -334,21 +336,21 @@ pub struct Receipt {
     pub message_sender: Jid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChatPresenceUpdate {
     pub source: crate::types::message::MessageSource,
     pub state: ChatPresence,
     pub media: ChatPresenceMedia,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PresenceUpdate {
     pub from: Jid,
     pub unavailable: bool,
     pub last_seen: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
     pub jid: Jid,
     pub author: Jid,
@@ -356,26 +358,26 @@ pub struct PictureUpdate {
     pub photo_change: Option<wa::PhotoChange>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IdentityChange {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub implicit: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PrivacySettingsUpdate {
     pub new_settings: PrivacySettings,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -383,7 +385,7 @@ pub struct ContactUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
     pub jid: Jid,
     pub message: Box<MessageInfo>,
@@ -391,7 +393,7 @@ pub struct PushNameUpdate {
     pub new_push_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -399,7 +401,7 @@ pub struct PinUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StarUpdate {
     pub chat_jid: Jid,
     pub sender_jid: Option<Jid>,
@@ -410,7 +412,7 @@ pub struct StarUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MuteUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -418,7 +420,7 @@ pub struct MuteUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ArchiveUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -426,7 +428,7 @@ pub struct ArchiveUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MarkChatAsReadUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -434,24 +436,24 @@ pub struct MarkChatAsReadUpdate {
     pub from_full_sync: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterJoin {
     pub metadata: NewsletterMetadata,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterLeave {
     pub id: Jid,
     pub role: NewsletterRole,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterMuteChange {
     pub id: Jid,
     pub mute: NewsletterMuteState,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewsletterLiveUpdate {
     pub jid: Jid,
     pub time: DateTime<Utc>,

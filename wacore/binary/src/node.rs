@@ -7,6 +7,7 @@ pub type AttrsRef<'a> = Vec<(Cow<'a, str>, Cow<'a, str>)>;
 
 pub type NodeVec<'a> = Vec<NodeRef<'a>>;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
     Bytes(Vec<u8>),
@@ -21,6 +22,7 @@ pub enum NodeContentRef<'a> {
     Nodes(Box<NodeVec<'a>>),
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Node {
     pub tag: String,
