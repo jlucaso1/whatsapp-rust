@@ -59,15 +59,13 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         &self,
         conn: &mut SqliteConnection,
     ) -> std::result::Result<(), diesel::r2d2::Error> {
-        // Apply PRAGMAs to each connection as it's acquired from the pool
+        // Apply per-connection PRAGMAs when connection is first created
+        // busy_timeout and synchronous are per-connection settings
         // Propagate errors so that misconfigured connections are rejected
-        diesel::sql_query("PRAGMA journal_mode = WAL;")
+        diesel::sql_query("PRAGMA busy_timeout = 15000;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
         diesel::sql_query("PRAGMA synchronous = NORMAL;")
-            .execute(conn)
-            .map_err(diesel::r2d2::Error::QueryError)?;
-        diesel::sql_query("PRAGMA busy_timeout = 15000;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
         Ok(())
@@ -85,14 +83,23 @@ impl SqliteStore {
             .build(manager)
             .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-        // Run migrations on a single connection
+        // Run migrations on the first connection from the pool
+        // For file-based DBs, this also initializes WAL mode before other connections are created
         let pool_clone = pool.clone();
         tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
             let mut conn = pool_clone
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Enable WAL mode first (idempotent for subsequent calls)
+            diesel::sql_query("PRAGMA journal_mode = WAL;")
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Run migrations
             conn.run_pending_migrations(MIGRATIONS)
                 .map_err(|e| StoreError::Migration(e.to_string()))?;
+
             Ok(())
         })
         .await
