@@ -48,6 +48,8 @@ futures-util = { version = "0.3.31", default-features = false, features = [
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 http = "1.3.1"
+jemalloc-ctl = "0.5.4"
+jemallocator = "0.5.4"
 libsqlite3-sys = { version = "0.35.0", default-features = false, features = [
     "bundled",
 ] }
