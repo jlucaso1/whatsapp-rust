@@ -48,14 +48,37 @@ pub struct SqliteStore {
 
 use std::sync::Arc;
 
+/// Connection customizer that applies PRAGMAs to each new connection
+#[derive(Debug, Clone, Copy)]
+struct ConnectionOptions;
+
+impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
+    for ConnectionOptions
+{
+    fn on_acquire(
+        &self,
+        conn: &mut SqliteConnection,
+    ) -> std::result::Result<(), diesel::r2d2::Error> {
+        // Apply PRAGMAs to each connection as it's acquired from the pool
+        let _ = diesel::sql_query("PRAGMA journal_mode = WAL;").execute(conn);
+        let _ = diesel::sql_query("PRAGMA synchronous = NORMAL;").execute(conn);
+        let _ = diesel::sql_query("PRAGMA busy_timeout = 15000;").execute(conn);
+        Ok(())
+    }
+}
+
 impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
+
+        // Build pool with connection customizer that applies PRAGMAs to each new connection
         let pool = Pool::builder()
             .max_size(4) // Limit concurrent connections to reduce memory and lock contention
+            .connection_customizer(Box::new(ConnectionOptions))
             .build(manager)
             .map_err(|e| StoreError::Connection(e.to_string()))?;
 
+        // Run migrations on a single connection
         let pool_clone = pool.clone();
         tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
             let mut conn = pool_clone
@@ -68,43 +91,9 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        // Prefill the pool and apply PRAGMAs to each connection
-        // This ensures all connections have proper settings including busy_timeout
-        const MAX_CONNS: usize = 4;
-        let pool_clone = pool.clone();
-        tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
-            // Collect all connections first to ensure we get distinct pool slots
-            let mut connections = Vec::with_capacity(MAX_CONNS);
-
-            for _ in 0..MAX_CONNS {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-
-                // Apply PRAGMAs to each connection
-                diesel::sql_query("PRAGMA journal_mode = WAL;")
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                diesel::sql_query("PRAGMA synchronous = NORMAL;")
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                diesel::sql_query("PRAGMA busy_timeout = 15000;")
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-
-                // Keep connection alive by storing it in the Vec
-                connections.push(conn);
-            }
-
-            // All connections are returned to pool when Vec is dropped here
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONNS)),
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // Match pool max_size
         })
     }
 
