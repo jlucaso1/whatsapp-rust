@@ -60,9 +60,16 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         conn: &mut SqliteConnection,
     ) -> std::result::Result<(), diesel::r2d2::Error> {
         // Apply PRAGMAs to each connection as it's acquired from the pool
-        let _ = diesel::sql_query("PRAGMA journal_mode = WAL;").execute(conn);
-        let _ = diesel::sql_query("PRAGMA synchronous = NORMAL;").execute(conn);
-        let _ = diesel::sql_query("PRAGMA busy_timeout = 15000;").execute(conn);
+        // Propagate errors so that misconfigured connections are rejected
+        diesel::sql_query("PRAGMA journal_mode = WAL;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
+        diesel::sql_query("PRAGMA synchronous = NORMAL;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
+        diesel::sql_query("PRAGMA busy_timeout = 15000;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
         Ok(())
     }
 }
