@@ -30,7 +30,7 @@ pub async fn fetch_latest_app_version(
         .ok_or_else(|| anyhow!("Could not find 'client_revision' version in sw.js response"))
 }
 
-fn parse_sw_js(s: &str) -> Option<(u32, u32, u32)> {
+pub fn parse_sw_js(s: &str) -> Option<(u32, u32, u32)> {
     if let Some(start_index) = s.find(REVISION_KEY) {
         let suffix = &s[start_index + REVISION_KEY.len()..];
 
