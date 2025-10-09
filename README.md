@@ -7,9 +7,10 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 - ✅ **Secure Connection & Pairing:** Full implementation of the Noise Protocol handshake and QR code pairing for secure, multi-device sessions.
 - ✅ **End-to-End Encrypted Messaging:** Robust support for the Signal Protocol, enabling E2E encrypted communication for both one-on-one and group chats.
 - ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
+- ✅ **Runtime Agnostic:** Abstracted transport layer allows use with any async runtime or platform (Tokio, async-std, WASM, etc.).
 - ✅ **Flexible Storage Architecture:** Supports custom storage backends (PostgreSQL, MongoDB, Redis, etc.) through a clean trait-based interface, while maintaining SQLite as the default.
 - ✅ **Persistent State:** Uses Diesel and SQLite for durable session state by default, ensuring the client can resume sessions after a restart.
-- ✅ **Asynchronous by Design:** Built on `tokio` for efficient, non-blocking I/O and concurrent task handling.
+- ✅ **Asynchronous by Design:** Supports efficient, non-blocking I/O and concurrent task handling with any async runtime through pluggable transport implementations.
 
 ## Storage Backends
 
@@ -20,12 +21,15 @@ The library uses a clean, trait-based storage architecture. You must provide a s
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 
 let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let transport_factory = TokioWebSocketTransportFactory::new();
 
 let bot = Bot::builder()
     .with_backend(backend)
+    .with_transport_factory(transport_factory)
     .build()
     .await?;
 ```
@@ -35,9 +39,11 @@ let bot = Bot::builder()
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 
 let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let transport_factory = TokioWebSocketTransportFactory::new();
 
 // First, create device data for the specific device
 let mut device = wacore::store::Device::new();
@@ -47,6 +53,7 @@ backend.save_device_data_for_device(42, &device).await?;
 // Create bot for specific device
 let bot = Bot::builder()
     .with_backend(backend)
+    .with_transport_factory(transport_factory)
     .for_device(42)
     .build()
     .await?;
@@ -56,18 +63,54 @@ let bot = Bot::builder()
 
 ```rust
 use whatsapp_rust::bot::Bot;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 
 // Implement the Backend trait for your storage system
 let custom_backend = Arc::new(MyPostgreSQLBackend::new("postgresql://..."));
+let transport_factory = TokioWebSocketTransportFactory::new();
 
 let bot = Bot::builder()
     .with_backend(custom_backend)
+    .with_transport_factory(transport_factory)
     .build()
     .await?;
 ```
 
 See `examples/custom_backend_example.rs` for a complete implementation template.
+
+## Transport Layer
+
+The library uses an abstracted transport layer, making it platform-agnostic. You must provide a transport factory when creating a bot.
+
+### Using Tokio WebSocket Transport (Default)
+
+```rust
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use std::sync::Arc;
+
+let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+let transport_factory = TokioWebSocketTransportFactory::new();
+
+let bot = Bot::builder()
+    .with_backend(backend)
+    .with_transport_factory(transport_factory)
+    .build()
+    .await?;
+```
+
+### Custom Transport Implementation
+
+You can implement your own transport for different runtimes or platforms by implementing the `Transport` and `TransportFactory` traits. This enables:
+
+- Using different async runtimes (async-std, smol)
+- Compiling to WebAssembly with browser WebSocket APIs
+- Testing with mock transports
+- Custom protocols or proxies
+
+See the `whatsapp-rust-tokio-transport` crate for a reference implementation.
 
 ## Quick Start: A Universal Ping-Pong Bot
 

@@ -71,8 +71,10 @@ mod tests {
                 .expect("Failed to create SQLite backend"),
         );
 
+        let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_enc_handler("frskmsg", mock_handler)
             .build()
             .await
@@ -96,8 +98,10 @@ mod tests {
                 .expect("Failed to create SQLite backend"),
         );
 
+        let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .with_enc_handler("frskmsg", handler1)
             .with_enc_handler("customtype", handler2)
             .build()
@@ -121,8 +125,10 @@ mod tests {
                 .expect("Failed to create SQLite backend"),
         );
 
+        let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
             .build()
             .await
             .expect("Failed to build bot");

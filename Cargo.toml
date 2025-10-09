@@ -10,7 +10,7 @@ readme = "README.md"
 description = "Rust client for WhatsApp Web"
 
 [workspace]
-members = [".", "wacore", "waproto"]
+members = [".", "transports/tokio-transport", "wacore", "waproto"]
 
 [workspace.dependencies]
 flate2 = { version = "1.1.4", default-features = false, features = ["zlib-rs"] }
@@ -40,14 +40,8 @@ diesel_migrations = { version = "2.2.0", default-features = false, features = [
     "sqlite",
 ] }
 env_logger = { version = "0.11", default-features = false }
-futures-util = { version = "0.3.31", default-features = false, features = [
-    "sink",
-    "alloc",
-    "std",
-] }
 
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-http = "1.3.1"
 libsqlite3-sys = { version = "0.35.0", default-features = false, features = [
     "bundled",
 ] }
@@ -57,7 +51,6 @@ prost = { version = "0.14.1", default-features = false }
 # Cryptography
 rand = { workspace = true }
 rand_core = { workspace = true }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
 scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0"
@@ -70,12 +63,6 @@ tokio = { workspace = true, features = [
     "time",
     "signal",
 ] }
-tokio-websockets = { version = "0.13.0", features = [
-    "client",
-    "rustls-webpki-roots",
-    "rand",
-    "ring",
-] }
 ureq = { version = "3.1.0", default-features = false, features = [
     "rustls",
     "json",
@@ -83,6 +70,7 @@ ureq = { version = "3.1.0", default-features = false, features = [
 wacore = { path = "./wacore", version = "0.1.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.1.0" }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }

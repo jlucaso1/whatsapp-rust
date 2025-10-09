@@ -2420,26 +2420,38 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "env_logger",
- "futures-util",
  "hex",
- "http",
  "libsqlite3-sys",
  "log",
  "prost",
  "rand",
  "rand_core 0.9.3",
- "rustls",
  "scopeguard",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-websockets",
  "ureq",
  "uuid",
  "wacore",
  "wacore-binary",
  "waproto",
+ "whatsapp-rust-tokio-transport",
+]
+
+[[package]]
+name = "whatsapp-rust-tokio-transport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "log",
+ "rustls",
+ "tokio",
+ "tokio-websockets",
 ]
 
 [[package]]

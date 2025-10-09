@@ -152,7 +152,8 @@ mod tests {
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
+        let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
+        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node, &mut cancelled).await;
@@ -180,7 +181,8 @@ mod tests {
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm)).await;
+        let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
+        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node, &mut cancelled).await;
