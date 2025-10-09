@@ -86,10 +86,20 @@ impl Transport for TokioWebSocketTransport {
     }
 
     async fn disconnect(&self) {
-        let mut is_connected = self.is_connected.lock().await;
-        if *is_connected {
-            *is_connected = false;
-            *self.ws_sink.lock().await = None;
+        let mut sink_guard = self.ws_sink.lock().await;
+        if let Some(mut sink) = sink_guard.take() {
+            if let Err(e) = sink.close().await {
+                error!("Error closing WebSocket: {}", e);
+            }
+            // After awaiting the close, set is_connected to false
+            let mut is_connected_guard = self.is_connected.lock().await;
+            *is_connected_guard = false;
+        } else {
+            // If no sink, still ensure is_connected is false
+            let mut is_connected_guard = self.is_connected.lock().await;
+            if *is_connected_guard {
+                *is_connected_guard = false;
+            }
         }
     }
 }
@@ -117,7 +127,10 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error> {
         // Install rustls crypto provider
         if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
-            debug!("rustls crypto provider install: {:?}", e);
+            warn!(
+                "rustls crypto provider install failed (may be already installed): {:?}",
+                e
+            );
         }
 
         info!("Dialing {URL}");

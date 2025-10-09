@@ -10,7 +10,7 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 - ✅ **Runtime Agnostic:** Abstracted transport layer allows use with any async runtime or platform (Tokio, async-std, WASM, etc.).
 - ✅ **Flexible Storage Architecture:** Supports custom storage backends (PostgreSQL, MongoDB, Redis, etc.) through a clean trait-based interface, while maintaining SQLite as the default.
 - ✅ **Persistent State:** Uses Diesel and SQLite for durable session state by default, ensuring the client can resume sessions after a restart.
-- ✅ **Asynchronous by Design:** Built on `tokio` for efficient, non-blocking I/O and concurrent task handling.
+- ✅ **Asynchronous by Design:** Supports efficient, non-blocking I/O and concurrent task handling with any async runtime through pluggable transport implementations.
 
 ## Storage Backends
 

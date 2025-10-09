@@ -65,6 +65,16 @@ impl FrameDecoder {
             | ((self.buffer[1] as usize) << 8)
             | (self.buffer[2] as usize);
 
+        // Bounds check against maximum frame size
+        if frame_len > FRAME_MAX_SIZE {
+            trace!(
+                "Frame length {} exceeds maximum size {}, dropping invalid frame",
+                frame_len, FRAME_MAX_SIZE
+            );
+            self.buffer.advance(FRAME_LENGTH_SIZE);
+            return None;
+        }
+
         if self.buffer.len() >= FRAME_LENGTH_SIZE + frame_len {
             self.buffer.advance(FRAME_LENGTH_SIZE);
             let frame_data = self.buffer.split_to(frame_len).freeze();

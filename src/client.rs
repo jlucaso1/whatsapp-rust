@@ -416,7 +416,7 @@ impl Client {
                             Some(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
-                                
+
                                 // Process all complete frames
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     self.process_encrypted_frame(&encrypted_frame).await;
