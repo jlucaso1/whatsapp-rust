@@ -29,11 +29,9 @@ wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
 
 [features]
-default = [
-    "sqlite-storage",
-    "whatsapp-rust-tokio-transport",
-    "whatsapp-rust-ureq-http-client",
-]
+default = ["sqlite-storage", "tokio-transport", "ureq-client"]
+ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
+tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
 signal = ["tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 

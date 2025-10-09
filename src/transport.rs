@@ -1,6 +1,11 @@
-pub use whatsapp_rust_tokio_transport::{
-    TokioWebSocketTransportFactory, Transport, TransportEvent, TransportFactory,
-};
+// Re-export transport types from wacore
+pub use wacore::net::{Transport, TransportEvent, TransportFactory};
+
+#[cfg(feature = "tokio-transport")]
+pub use whatsapp_rust_tokio_transport::{TokioWebSocketTransport, TokioWebSocketTransportFactory};
+
+#[cfg(feature = "ureq-client")]
+pub use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 #[cfg(test)]
 pub mod mock {

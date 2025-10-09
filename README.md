@@ -28,6 +28,7 @@ The SQLite backend is provided by the `whatsapp-rust-sqlite-storage` crate and i
 [dependencies]
 whatsapp-rust = "0.1"  # sqlite-storage feature is enabled by default
 whatsapp-rust-tokio-transport = "0.1"
+whatsapp-rust-ureq-http-client = "0.1"
 ```
 
 **In your code:**
@@ -35,14 +36,17 @@ whatsapp-rust-tokio-transport = "0.1"
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use std::sync::Arc;
 
 let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
 let transport_factory = TokioWebSocketTransportFactory::new();
+let http_client = UreqHttpClient::new();
 
 let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport_factory)
+    .with_http_client(http_client)
     .build()
     .await?;
 ```
@@ -86,7 +90,7 @@ You can then provide your own storage backend by implementing the `wacore::store
 - PostgreSQL, MongoDB, Redis, or other databases
 - In-memory storage for testing
 
-**Note:** For complete WASM support, you'll also need WASM-compatible transport and HTTP implementations. See [WASM.md](WASM.md) for a full guide on WebAssembly support.
+**Note:** For complete WASM support, you'll also need WASM-compatible transport and HTTP implementations. The core `whatsapp-rust` library no longer has any platform-specific dependencies, making it truly WASM-compatible when paired with appropriate implementations.
 
 ### Custom Backend Implementation
 
@@ -108,38 +112,50 @@ let bot = Bot::builder()
 
 See `examples/custom_backend_example.rs` for a complete implementation template.
 
-## Transport Layer
+## Transport and HTTP Client
 
-The library uses an abstracted transport layer, making it platform-agnostic. You must provide a transport factory when creating a bot.
+The library uses abstracted transport and HTTP client layers, making it platform-agnostic. You must provide both a transport factory and HTTP client when creating a bot.
 
-### Using Tokio WebSocket Transport (Default)
+### Using Default Implementations
 
+**In your `Cargo.toml`:**
+```toml
+[dependencies]
+whatsapp-rust = "0.1"
+whatsapp-rust-tokio-transport = "0.1"
+whatsapp-rust-ureq-http-client = "0.1"
+```
+
+**In your code:**
 ```rust
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use std::sync::Arc;
 
 let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
 let transport_factory = TokioWebSocketTransportFactory::new();
+let http_client = UreqHttpClient::new();
 
 let bot = Bot::builder()
     .with_backend(backend)
     .with_transport_factory(transport_factory)
+    .with_http_client(http_client)
     .build()
     .await?;
 ```
 
-### Custom Transport Implementation
+### Custom Transport and HTTP Implementations
 
-You can implement your own transport for different runtimes or platforms by implementing the `Transport` and `TransportFactory` traits. This enables:
+You can implement your own transport and HTTP client for different runtimes or platforms by implementing the `Transport`, `TransportFactory`, and `HttpClient` traits. This enables:
 
 - Using different async runtimes (async-std, smol)
-- Compiling to WebAssembly with browser WebSocket APIs
-- Testing with mock transports
+- Compiling to WebAssembly with browser APIs
+- Testing with mock implementations
 - Custom protocols or proxies
 
-See the `whatsapp-rust-tokio-transport` crate for a reference implementation.
+See the `whatsapp-rust-tokio-transport` and `whatsapp-rust-ureq-http-client` crates for reference implementations.
 
 ## Quick Start: A Universal Ping-Pong Bot
 
