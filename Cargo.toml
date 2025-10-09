@@ -24,16 +24,17 @@ flate2 = { version = "1.1.4", default-features = false, features = ["zlib-rs"] }
 rand = "0.9"
 rand_core = "0.9"
 thiserror = "2.0.17"
-tokio = { version = "1.47.1" }
+tokio = { version = "1.47.1", default-features = false }
 wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
 
 [features]
-default = ["sqlite-storage", "tokio-transport", "ureq-client"]
+default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
 signal = ["tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
+tokio-native = ["tokio/rt-multi-thread"]
 
 [dependencies]
 
@@ -59,12 +60,7 @@ scopeguard = "1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0"
 thiserror = { workspace = true }
-tokio = { workspace = true, features = [
-    "macros",
-    "rt-multi-thread",
-    "sync",
-    "time",
-] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 wacore = { path = "./wacore", version = "0.1.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
