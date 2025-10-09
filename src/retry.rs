@@ -283,6 +283,23 @@ mod tests {
     use wacore_binary::jid::Jid;
     use waproto::whatsapp as wa;
 
+    // Mock HTTP client for tests
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl crate::http::HttpClient for MockHttpClient {
+        async fn execute(
+            &self,
+            _request: crate::http::HttpRequest,
+        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
+            Ok(crate::http::HttpResponse {
+                status_code: 200,
+                body: Vec::new(),
+            })
+        }
+    }
+
     #[tokio::test]
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -296,6 +313,7 @@ mod tests {
         let (client, _sync_rx) = Client::new(
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
         )
         .await;
 

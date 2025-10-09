@@ -1,0 +1,17 @@
+[package]
+name = "whatsapp-rust-ureq-http-client"
+version = "0.1.0"
+edition = "2024"
+authors = ["João Lucas <jlucaso@hotmail.com>"]
+license = "MIT"
+repository = "https://github.com/jlucaso1/whatsapp-rust"
+description = "Ureq-based HTTP client implementation for whatsapp-rust"
+
+[dependencies]
+anyhow = { version = "1.0", default-features = false }
+async-trait = "0.1.88"
+tokio = { version = "1.47.1", features = ["rt"] }
+ureq = { version = "3.1.0", default-features = false, features = [
+    "rustls",
+    "json",
+] }

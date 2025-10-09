@@ -139,6 +139,7 @@ pub struct BotBuilder {
     // The only way to configure storage
     backend: Option<Arc<dyn Backend>>,
     transport_factory: Option<Arc<dyn crate::transport::TransportFactory>>,
+    http_client: Option<Arc<dyn crate::http::HttpClient>>,
     override_version: Option<(u32, u32, u32)>,
     os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
 }
@@ -151,6 +152,7 @@ impl BotBuilder {
             device_id: None,
             backend: None,
             transport_factory: None,
+            http_client: None,
             override_version: None,
             os_info: None,
         }
@@ -234,6 +236,29 @@ impl BotBuilder {
         self
     }
 
+    /// Configure the HTTP client used for media operations and version fetching.
+    ///
+    /// # Arguments
+    /// * `client` - The HTTP client implementation
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use whatsapp_rust_ureq_http_client::UreqHttpClient;
+    ///
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_http_client(UreqHttpClient::new())
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_http_client<C>(mut self, client: C) -> Self
+    where
+        C: crate::http::HttpClient + 'static,
+    {
+        self.http_client = Some(Arc::new(client));
+        self
+    }
+
     /// Override the WhatsApp version used by the client.
     ///
     /// By default, the client will automatically fetch the latest version from WhatsApp's servers.
@@ -309,6 +334,10 @@ impl BotBuilder {
             )
         })?;
 
+        let http_client = self.http_client.ok_or_else(|| {
+            anyhow::anyhow!("HTTP client is required. Use with_http_client() to provide one.")
+        })?;
+
         let persistence_manager = if let Some(device_id) = self.device_id {
             info!("Creating PersistenceManager for device ID: {}", device_id);
             Arc::new(
@@ -335,8 +364,12 @@ impl BotBuilder {
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
 
-        crate::version::resolve_and_update_version(&persistence_manager, self.override_version)
-            .await;
+        crate::version::resolve_and_update_version(
+            &persistence_manager,
+            &http_client,
+            self.override_version,
+        )
+        .await?;
 
         // Apply OS info override if specified
         if let Some((os_name, version)) = self.os_info {
@@ -350,7 +383,7 @@ impl BotBuilder {
 
         info!("Creating client...");
         let (client, sync_task_receiver) =
-            Client::new(persistence_manager.clone(), transport_factory).await;
+            Client::new(persistence_manager.clone(), transport_factory, http_client).await;
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
@@ -368,8 +401,24 @@ impl BotBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::{HttpClient, HttpRequest, HttpResponse};
     use crate::store::sqlite_store::SqliteStore;
     use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+
+    // Mock HTTP client for testing
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
+            // Return a mock response for version fetching
+            Ok(HttpResponse {
+                status_code: 200,
+                body: br#"self.__swData=JSON.parse(/*BTDS*/"{\"dynamic_data\":{\"SiteData\":{\"server_revision\":1026131876,\"client_revision\":1026131876}}}");"#.to_vec(),
+            })
+        }
+    }
 
     async fn create_test_sqlite_backend() -> Arc<dyn Backend> {
         let temp_db = format!(
@@ -387,10 +436,12 @@ mod tests {
     async fn test_bot_builder_single_device() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .build()
             .await
             .expect("Failed to build bot");
@@ -419,6 +470,7 @@ mod tests {
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
             .for_device(42)
             .build()
             .await
@@ -437,9 +489,11 @@ mod tests {
         // Create an in-memory backend for testing
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .build()
             .await
             .expect("Failed to build bot with custom backend");
@@ -457,6 +511,7 @@ mod tests {
         // Create an in-memory backend for testing
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         // First, we need to create some device data for device ID 100
         let mut device = wacore::store::Device::new();
@@ -469,6 +524,7 @@ mod tests {
         // Build a bot with the custom backend for a specific device
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_http_client(http_client)
             .with_transport_factory(transport)
             .for_device(100)
             .build()
@@ -486,8 +542,10 @@ mod tests {
     async fn test_bot_builder_missing_backend() {
         // Try to build without setting a backend
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
         let result = Bot::builder()
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .build()
             .await;
 
@@ -505,7 +563,12 @@ mod tests {
     async fn test_bot_builder_missing_transport() {
         // Try to build without setting a transport
         let backend = create_test_sqlite_backend().await;
-        let result = Bot::builder().with_backend(backend).build().await;
+        let http_client = MockHttpClient;
+        let result = Bot::builder()
+            .with_backend(backend)
+            .with_http_client(http_client)
+            .build()
+            .await;
 
         // This should fail
         assert!(result.is_err());
@@ -521,10 +584,12 @@ mod tests {
     async fn test_bot_builder_with_version_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .with_version((2, 3000, 123456789))
             .build()
             .await
@@ -545,6 +610,7 @@ mod tests {
     async fn test_bot_builder_with_os_info_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         let custom_os = "CustomOS".to_string();
         let custom_version = wa::device_props::AppVersion {
@@ -557,6 +623,7 @@ mod tests {
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .with_os_info(Some(custom_os.clone()), Some(custom_version))
             .build()
             .await
@@ -575,12 +642,14 @@ mod tests {
     async fn test_bot_builder_with_os_only_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         let custom_os = "CustomOS".to_string();
 
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .with_os_info(Some(custom_os.clone()), None)
             .build()
             .await
@@ -603,6 +672,7 @@ mod tests {
     async fn test_bot_builder_with_version_only_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
 
         let custom_version = wa::device_props::AppVersion {
             primary: Some(99),
@@ -613,6 +683,7 @@ mod tests {
 
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_http_client(http_client)
             .with_transport_factory(transport)
             .with_os_info(None, Some(custom_version))
             .build()

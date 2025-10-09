@@ -6,6 +6,7 @@ use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::store::traits::Backend;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 /// This example demonstrates the new multi-account capabilities of whatsapp-rust.
 /// It shows how to:
@@ -54,9 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bot 1: Account 1
     info!("🤖 Creating Bot 1 (Account 1)...");
     let transport1 = TokioWebSocketTransportFactory::new();
+    let http_client1 = UreqHttpClient::new();
     let mut bot1 = Bot::builder()
         .with_backend(backend1)
         .with_transport_factory(transport1)
+        .with_http_client(http_client1)
         .on_event(|event, _client| async move {
             let account_id = 1;
             match event {
@@ -93,9 +96,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bot 2: Account 2
     info!("🤖 Creating Bot 2 (Account 2)...");
     let transport2 = TokioWebSocketTransportFactory::new();
+    let http_client2 = UreqHttpClient::new();
     let mut bot2 = Bot::builder()
         .with_backend(backend2)
         .with_transport_factory(transport2)
+        .with_http_client(http_client2)
         .on_event(|event, _client| async move {
             let account_id = 2;
             match event {
@@ -143,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🔄 Press Ctrl+C to stop.");
 
     // Step 7: Wait for the bots to finish (they run indefinitely)
+    #[cfg(feature = "signal")]
     tokio::select! {
         result1 = bot1_handle => {
             if let Err(e) = result1 {
@@ -160,6 +166,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("🛑 Received Ctrl+C, shutting down...");
+        }
+    }
+
+    #[cfg(not(feature = "signal"))]
+    tokio::select! {
+        result1 = bot1_handle => {
+            if let Err(e) = result1 {
+                error!("Bot 1 ended with error: {}", e);
+            } else {
+                info!("Bot 1 ended gracefully");
+            }
+        }
+        result2 = bot2_handle => {
+            if let Err(e) = result2 {
+                error!("Bot 2 ended with error: {}", e);
+            } else {
+                info!("Bot 2 ended gracefully");
+            }
         }
     }
 
@@ -190,14 +214,22 @@ mod tests {
         ) as Arc<dyn Backend>;
 
         // Create bots for each account
+        let transport1 = TokioWebSocketTransportFactory::new();
+        let http_client1 = UreqHttpClient::new();
         let bot1 = Bot::builder()
             .with_backend(backend1)
+            .with_transport_factory(transport1)
+            .with_http_client(http_client1)
             .build()
             .await
             .expect("Failed to create bot 1");
 
+        let transport2 = TokioWebSocketTransportFactory::new();
+        let http_client2 = UreqHttpClient::new();
         let bot2 = Bot::builder()
             .with_backend(backend2)
+            .with_transport_factory(transport2)
+            .with_http_client(http_client2)
             .build()
             .await
             .expect("Failed to create bot 2");
@@ -223,8 +255,12 @@ mod tests {
                 .expect("Failed to create test backend"),
         ) as Arc<dyn Backend>;
 
+        let transport = TokioWebSocketTransportFactory::new();
+        let http_client = UreqHttpClient::new();
         let bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(http_client)
             .build()
             .await
             .expect("Failed to create bot with backend");

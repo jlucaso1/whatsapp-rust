@@ -1,26 +1,26 @@
+use crate::http::{HttpClient, HttpRequest};
 use crate::store::commands::DeviceCommand;
 use crate::store::persistence_manager::PersistenceManager;
 use anyhow::{Result, anyhow};
-use log::{info, warn};
-use std::io::Read;
+use log::info;
 use std::sync::Arc;
 
 const SW_URL: &str = "https://web.whatsapp.com/sw.js";
 const REVISION_KEY: &str = "client_revision";
 const ASSETS_KEY: &str = "assets-manifest-";
 
-pub fn fetch_latest_app_version() -> Result<(u32, u32, u32)> {
-    let resp = ureq::get(SW_URL)
-        .call()
+pub async fn fetch_latest_app_version(
+    http_client: &Arc<dyn HttpClient>,
+) -> Result<(u32, u32, u32)> {
+    let request = HttpRequest::get(SW_URL);
+    let response = http_client
+        .execute(request)
+        .await
         .map_err(|e| anyhow!("HTTP request to {} failed: {}", SW_URL, e))?;
 
-    let mut body = resp.into_body();
-    let mut reader = body.as_reader();
-
-    let mut body_str = String::new();
-    reader
-        .read_to_string(&mut body_str)
-        .map_err(|e| anyhow!("Failed to read response body: {}", e))?;
+    let body_str = response
+        .body_string()
+        .map_err(|e| anyhow!("Failed to decode response body: {}", e))?;
 
     parse_sw_js(&body_str)
         .ok_or_else(|| anyhow!("Could not find 'client_revision' version in sw.js response"))
@@ -60,14 +60,15 @@ fn parse_sw_js(s: &str) -> Option<(u32, u32, u32)> {
 
 pub async fn resolve_and_update_version(
     persistence_manager: &Arc<PersistenceManager>,
+    http_client: &Arc<dyn HttpClient>,
     override_version: Option<(u32, u32, u32)>,
-) {
+) -> Result<()> {
     if let Some((p, s, t)) = override_version {
         info!("Using user-provided override version: {}.{}.{}", p, s, t);
         persistence_manager
             .process_command(DeviceCommand::SetAppVersion((p, s, t)))
             .await;
-        return;
+        return Ok(());
     }
 
     let device = persistence_manager.get_device_snapshot().await;
@@ -87,29 +88,21 @@ pub async fn resolve_and_update_version(
 
     if needs_fetch {
         info!("WhatsApp version is stale or missing, fetching latest...");
-        match tokio::task::spawn_blocking(fetch_latest_app_version).await {
-            Ok(Ok((p, s, t))) => {
-                info!("Fetched latest version: {}.{}.{}", p, s, t);
-                persistence_manager
-                    .process_command(DeviceCommand::SetAppVersion((p, s, t)))
-                    .await;
-            }
-            Ok(Err(e)) => {
-                warn!(
-                    "Failed to fetch latest version, using cached/default: {}",
-                    e
-                );
-            }
-            Err(e) => {
-                warn!("Version fetch task panicked: {}", e);
-            }
-        }
+        let (p, s, t) = fetch_latest_app_version(http_client)
+            .await
+            .map_err(|e| anyhow!("Failed to fetch latest WhatsApp version: {}", e))?;
+        info!("Fetched latest version: {}.{}.{}", p, s, t);
+        persistence_manager
+            .process_command(DeviceCommand::SetAppVersion((p, s, t)))
+            .await;
     } else {
         info!(
             "Using cached version: {}.{}.{}",
             device.app_version_primary, device.app_version_secondary, device.app_version_tertiary
         );
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -2431,12 +2431,12 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "ureq",
  "uuid",
  "wacore",
  "wacore-binary",
  "waproto",
  "whatsapp-rust-tokio-transport",
+ "whatsapp-rust-ureq-http-client",
 ]
 
 [[package]]
@@ -2452,6 +2452,16 @@ dependencies = [
  "rustls",
  "tokio",
  "tokio-websockets",
+]
+
+[[package]]
+name = "whatsapp-rust-ureq-http-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "tokio",
+ "ureq",
 ]
 
 [[package]]

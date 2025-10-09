@@ -154,12 +154,16 @@ pub struct Client {
 
     /// Whether to send ACKs synchronously or in a background task
     pub(crate) synchronous_ack: bool,
+
+    /// HTTP client for making HTTP requests (media upload/download, version fetching)
+    pub http_client: Arc<dyn crate::http::HttpClient>,
 }
 
 impl Client {
     pub async fn new(
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
+        http_client: Arc<dyn crate::http::HttpClient>,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
@@ -249,6 +253,7 @@ impl Client {
             custom_enc_handlers: Arc::new(DashMap::new()),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
+            http_client,
         };
 
         let arc = Arc::new(this);
@@ -1372,6 +1377,23 @@ mod tests {
     use super::*;
     use wacore_binary::builder::NodeBuilder;
 
+    // Mock HTTP client for tests
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl crate::http::HttpClient for MockHttpClient {
+        async fn execute(
+            &self,
+            _request: crate::http::HttpRequest,
+        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
+            Ok(crate::http::HttpResponse {
+                status_code: 200,
+                body: Vec::new(),
+            })
+        }
+    }
+
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
         let backend = Arc::new(
@@ -1383,6 +1405,7 @@ mod tests {
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
         )
         .await;
 

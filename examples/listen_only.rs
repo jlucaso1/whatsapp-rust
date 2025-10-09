@@ -7,6 +7,7 @@ use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::store::traits::Backend;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 /// A minimal, listen-only bot designed for debugging.
 /// It connects, logs in, and prints detailed information for every event.
@@ -38,10 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) as Arc<dyn Backend>;
 
     let transport_factory = TokioWebSocketTransportFactory::new();
+    let http_client = UreqHttpClient::new();
 
     let mut bot = Bot::builder()
         .with_backend(backend)
         .with_transport_factory(transport_factory)
+        .with_http_client(http_client)
         .on_event(|event, _client| async move {
             match event {
                 Event::PairingQrCode { code, timeout } => {
@@ -88,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🤖 Listener bot built. Starting run loop...");
     let bot_handle = bot.run().await.expect("Failed to start listener bot");
 
+    #[cfg(feature = "signal")]
     tokio::select! {
         result = bot_handle => {
             if let Err(e) = result {
@@ -98,6 +102,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("🛑 Received Ctrl+C, shutting down listener...");
+        }
+    }
+
+    #[cfg(not(feature = "signal"))]
+    tokio::select! {
+        result = bot_handle => {
+            if let Err(e) = result {
+                error!("Listener bot ended with error: {}", e);
+            } else {
+                info!("Listener bot ended gracefully");
+            }
         }
     }
 
