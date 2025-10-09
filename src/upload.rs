@@ -43,7 +43,6 @@ impl Client {
             host.hostname, mms_type, token, media_conn.auth, token
         );
 
-        // Perform the upload using the HTTP client
         let request = HttpRequest::post(url)
             .with_header("Content-Type", "application/octet-stream")
             .with_header("Origin", "https://web.whatsapp.com")
@@ -52,7 +51,16 @@ impl Client {
         let response = self.http_client.execute(request).await?;
 
         if response.status_code >= 400 {
-            let body_str = response.body_string().unwrap_or_default();
+            let body_str = match response.body_string() {
+                Ok(body) => body,
+                Err(body_err) => {
+                    return Err(anyhow!(
+                        "Upload failed {} and failed to read response body: {}",
+                        response.status_code,
+                        body_err
+                    ));
+                }
+            };
             return Err(anyhow!(
                 "Upload failed {} body={}",
                 response.status_code,

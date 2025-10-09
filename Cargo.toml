@@ -10,7 +10,13 @@ readme = "README.md"
 description = "Rust client for WhatsApp Web"
 
 [workspace]
-members = [".", "transports/tokio-transport", "http_clients/ureq-client", "wacore", "waproto"]
+members = [
+    ".",
+    "http_clients/ureq-client",
+    "transports/tokio-transport",
+    "wacore",
+    "waproto",
+]
 
 [workspace.dependencies]
 flate2 = { version = "1.1.4", default-features = false, features = ["zlib-rs"] }

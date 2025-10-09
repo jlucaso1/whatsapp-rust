@@ -369,7 +369,7 @@ impl BotBuilder {
             &http_client,
             self.override_version,
         )
-        .await;
+        .await?;
 
         // Apply OS info override if specified
         if let Some((os_name, version)) = self.os_info {

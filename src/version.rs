@@ -2,7 +2,7 @@ use crate::http::{HttpClient, HttpRequest};
 use crate::store::commands::DeviceCommand;
 use crate::store::persistence_manager::PersistenceManager;
 use anyhow::{Result, anyhow};
-use log::{info, warn};
+use log::info;
 use std::sync::Arc;
 
 const SW_URL: &str = "https://web.whatsapp.com/sw.js";
@@ -62,13 +62,13 @@ pub async fn resolve_and_update_version(
     persistence_manager: &Arc<PersistenceManager>,
     http_client: &Arc<dyn HttpClient>,
     override_version: Option<(u32, u32, u32)>,
-) {
+) -> Result<()> {
     if let Some((p, s, t)) = override_version {
         info!("Using user-provided override version: {}.{}.{}", p, s, t);
         persistence_manager
             .process_command(DeviceCommand::SetAppVersion((p, s, t)))
             .await;
-        return;
+        return Ok(());
     }
 
     let device = persistence_manager.get_device_snapshot().await;
@@ -88,26 +88,21 @@ pub async fn resolve_and_update_version(
 
     if needs_fetch {
         info!("WhatsApp version is stale or missing, fetching latest...");
-        match fetch_latest_app_version(http_client).await {
-            Ok((p, s, t)) => {
-                info!("Fetched latest version: {}.{}.{}", p, s, t);
-                persistence_manager
-                    .process_command(DeviceCommand::SetAppVersion((p, s, t)))
-                    .await;
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to fetch latest version, using cached/default: {}",
-                    e
-                );
-            }
-        }
+        let (p, s, t) = fetch_latest_app_version(http_client)
+            .await
+            .map_err(|e| anyhow!("Failed to fetch latest WhatsApp version: {}", e))?;
+        info!("Fetched latest version: {}.{}.{}", p, s, t);
+        persistence_manager
+            .process_command(DeviceCommand::SetAppVersion((p, s, t)))
+            .await;
     } else {
         info!(
             "Using cached version: {}.{}.{}",
             device.app_version_primary, device.app_version_secondary, device.app_version_tertiary
         );
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

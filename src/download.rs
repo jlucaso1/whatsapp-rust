@@ -51,9 +51,15 @@ impl Client {
         let url = request.url.clone();
         let media_key = request.media_key.clone();
         let app_info = request.app_info;
-
         let http_request = crate::http::HttpRequest::get(url);
         let response = self.http_client.execute(http_request).await?;
+
+        if response.status_code >= 300 {
+            return Err(anyhow!(
+                "Download failed with status: {}",
+                response.status_code
+            ));
+        }
 
         // Decrypt in a blocking thread since it's CPU-intensive
         tokio::task::spawn_blocking(move || {
