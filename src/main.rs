@@ -1,5 +1,7 @@
 #[cfg(not(feature = "sqlite-storage"))]
-compile_error!("This binary requires the 'sqlite-storage' feature. Build with --features sqlite-storage");
+compile_error!(
+    "This binary requires the 'sqlite-storage' feature. Build with --features sqlite-storage"
+);
 
 use chrono::Local;
 use log::{error, info};

@@ -752,8 +752,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::persistence_manager::PersistenceManager;
     use crate::store::SqliteStore;
+    use crate::store::persistence_manager::PersistenceManager;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
     use wacore_binary::jid::Jid;

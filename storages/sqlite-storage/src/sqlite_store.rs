@@ -1,6 +1,5 @@
 use crate::schema::*;
 use async_trait::async_trait;
-use wacore::store::traits::*;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sql_query;
@@ -12,6 +11,7 @@ use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::AppStateMutationMAC;
+use wacore::store::traits::*;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
