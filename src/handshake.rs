@@ -32,11 +32,11 @@ pub async fn do_handshake(
 
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
-    
+
     // First message includes the WA connection header
     let header = wacore_binary::consts::WA_CONN_HEADER;
     let framed = crate::framing::encode_frame(&client_hello_bytes, Some(&header))
-        .map_err(|e| HandshakeError::Transport(e))?;
+        .map_err(HandshakeError::Transport)?;
     transport.send(&framed).await?;
 
     // Wait for server response frame
@@ -45,7 +45,7 @@ pub async fn do_handshake(
             Ok(Some(TransportEvent::DataReceived(data))) => {
                 // Feed data into decoder
                 frame_decoder.feed(&data);
-                
+
                 // Try to decode a frame
                 if let Some(frame) = frame_decoder.decode_frame() {
                     break frame;
@@ -74,7 +74,7 @@ pub async fn do_handshake(
     debug!("--> Sending ClientFinish");
     // Subsequent messages don't need the header
     let framed = crate::framing::encode_frame(&client_finish_bytes, None)
-        .map_err(|e| HandshakeError::Transport(e))?;
+        .map_err(HandshakeError::Transport)?;
     transport.send(&framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;

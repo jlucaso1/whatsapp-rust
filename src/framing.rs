@@ -1,8 +1,3 @@
-/// WhatsApp protocol framing logic
-///
-/// This module handles the encoding and decoding of WhatsApp frames.
-/// Each frame consists of a 3-byte big-endian length prefix followed by the payload.
-
 use bytes::{Buf, Bytes, BytesMut};
 use log::trace;
 
@@ -13,7 +8,7 @@ pub const FRAME_MAX_SIZE: usize = 2 << 23;
 /// Optionally prepends a header (used for the initial connection frame).
 pub fn encode_frame(payload: &[u8], header: Option<&[u8]>) -> Result<Vec<u8>, anyhow::Error> {
     let payload_len = payload.len();
-    
+
     if payload_len >= FRAME_MAX_SIZE {
         return Err(anyhow::anyhow!(
             "Frame is too large (max: {}, got: {})",
@@ -24,7 +19,7 @@ pub fn encode_frame(payload: &[u8], header: Option<&[u8]>) -> Result<Vec<u8>, an
 
     let header_len = header.map(|h| h.len()).unwrap_or(0);
     let prefix_len = header_len + FRAME_LENGTH_SIZE;
-    
+
     let mut data = Vec::with_capacity(prefix_len + payload_len);
     data.resize(prefix_len, 0);
     data.extend_from_slice(payload);
@@ -95,12 +90,12 @@ mod tests {
     fn test_encode_frame_no_header() {
         let payload = vec![1, 2, 3, 4, 5];
         let encoded = encode_frame(&payload, None).unwrap();
-        
+
         // Check length prefix (3 bytes, big-endian)
         assert_eq!(encoded[0], 0);
         assert_eq!(encoded[1], 0);
         assert_eq!(encoded[2], 5);
-        
+
         // Check payload
         assert_eq!(&encoded[3..], &payload[..]);
     }
@@ -110,15 +105,15 @@ mod tests {
         let payload = vec![1, 2, 3];
         let header = vec![0xAA, 0xBB];
         let encoded = encode_frame(&payload, Some(&header)).unwrap();
-        
+
         // Check header
         assert_eq!(&encoded[0..2], &header[..]);
-        
+
         // Check length prefix
         assert_eq!(encoded[2], 0);
         assert_eq!(encoded[3], 0);
         assert_eq!(encoded[4], 3);
-        
+
         // Check payload
         assert_eq!(&encoded[5..], &payload[..]);
     }
@@ -126,16 +121,16 @@ mod tests {
     #[test]
     fn test_frame_decoder() {
         let mut decoder = FrameDecoder::new();
-        
+
         // Feed incomplete frame
         decoder.feed(&[0, 0, 5, 1, 2]);
         assert!(decoder.decode_frame().is_none());
-        
+
         // Feed rest of frame
         decoder.feed(&[3, 4, 5]);
         let frame = decoder.decode_frame().unwrap();
         assert_eq!(&frame[..], &[1, 2, 3, 4, 5]);
-        
+
         // No more frames
         assert!(decoder.decode_frame().is_none());
     }
@@ -143,16 +138,16 @@ mod tests {
     #[test]
     fn test_frame_decoder_multiple_frames() {
         let mut decoder = FrameDecoder::new();
-        
+
         // Feed two complete frames at once
         decoder.feed(&[0, 0, 2, 0xAA, 0xBB, 0, 0, 3, 0xCC, 0xDD, 0xEE]);
-        
+
         let frame1 = decoder.decode_frame().unwrap();
         assert_eq!(&frame1[..], &[0xAA, 0xBB]);
-        
+
         let frame2 = decoder.decode_frame().unwrap();
         assert_eq!(&frame2[..], &[0xCC, 0xDD, 0xEE]);
-        
+
         assert!(decoder.decode_frame().is_none());
     }
 

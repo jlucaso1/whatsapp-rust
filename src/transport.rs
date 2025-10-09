@@ -1,12 +1,5 @@
-/// Transport abstraction layer for WhatsApp-Rust
-///
-/// This module re-exports the transport traits and implementations.
-/// The transport layer is responsible for moving raw bytes, while framing logic
-/// is handled by the core library.
-
-// Re-export traits and implementations from tokio-transport
 pub use whatsapp_rust_tokio_transport::{
-    Transport, TransportEvent, TransportFactory, TokioWebSocketTransportFactory,
+    TokioWebSocketTransportFactory, Transport, TransportEvent, TransportFactory,
 };
 
 #[cfg(test)]
