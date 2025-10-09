@@ -401,6 +401,9 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("Cannot start message loop: not connected"))?;
         drop(rx_guard);
 
+        // Frame decoder to parse incoming data
+        let mut frame_decoder = crate::framing::FrameDecoder::new();
+
         loop {
             tokio::select! {
                     biased;
@@ -410,8 +413,14 @@ impl Client {
                     },
                     event_opt = transport_events.recv() => {
                         match event_opt {
-                            Some(crate::transport::TransportEvent::FrameReceived(encrypted_frame)) => {
-                                self.process_encrypted_frame(&encrypted_frame).await;
+                            Some(crate::transport::TransportEvent::DataReceived(data)) => {
+                                // Feed data into the frame decoder
+                                frame_decoder.feed(&data);
+                                
+                                // Process all complete frames
+                                while let Some(encrypted_frame) = frame_decoder.decode_frame() {
+                                    self.process_encrypted_frame(&encrypted_frame).await;
+                                }
                             },
                             Some(crate::transport::TransportEvent::Disconnected) | None => {
                                 self.cleanup_connection_state().await;

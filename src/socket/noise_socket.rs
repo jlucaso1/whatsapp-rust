@@ -45,8 +45,13 @@ impl NoiseSocket {
     ) -> Result<Vec<u8>> {
         self.encrypt_into(&plaintext_buf, &mut out_buf)?;
         plaintext_buf.clear();
+        
+        // Frame the encrypted data with length prefix
+        let framed = crate::framing::encode_frame(&out_buf, None)
+            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        
         self.transport
-            .send_frame(&out_buf)
+            .send(&framed)
             .await
             .map_err(|e| SocketError::Crypto(e.to_string()))?;
         Ok(plaintext_buf)

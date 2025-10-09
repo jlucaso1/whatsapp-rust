@@ -32,4 +32,3 @@ tokio-websockets = { version = "0.13.0", features = [
     "rand",
     "ring",
 ] }
-wacore-binary = { path = "../../wacore/binary", version = "0.1.0" }

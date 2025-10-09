@@ -1,8 +1,13 @@
 /// Transport abstraction layer for WhatsApp-Rust
 ///
-/// This module re-exports the transport traits from the tokio-transport crate.
-/// Users can implement their own transport by implementing these traits.
-pub use whatsapp_rust_tokio_transport::{Transport, TransportEvent, TransportFactory};
+/// This module re-exports the transport traits and implementations.
+/// The transport layer is responsible for moving raw bytes, while framing logic
+/// is handled by the core library.
+
+// Re-export traits and implementations from tokio-transport
+pub use whatsapp_rust_tokio_transport::{
+    Transport, TransportEvent, TransportFactory, TokioWebSocketTransportFactory,
+};
 
 #[cfg(test)]
 pub mod mock {
@@ -16,7 +21,7 @@ pub mod mock {
 
     #[async_trait]
     impl Transport for MockTransport {
-        async fn send_frame(&self, _frame: &[u8]) -> Result<(), anyhow::Error> {
+        async fn send(&self, _data: &[u8]) -> Result<(), anyhow::Error> {
             Ok(())
         }
 

@@ -5,6 +5,7 @@ pub mod types;
 pub mod client;
 pub use client::Client;
 pub mod download;
+pub mod framing;
 pub mod handlers;
 pub mod handshake;
 pub mod keepalive;

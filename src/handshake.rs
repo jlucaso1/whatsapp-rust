@@ -28,15 +28,31 @@ pub async fn do_handshake(
     transport_events: &mut tokio::sync::mpsc::Receiver<TransportEvent>,
 ) -> Result<Arc<NoiseSocket>> {
     let mut handshake_state = HandshakeState::new(&device.core)?;
+    let mut frame_decoder = crate::framing::FrameDecoder::new();
 
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
-    transport.send_frame(&client_hello_bytes).await?;
+    
+    // First message includes the WA connection header
+    let header = wacore_binary::consts::WA_CONN_HEADER;
+    let framed = crate::framing::encode_frame(&client_hello_bytes, Some(&header))
+        .map_err(|e| HandshakeError::Transport(e))?;
+    transport.send(&framed).await?;
 
     // Wait for server response frame
     let resp_frame = loop {
         match timeout(NOISE_HANDSHAKE_RESPONSE_TIMEOUT, transport_events.recv()).await {
-            Ok(Some(TransportEvent::FrameReceived(frame))) => break frame,
+            Ok(Some(TransportEvent::DataReceived(data))) => {
+                // Feed data into decoder
+                frame_decoder.feed(&data);
+                
+                // Try to decode a frame
+                if let Some(frame) = frame_decoder.decode_frame() {
+                    break frame;
+                }
+                // If no complete frame yet, continue waiting for more data
+                continue;
+            }
             Ok(Some(TransportEvent::Connected)) => {
                 // Ignore Connected event, we're already connected
                 continue;
@@ -56,7 +72,10 @@ pub async fn do_handshake(
         handshake_state.read_server_hello_and_build_client_finish(&resp_frame)?;
 
     debug!("--> Sending ClientFinish");
-    transport.send_frame(&client_finish_bytes).await?;
+    // Subsequent messages don't need the header
+    let framed = crate::framing::encode_frame(&client_finish_bytes, None)
+        .map_err(|e| HandshakeError::Transport(e))?;
+    transport.send(&framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
     info!(target: "Client", "Handshake complete, switching to encrypted communication");
