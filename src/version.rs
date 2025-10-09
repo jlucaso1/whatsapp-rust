@@ -12,7 +12,11 @@ const ASSETS_KEY: &str = "assets-manifest-";
 pub async fn fetch_latest_app_version(
     http_client: &Arc<dyn HttpClient>,
 ) -> Result<(u32, u32, u32)> {
-    let request = HttpRequest::get(SW_URL);
+    let request = HttpRequest::get(SW_URL).with_header("sec-fetch-site", "none")
+    .with_header(
+        "user-agent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    );
     let response = http_client
         .execute(request)
         .await
