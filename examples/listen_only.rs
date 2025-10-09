@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🤖 Listener bot built. Starting run loop...");
     let bot_handle = bot.run().await.expect("Failed to start listener bot");
 
+    #[cfg(feature = "signal")]
     tokio::select! {
         result = bot_handle => {
             if let Err(e) = result {
@@ -101,6 +102,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("🛑 Received Ctrl+C, shutting down listener...");
+        }
+    }
+
+    #[cfg(not(feature = "signal"))]
+    tokio::select! {
+        result = bot_handle => {
+            if let Err(e) = result {
+                error!("Listener bot ended with error: {}", e);
+            } else {
+                info!("Listener bot ended gracefully");
+            }
         }
     }
 

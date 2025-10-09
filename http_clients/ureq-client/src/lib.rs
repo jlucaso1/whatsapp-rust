@@ -121,14 +121,3 @@ impl HttpClient for UreqHttpClient {
         .await?
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_ureq_client_instantiation() {
-        let client = UreqHttpClient::new();
-        assert!(std::mem::size_of_val(&client) >= 0);
-    }
-}

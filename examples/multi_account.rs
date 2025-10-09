@@ -148,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🔄 Press Ctrl+C to stop.");
 
     // Step 7: Wait for the bots to finish (they run indefinitely)
+    #[cfg(feature = "signal")]
     tokio::select! {
         result1 = bot1_handle => {
             if let Err(e) = result1 {
@@ -165,6 +166,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("🛑 Received Ctrl+C, shutting down...");
+        }
+    }
+
+    #[cfg(not(feature = "signal"))]
+    tokio::select! {
+        result1 = bot1_handle => {
+            if let Err(e) = result1 {
+                error!("Bot 1 ended with error: {}", e);
+            } else {
+                info!("Bot 1 ended gracefully");
+            }
+        }
+        result2 = bot2_handle => {
+            if let Err(e) = result2 {
+                error!("Bot 2 ended with error: {}", e);
+            } else {
+                info!("Bot 2 ended gracefully");
+            }
         }
     }
 
