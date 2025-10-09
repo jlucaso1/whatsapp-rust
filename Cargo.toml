@@ -29,7 +29,11 @@ wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
 
 [features]
-default = ["sqlite-storage"]
+default = [
+    "sqlite-storage",
+    "whatsapp-rust-tokio-transport",
+    "whatsapp-rust-ureq-http-client",
+]
 signal = ["tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 
@@ -67,8 +71,8 @@ wacore = { path = "./wacore", version = "0.1.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.1.0", optional = true }
-whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.1.0" }
-whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.1.0" }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.1.0", optional = true }
+whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.1.0", optional = true }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
