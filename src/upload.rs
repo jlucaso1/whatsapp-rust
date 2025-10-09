@@ -4,6 +4,7 @@ use serde::Deserialize;
 use wacore::download::MediaType;
 
 use crate::client::Client;
+use crate::http::HttpRequest;
 
 #[derive(Debug, Clone)]
 pub struct UploadResponse {
@@ -42,26 +43,24 @@ impl Client {
             host.hostname, mms_type, token, media_conn.auth, token
         );
 
-        // Perform the synchronous upload in a blocking thread
-        let raw: RawUploadResponse =
-            tokio::task::spawn_blocking(move || -> Result<RawUploadResponse> {
-                let mut resp = ureq::post(&url)
-                    // FIX: ureq uses .set() for headers
-                    .header("Content-Type", "application/octet-stream")
-                    .header("Origin", "https://web.whatsapp.com")
-                    .send(&enc.data_to_upload)?;
+        // Perform the upload using the HTTP client
+        let request = HttpRequest::post(url)
+            .with_header("Content-Type", "application/octet-stream")
+            .with_header("Origin", "https://web.whatsapp.com")
+            .with_body(enc.data_to_upload);
 
-                if resp.status().as_u16() >= 400 {
-                    return Err(anyhow!(
-                        "Upload failed {} body={}",
-                        resp.status(),
-                        resp.body_mut().read_to_string().unwrap_or_default()
-                    ));
-                }
+        let response = self.http_client.execute(request).await?;
 
-                Ok(resp.body_mut().read_json()?)
-            })
-            .await??;
+        if response.status_code >= 400 {
+            let body_str = response.body_string().unwrap_or_default();
+            return Err(anyhow!(
+                "Upload failed {} body={}",
+                response.status_code,
+                body_str
+            ));
+        }
+
+        let raw: RawUploadResponse = serde_json::from_slice(&response.body)?;
 
         let result = UploadResponse {
             url: raw.url,

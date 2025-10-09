@@ -51,11 +51,13 @@ impl Client {
         let url = request.url.clone();
         let media_key = request.media_key.clone();
         let app_info = request.app_info;
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            let resp = ureq::get(&url).call()?;
-            let mut body = resp.into_body();
-            let reader = body.as_reader();
-            DownloadUtils::decrypt_stream(reader, &media_key, app_info)
+
+        let http_request = crate::http::HttpRequest::get(url);
+        let response = self.http_client.execute(http_request).await?;
+
+        // Decrypt in a blocking thread since it's CPU-intensive
+        tokio::task::spawn_blocking(move || {
+            DownloadUtils::decrypt_stream(&response.body[..], &media_key, app_info)
         })
         .await?
     }
@@ -91,17 +93,21 @@ impl Client {
         media_type: MediaType,
         writer: &mut W,
     ) -> Result<()> {
-        let url = url.to_string();
+        let http_request = crate::http::HttpRequest::get(url);
+        let response = self.http_client.execute(http_request).await?;
+
+        if response.status_code >= 300 {
+            return Err(anyhow!(
+                "Download failed with status: {}",
+                response.status_code
+            ));
+        }
+
         let media_key = media_key.to_vec();
+        let encrypted_bytes = response.body;
 
-        let plaintext = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            let mut resp = ureq::get(&url).call()?;
-            if resp.status().as_u16() >= 300 {
-                return Err(anyhow!("Download failed with status: {}", resp.status()));
-            }
-
-            let encrypted_bytes = resp.body_mut().read_to_vec()?;
-
+        // Decrypt and verify in a blocking thread since it's CPU-intensive
+        let plaintext = tokio::task::spawn_blocking(move || {
             DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
         })
         .await??;
