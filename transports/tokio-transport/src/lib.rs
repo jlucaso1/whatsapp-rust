@@ -13,37 +13,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
-
-/// An event produced by the transport layer.
-#[derive(Debug, Clone)]
-pub enum TransportEvent {
-    /// The transport has successfully connected.
-    Connected,
-    /// Raw data has been received from the server.
-    DataReceived(Bytes),
-    /// The connection was lost.
-    Disconnected,
-}
-
-/// Represents an active network connection.
-/// The transport is a dumb pipe for bytes with no knowledge of WhatsApp framing.
-#[async_trait]
-pub trait Transport: Send + Sync {
-    /// Sends raw data to the server.
-    async fn send(&self, data: &[u8]) -> Result<(), anyhow::Error>;
-
-    /// Closes the connection.
-    async fn disconnect(&self);
-}
-
-/// A factory responsible for creating new transport instances.
-#[async_trait]
-pub trait TransportFactory: Send + Sync {
-    /// Creates a new transport and returns it, along with a stream of events.
-    async fn create_transport(
-        &self,
-    ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error>;
-}
+use wacore::net::{Transport, TransportEvent, TransportFactory};
 
 type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<RawWs, Message>;

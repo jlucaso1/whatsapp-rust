@@ -2230,6 +2230,7 @@ dependencies = [
  "arrayref",
  "async-trait",
  "base64",
+ "bytes",
  "cbc",
  "chrono",
  "ctr",
@@ -2254,6 +2255,7 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror",
+ "tokio",
  "uuid",
  "wacore-binary",
  "waproto",
@@ -2465,6 +2467,7 @@ dependencies = [
  "rustls",
  "tokio",
  "tokio-websockets",
+ "wacore",
 ]
 
 [[package]]
@@ -2475,6 +2478,7 @@ dependencies = [
  "async-trait",
  "tokio",
  "ureq",
+ "wacore",
 ]
 
 [[package]]
