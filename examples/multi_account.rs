@@ -5,6 +5,7 @@ use wacore::types::events::Event;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::store::traits::Backend;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 /// This example demonstrates the new multi-account capabilities of whatsapp-rust.
 /// It shows how to:
@@ -52,8 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bot 1: Account 1
     info!("🤖 Creating Bot 1 (Account 1)...");
+    let transport1 = TokioWebSocketTransportFactory::new();
     let mut bot1 = Bot::builder()
         .with_backend(backend1)
+        .with_transport_factory(transport1)
         .on_event(|event, _client| async move {
             let account_id = 1;
             match event {
@@ -89,8 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bot 2: Account 2
     info!("🤖 Creating Bot 2 (Account 2)...");
+    let transport2 = TokioWebSocketTransportFactory::new();
     let mut bot2 = Bot::builder()
         .with_backend(backend2)
+        .with_transport_factory(transport2)
         .on_event(|event, _client| async move {
             let account_id = 2;
             match event {

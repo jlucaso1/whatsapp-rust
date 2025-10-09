@@ -6,6 +6,7 @@ use wacore::types::events::Event;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::store::traits::Backend;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 /// A minimal, listen-only bot designed for debugging.
 /// It connects, logs in, and prints detailed information for every event.
@@ -36,8 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("Failed to create listener backend"),
     ) as Arc<dyn Backend>;
 
+    let transport_factory = TokioWebSocketTransportFactory::new();
+
     let mut bot = Bot::builder()
         .with_backend(backend)
+        .with_transport_factory(transport_factory)
         .on_event(|event, _client| async move {
             match event {
                 Event::PairingQrCode { code, timeout } => {

@@ -1,14 +1,12 @@
 use crate::socket::error::{Result, SocketError};
+use crate::transport::Transport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use wacore::aes_gcm::{Aes256Gcm, aead::Aead};
 use wacore::handshake::utils::generate_iv;
 
-use crate::socket::FrameSocket;
-use tokio::sync::Mutex;
-
 pub struct NoiseSocket {
-    frame_socket: Arc<Mutex<FrameSocket>>,
+    transport: Arc<dyn Transport>,
     write_key: Aes256Gcm,
     read_key: Aes256Gcm,
     write_counter: Arc<AtomicU32>,
@@ -16,13 +14,9 @@ pub struct NoiseSocket {
 }
 
 impl NoiseSocket {
-    pub fn new(
-        frame_socket: Arc<Mutex<FrameSocket>>,
-        write_key: Aes256Gcm,
-        read_key: Aes256Gcm,
-    ) -> Self {
+    pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
         Self {
-            frame_socket,
+            transport,
             write_key,
             read_key,
             write_counter: Arc::new(AtomicU32::new(0)),
@@ -51,8 +45,15 @@ impl NoiseSocket {
     ) -> Result<Vec<u8>> {
         self.encrypt_into(&plaintext_buf, &mut out_buf)?;
         plaintext_buf.clear();
-        let fs = self.frame_socket.clone();
-        fs.lock().await.send_frame(out_buf).await?;
+
+        // Frame the encrypted data with length prefix
+        let framed = crate::framing::encode_frame(&out_buf, None)
+            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+
+        self.transport
+            .send(&framed)
+            .await
+            .map_err(|e| SocketError::Crypto(e.to_string()))?;
         Ok(plaintext_buf)
     }
 

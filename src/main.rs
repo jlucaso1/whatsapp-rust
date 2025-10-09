@@ -9,6 +9,7 @@ use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::store::sqlite_store::SqliteStore;
 use whatsapp_rust::upload::UploadResponse;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
 // This is a demo of a simple ping-pong bot with every type of media.
 
@@ -42,8 +43,11 @@ fn main() {
         };
         info!("SQLite backend initialized successfully.");
 
+        let transport_factory = TokioWebSocketTransportFactory::new();
+
         let mut bot = Bot::builder()
             .with_backend(backend)
+            .with_transport_factory(transport_factory)
             // Optional: Override the WhatsApp version (normally auto-fetched)
             // .with_version((2, 3000, 1027868167))
             .on_event(move |event, client| {
