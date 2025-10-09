@@ -164,7 +164,7 @@ mod tests {
         use crate::store::persistence_manager::PersistenceManager;
 
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;
@@ -194,7 +194,7 @@ mod tests {
         use crate::store::persistence_manager::PersistenceManager;
 
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;

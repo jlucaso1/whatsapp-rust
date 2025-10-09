@@ -305,7 +305,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .unwrap(),
         ) as Arc<dyn crate::store::traits::Backend>;

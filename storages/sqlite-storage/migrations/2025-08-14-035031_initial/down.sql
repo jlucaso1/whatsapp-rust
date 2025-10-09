@@ -1,0 +1,13 @@
+DROP TABLE signed_prekeys;
+DROP TABLE device;
+DROP TABLE app_state_versions;
+DROP TABLE app_state_keys;
+DROP TABLE sender_keys;
+DROP TABLE prekeys;
+DROP TABLE sessions;
+DROP TABLE identities;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS chat_messages;
+DROP TABLE IF EXISTS chat_participants;
+DROP TABLE IF EXISTS chat_conversations;
+DROP TABLE IF EXISTS app_state_mutation_macs;

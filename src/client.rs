@@ -1397,7 +1397,7 @@ mod tests {
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
