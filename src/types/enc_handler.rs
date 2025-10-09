@@ -72,9 +72,11 @@ mod tests {
         );
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
+        let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .with_enc_handler("frskmsg", mock_handler)
             .build()
             .await
@@ -99,9 +101,11 @@ mod tests {
         );
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
+        let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .with_enc_handler("frskmsg", handler1)
             .with_enc_handler("customtype", handler2)
             .build()
@@ -126,9 +130,11 @@ mod tests {
         );
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
+        let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
         let bot = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport)
+            .with_http_client(http_client)
             .build()
             .await
             .expect("Failed to build bot");

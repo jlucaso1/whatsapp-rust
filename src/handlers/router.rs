@@ -129,6 +129,23 @@ mod tests {
         router.register(handler2); // Should panic
     }
 
+    // Mock HTTP client for tests
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl crate::http::HttpClient for MockHttpClient {
+        async fn execute(
+            &self,
+            _request: crate::http::HttpRequest,
+        ) -> anyhow::Result<crate::http::HttpResponse> {
+            Ok(crate::http::HttpResponse {
+                status_code: 200,
+                body: Vec::new(),
+            })
+        }
+    }
+
     #[tokio::test]
     async fn test_router_dispatch_found() {
         let mut router = StanzaRouter::new();
@@ -153,7 +170,8 @@ mod tests {
         ) as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport).await;
+        let http_client = Arc::new(MockHttpClient);
+        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport, http_client).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node, &mut cancelled).await;
@@ -182,7 +200,8 @@ mod tests {
         ) as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport).await;
+        let http_client = Arc::new(MockHttpClient);
+        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport, http_client).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node, &mut cancelled).await;

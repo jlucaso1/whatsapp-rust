@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::*;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 // Example: A hypothetical Redis-based backend
 #[allow(dead_code)]
@@ -282,8 +284,17 @@ async fn example_usage() -> Result<(), Box<dyn std::error::Error>> {
     // Create a custom Redis backend
     let redis_backend = Arc::new(RedisBackend::new("redis://localhost:6379"));
 
+    // Create transport and HTTP client
+    let transport = TokioWebSocketTransportFactory::new();
+    let http_client = UreqHttpClient::new();
+
     // Create a bot using the custom backend
-    let _bot = Bot::builder().with_backend(redis_backend).build().await?;
+    let _bot = Bot::builder()
+        .with_backend(redis_backend)
+        .with_transport_factory(transport)
+        .with_http_client(http_client)
+        .build()
+        .await?;
 
     // The bot now uses Redis for all storage operations!
     println!("Bot created with Redis backend!");
