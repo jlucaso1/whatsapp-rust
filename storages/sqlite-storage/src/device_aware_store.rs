@@ -1,5 +1,5 @@
 use super::sqlite_store::SqliteStore;
-use crate::store::schema::*;
+use crate::schema::*;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use prost::Message;

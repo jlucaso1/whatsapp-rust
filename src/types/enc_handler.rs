@@ -66,7 +66,7 @@ mod tests {
 
         // Build bot with custom handler and in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );
@@ -95,7 +95,7 @@ mod tests {
 
         // Build bot with in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );
@@ -124,7 +124,7 @@ mod tests {
 
         // Build bot without custom handlers but with in-memory DB
         let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new(":memory:")
                 .await
                 .expect("Failed to create SQLite backend"),
         );

@@ -163,11 +163,8 @@ mod tests {
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
+            as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
@@ -193,11 +190,8 @@ mod tests {
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = Arc::new(
-            crate::store::sqlite_store::SqliteStore::new(":memory:")
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
+            as Arc<dyn crate::store::traits::Backend>;
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);

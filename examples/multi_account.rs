@@ -3,7 +3,7 @@ use log::{debug, error, info};
 use std::sync::Arc;
 use wacore::types::events::Event;
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::store::traits::Backend;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
