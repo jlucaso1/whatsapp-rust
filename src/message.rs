@@ -752,8 +752,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::store::sqlite_store::SqliteStore;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
     use wacore_binary::jid::Jid;
@@ -979,7 +979,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires valid whatsapp.db with active session to reproduce. This is a known issue documented in README.md"]
     async fn test_lid_group_message_without_session() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
         use wacore_binary::jid::Jid;
@@ -1057,7 +1057,7 @@ mod tests {
     /// 3. Attempting retrieval with LID address (the fix) - should succeed
     #[tokio::test]
     async fn test_self_sent_lid_group_message_sender_key_mismatch() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             SenderKeyStore, create_sender_key_distribution_message,
@@ -1164,7 +1164,7 @@ mod tests {
     /// sender key stored under their LID address, not mixed up with phone numbers.
     #[tokio::test]
     async fn test_multiple_lid_participants_sender_key_isolation() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             SenderKeyStore, create_sender_key_distribution_message,
@@ -1340,7 +1340,7 @@ mod tests {
     /// - Mixed addressing modes
     #[tokio::test]
     async fn test_parse_message_info_sender_alt_extraction() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
 
@@ -1552,7 +1552,7 @@ mod tests {
     /// regardless of what JID is used for E2E session decryption
     #[tokio::test]
     async fn test_sender_key_always_uses_display_jid() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{SenderKeyStore, create_sender_key_distribution_message};
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
@@ -1628,7 +1628,7 @@ mod tests {
     /// causing it to skip skmsg decryption for all messages after the first.
     #[tokio::test]
     async fn test_second_message_with_only_skmsg_decrypts() {
-        use crate::store::sqlite_store::SqliteStore;
+        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             create_sender_key_distribution_message, process_sender_key_distribution_message,

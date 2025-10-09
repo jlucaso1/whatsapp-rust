@@ -1,3 +1,8 @@
+#[cfg(not(feature = "sqlite-storage"))]
+compile_error!(
+    "This binary requires the 'sqlite-storage' feature. Build with --features sqlite-storage"
+);
+
 use chrono::Local;
 use log::{error, info};
 use std::io::Cursor;
@@ -7,7 +12,7 @@ use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::upload::UploadResponse;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;

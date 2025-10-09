@@ -8,19 +8,32 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 - ✅ **End-to-End Encrypted Messaging:** Robust support for the Signal Protocol, enabling E2E encrypted communication for both one-on-one and group chats.
 - ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
 - ✅ **Runtime Agnostic:** Abstracted transport layer allows use with any async runtime or platform (Tokio, async-std, WASM, etc.).
-- ✅ **Flexible Storage Architecture:** Supports custom storage backends (PostgreSQL, MongoDB, Redis, etc.) through a clean trait-based interface, while maintaining SQLite as the default.
-- ✅ **Persistent State:** Uses Diesel and SQLite for durable session state by default, ensuring the client can resume sessions after a restart.
+- ✅ **Flexible Storage Architecture:** Storage-agnostic core with pluggable backends. SQLite provided by default, but supports custom implementations (PostgreSQL, MongoDB, Redis, browser storage, etc.) through a clean trait-based interface.
+- ✅ **WASM Compatible:** Core library is free of C dependencies and ready for WebAssembly compilation. See [WASM.md](WASM.md) for details on WASM support.
+- ✅ **Persistent State:** SQLite backend (when enabled) uses Diesel for durable session state, ensuring the client can resume sessions after a restart.
 - ✅ **Asynchronous by Design:** Supports efficient, non-blocking I/O and concurrent task handling with any async runtime through pluggable transport implementations.
 
 ## Storage Backends
 
 The library uses a clean, trait-based storage architecture. You must provide a storage backend implementation when creating a bot.
 
-### Using SQLite (Default Implementation)
+The core library (`whatsapp-rust`) is **storage-agnostic** and can be compiled without any specific storage implementation, making it suitable for WebAssembly and other constrained environments. Storage backends are provided as separate crates.
 
+### Using SQLite (Default)
+
+The SQLite backend is provided by the `whatsapp-rust-sqlite-storage` crate and is included by default through the `sqlite-storage` feature flag.
+
+**In your `Cargo.toml`:**
+```toml
+[dependencies]
+whatsapp-rust = "0.1"  # sqlite-storage feature is enabled by default
+whatsapp-rust-tokio-transport = "0.1"
+```
+
+**In your code:**
 ```rust
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 
@@ -38,7 +51,7 @@ let bot = Bot::builder()
 
 ```rust
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 
@@ -58,6 +71,22 @@ let bot = Bot::builder()
     .build()
     .await?;
 ```
+
+### Building Without SQLite (e.g., for WebAssembly)
+
+To compile the library without SQLite dependencies (for WASM or other constrained environments), disable the default features:
+
+```toml
+[dependencies]
+whatsapp-rust = { version = "0.1", default-features = false }
+```
+
+You can then provide your own storage backend by implementing the `wacore::store::traits::Backend` trait. This allows you to use:
+- Browser storage APIs (localStorage, IndexedDB) for WASM
+- PostgreSQL, MongoDB, Redis, or other databases
+- In-memory storage for testing
+
+**Note:** For complete WASM support, you'll also need WASM-compatible transport and HTTP implementations. See [WASM.md](WASM.md) for a full guide on WebAssembly support.
 
 ### Custom Backend Implementation
 
@@ -87,7 +116,7 @@ The library uses an abstracted transport layer, making it platform-agnostic. You
 
 ```rust
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::sqlite_store::SqliteStore;
+use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use std::sync::Arc;
 

@@ -1,5 +1,4 @@
-use crate::store::schema::*;
-use crate::store::traits::*;
+use crate::schema::*;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -12,6 +11,7 @@ use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::AppStateMutationMAC;
+use wacore::store::traits::*;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 use wacore::store::Device as CoreDevice;
@@ -481,7 +481,7 @@ impl SqliteStore {
 
     /// Create a new device entry in the database and return its ID
     pub async fn create_new_device(&self) -> Result<i32> {
-        use crate::store::schema::device;
+        use crate::schema::device;
 
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<i32> {
@@ -556,7 +556,7 @@ impl SqliteStore {
 
     /// Check if a device with the given ID exists
     pub async fn device_exists(&self, device_id: i32) -> Result<bool> {
-        use crate::store::schema::device;
+        use crate::schema::device;
 
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<bool> {
@@ -578,7 +578,7 @@ impl SqliteStore {
 
     /// List all device IDs in the database
     pub async fn list_device_ids(&self) -> Result<Vec<i32>> {
-        use crate::store::schema::device;
+        use crate::schema::device;
 
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<i32>> {
@@ -599,7 +599,7 @@ impl SqliteStore {
 
     /// Delete a device and all its associated data
     pub async fn delete_device(&self, device_id: i32) -> Result<()> {
-        use crate::store::schema::*;
+        use crate::schema::*;
 
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -666,7 +666,7 @@ impl SqliteStore {
 
     /// Load device data for a specific device ID
     pub async fn load_device_data_for_device(&self, device_id: i32) -> Result<Option<CoreDevice>> {
-        use crate::store::schema::device;
+        use crate::schema::device;
 
         let pool = self.pool.clone();
         let row = tokio::task::spawn_blocking(move || -> Result<Option<DeviceRow>> {

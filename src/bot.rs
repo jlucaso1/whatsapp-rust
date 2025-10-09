@@ -402,7 +402,7 @@ impl BotBuilder {
 mod tests {
     use super::*;
     use crate::http::{HttpClient, HttpRequest, HttpResponse};
-    use crate::store::sqlite_store::SqliteStore;
+    use crate::store::SqliteStore;
     use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
     // Mock HTTP client for testing
