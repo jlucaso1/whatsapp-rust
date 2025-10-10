@@ -1,7 +1,6 @@
 use crate::client::Client;
 use log::debug;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::NodeContent;
 
@@ -9,18 +8,14 @@ impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         debug!("get_user_devices: Using normal mode for {jids:?}");
 
-        const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour TTL
         let mut jids_to_fetch: HashSet<Jid> = HashSet::new();
         let mut all_devices = Vec::new();
 
         // 1. Check the cache first
         for jid in jids.iter().map(|j| j.to_non_ad()) {
-            if let Some(entry) = self.device_cache.get(&jid) {
-                let (cached_devices, fetched_at) = &*entry;
-                if fetched_at.elapsed() < CACHE_TTL {
-                    all_devices.extend_from_slice(cached_devices);
-                    continue; // Found fresh entry, skip network fetch
-                }
+            if let Some(cached_devices) = self.device_cache.get(&jid).await {
+                all_devices.extend(cached_devices);
+                continue; // Found fresh entry, skip network fetch
             }
             // Not in cache or stale, add to the fetch set (de-duplicated)
             jids_to_fetch.insert(jid);
@@ -60,8 +55,7 @@ impl Client {
             }
 
             for (user_jid, devices) in devices_by_user {
-                self.device_cache
-                    .insert(user_jid, (devices, Instant::now()));
+                self.device_cache.insert(user_jid, devices).await;
             }
             all_devices.extend(fetched_devices);
         }

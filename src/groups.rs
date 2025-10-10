@@ -5,8 +5,8 @@ use wacore_binary::jid::Jid;
 
 impl Client {
     pub async fn query_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
-        if let Some(cached) = self.group_cache.get(jid) {
-            return Ok(cached.value().clone());
+        if let Some(cached) = self.group_cache.get(jid).await {
+            return Ok(cached);
         }
 
         use wacore_binary::node::NodeContent;
@@ -58,7 +58,7 @@ impl Client {
         if !lid_to_pn_map.is_empty() {
             info.set_lid_to_pn_map(lid_to_pn_map);
         }
-        self.group_cache.insert(jid.clone(), info.clone());
+        self.group_cache.insert(jid.clone(), info.clone()).await;
 
         Ok(info)
     }
