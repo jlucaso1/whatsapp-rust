@@ -42,7 +42,7 @@ impl NoiseSocket {
         &self,
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         self.encrypt_into(&plaintext_buf, &mut out_buf)?;
         plaintext_buf.clear();
 
@@ -54,7 +54,9 @@ impl NoiseSocket {
             .send(&framed)
             .await
             .map_err(|e| SocketError::Crypto(e.to_string()))?;
-        Ok(plaintext_buf)
+
+        out_buf.clear();
+        Ok((plaintext_buf, out_buf))
     }
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
@@ -63,5 +65,61 @@ impl NoiseSocket {
         self.read_key
             .decrypt(iv.as_ref().into(), ciphertext)
             .map_err(|e| SocketError::Crypto(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wacore::aes_gcm::{Aes256Gcm, KeyInit};
+
+    #[tokio::test]
+    async fn test_encrypt_and_send_returns_both_buffers() {
+        // Create a mock transport
+        let transport = Arc::new(crate::transport::mock::MockTransport);
+
+        // Create dummy keys for testing
+        let key = [0u8; 32];
+        let write_key = Aes256Gcm::new_from_slice(&key).unwrap();
+        let read_key = Aes256Gcm::new_from_slice(&key).unwrap();
+
+        let socket = NoiseSocket::new(transport, write_key, read_key);
+
+        // Create buffers with some initial capacity
+        let plaintext_buf = Vec::with_capacity(1024);
+        let encrypted_buf = Vec::with_capacity(1024);
+
+        // Store the capacities for verification
+        let plaintext_capacity = plaintext_buf.capacity();
+        let encrypted_capacity = encrypted_buf.capacity();
+
+        // Call encrypt_and_send - this should return both buffers
+        let result = socket.encrypt_and_send(plaintext_buf, encrypted_buf).await;
+
+        assert!(result.is_ok(), "encrypt_and_send should succeed");
+
+        let (returned_plaintext, returned_encrypted) = result.unwrap();
+
+        // Verify both buffers are returned
+        assert_eq!(
+            returned_plaintext.capacity(),
+            plaintext_capacity,
+            "Plaintext buffer should maintain its capacity"
+        );
+        assert_eq!(
+            returned_encrypted.capacity(),
+            encrypted_capacity,
+            "Encrypted buffer should maintain its capacity"
+        );
+
+        // Verify buffers are cleared
+        assert!(
+            returned_plaintext.is_empty(),
+            "Returned plaintext buffer should be cleared"
+        );
+        assert!(
+            returned_encrypted.is_empty(),
+            "Returned encrypted buffer should be cleared"
+        );
     }
 }
