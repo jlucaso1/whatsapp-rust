@@ -10,7 +10,9 @@ use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand_core::OsRng;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::SystemTime;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -156,7 +158,7 @@ where
                 stores.identity_store,
                 bundle,
                 SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut OsRng.unwrap_err(),
                 UsePQRatchet::No,
             )
             .await?;
@@ -261,7 +263,7 @@ where
                 &mut identity_store_clone,
                 bundle,
                 SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut OsRng.unwrap_err(),
                 UsePQRatchet::No,
             )
             .await?;
@@ -269,28 +271,36 @@ where
     }
 
     // Now encrypt for all devices in parallel
-    let plaintext_bytes = plaintext_to_encrypt.to_vec();
+    // Use Arc to share plaintext without cloning for each task
+    let plaintext_arc: Arc<[u8]> = Arc::from(plaintext_to_encrypt);
     let enc_extra_attrs_owned = enc_extra_attrs.clone();
 
     let encryption_tasks: Vec<_> = devices
         .iter()
         .map(|device_jid| {
             let device_jid = device_jid.clone();
-            let plaintext = plaintext_bytes.clone();
+            let plaintext = Arc::clone(&plaintext_arc);
             let extra_attrs = enc_extra_attrs_owned.clone();
             let mut session_store = stores.session_store.clone();
             let mut identity_store = stores.identity_store.clone();
 
             async move {
                 let signal_address = device_jid.to_protocol_address();
-                let encrypted_payload = message_encrypt(
+                let encrypted_payload = match message_encrypt(
                     &plaintext,
                     &signal_address,
                     &mut session_store,
                     &mut identity_store,
                     SystemTime::now(),
                 )
-                .await?;
+                .await
+                {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        log::warn!("Failed to encrypt for device {}: {}", device_jid, e);
+                        return Ok(None);
+                    }
+                };
 
                 let (is_prekey, enc_type, serialized_bytes) = match encrypted_payload {
                     CiphertextMessage::PreKeySignalMessage(msg) => {
@@ -325,16 +335,25 @@ where
         .collect();
 
     // Execute all encryption tasks concurrently
-    let results = futures::future::join_all(encryption_tasks).await;
+    let results = futures_util::future::join_all(encryption_tasks).await;
 
     let mut participant_nodes = Vec::new();
     let mut includes_prekey_message = false;
 
     for result in results {
-        let result = result?;
-        if let Some((node, is_prekey)) = result {
-            participant_nodes.push(node);
-            includes_prekey_message = includes_prekey_message || is_prekey;
+        match result {
+            Ok(Some((node, is_prekey))) => {
+                participant_nodes.push(node);
+                includes_prekey_message = includes_prekey_message || is_prekey;
+            }
+            Ok(None) => {
+                // Device encryption was skipped or failed non-fatally
+                continue;
+            }
+            Err(e) => {
+                // Log the error but continue processing other devices
+                log::error!("Error processing device encryption result: {}", e);
+            }
         }
     }
 
@@ -766,7 +785,7 @@ pub async fn prepare_group_stanza<
         &to_jid,
         &own_sending_jid,
         &plaintext,
-        &mut rand::rngs::OsRng.unwrap_err(),
+        &mut OsRng.unwrap_err(),
     )
     .await?;
 
@@ -963,7 +982,7 @@ pub async fn prepare_group_stanza_parallel<
         &to_jid,
         &own_sending_jid,
         &plaintext,
-        &mut rand::rngs::OsRng.unwrap_err(),
+        &mut OsRng.unwrap_err(),
     )
     .await?;
 
@@ -1031,7 +1050,7 @@ pub async fn create_sender_key_distribution_message_for_group(
             group_jid
         );
 
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = OsRng.unwrap_err();
         let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
 
         let chain_id = (rng.random::<u32>()) >> 1;

@@ -35,7 +35,7 @@ derive_more = { version = "2.0.1", features = [
 ] }
 displaydoc = "0.2.5"
 flate2 = { workspace = true }
-futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 ghash = "0.5.1"
 hex = { version = "0.4", features = ["alloc"], default-features = false }
