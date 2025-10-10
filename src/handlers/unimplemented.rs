@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::node::NodeRef;
 
 /// Handler for stanza types that are not yet fully implemented.
 ///
@@ -46,8 +46,8 @@ impl StanzaHandler for UnimplementedHandler {
         }
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
-        client.handle_unimplemented(&node.tag).await;
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        client.handle_unimplemented(node.tag.as_ref()).await;
         true
     }
 }

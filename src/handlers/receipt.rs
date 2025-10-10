@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::node::NodeRef;
 
 /// Handler for `<receipt>` stanzas.
 ///
@@ -25,8 +25,8 @@ impl StanzaHandler for ReceiptHandler {
         "receipt"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
-        client.handle_receipt(node).await;
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        client.handle_receipt_ref(node).await;
         true
     }
 }

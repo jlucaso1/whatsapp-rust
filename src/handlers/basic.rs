@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::node::NodeRef;
 
 /// Handler for `<success>` stanzas.
 ///
@@ -22,8 +22,8 @@ impl StanzaHandler for SuccessHandler {
         "success"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
-        client.handle_success(node).await;
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        client.handle_success_ref(node).await;
         true
     }
 }
@@ -46,8 +46,8 @@ impl StanzaHandler for FailureHandler {
         "failure"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
-        client.handle_connect_failure(node).await;
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        client.handle_connect_failure_ref(node).await;
         true
     }
 }
@@ -70,8 +70,8 @@ impl StanzaHandler for StreamErrorHandler {
         "stream:error"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
-        client.handle_stream_error(node).await;
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        client.handle_stream_error_ref(node).await;
         true
     }
 }
@@ -94,11 +94,11 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(&self, _client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
+    async fn handle(&self, _client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
         use log::info;
-        use wacore::xml::DisplayableNode;
+        use wacore::xml::DisplayableNodeRef;
 
-        info!(target: "Client/Recv", "Received ACK node: {}", DisplayableNode(node));
+        info!(target: "Client/Recv", "Received ACK node: {}", DisplayableNodeRef(node));
         true
     }
 }

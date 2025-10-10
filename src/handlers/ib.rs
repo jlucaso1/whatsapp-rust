@@ -4,7 +4,7 @@ use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::node::NodeRef;
 
 /// Handler for `<ib>` (information broadcast) stanzas.
 ///
@@ -33,17 +33,17 @@ impl StanzaHandler for IbHandler {
         "ib"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
         handle_ib_impl(client, node).await;
         true
     }
 }
 
-async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
+async fn handle_ib_impl(client: Arc<Client>, node: &NodeRef<'_>) {
     for child in node.children().unwrap_or_default() {
-        match child.tag.as_str() {
+        match child.tag.as_ref() {
             "dirty" => {
-                let mut attrs = child.attrs();
+                let mut attrs = child.attr_parser();
                 let dirty_type = attrs.string("type");
 
                 info!(
@@ -55,7 +55,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 info!(target: "Client", "Received edge routing info, ignoring for now.");
             }
             "offline_preview" => {
-                let mut attrs = child.attrs();
+                let mut attrs = child.attr_parser();
                 let total = attrs.optional_u64("count").unwrap_or(0) as i32;
                 let app_data_changes = attrs.optional_u64("appdata").unwrap_or(0) as i32;
                 let messages = attrs.optional_u64("message").unwrap_or(0) as i32;
@@ -80,7 +80,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                     }));
             }
             "offline" => {
-                let mut attrs = child.attrs();
+                let mut attrs = child.attr_parser();
                 let count = attrs.optional_u64("count").unwrap_or(0) as i32;
 
                 info!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
