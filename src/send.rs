@@ -110,16 +110,16 @@ impl Client {
 
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
 
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
+            let stores = wacore::send::CloneableSignalStores {
+                session_store: store_adapter.session_store.clone(),
+                identity_store: store_adapter.identity_store.clone(),
+                prekey_store: store_adapter.pre_key_store.clone(),
+                signed_prekey_store: store_adapter.signed_pre_key_store.clone(),
             };
 
-            match wacore::send::prepare_group_stanza(
-                &mut stores,
+            match wacore::send::prepare_group_stanza_parallel(
+                &stores,
+                &mut store_adapter.sender_key_store,
                 self,
                 &mut group_info,
                 &own_jid,
@@ -142,16 +142,16 @@ impl Client {
 
                         let mut store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
-                        let mut stores_retry = wacore::send::SignalStores {
-                            session_store: &mut store_adapter_retry.session_store,
-                            identity_store: &mut store_adapter_retry.identity_store,
-                            prekey_store: &mut store_adapter_retry.pre_key_store,
-                            signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
-                            sender_key_store: &mut store_adapter_retry.sender_key_store,
+                        let stores_retry = wacore::send::CloneableSignalStores {
+                            session_store: store_adapter_retry.session_store.clone(),
+                            identity_store: store_adapter_retry.identity_store.clone(),
+                            prekey_store: store_adapter_retry.pre_key_store.clone(),
+                            signed_prekey_store: store_adapter_retry.signed_pre_key_store.clone(),
                         };
 
-                        wacore::send::prepare_group_stanza(
-                            &mut stores_retry,
+                        wacore::send::prepare_group_stanza_parallel(
+                            &stores_retry,
+                            &mut store_adapter_retry.sender_key_store,
                             self,
                             &mut group_info,
                             &own_jid,
@@ -182,18 +182,17 @@ impl Client {
             let account_info = device_snapshot.account.clone();
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
+            let store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
+            let stores = wacore::send::CloneableSignalStores {
+                session_store: store_adapter.session_store.clone(),
+                identity_store: store_adapter.identity_store.clone(),
+                prekey_store: store_adapter.pre_key_store.clone(),
+                signed_prekey_store: store_adapter.signed_pre_key_store.clone(),
             };
 
-            wacore::send::prepare_dm_stanza(
-                &mut stores,
+            wacore::send::prepare_dm_stanza_parallel(
+                &stores,
                 self,
                 &own_jid,
                 account_info.as_ref(),

@@ -76,6 +76,7 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
+        // Use read lock since backend operations handle their own synchronization
         let device = self.0.device.read().await;
         let record_bytes = record.serialize()?;
         device
