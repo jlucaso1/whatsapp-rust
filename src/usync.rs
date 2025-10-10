@@ -1,7 +1,6 @@
 use crate::client::Client;
 use log::debug;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::NodeContent;
 
@@ -9,18 +8,14 @@ impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         debug!("get_user_devices: Using normal mode for {jids:?}");
 
-        const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour TTL
         let mut jids_to_fetch: HashSet<Jid> = HashSet::new();
         let mut all_devices = Vec::new();
 
         // 1. Check the cache first
         for jid in jids.iter().map(|j| j.to_non_ad()) {
-            if let Some(entry) = self.device_cache.get(&jid) {
-                let (cached_devices, fetched_at) = &*entry;
-                if fetched_at.elapsed() < CACHE_TTL {
-                    all_devices.extend_from_slice(cached_devices);
-                    continue; // Found fresh entry, skip network fetch
-                }
+            if let Some(cached_devices) = self.device_cache.get(&jid).await {
+                all_devices.extend(cached_devices);
+                continue; // Found fresh entry, skip network fetch
             }
             // Not in cache or stale, add to the fetch set (de-duplicated)
             jids_to_fetch.insert(jid);
@@ -60,12 +55,90 @@ impl Client {
             }
 
             for (user_jid, devices) in devices_by_user {
-                self.device_cache
-                    .insert(user_jid, (devices, Instant::now()));
+                self.device_cache.insert(user_jid, devices).await;
             }
             all_devices.extend(fetched_devices);
         }
 
         Ok(all_devices)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_device_cache_hit() {
+        // Create a mock client
+        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
+            as Arc<dyn crate::store::traits::Backend>;
+        let pm = Arc::new(
+            crate::store::persistence_manager::PersistenceManager::new(backend)
+                .await
+                .unwrap(),
+        );
+
+        let (client, _sync_rx) = crate::client::Client::new(
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+        )
+        .await;
+
+        let test_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let device_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+
+        // Manually insert into cache
+        client
+            .device_cache
+            .insert(test_jid.clone(), vec![device_jid.clone()])
+            .await;
+
+        // Verify cache hit
+        let cached = client.device_cache.get(&test_jid).await;
+        assert!(cached.is_some());
+        let cached_devices = cached.unwrap();
+        assert_eq!(cached_devices.len(), 1);
+        assert_eq!(cached_devices[0], device_jid);
+    }
+
+    #[tokio::test]
+    async fn test_cache_size_eviction() {
+        use moka::future::Cache;
+
+        // Create a small cache
+        let cache: Cache<i32, String> = Cache::builder().max_capacity(2).build();
+
+        // Insert 3 items
+        cache.insert(1, "one".to_string()).await;
+        cache.insert(2, "two".to_string()).await;
+        cache.insert(3, "three".to_string()).await;
+
+        // Give time for eviction to occur
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // The cache should have at most 2 items
+        let count = cache.entry_count();
+        assert!(
+            count <= 2,
+            "Cache should have at most 2 items, has {}",
+            count
+        );
+    }
+
+    // Mock HTTP client for tests
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl crate::http::HttpClient for MockHttpClient {
+        async fn execute(
+            &self,
+            _request: crate::http::HttpRequest,
+        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
+            Err(anyhow::anyhow!("Not implemented"))
+        }
     }
 }

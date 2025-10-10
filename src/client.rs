@@ -4,6 +4,7 @@ use crate::handshake;
 use crate::pair;
 use anyhow::anyhow;
 use dashmap::DashMap;
+use moka::future::Cache;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
@@ -121,10 +122,10 @@ pub struct Client {
     pub(crate) id_counter: Arc<AtomicU64>,
 
     pub(crate) chat_locks: Arc<DashMap<Jid, Arc<tokio::sync::Mutex<()>>>>,
-    pub group_cache: Arc<DashMap<Jid, GroupInfo>>,
-    pub device_cache: Arc<DashMap<Jid, (Vec<Jid>, std::time::Instant)>>,
+    pub group_cache: Cache<Jid, GroupInfo>,
+    pub device_cache: Cache<Jid, Vec<Jid>>,
 
-    pub(crate) retried_group_messages: Arc<DashMap<String, ()>>,
+    pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
     pub(crate) recent_msg_tx: RecentMessageManagerHandle,
@@ -227,9 +228,18 @@ impl Client {
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             chat_locks: Arc::new(DashMap::new()),
-            group_cache: Arc::new(DashMap::new()),
-            device_cache: Arc::new(DashMap::new()),
-            retried_group_messages: Arc::new(DashMap::new()),
+            group_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(3600))
+                .max_capacity(1_000)
+                .build(),
+            device_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(3600))
+                .max_capacity(5_000)
+                .build(),
+            retried_group_messages: Cache::builder()
+                .time_to_live(Duration::from_secs(300))
+                .max_capacity(2_000)
+                .build(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
@@ -394,7 +404,7 @@ impl Client {
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
-        self.retried_group_messages.clear();
+        self.retried_group_messages.invalidate_all();
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
