@@ -72,11 +72,8 @@ mod tests {
     #[tokio::test]
     async fn test_device_cache_hit() {
         // Create a mock client
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .unwrap(),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
+            as Arc<dyn crate::store::traits::Backend>;
         let pm = Arc::new(
             crate::store::persistence_manager::PersistenceManager::new(backend)
                 .await
@@ -124,7 +121,11 @@ mod tests {
 
         // The cache should have at most 2 items
         let count = cache.entry_count();
-        assert!(count <= 2, "Cache should have at most 2 items, has {}", count);
+        assert!(
+            count <= 2,
+            "Cache should have at most 2 items, has {}",
+            count
+        );
     }
 
     // Mock HTTP client for tests
