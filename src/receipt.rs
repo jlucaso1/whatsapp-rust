@@ -6,7 +6,10 @@ use std::sync::Arc;
 use wacore_binary::jid::JidExt as _;
 
 impl Client {
-    pub(crate) async fn handle_receipt_ref(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
+    pub(crate) async fn handle_receipt_ref(
+        self: &Arc<Self>,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) {
         // Convert to owned for async operations
         self.handle_receipt(&node.to_owned()).await;
     }

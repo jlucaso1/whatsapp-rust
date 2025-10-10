@@ -46,7 +46,12 @@ impl StanzaRouter {
     /// Returns `true` if a handler was found and successfully processed the node,
     /// `false` if no handler was registered for the node's tag or the handler
     /// indicated it couldn't process the node.
-    pub async fn dispatch(&self, client: Arc<Client>, node: &NodeRef<'_>, cancelled: &mut bool) -> bool {
+    pub async fn dispatch(
+        &self,
+        client: Arc<Client>,
+        node: &NodeRef<'_>,
+        cancelled: &mut bool,
+    ) -> bool {
         if let Some(handler) = self.handlers.get(node.tag.as_ref()) {
             handler.handle(client, node, cancelled).await
         } else {
@@ -150,7 +155,7 @@ mod tests {
     async fn test_router_dispatch_found() {
         use std::borrow::Cow;
         use wacore_binary::node::{NodeContentRef, NodeRef};
-        
+
         let mut router = StanzaRouter::new();
         let handler = Arc::new(MockHandler::new("test"));
         let handler_ref = handler.clone();
@@ -185,7 +190,7 @@ mod tests {
     async fn test_router_dispatch_not_found() {
         use std::borrow::Cow;
         use wacore_binary::node::{NodeContentRef, NodeRef};
-        
+
         let router = StanzaRouter::new();
 
         // Create a NodeRef directly

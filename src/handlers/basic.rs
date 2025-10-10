@@ -94,7 +94,12 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(&self, _client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+    async fn handle(
+        &self,
+        _client: Arc<Client>,
+        node: &NodeRef<'_>,
+        _cancelled: &mut bool,
+    ) -> bool {
         use log::info;
         use wacore::xml::DisplayableNodeRef;
 

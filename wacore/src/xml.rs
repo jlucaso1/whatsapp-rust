@@ -3,7 +3,7 @@ use wacore_binary::node::{Attrs, AttrsRef, Node, NodeContent, NodeContentRef, No
 
 pub struct DisplayableNode<'a>(pub &'a Node);
 
-pub struct DisplayableNodeRef<'a>(pub &'a NodeRef<'a>);
+pub struct DisplayableNodeRef<'a, 'b>(pub &'a NodeRef<'b>);
 
 fn get_printable_str(data: &[u8]) -> Option<&str> {
     let s = std::str::from_utf8(data).ok()?;
@@ -75,7 +75,10 @@ fn format_attributes_ref(attrs: &AttrsRef<'_>) -> String {
     result
 }
 
-fn format_content_lines_ref(content: &Option<Box<NodeContentRef<'_>>>, indent: bool) -> Vec<String> {
+fn format_content_lines_ref<'a>(
+    content: &Option<Box<NodeContentRef<'a>>>,
+    indent: bool,
+) -> Vec<String> {
     match content.as_deref() {
         Some(NodeContentRef::Nodes(nodes)) => nodes
             .iter()
@@ -136,7 +139,7 @@ impl<'a> fmt::Display for DisplayableNode<'a> {
     }
 }
 
-impl<'a> fmt::Display for DisplayableNodeRef<'a> {
+impl<'a, 'b> fmt::Display for DisplayableNodeRef<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let node = self.0;
         let indent_xml = false;

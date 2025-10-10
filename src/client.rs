@@ -535,7 +535,7 @@ impl Client {
 
     pub(crate) async fn process_node(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
         use wacore::xml::DisplayableNodeRef;
-        
+
         if node.tag.as_ref() == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
@@ -669,7 +669,10 @@ impl Client {
     }
 
     /// Build and send an <ack/> node corresponding to the given NodeRef stanza.
-    async fn send_ack_for_ref(&self, node: &wacore_binary::node::NodeRef<'_>) -> Result<(), ClientError> {
+    async fn send_ack_for_ref(
+        &self,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) -> Result<(), ClientError> {
         let id = match node.get_attr("id") {
             Some(v) => v.to_string(),
             None => return Ok(()),
@@ -727,7 +730,10 @@ impl Client {
         self.send_iq(query).await.map(|_| ())
     }
 
-    pub(crate) async fn handle_success_ref(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
+    pub(crate) async fn handle_success_ref(
+        self: &Arc<Self>,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) {
         // Convert to owned node for async operations
         self.handle_success(&node.to_owned()).await;
     }
@@ -1250,7 +1256,10 @@ impl Client {
         }
     }
 
-    pub(crate) async fn handle_iq_ref(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) -> bool {
+    pub(crate) async fn handle_iq_ref(
+        self: &Arc<Self>,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) -> bool {
         if let Some("get") = node.attr_parser().optional_string("type")
             && let Some(_ping_node) = node.get_optional_child("ping")
         {

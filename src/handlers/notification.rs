@@ -34,9 +34,9 @@ impl StanzaHandler for NotificationHandler {
 }
 
 async fn handle_notification_impl(client: &Arc<Client>, node: &NodeRef<'_>) {
-    let notification_type = node.get_attr("type").map(|s| s.to_string()).unwrap_or_default();
+    let notification_type = node.get_attr("type").map(|s| s.as_ref()).unwrap_or("");
 
-    match notification_type.as_str() {
+    match notification_type {
         "encrypt" => {
             if let Some(from) = node.get_attr("from")
                 && from.as_ref() == SERVER_JID
