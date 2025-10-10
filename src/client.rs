@@ -526,38 +526,40 @@ impl Client {
 
         match wacore_binary::marshal::unmarshal_ref(unpacked_data_cow.as_ref()) {
             Ok(node_ref) => {
-                let node = node_ref.to_owned();
-                self.process_node(&node).await;
+                // Pass NodeRef directly to process_node to avoid allocation
+                self.process_node(&node_ref).await;
             }
             Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
         };
     }
 
-    pub(crate) async fn process_node(self: &Arc<Self>, node: &Node) {
-        if node.tag == "iq"
+    pub(crate) async fn process_node(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
+        use wacore::xml::DisplayableNodeRef;
+
+        if node.tag.as_ref() == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
-            let name = collection_node.attrs().string("name");
+            let name = collection_node.attr_parser().string("name");
             info!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            info!(target: "Client/Recv","{}", DisplayableNode(node));
+            info!(target: "Client/Recv","{}", DisplayableNodeRef(node));
         }
 
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
         let mut cancelled = false;
 
-        if node.tag == "xmlstreamend" {
+        if node.tag.as_ref() == "xmlstreamend" {
             warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
             self.shutdown_notifier.notify_one();
             return;
         }
 
-        if node.tag == "iq" {
-            let id_opt = node.attrs.get("id");
+        if node.tag.as_ref() == "iq" {
+            let id_opt = node.get_attr("id");
             if let Some(id) = id_opt {
-                let has_waiter = self.response_waiters.lock().await.contains_key(id);
-                if has_waiter && self.handle_iq_response(node.clone()).await {
+                let has_waiter = self.response_waiters.lock().await.contains_key(id.as_ref());
+                if has_waiter && self.handle_iq_response(node.to_owned()).await {
                     return;
                 }
             }
@@ -569,34 +571,34 @@ impl Client {
             .dispatch(self.clone(), node, &mut cancelled)
             .await
         {
-            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(node));
+            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNodeRef(node));
         }
 
         // Send the deferred ACK if applicable and not cancelled by handler
-        if self.should_ack(node) && !cancelled {
-            self.maybe_deferred_ack(node).await;
+        if self.should_ack_ref(node) && !cancelled {
+            self.maybe_deferred_ack_ref(node).await;
         }
     }
 
-    /// Determine if a node should be acknowledged with <ack/>.
-    fn should_ack(&self, node: &Node) -> bool {
+    /// Determine if a NodeRef should be acknowledged with <ack/>.
+    fn should_ack_ref(&self, node: &wacore_binary::node::NodeRef<'_>) -> bool {
         matches!(
-            node.tag.as_str(),
+            node.tag.as_ref(),
             "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
-            && node.attrs.contains_key("from")
+        ) && node.get_attr("id").is_some()
+            && node.get_attr("from").is_some()
     }
 
-    /// Possibly send a deferred ack: either immediately or via spawned task.
+    /// Possibly send a deferred ack from a NodeRef: either immediately or via spawned task.
     /// Handlers can cancel by setting `cancelled` to true.
-    async fn maybe_deferred_ack(self: &Arc<Self>, node: &Node) {
+    async fn maybe_deferred_ack_ref(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(node).await {
+            if let Err(e) = self.send_ack_for_ref(node).await {
                 warn!(target: "Client", "Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
-            let node_clone = node.clone();
+            let node_clone = node.to_owned();
             tokio::spawn(async move {
                 if let Err(e) = this.send_ack_for(&node_clone).await {
                     warn!(target: "Client", "Failed to send ack: {e:?}");
@@ -639,6 +641,43 @@ impl Client {
         self.send_node(ack).await
     }
 
+    /// Build and send an <ack/> node corresponding to the given NodeRef stanza.
+    async fn send_ack_for_ref(
+        &self,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) -> Result<(), ClientError> {
+        let id = match node.get_attr("id") {
+            Some(v) => v.to_string(),
+            None => return Ok(()),
+        };
+        let from = match node.get_attr("from") {
+            Some(v) => v.to_string(),
+            None => return Ok(()),
+        };
+        let participant = node.get_attr("participant").map(|v| v.to_string());
+        let typ = if node.tag.as_ref() != "message" {
+            node.get_attr("type").map(|v| v.to_string())
+        } else {
+            None
+        };
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("class".to_string(), node.tag.to_string());
+        attrs.insert("id".to_string(), id);
+        attrs.insert("to".to_string(), from);
+        if let Some(p) = participant {
+            attrs.insert("participant".to_string(), p);
+        }
+        if let Some(t) = typ {
+            attrs.insert("type".to_string(), t);
+        }
+        let ack = Node {
+            tag: "ack".to_string(),
+            attrs,
+            content: None,
+        };
+        self.send_node(ack).await
+    }
+
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {
         warn!(target: "Client", "TODO: Implement handler for <{tag}>");
     }
@@ -662,6 +701,14 @@ impl Client {
         };
 
         self.send_iq(query).await.map(|_| ())
+    }
+
+    pub(crate) async fn handle_success_ref(
+        self: &Arc<Self>,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) {
+        // Convert to owned node for async operations
+        self.handle_success(&node.to_owned()).await;
     }
 
     pub(crate) async fn handle_success(self: &Arc<Self>, node: &Node) {
@@ -1072,6 +1119,11 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
     }
 
+    pub(crate) async fn handle_stream_error_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
+        // Convert to owned node for async operations
+        self.handle_stream_error(&node.to_owned()).await;
+    }
+
     pub(crate) async fn handle_stream_error(&self, node: &Node) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
@@ -1117,6 +1169,11 @@ impl Client {
         }
 
         self.shutdown_notifier.notify_one();
+    }
+
+    pub(crate) async fn handle_connect_failure_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
+        // Convert to owned node for async operations
+        self.handle_connect_failure(&node.to_owned()).await;
     }
 
     pub(crate) async fn handle_connect_failure(&self, node: &Node) {
@@ -1172,12 +1229,15 @@ impl Client {
         }
     }
 
-    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
-        if let Some("get") = node.attrs().optional_string("type")
+    pub(crate) async fn handle_iq_ref(
+        self: &Arc<Self>,
+        node: &wacore_binary::node::NodeRef<'_>,
+    ) -> bool {
+        if let Some("get") = node.attr_parser().optional_string("type")
             && let Some(_ping_node) = node.get_optional_child("ping")
         {
             info!(target: "Client", "Received ping, sending pong.");
-            let mut parser = node.attrs();
+            let mut parser = node.attr_parser();
             let from_jid = parser.jid("from");
             let id = parser.string("id");
             let pong = NodeBuilder::new("iq")
@@ -1193,6 +1253,7 @@ impl Client {
             return true;
         }
 
+        // Pass NodeRef directly to pair handling
         if pair::handle_iq(self, node).await {
             return true;
         }
@@ -1385,7 +1446,6 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::builder::NodeBuilder;
 
     // Mock HTTP client for tests
     #[derive(Debug, Clone)]
@@ -1419,30 +1479,38 @@ mod tests {
         )
         .await;
 
-        // 2. A <receipt> stanza.
-        // These MUST be acknowledged for the server to know we've processed them.
-        let receipt_node = NodeBuilder::new("receipt")
-            .attr("from", "s.whatsapp.net")
-            .attr("id", "RCPT-1")
-            .build();
-
-        // 3. A <notification> stanza.
-        // These also require an acknowledgment.
-        let notification_node = NodeBuilder::new("notification")
-            .attr("from", "s.whatsapp.net")
-            .attr("id", "NOTIF-1")
-            .build();
-
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
+        // Create NodeRef directly for testing
+        use std::borrow::Cow;
+        use wacore_binary::node::{NodeContentRef, NodeRef};
+
+        let receipt_node_ref = NodeRef::new(
+            Cow::Borrowed("receipt"),
+            vec![
+                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("id"), Cow::Borrowed("RCPT-1")),
+            ],
+            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        );
+
+        let notification_node_ref = NodeRef::new(
+            Cow::Borrowed("notification"),
+            vec![
+                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("id"), Cow::Borrowed("NOTIF-1")),
+            ],
+            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        );
+
         assert!(
-            client.should_ack(&receipt_node),
-            "should_ack must still return TRUE for <receipt> stanzas."
+            client.should_ack_ref(&receipt_node_ref),
+            "should_ack_ref must still return TRUE for <receipt> stanzas."
         );
         assert!(
-            client.should_ack(&notification_node),
-            "should_ack must still return TRUE for <notification> stanzas."
+            client.should_ack_ref(&notification_node_ref),
+            "should_ack_ref must still return TRUE for <notification> stanzas."
         );
 
         info!(
