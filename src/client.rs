@@ -580,15 +580,6 @@ impl Client {
         }
     }
 
-    /// Determine if a node should be acknowledged with <ack/>.
-    fn should_ack(&self, node: &Node) -> bool {
-        matches!(
-            node.tag.as_str(),
-            "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
-            && node.attrs.contains_key("from")
-    }
-
     /// Determine if a NodeRef should be acknowledged with <ack/>.
     fn should_ack_ref(&self, node: &wacore_binary::node::NodeRef<'_>) -> bool {
         matches!(
@@ -596,24 +587,6 @@ impl Client {
             "message" | "receipt" | "notification" | "call"
         ) && node.get_attr("id").is_some()
             && node.get_attr("from").is_some()
-    }
-
-    /// Possibly send a deferred ack: either immediately or via spawned task.
-    /// Handlers can cancel by setting `cancelled` to true.
-    async fn maybe_deferred_ack(self: &Arc<Self>, node: &Node) {
-        if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(node).await {
-                warn!(target: "Client", "Failed to send ack: {e:?}");
-            }
-        } else {
-            let this = self.clone();
-            let node_clone = node.clone();
-            tokio::spawn(async move {
-                if let Err(e) = this.send_ack_for(&node_clone).await {
-                    warn!(target: "Client", "Failed to send ack: {e:?}");
-                }
-            });
-        }
     }
 
     /// Possibly send a deferred ack from a NodeRef: either immediately or via spawned task.
@@ -1280,36 +1253,7 @@ impl Client {
             return true;
         }
 
-        // Convert to owned node for pair handling
-        let node_owned = node.to_owned();
-        if pair::handle_iq(self, &node_owned).await {
-            return true;
-        }
-
-        false
-    }
-
-    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &Node) -> bool {
-        if let Some("get") = node.attrs().optional_string("type")
-            && let Some(_ping_node) = node.get_optional_child("ping")
-        {
-            info!(target: "Client", "Received ping, sending pong.");
-            let mut parser = node.attrs();
-            let from_jid = parser.jid("from");
-            let id = parser.string("id");
-            let pong = NodeBuilder::new("iq")
-                .attrs([
-                    ("to", from_jid.to_string()),
-                    ("id", id),
-                    ("type", "result".to_string()),
-                ])
-                .build();
-            if let Err(e) = self.send_node(pong).await {
-                warn!("Failed to send pong: {e:?}");
-            }
-            return true;
-        }
-
+        // Pass NodeRef directly to pair handling
         if pair::handle_iq(self, node).await {
             return true;
         }
@@ -1502,7 +1446,6 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::builder::NodeBuilder;
 
     // Mock HTTP client for tests
     #[derive(Debug, Clone)]
@@ -1536,30 +1479,38 @@ mod tests {
         )
         .await;
 
-        // 2. A <receipt> stanza.
-        // These MUST be acknowledged for the server to know we've processed them.
-        let receipt_node = NodeBuilder::new("receipt")
-            .attr("from", "s.whatsapp.net")
-            .attr("id", "RCPT-1")
-            .build();
-
-        // 3. A <notification> stanza.
-        // These also require an acknowledgment.
-        let notification_node = NodeBuilder::new("notification")
-            .attr("from", "s.whatsapp.net")
-            .attr("id", "NOTIF-1")
-            .build();
-
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
+        // Create NodeRef directly for testing
+        use std::borrow::Cow;
+        use wacore_binary::node::{NodeContentRef, NodeRef};
+
+        let receipt_node_ref = NodeRef::new(
+            Cow::Borrowed("receipt"),
+            vec![
+                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("id"), Cow::Borrowed("RCPT-1")),
+            ],
+            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        );
+
+        let notification_node_ref = NodeRef::new(
+            Cow::Borrowed("notification"),
+            vec![
+                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("id"), Cow::Borrowed("NOTIF-1")),
+            ],
+            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        );
+
         assert!(
-            client.should_ack(&receipt_node),
-            "should_ack must still return TRUE for <receipt> stanzas."
+            client.should_ack_ref(&receipt_node_ref),
+            "should_ack_ref must still return TRUE for <receipt> stanzas."
         );
         assert!(
-            client.should_ack(&notification_node),
-            "should_ack must still return TRUE for <notification> stanzas."
+            client.should_ack_ref(&notification_node_ref),
+            "should_ack_ref must still return TRUE for <notification> stanzas."
         );
 
         info!(

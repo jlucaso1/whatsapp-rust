@@ -75,7 +75,7 @@ impl Default for StanzaRouter {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use wacore_binary::node::{Node, NodeRef};
+    use wacore_binary::node::NodeRef;
 
     #[derive(Debug)]
     struct MockHandler {

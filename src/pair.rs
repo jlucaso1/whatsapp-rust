@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
 use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::node::{Node, NodeContent, NodeContentRef, NodeRef};
 use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
@@ -22,16 +22,22 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     PairUtils::make_qr_data(&device_state, ref_str)
 }
 
-pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
-    if node.attrs.get("from").cloned().unwrap_or_default() != "s.whatsapp.net" {
+pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
+    if node
+        .get_attr("from")
+        .map(|s| s.as_ref())
+        .unwrap_or_default()
+        != "s.whatsapp.net"
+    {
         return false;
     }
 
     if let Some(children) = node.children() {
         for child in children {
-            let handled = match child.tag.as_str() {
+            let handled = match child.tag.as_ref() {
                 "pair-device" => {
-                    if let Some(ack_node) = PairUtils::build_ack_node(node)
+                    // PairUtils::build_ack_node needs an owned Node
+                    if let Some(ack_node) = PairUtils::build_ack_node(&node.to_owned())
                         && let Err(e) = client.send_node(ack_node).await
                     {
                         warn!("Failed to send acknowledgement: {e:?}");
@@ -47,8 +53,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     };
 
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
-                            && let Ok(r) = String::from_utf8(bytes.clone())
+                        if let Some(NodeContentRef::Bytes(bytes)) = grandchild.content.as_deref()
+                            && let Ok(r) = String::from_utf8(bytes.as_ref().to_vec())
                         {
                             codes.push(PairUtils::make_qr_data(&device_state, r));
                         }
@@ -97,7 +103,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     true
                 }
                 "pair-success" => {
-                    handle_pair_success(client, node, child).await;
+                    // Convert to owned for handle_pair_success as it needs to access deeply nested data
+                    handle_pair_success(client, &node.to_owned(), &child.to_owned()).await;
                     true
                 }
                 _ => false,
