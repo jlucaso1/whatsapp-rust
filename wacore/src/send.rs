@@ -85,6 +85,31 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
+/// Cloneable version of SignalStores for parallel encryption
+pub struct CloneableSignalStores<S, I, P, SP> {
+    pub session_store: S,
+    pub identity_store: I,
+    pub prekey_store: P,
+    pub signed_prekey_store: SP,
+}
+
+impl<S, I, P, SP> Clone for CloneableSignalStores<S, I, P, SP>
+where
+    S: Clone,
+    I: Clone,
+    P: Clone,
+    SP: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            session_store: self.session_store.clone(),
+            identity_store: self.identity_store.clone(),
+            prekey_store: self.prekey_store.clone(),
+            signed_prekey_store: self.signed_prekey_store.clone(),
+        }
+    }
+}
+
 async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
@@ -183,6 +208,139 @@ where
     Ok((participant_nodes, includes_prekey_message))
 }
 
+/// Parallel version of encrypt_for_devices that uses cloneable stores
+async fn encrypt_for_devices_parallel<S, I, P, SP>(
+    stores: &CloneableSignalStores<S, I, P, SP>,
+    resolver: &dyn SendContextResolver,
+    devices: &[Jid],
+    plaintext_to_encrypt: &[u8],
+    enc_extra_attrs: &Attrs,
+) -> Result<(Vec<Node>, bool)>
+where
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
+    P: crate::libsignal::protocol::PreKeyStore + Clone + Send + Sync + 'static,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Clone + Send + Sync + 'static,
+{
+    // First, check which devices need prekeys and fetch them sequentially
+    let mut jids_needing_prekeys = Vec::new();
+    for device_jid in devices {
+        let signal_address = device_jid.to_protocol_address();
+        if stores
+            .session_store
+            .load_session(&signal_address)
+            .await?
+            .is_none()
+        {
+            jids_needing_prekeys.push(device_jid.clone());
+        }
+    }
+
+    if !jids_needing_prekeys.is_empty() {
+        log::debug!(
+            "Fetching prekeys for {} devices without sessions",
+            jids_needing_prekeys.len()
+        );
+        let prekey_bundles = resolver
+            .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+            .await?;
+
+        // Process prekey bundles sequentially to avoid race conditions
+        for device_jid in &jids_needing_prekeys {
+            let signal_address = device_jid.to_protocol_address();
+            let bundle = prekey_bundles
+                .get(device_jid)
+                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
+
+            let mut session_store_clone = stores.session_store.clone();
+            let mut identity_store_clone = stores.identity_store.clone();
+
+            process_prekey_bundle(
+                &signal_address,
+                &mut session_store_clone,
+                &mut identity_store_clone,
+                bundle,
+                SystemTime::now(),
+                &mut rand::rngs::OsRng.unwrap_err(),
+                UsePQRatchet::No,
+            )
+            .await?;
+        }
+    }
+
+    // Now encrypt for all devices in parallel
+    let plaintext_bytes = plaintext_to_encrypt.to_vec();
+    let enc_extra_attrs_owned = enc_extra_attrs.clone();
+
+    let encryption_tasks: Vec<_> = devices
+        .iter()
+        .map(|device_jid| {
+            let device_jid = device_jid.clone();
+            let plaintext = plaintext_bytes.clone();
+            let extra_attrs = enc_extra_attrs_owned.clone();
+            let mut session_store = stores.session_store.clone();
+            let mut identity_store = stores.identity_store.clone();
+
+            async move {
+                let signal_address = device_jid.to_protocol_address();
+                let encrypted_payload = message_encrypt(
+                    &plaintext,
+                    &signal_address,
+                    &mut session_store,
+                    &mut identity_store,
+                    SystemTime::now(),
+                )
+                .await?;
+
+                let (is_prekey, enc_type, serialized_bytes) = match encrypted_payload {
+                    CiphertextMessage::PreKeySignalMessage(msg) => {
+                        (true, "pkmsg", msg.serialized().to_vec())
+                    }
+                    CiphertextMessage::SignalMessage(msg) => {
+                        (false, "msg", msg.serialized().to_vec())
+                    }
+                    _ => return Ok(None),
+                };
+
+                let mut enc_attrs = Attrs::new();
+                enc_attrs.insert("v".to_string(), "2".to_string());
+                enc_attrs.insert("type".to_string(), enc_type.to_string());
+                for (k, v) in extra_attrs.iter() {
+                    enc_attrs.insert(k.clone(), v.clone());
+                }
+
+                let enc_node = NodeBuilder::new("enc")
+                    .attrs(enc_attrs)
+                    .bytes(serialized_bytes)
+                    .build();
+
+                let participant_node = NodeBuilder::new("to")
+                    .attr("jid", device_jid.to_string())
+                    .children([enc_node])
+                    .build();
+
+                Ok::<Option<(Node, bool)>, anyhow::Error>(Some((participant_node, is_prekey)))
+            }
+        })
+        .collect();
+
+    // Execute all encryption tasks concurrently
+    let results = futures::future::join_all(encryption_tasks).await;
+
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
+
+    for result in results {
+        let result = result?;
+        if let Some((node, is_prekey)) = result {
+            participant_nodes.push(node);
+            includes_prekey_message = includes_prekey_message || is_prekey;
+        }
+    }
+
+    Ok((participant_nodes, includes_prekey_message))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
@@ -253,6 +411,121 @@ pub async fn prepare_dm_stanza<
 
     if !own_other_devices.is_empty() {
         let (nodes, inc) = encrypt_for_devices(
+            stores,
+            resolver,
+            &own_other_devices,
+            &own_devices_plaintext,
+            &enc_extra_attrs,
+        )
+        .await?;
+        participant_nodes.extend(nodes);
+        includes_prekey_message = includes_prekey_message || inc;
+    }
+
+    let mut message_content_nodes = vec![
+        NodeBuilder::new("participants")
+            .children(participant_nodes)
+            .build(),
+    ];
+
+    if includes_prekey_message && let Some(acc) = account {
+        let device_identity_bytes = acc.encode_to_vec();
+        message_content_nodes.push(
+            NodeBuilder::new("device-identity")
+                .bytes(device_identity_bytes)
+                .build(),
+        );
+    }
+
+    let mut stanza_attrs = Attrs::new();
+    stanza_attrs.insert("to".to_string(), to_jid.to_string());
+    stanza_attrs.insert("id".to_string(), request_id);
+    stanza_attrs.insert("type".to_string(), "text".to_string());
+
+    if let Some(edit_attr) = edit
+        && edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+    }
+
+    let stanza = NodeBuilder::new("message")
+        .attrs(stanza_attrs.into_iter())
+        .children(message_content_nodes)
+        .build();
+
+    Ok(stanza)
+}
+
+/// Parallel version of prepare_dm_stanza that uses cloneable stores for concurrent encryption
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_dm_stanza_parallel<
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
+    P: crate::libsignal::protocol::PreKeyStore + Clone + Send + Sync + 'static,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Clone + Send + Sync + 'static,
+>(
+    stores: &CloneableSignalStores<S, I, P, SP>,
+    resolver: &dyn SendContextResolver,
+    own_jid: &Jid,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+    to_jid: Jid,
+    message: &wa::Message,
+    request_id: String,
+    edit: Option<crate::types::message::EditAttribute>,
+) -> Result<Node> {
+    let recipient_plaintext = message.encode_to_vec();
+
+    let dsm = wa::Message {
+        device_sent_message: Some(Box::new(DeviceSentMessage {
+            destination_jid: Some(to_jid.to_string()),
+            message: Some(Box::new(message.clone())),
+            phash: Some("".to_string()),
+        })),
+        ..Default::default()
+    };
+
+    let own_devices_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
+
+    let participants = vec![to_jid.clone(), own_jid.clone()];
+    let all_devices = resolver.resolve_devices(&participants).await?;
+
+    let mut recipient_devices = Vec::new();
+    let mut own_other_devices = Vec::new();
+    for device_jid in &all_devices {
+        let is_own_device = device_jid.user == own_jid.user && device_jid.device != own_jid.device;
+        if is_own_device {
+            own_other_devices.push(device_jid.clone());
+        } else {
+            recipient_devices.push(device_jid.clone());
+        }
+    }
+
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
+
+    // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
+    let mut enc_extra_attrs = Attrs::new();
+    if let Some(edit_attr) = &edit
+        && *edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        enc_extra_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+    }
+
+    if !recipient_devices.is_empty() {
+        let (nodes, inc) = encrypt_for_devices_parallel(
+            stores,
+            resolver,
+            &recipient_devices,
+            &recipient_plaintext,
+            &enc_extra_attrs,
+        )
+        .await?;
+        participant_nodes.extend(nodes);
+        includes_prekey_message = includes_prekey_message || inc;
+    }
+
+    if !own_other_devices.is_empty() {
+        let (nodes, inc) = encrypt_for_devices_parallel(
             stores,
             resolver,
             &own_other_devices,
@@ -540,6 +813,204 @@ pub async fn prepare_group_stanza<
 
     Ok(stanza)
 }
+
+/// Parallel version of prepare_group_stanza that uses cloneable stores for concurrent encryption
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_group_stanza_parallel<
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
+    P: crate::libsignal::protocol::PreKeyStore + Clone + Send + Sync + 'static,
+    SP: crate::libsignal::protocol::SignedPreKeyStore + Clone + Send + Sync + 'static,
+>(
+    stores: &CloneableSignalStores<S, I, P, SP>,
+    sender_key_store: &mut (dyn SenderKeyStore + Send + Sync),
+    resolver: &dyn SendContextResolver,
+    group_info: &mut GroupInfo,
+    own_jid: &Jid,
+    own_lid: &Jid,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+    to_jid: Jid,
+    message: &wa::Message,
+    request_id: String,
+    force_skdm_distribution: bool,
+    edit: Option<crate::types::message::EditAttribute>,
+) -> Result<Node> {
+    let (own_sending_jid, _) = match group_info.addressing_mode {
+        crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
+        crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
+    };
+
+    let own_base_jid = own_sending_jid.to_non_ad();
+    if !group_info
+        .participants
+        .iter()
+        .any(|participant| participant.is_same_user_as(&own_base_jid))
+    {
+        group_info.participants.push(own_base_jid.clone());
+    }
+
+    let mut message_children: Vec<Node> = Vec::new();
+    let mut includes_prekey_message = false;
+    let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
+
+    if force_skdm_distribution {
+        // For LID groups, use phone numbers for device queries (LID usync may not work for own JID)
+        // For PN groups, use JIDs directly
+        let mut jids_to_resolve: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                let base_jid = jid.to_non_ad();
+                // If this is a LID JID and we have a phone number mapping, use it for device query
+                if base_jid.server == "lid"
+                    && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
+                {
+                    log::debug!(
+                        "Using phone number {} for LID {} device query",
+                        phone_jid,
+                        base_jid
+                    );
+                    return phone_jid.to_non_ad();
+                }
+                base_jid
+            })
+            .collect();
+
+        // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
+        let own_jid_to_check = if own_base_jid.server == "lid" {
+            group_info
+                .phone_jid_for_lid_user(&own_base_jid.user)
+                .map(|pn| pn.to_non_ad())
+                .unwrap_or_else(|| own_base_jid.clone())
+        } else {
+            own_base_jid.clone()
+        };
+
+        if !jids_to_resolve
+            .iter()
+            .any(|participant| participant.is_same_user_as(&own_jid_to_check))
+        {
+            jids_to_resolve.push(own_jid_to_check);
+        }
+
+        let mut seen_users = HashSet::new();
+        jids_to_resolve.retain(|jid| seen_users.insert((jid.user.clone(), jid.server.clone())));
+
+        log::debug!(
+            "Resolving devices for {} participants",
+            jids_to_resolve.len()
+        );
+
+        let mut distribution_list = resolver.resolve_devices(&jids_to_resolve).await?;
+
+        let mut seen = HashSet::new();
+        distribution_list.retain(|jid| seen.insert(jid.to_string()));
+
+        log::debug!(
+            "SKDM distribution list for {} resolved to {} devices",
+            to_jid,
+            distribution_list.len(),
+        );
+
+        resolved_devices_for_phash = Some(distribution_list.clone());
+        let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
+            sender_key_store,
+            &to_jid,
+            &own_sending_jid,
+        )
+        .await?;
+
+        let skdm_wrapper_msg = wa::Message {
+            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
+                group_id: Some(to_jid.to_string()),
+                axolotl_sender_key_distribution_message: Some(axolotl_skdm_bytes),
+            }),
+            ..Default::default()
+        };
+        let skdm_plaintext_to_encrypt =
+            MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
+
+        // For SKDM distribution we don't set decrypt-fail; use empty attrs
+        let empty_attrs = Attrs::new();
+        let (participant_nodes, inc) = encrypt_for_devices_parallel(
+            stores,
+            resolver,
+            &distribution_list,
+            &skdm_plaintext_to_encrypt,
+            &empty_attrs,
+        )
+        .await?;
+        includes_prekey_message = includes_prekey_message || inc;
+
+        // Add participants list as part of the single hybrid stanza
+        message_children.push(
+            NodeBuilder::new("participants")
+                .children(participant_nodes)
+                .build(),
+        );
+        if includes_prekey_message && let Some(acc) = account {
+            message_children.push(
+                NodeBuilder::new("device-identity")
+                    .bytes(acc.encode_to_vec())
+                    .build(),
+            );
+        }
+    }
+
+    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let skmsg = encrypt_group_message(
+        sender_key_store,
+        &to_jid,
+        &own_sending_jid,
+        &plaintext,
+        &mut rand::rngs::OsRng.unwrap_err(),
+    )
+    .await?;
+
+    let skmsg_ciphertext = skmsg.serialized().to_vec();
+
+    // Add decrypt-fail="hide" for edited group messages too
+    let mut sk_enc_attrs = Attrs::new();
+    sk_enc_attrs.insert("v".to_string(), "2".to_string());
+    sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
+    if let Some(edit_attr) = &edit
+        && *edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+    }
+
+    let content_node = NodeBuilder::new("enc")
+        .attrs(sk_enc_attrs)
+        .bytes(skmsg_ciphertext)
+        .build();
+
+    let mut stanza_attrs = Attrs::new();
+    stanza_attrs.insert("to".to_string(), to_jid.to_string());
+    stanza_attrs.insert("id".to_string(), request_id);
+    stanza_attrs.insert("type".to_string(), "text".to_string());
+
+    if let Some(edit_attr) = edit
+        && edit_attr != crate::types::message::EditAttribute::Empty
+    {
+        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+    }
+
+    message_children.push(content_node);
+
+    // Add phash if we distributed keys in this message
+    if let Some(devices) = &resolved_devices_for_phash {
+        let phash = MessageUtils::participant_list_hash(devices);
+        stanza_attrs.insert("phash".to_string(), phash);
+    }
+
+    let stanza = NodeBuilder::new("message")
+        .attrs(stanza_attrs.into_iter())
+        .children(message_children)
+        .build();
+
+    Ok(stanza)
+}
+
 pub async fn create_sender_key_distribution_message_for_group(
     store: &mut (dyn SenderKeyStore + Send + Sync),
     group_jid: &Jid,
