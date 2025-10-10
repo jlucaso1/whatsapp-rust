@@ -3,7 +3,7 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::warn;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::node::NodeRef;
 
 /// Handler for `<message>` stanzas.
 ///
@@ -27,9 +27,10 @@ impl StanzaHandler for MessageHandler {
         "message"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &Node, _cancelled: &mut bool) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
         let client_clone = client.clone();
-        let node_arc = Arc::new(node.clone());
+        // Clone node to owned for spawned task
+        let node_arc = Arc::new(node.to_owned());
 
         tokio::spawn(async move {
             let info = match client_clone.parse_message_info(&node_arc).await {
