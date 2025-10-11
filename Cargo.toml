@@ -80,6 +80,11 @@ path = "examples/multi_account.rs"
 name = "listen_only"
 path = "examples/listen_only.rs"
 
+[[bin]]
+name = "encryption_benchmark"
+path = "benches/encryption_benchmark.rs"
+required-features = ["tokio-native"]
+
 [profile.release]
 opt-level = "z"
 debug = false
