@@ -2514,15 +2514,18 @@ dependencies = [
 name = "whatsapp-rust"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
  "base64",
  "bincode",
  "bytes",
+ "cbc",
  "chrono",
  "dashmap",
  "env_logger",
  "hex",
+ "hmac",
  "log",
  "moka",
  "prost",
@@ -2531,6 +2534,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "uuid",
