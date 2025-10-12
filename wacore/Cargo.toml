@@ -45,6 +45,8 @@ log = "0.4.28"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
 prost = { version = "0.14.1", default-features = false }
+reflect-macros = { path = "../reflect-macros" }
+reflect-metadata = { path = "../reflect-metadata" }
 
 # Cryptography
 rand = { version = "0.9" }

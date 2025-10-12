@@ -1,0 +1,17 @@
+[package]
+name = "whatsapp-uniffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+uniffi = "0.28"
+whatsapp-rust = { path = "..", version = "0.1.0" }
+reflect-metadata = { path = "../reflect-metadata", version = "0.1.0" }
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
+whatsapp-rust = { path = "..", version = "0.1.0" }
+reflect-metadata = { path = "../reflect-metadata", version = "0.1.0" }

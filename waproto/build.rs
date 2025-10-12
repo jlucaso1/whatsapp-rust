@@ -14,7 +14,10 @@ fn main() -> std::io::Result<()> {
     println!("cargo:warning=GENERATE_PROTO is set, regenerating proto definitions...");
 
     let mut config = prost_build::Config::new();
-    config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config.type_attribute(
+        ".",
+        "#[derive(serde::Serialize, serde::Deserialize, reflect_macros::Reflect)]",
+    );
 
     // Configure prost to output the file to the `src/` directory,
     // so it can be version-controlled.

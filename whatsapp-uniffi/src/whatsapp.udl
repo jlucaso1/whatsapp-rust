@@ -1,0 +1,18 @@
+namespace whatsapp{};
+
+dictionary PublicDeviceStatusProxy {
+    string jid;
+    string? display_name;
+    boolean connected;
+    u32 unread_chats;
+};
+
+dictionary PublicEventProxy {
+    string category;
+    string payload_json;
+};
+
+interface WhatsappApi {
+    PublicDeviceStatusProxy sample_device_status();
+    PublicEventProxy sample_event();
+};

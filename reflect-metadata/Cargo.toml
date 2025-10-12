@@ -1,0 +1,10 @@
+[package]
+name = "reflect-metadata"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "reflect_metadata"
+path = "src/lib.rs"
+
+[dependencies]
