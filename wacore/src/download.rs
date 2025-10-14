@@ -166,8 +166,8 @@ impl DownloadUtils {
         app_info: MediaType,
     ) -> Result<Vec<u8>> {
         use aes::Aes256;
-        use aes::cipher::generic_array::GenericArray;
         use aes::cipher::{BlockDecrypt, KeyInit};
+        use aes::cipher::generic_array::GenericArray;
 
         const MAC_SIZE: usize = 10;
         const BLOCK: usize = 16;
