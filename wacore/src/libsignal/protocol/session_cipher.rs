@@ -3,12 +3,55 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::cell::RefCell;
 use std::time::SystemTime;
 
 use rand::{CryptoRng, Rng};
 
 use crate::libsignal::crypto::DecryptionError as DecryptionErrorCrypto;
-use crate::libsignal::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt};
+use crate::libsignal::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt_into};
+
+// Thread-local buffer for AES encryption to reduce allocations and memory fragmentation
+thread_local! {
+    static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
+}
+
+// Wrapper for the encryption buffer with intelligent size management
+struct EncryptionBuffer {
+    buffer: Vec<u8>,
+    usage_count: usize,
+}
+
+impl EncryptionBuffer {
+    const INITIAL_CAPACITY: usize = 1024;
+    const MAX_CAPACITY: usize = 16 * 1024; // 16KB max
+    const SHRINK_THRESHOLD: usize = 100; // Shrink every 100 uses if oversized
+
+    fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(Self::INITIAL_CAPACITY),
+            usage_count: 0,
+        }
+    }
+
+    fn get_buffer(&mut self) -> &mut Vec<u8> {
+        self.usage_count += 1;
+
+        // Periodically manage buffer size to prevent unbounded growth
+        if self.usage_count.is_multiple_of(Self::SHRINK_THRESHOLD) {
+            // If buffer has grown beyond max capacity, shrink it back
+            if self.buffer.capacity() > Self::MAX_CAPACITY {
+                self.buffer = Vec::with_capacity(Self::INITIAL_CAPACITY);
+            } else if self.buffer.is_empty() && self.buffer.capacity() > Self::INITIAL_CAPACITY * 2
+            {
+                // If buffer is empty but has grown significantly, shrink it
+                self.buffer.shrink_to(Self::INITIAL_CAPACITY);
+            }
+        }
+
+        &mut self.buffer
+    }
+}
 use crate::libsignal::protocol::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
 use crate::libsignal::protocol::ratchet::keys::MessageKeyGenerator;
 use crate::libsignal::protocol::ratchet::{ChainKey, UsePQRatchet};
@@ -53,11 +96,17 @@ pub async fn message_encrypt(
         )
     })?;
 
-    let ctext =
-        aes_256_cbc_encrypt(ptext, message_keys.cipher_key(), message_keys.iv()).map_err(|_| {
-            log::error!("session state corrupt for {remote_address}");
-            SignalProtocolError::InvalidSessionStructure("invalid sender chain message keys")
-        })?;
+    let ctext = ENCRYPTION_BUFFER.with(|buffer| {
+        let mut buf_wrapper = buffer.borrow_mut();
+        let buf = buf_wrapper.get_buffer();
+        buf.clear();
+        aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), message_keys.iv(), buf)
+            .map_err(|_| {
+                log::error!("session state corrupt for {remote_address}");
+                SignalProtocolError::InvalidSessionStructure("invalid sender chain message keys")
+            })?;
+        Ok::<Vec<u8>, SignalProtocolError>(buf.clone())
+    })?;
 
     let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
         let timestamp_as_unix_time = items
