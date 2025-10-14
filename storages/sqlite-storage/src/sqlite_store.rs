@@ -68,6 +68,12 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         diesel::sql_query("PRAGMA synchronous = NORMAL;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
+        diesel::sql_query("PRAGMA cache_size = 512;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
+        diesel::sql_query("PRAGMA temp_store = memory;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
         Ok(())
     }
 }
