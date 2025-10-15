@@ -14,7 +14,6 @@ pub fn unmarshal_ref(data: &[u8]) -> Result<NodeRef<'_>> {
 }
 
 pub fn marshal_to(node: &Node, writer: &mut impl Write) -> Result<()> {
-    writer.write_all(&[0])?;
     let mut encoder = Encoder::new(writer);
     encoder.write_node(node)?;
     Ok(())
