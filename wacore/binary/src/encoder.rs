@@ -164,7 +164,7 @@ impl<W: Write> Encoder<W> {
             Self::pack_hex
         };
 
-        let mut chars = std::str::from_utf8(input_bytes).unwrap().chars();
+        let mut chars = core::str::from_utf8(input_bytes).unwrap().chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
             self.write_u8(self.pack_byte_pair(packer, part1, part2));
