@@ -79,9 +79,7 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(len)?;
         match std::str::from_utf8(bytes) {
             Ok(s) => Ok(Cow::Borrowed(s)),
-            Err(_) => String::from_utf8(bytes.to_vec())
-                .map(Cow::Owned)
-                .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error())),
+            Err(e) => Err(BinaryError::InvalidUtf8(e)),
         }
     }
 
