@@ -124,7 +124,7 @@ where
             let signal_address = device_jid.to_protocol_address();
             match prekey_bundles.get(device_jid) {
                 Some(bundle) => {
-                    process_prekey_bundle(
+                    match process_prekey_bundle(
                         &signal_address,
                         stores.session_store,
                         stores.identity_store,
@@ -133,7 +133,28 @@ where
                         &mut rand::rngs::OsRng.unwrap_err(),
                         UsePQRatchet::No,
                     )
-                    .await?;
+                    .await
+                    {
+                        Ok(_) => {
+                            // Session established successfully
+                        }
+                        Err(SignalProtocolError::UntrustedIdentity(ref addr)) => {
+                            log::warn!(
+                                "Untrusted identity for device {}. Skipping this device.",
+                                addr
+                            );
+                            // Skip this device and continue with others
+                            continue;
+                        }
+                        Err(e) => {
+                            // Propagate other unexpected errors
+                            return Err(anyhow::anyhow!(
+                                "Failed to process pre-key bundle for {}: {:?}",
+                                signal_address,
+                                e
+                            ));
+                        }
+                    }
                 }
                 None => {
                     log::warn!(
@@ -864,9 +885,10 @@ mod tests {
 
     /// Helper function to create a mock PreKeyBundle with valid types
     fn create_mock_bundle() -> PreKeyBundle {
-        let identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-        let signed_prekey_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-        let prekey_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let identity_pair = IdentityKeyPair::generate(&mut rng);
+        let signed_prekey_pair = KeyPair::generate(&mut rng);
+        let prekey_pair = KeyPair::generate(&mut rng);
 
         PreKeyBundle::new(
             1,                                                   // registration_id
