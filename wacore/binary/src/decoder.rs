@@ -238,12 +238,19 @@ impl<'a> Decoder<'a> {
                 let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
                 let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
                 if !(hi_valid & lo_valid).all() {
-                    return Err(BinaryError::InvalidToken(tag));
+                    // Fall back to per-byte validation to identify exact offending nibble
+                    for byte in *chunk {
+                        let high = (byte & 0xF0) >> 4;
+                        let low = byte & 0x0F;
+                        Self::unpack_byte(tag, high)?;
+                        Self::unpack_byte(tag, low)?;
+                    }
+                    unreachable!("SIMD validation should match scalar validation");
                 }
             }
 
-            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
-            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+            let high_chars = Self::simd_table_lookup(lookup_table, high_nibbles);
+            let low_chars = Self::simd_table_lookup(lookup_table, low_nibbles);
 
             let (lo, hi) = Simd::interleave(high_chars, low_chars);
             unpacked_bytes.extend_from_slice(lo.as_array());
@@ -280,6 +287,15 @@ impl<'a> Decoder<'a> {
             },
             _ => Err(BinaryError::InvalidToken(tag)),
         }
+    }
+
+    fn simd_table_lookup(table: Simd<u8, 16>, indices: Simd<u8, 16>) -> Simd<u8, 16> {
+        let mut result = Simd::splat(0);
+        for i in 0..16 {
+            let mask = indices.simd_eq(Simd::splat(i as u8));
+            result = mask.select(Simd::splat(table[i]), result);
+        }
+        result
     }
 
     fn read_attributes(&mut self, size: usize) -> Result<AttrsRef<'a>> {
