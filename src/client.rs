@@ -252,11 +252,12 @@ impl Client {
                                 let mut map = map_clone.lock().await;
                                 let mut list = list_clone.lock().await;
                                 map.insert(key.clone(), msg);
+                                list.retain(|k| k != &key);
                                 list.push_back(key);
-                                if list.len() > 256
-                                    && let Some(old_key) = list.pop_front()
-                                {
-                                    map.remove(&old_key);
+                                while list.len() > 256 {
+                                    if let Some(old_key) = list.pop_front() {
+                                        map.remove(&old_key);
+                                    }
                                 }
                             }
                             RecentMessageCommand::Take(key, responder) => {
@@ -967,7 +968,13 @@ impl Client {
                 debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
             }
 
-            let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
+            let missing = match proc.get_missing_key_ids(&list).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("Failed to get missing key IDs for {:?}: {}", name, e);
+                    Vec::new()
+                }
+            };
             if !missing.is_empty() {
                 let mut to_request: Vec<Vec<u8>> = Vec::new();
                 let mut guard = self.app_state_key_requests.lock().await;
