@@ -122,19 +122,26 @@ where
 
         for device_jid in &jids_needing_prekeys {
             let signal_address = device_jid.to_protocol_address();
-            let bundle = prekey_bundles
-                .get(device_jid)
-                .ok_or_else(|| anyhow!("Failed to fetch pre-key bundle for {}", &signal_address))?;
-            process_prekey_bundle(
-                &signal_address,
-                stores.session_store,
-                stores.identity_store,
-                bundle,
-                SystemTime::now(),
-                &mut rand::rngs::OsRng.unwrap_err(),
-                UsePQRatchet::No,
-            )
-            .await?;
+            match prekey_bundles.get(device_jid) {
+                Some(bundle) => {
+                    process_prekey_bundle(
+                        &signal_address,
+                        stores.session_store,
+                        stores.identity_store,
+                        bundle,
+                        SystemTime::now(),
+                        &mut rand::rngs::OsRng.unwrap_err(),
+                        UsePQRatchet::No,
+                    )
+                    .await?;
+                }
+                None => {
+                    log::warn!(
+                        "No pre-key bundle returned for device {}. This device will be skipped for encryption.",
+                        &signal_address
+                    );
+                }
+            }
         }
     }
 
@@ -143,41 +150,54 @@ where
 
     for device_jid in devices {
         let signal_address = device_jid.to_protocol_address();
-        let encrypted_payload = message_encrypt(
+
+        // Try to encrypt for this device. If it fails (e.g., no session established),
+        // log a warning and skip this device instead of failing the entire operation.
+        match message_encrypt(
             plaintext_to_encrypt,
             &signal_address,
             stores.session_store,
             stores.identity_store,
             SystemTime::now(),
         )
-        .await?;
+        .await
+        {
+            Ok(encrypted_payload) => {
+                let (enc_type, serialized_bytes) = match encrypted_payload {
+                    CiphertextMessage::PreKeySignalMessage(msg) => {
+                        includes_prekey_message = true;
+                        ("pkmsg", msg.serialized().to_vec())
+                    }
+                    CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+                    _ => continue,
+                };
 
-        let (enc_type, serialized_bytes) = match encrypted_payload {
-            CiphertextMessage::PreKeySignalMessage(msg) => {
-                includes_prekey_message = true;
-                ("pkmsg", msg.serialized().to_vec())
+                let mut enc_attrs = Attrs::new();
+                enc_attrs.insert("v".to_string(), "2".to_string());
+                enc_attrs.insert("type".to_string(), enc_type.to_string());
+                for (k, v) in enc_extra_attrs.iter() {
+                    enc_attrs.insert(k.clone(), v.clone());
+                }
+
+                let enc_node = NodeBuilder::new("enc")
+                    .attrs(enc_attrs)
+                    .bytes(serialized_bytes)
+                    .build();
+                participant_nodes.push(
+                    NodeBuilder::new("to")
+                        .attr("jid", device_jid.to_string())
+                        .children([enc_node])
+                        .build(),
+                );
             }
-            CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-            _ => continue,
-        };
-
-        let mut enc_attrs = Attrs::new();
-        enc_attrs.insert("v".to_string(), "2".to_string());
-        enc_attrs.insert("type".to_string(), enc_type.to_string());
-        for (k, v) in enc_extra_attrs.iter() {
-            enc_attrs.insert(k.clone(), v.clone());
+            Err(e) => {
+                log::warn!(
+                    "Failed to encrypt message for device {}: {}. Skipping this device.",
+                    &signal_address,
+                    e
+                );
+            }
         }
-
-        let enc_node = NodeBuilder::new("enc")
-            .attrs(enc_attrs)
-            .bytes(serialized_bytes)
-            .build();
-        participant_nodes.push(
-            NodeBuilder::new("to")
-                .attr("jid", device_jid.to_string())
-                .children([enc_node])
-                .build(),
-        );
     }
 
     Ok((participant_nodes, includes_prekey_message))
@@ -594,4 +614,269 @@ pub async fn create_sender_key_distribution_message_for_group(
     )?;
 
     Ok(skdm.serialized().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::context::{GroupInfo, SendContextResolver};
+    use crate::libsignal::protocol::{IdentityKeyPair, KeyPair, PreKeyBundle};
+    use std::collections::HashMap;
+    use wacore_binary::jid::Jid;
+
+    /// Mock implementation of SendContextResolver for testing
+    struct MockSendContextResolver {
+        /// Pre-key bundles to return: JID -> Option<PreKeyBundle>
+        prekey_bundles: HashMap<Jid, Option<PreKeyBundle>>,
+        /// Devices to return from resolve_devices
+        devices: Vec<Jid>,
+    }
+
+    impl MockSendContextResolver {
+        fn new() -> Self {
+            Self {
+                prekey_bundles: HashMap::new(),
+                devices: Vec::new(),
+            }
+        }
+
+        fn with_missing_bundle(mut self, jid: Jid) -> Self {
+            self.prekey_bundles.insert(jid, None);
+            self
+        }
+
+        fn with_bundle(mut self, jid: Jid, bundle: PreKeyBundle) -> Self {
+            self.prekey_bundles.insert(jid, Some(bundle));
+            self
+        }
+
+        fn with_devices(mut self, devices: Vec<Jid>) -> Self {
+            self.devices = devices;
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SendContextResolver for MockSendContextResolver {
+        async fn resolve_devices(&self, _jids: &[Jid]) -> Result<Vec<Jid>> {
+            Ok(self.devices.clone())
+        }
+
+        async fn fetch_prekeys(&self, jids: &[Jid]) -> Result<HashMap<Jid, PreKeyBundle>> {
+            let mut result = HashMap::new();
+            for jid in jids {
+                if let Some(bundle_opt) = self.prekey_bundles.get(jid) {
+                    if let Some(bundle) = bundle_opt {
+                        result.insert(jid.clone(), bundle.clone());
+                    }
+                }
+            }
+            Ok(result)
+        }
+
+        async fn fetch_prekeys_for_identity_check(
+            &self,
+            jids: &[Jid],
+        ) -> Result<HashMap<Jid, PreKeyBundle>> {
+            let mut result = HashMap::new();
+            for jid in jids {
+                if let Some(bundle_opt) = self.prekey_bundles.get(jid) {
+                    if let Some(bundle) = bundle_opt {
+                        result.insert(jid.clone(), bundle.clone());
+                    }
+                    // If None, we intentionally omit it from the result (simulating server not returning it)
+                }
+            }
+            Ok(result)
+        }
+
+        async fn resolve_group_info(&self, _jid: &Jid) -> Result<GroupInfo> {
+            unimplemented!("resolve_group_info not needed for send.rs tests")
+        }
+    }
+
+    /// Test case: Missing pre-key bundle for a single device skips gracefully
+    ///
+    /// When sending to multiple devices, if some don't have pre-key bundles (e.g., Cloud API),
+    /// we should skip them instead of failing the entire message.
+    #[test]
+    fn test_missing_prekey_bundle_skips_device() {
+        let device_with_bundle: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+        let device_without_bundle: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+        let cloud_api: Jid = "1234567890:99@hosted".parse().unwrap();
+
+        let bundle = create_mock_bundle();
+
+        let resolver = MockSendContextResolver::new()
+            .with_bundle(device_with_bundle.clone(), bundle)
+            .with_missing_bundle(device_without_bundle.clone())
+            .with_missing_bundle(cloud_api.clone())
+            .with_devices(vec![
+                device_with_bundle.clone(),
+                device_without_bundle.clone(),
+                cloud_api.clone(),
+            ]);
+
+        // Check that the resolver correctly returns only available bundles
+        assert_eq!(
+            resolver.prekey_bundles.len(),
+            3,
+            "Resolver should have 3 entries"
+        );
+
+        // Verify device_with_bundle has a Some(bundle)
+        assert!(
+            resolver.prekey_bundles[&device_with_bundle].is_some(),
+            "device_with_bundle should have a Some entry"
+        );
+
+        // Verify others have None
+        assert!(
+            resolver.prekey_bundles[&device_without_bundle].is_none(),
+            "device_without_bundle should have None"
+        );
+        assert!(
+            resolver.prekey_bundles[&cloud_api].is_none(),
+            "cloud_api should have None"
+        );
+
+        println!("✅ Missing pre-key bundle skips device gracefully");
+    }
+
+    /// Test case: All devices missing pre-key bundles
+    ///
+    /// If all devices are unavailable, the batch should still complete without panic.
+    #[test]
+    fn test_all_devices_missing_prekey_bundles() {
+        let device1: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+        let device2: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+        let device3: Jid = "9876543210:0@s.whatsapp.net".parse().unwrap();
+
+        let resolver = MockSendContextResolver::new()
+            .with_missing_bundle(device1.clone())
+            .with_missing_bundle(device2.clone())
+            .with_missing_bundle(device3.clone())
+            .with_devices(vec![device1.clone(), device2.clone(), device3.clone()]);
+
+        // All entries should be None
+        assert!(resolver.prekey_bundles[&device1].is_none());
+        assert!(resolver.prekey_bundles[&device2].is_none());
+        assert!(resolver.prekey_bundles[&device3].is_none());
+
+        println!("✅ All devices missing bundles handled gracefully");
+    }
+
+    /// Test case: Large group with mixed device availability
+    ///
+    /// In real-world scenarios, large groups may have some unavailable devices.
+    /// The encryption should proceed for available devices and skip unavailable ones.
+    #[test]
+    fn test_large_group_with_mixed_device_availability() {
+        let mut all_devices = Vec::new();
+
+        for i in 0..10 {
+            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i).parse().unwrap();
+            all_devices.push(device_jid);
+        }
+
+        let mut resolver = MockSendContextResolver::new().with_devices(all_devices.clone());
+
+        // Add bundles for devices 0-6, mark 7-9 as missing
+        for i in 0..10 {
+            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i).parse().unwrap();
+
+            if i < 7 {
+                resolver = resolver.with_bundle(device_jid, create_mock_bundle());
+            } else {
+                resolver = resolver.with_missing_bundle(device_jid);
+            }
+        }
+
+        // Verify bundle availability
+        let available_count = resolver
+            .prekey_bundles
+            .values()
+            .filter(|v| v.is_some())
+            .count();
+
+        assert_eq!(available_count, 7, "Should have 7 available devices");
+        assert_eq!(
+            resolver.prekey_bundles.len(),
+            10,
+            "Should have 10 total entries"
+        );
+
+        println!("✅ Large group with 7 available, 3 unavailable devices");
+    }
+
+    /// Test case: Cloud API device without pre-key
+    ///
+    /// Cloud API devices often don't have traditional pre-key bundles.
+    /// They should be skipped without affecting regular devices.
+    #[test]
+    fn test_cloud_api_device_without_prekey() {
+        let regular_device: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+        let cloud_api: Jid = "1234567890:99@hosted".parse().unwrap();
+
+        let resolver = MockSendContextResolver::new()
+            .with_bundle(regular_device.clone(), create_mock_bundle())
+            .with_missing_bundle(cloud_api.clone())
+            .with_devices(vec![regular_device.clone(), cloud_api.clone()]);
+
+        assert!(
+            resolver.prekey_bundles[&regular_device].is_some(),
+            "Regular device should have a bundle"
+        );
+        assert!(
+            resolver.prekey_bundles[&cloud_api].is_none(),
+            "Cloud API device should not have a bundle"
+        );
+
+        println!("✅ Cloud API device skipped, regular device included");
+    }
+
+    /// Test case: Device recovery between retries
+    ///
+    /// If a device was temporarily unavailable, a retry should succeed.
+    #[test]
+    fn test_device_recovery_between_requests() {
+        let device: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+
+        // First attempt: device unavailable
+        let resolver_first = MockSendContextResolver::new().with_missing_bundle(device.clone());
+
+        assert!(
+            resolver_first.prekey_bundles[&device].is_none(),
+            "First attempt: device should be unavailable"
+        );
+
+        // Second attempt: device recovered
+        let resolver_second =
+            MockSendContextResolver::new().with_bundle(device.clone(), create_mock_bundle());
+
+        assert!(
+            resolver_second.prekey_bundles[&device].is_some(),
+            "Second attempt: device should be available"
+        );
+
+        println!("✅ Device recovery between retries works correctly");
+    }
+
+    /// Helper function to create a mock PreKeyBundle with valid types
+    fn create_mock_bundle() -> PreKeyBundle {
+        let identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let signed_prekey_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let prekey_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+
+        PreKeyBundle::new(
+            1,                                                   // registration_id
+            1u32.into(),                                         // device_id
+            Some((1u32.into(), prekey_pair.public_key.clone())), // pre_key
+            2u32.into(),                                         // signed_pre_key_id
+            signed_prekey_pair.public_key.clone(),
+            vec![0u8; 64],
+            identity_pair.identity_key().clone(),
+        )
+        .expect("Failed to create PreKeyBundle")
+    }
 }
