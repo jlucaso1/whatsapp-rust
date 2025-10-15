@@ -9,7 +9,7 @@ A high-performance, asynchronous Rust library for interacting with the WhatsApp 
 - ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
 - ✅ **Runtime Agnostic:** Abstracted transport layer allows use with any async runtime or platform (Tokio, async-std, WASM, etc.).
 - ✅ **Flexible Storage Architecture:** Storage-agnostic core with pluggable backends. SQLite provided by default, but supports custom implementations (PostgreSQL, MongoDB, Redis, browser storage, etc.) through a clean trait-based interface.
-- ✅ **WASM Compatible:** Core library is free of C dependencies and ready for WebAssembly compilation. See [WASM.md](WASM.md) for details on WASM support.
+- ✅ **WASM Compatible:** Core library is free of C dependencies and ready for WebAssembly compilation. Check this example https://github.com/WhiskeySockets/whatsapp-rust-bridge
 - ✅ **Persistent State:** SQLite backend (when enabled) uses Diesel for durable session state, ensuring the client can resume sessions after a restart.
 - ✅ **Asynchronous by Design:** Supports efficient, non-blocking I/O and concurrent task handling with any async runtime through pluggable transport implementations.
 
