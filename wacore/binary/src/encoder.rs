@@ -1,5 +1,8 @@
 use std::io::Write;
 
+use std::simd::prelude::*;
+use std::simd::{Simd, u8x16};
+
 use crate::error::Result;
 use crate::node::{Attrs, Node, NodeContent};
 use crate::token;
@@ -115,11 +118,45 @@ impl<W: Write> Encoder<W> {
 
         self.write_u8(data_type);
 
-        let mut rounded_len = ((value.len() as f64) / 2.0).ceil() as u8;
+        let mut rounded_len = value.len().div_ceil(2) as u8;
         if !value.len().is_multiple_of(2) {
             rounded_len |= 0x80;
         }
         self.write_u8(rounded_len);
+
+        let mut input_bytes = value.as_bytes();
+
+        while input_bytes.len() >= 16 {
+            let (chunk, rest) = input_bytes.split_at(16);
+            let input = u8x16::from_slice(chunk);
+
+            let mut nibbles = if data_type == token::NIBBLE_8 {
+                let indices = input.saturating_sub(Simd::splat(b'-'));
+                const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
+                Simd::from_array(LOOKUP).swizzle_dyn(indices)
+            } else {
+                let ascii_0 = Simd::splat(b'0');
+                let ascii_a = Simd::splat(b'A');
+                let ten = Simd::splat(10);
+
+                let digit_vals = input - ascii_0;
+                let letter_vals = input - ascii_a + ten;
+                let is_letter = input.simd_ge(ascii_a);
+                is_letter.select(letter_vals, digit_vals)
+            };
+
+            if data_type == token::NIBBLE_8 {
+                let pad_mask = input.simd_eq(Simd::splat(b'\x00'));
+                nibbles = pad_mask.select(Simd::splat(15), nibbles);
+            }
+
+            let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+            let packed = (evens << Simd::splat(4)) | odds;
+            let packed_bytes = packed.to_array();
+            self.write_raw_bytes(&packed_bytes[..8]);
+
+            input_bytes = rest;
+        }
 
         let packer: fn(char) -> u8 = if data_type == token::NIBBLE_8 {
             Self::pack_nibble
@@ -127,7 +164,7 @@ impl<W: Write> Encoder<W> {
             Self::pack_hex
         };
 
-        let mut chars = value.chars();
+        let mut chars = core::str::from_utf8(input_bytes).unwrap().chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
             self.write_u8(self.pack_byte_pair(packer, part1, part2));
@@ -203,5 +240,26 @@ mod tests {
         let expected = vec![0, 248, 2, 19, 7];
         assert_eq!(buffer, expected);
         assert_eq!(buffer.len(), 5);
+    }
+
+    #[test]
+    fn test_nibble_packing() {
+        // Test string with nibble characters: '-', '.', '0'-'9'
+        let test_str = "-.0123456789";
+        let node = Node::new(
+            "test",
+            std::collections::HashMap::new(),
+            Some(NodeContent::String(test_str.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer));
+        encoder.write_node(&node).unwrap();
+
+        let expected = vec![
+            0, 248, 2, 252, 4, 116, 101, 115, 116, 255, 6, 171, 1, 35, 69, 103, 137,
+        ];
+        assert_eq!(buffer, expected);
+        assert_eq!(buffer.len(), 17);
     }
 }
