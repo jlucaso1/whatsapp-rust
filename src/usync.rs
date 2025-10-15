@@ -13,7 +13,7 @@ impl Client {
 
         // 1. Check the cache first
         for jid in jids.iter().map(|j| j.to_non_ad()) {
-            if let Some(cached_devices) = self.device_cache.get(&jid).await {
+            if let Some(cached_devices) = self.get_device_cache().await.get(&jid).await {
                 all_devices.extend(cached_devices);
                 continue; // Found fresh entry, skip network fetch
             }
@@ -55,7 +55,10 @@ impl Client {
             }
 
             for (user_jid, devices) in devices_by_user {
-                self.device_cache.insert(user_jid, devices).await;
+                self.get_device_cache()
+                    .await
+                    .insert(user_jid, devices)
+                    .await;
             }
             all_devices.extend(fetched_devices);
         }
@@ -93,12 +96,13 @@ mod tests {
 
         // Manually insert into cache
         client
-            .device_cache
+            .get_device_cache()
+            .await
             .insert(test_jid.clone(), vec![device_jid.clone()])
             .await;
 
         // Verify cache hit
-        let cached = client.device_cache.get(&test_jid).await;
+        let cached = client.get_device_cache().await.get(&test_jid).await;
         assert!(cached.is_some());
         let cached_devices = cached.unwrap();
         assert_eq!(cached_devices.len(), 1);
