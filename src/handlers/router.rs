@@ -177,7 +177,8 @@ mod tests {
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport, http_client).await;
+        let (client, _rx) =
+            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node_ref, &mut cancelled).await;
@@ -208,7 +209,8 @@ mod tests {
         let pm = PersistenceManager::new(backend).await.unwrap();
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) = crate::client::Client::new(Arc::new(pm), transport, http_client).await;
+        let (client, _rx) =
+            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, &node_ref, &mut cancelled).await;

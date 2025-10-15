@@ -158,6 +158,9 @@ pub struct Client {
 
     /// HTTP client for making HTTP requests (media upload/download, version fetching)
     pub http_client: Arc<dyn crate::http::HttpClient>,
+
+    /// Version override for testing or manual specification
+    pub(crate) override_version: Option<(u32, u32, u32)>,
 }
 
 impl Client {
@@ -165,6 +168,7 @@ impl Client {
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
+        override_version: Option<(u32, u32, u32)>,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
@@ -264,6 +268,7 @@ impl Client {
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
+            override_version,
         };
 
         let arc = Arc::new(this);
@@ -363,11 +368,23 @@ impl Client {
             return Err(ClientError::AlreadyConnected.into());
         }
 
-        // Create transport using the factory
-        let (transport, mut transport_events) = self.transport_factory.create_transport().await?;
+        let version_future = crate::version::resolve_and_update_version(
+            &self.persistence_manager,
+            &self.http_client,
+            self.override_version,
+        );
 
-        // Wait for Connected event or process handshake with FrameReceived events
+        let transport_future = self.transport_factory.create_transport();
+
+        info!("Connecting WebSocket and fetching latest client version in parallel...");
+        let (version_result, transport_result) = tokio::join!(version_future, transport_future);
+
+        version_result.map_err(|e| anyhow!("Failed to resolve app version: {}", e))?;
+        let (transport, mut transport_events) = transport_result?;
+        info!("Version fetch and transport connection established.");
+
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
         let noise_socket =
             handshake::do_handshake(&device_snapshot, transport.clone(), &mut transport_events)
                 .await?;
@@ -1478,6 +1495,7 @@ mod tests {
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
+            None,
         )
         .await;
 
@@ -1532,6 +1550,7 @@ mod tests {
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
+            None,
         )
         .await;
 

@@ -364,13 +364,6 @@ impl BotBuilder {
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
 
-        crate::version::resolve_and_update_version(
-            &persistence_manager,
-            &http_client,
-            self.override_version,
-        )
-        .await?;
-
         // Apply OS info override if specified
         if let Some((os_name, version)) = self.os_info {
             info!("Applying OS info override: {:?} {:?}", os_name, version);
@@ -382,8 +375,13 @@ impl BotBuilder {
         }
 
         info!("Creating client...");
-        let (client, sync_task_receiver) =
-            Client::new(persistence_manager.clone(), transport_factory, http_client).await;
+        let (client, sync_task_receiver) = Client::new(
+            persistence_manager.clone(),
+            transport_factory,
+            http_client,
+            self.override_version,
+        )
+        .await;
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
@@ -597,13 +595,9 @@ mod tests {
 
         // Verify the bot was created successfully
         let client = bot.client();
-        let persistence_manager = client.persistence_manager();
 
-        // Check that the version was set correctly
-        let device_snapshot = persistence_manager.get_device_snapshot().await;
-        assert_eq!(device_snapshot.app_version_primary, 2);
-        assert_eq!(device_snapshot.app_version_secondary, 3000);
-        assert_eq!(device_snapshot.app_version_tertiary, 123456789);
+        // Check that the override version is stored in the client
+        assert_eq!(client.override_version, Some((2, 3000, 123456789)));
     }
 
     #[tokio::test]
