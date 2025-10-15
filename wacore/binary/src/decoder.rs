@@ -26,7 +26,7 @@ impl<'a> Decoder<'a> {
         if self.bytes_left() >= len {
             Ok(())
         } else {
-            Err(BinaryError::Eof)
+            Err(BinaryError::UnexpectedEof)
         }
     }
 

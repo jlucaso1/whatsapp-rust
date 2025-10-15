@@ -5,7 +5,7 @@ use std::io::Read;
 
 pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>> {
     if data.is_empty() {
-        return Err(BinaryError::Eof);
+        return Err(BinaryError::EmptyData);
     }
     let data_type = data[0];
     let data = &data[1..];

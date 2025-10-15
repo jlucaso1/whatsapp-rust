@@ -12,7 +12,8 @@ pub enum BinaryError {
     InvalidUtf8(std::str::Utf8Error),
     Zlib(String),
     Jid(JidError),
-    Eof,
+    UnexpectedEof,
+    EmptyData,
     LeftoverData(usize),
     AttrList(Vec<BinaryError>),
 }
@@ -28,7 +29,8 @@ impl fmt::Display for BinaryError {
             BinaryError::InvalidUtf8(e) => write!(f, "Data is not valid UTF-8: {e}"),
             BinaryError::Zlib(s) => write!(f, "Zlib decompression error: {s}"),
             BinaryError::Jid(e) => write!(f, "JID parsing error: {e}"),
-            BinaryError::Eof => write!(f, "Reached end of file unexpectedly"),
+            BinaryError::UnexpectedEof => write!(f, "Unexpected end of binary data"),
+            BinaryError::EmptyData => write!(f, "Received empty data where payload was expected"),
             BinaryError::LeftoverData(n) => write!(f, "Leftover data after decoding: {n} bytes"),
             BinaryError::AttrList(list) => write!(f, "Multiple attribute parsing errors: {list:?}"),
         }
@@ -72,7 +74,8 @@ impl Clone for BinaryError {
             BinaryError::InvalidUtf8(e) => BinaryError::InvalidUtf8(*e),
             BinaryError::Zlib(s) => BinaryError::Zlib(s.clone()),
             BinaryError::Jid(e) => BinaryError::Jid(JidError::InvalidFormat(e.to_string())),
-            BinaryError::Eof => BinaryError::Eof,
+            BinaryError::UnexpectedEof => BinaryError::UnexpectedEof,
+            BinaryError::EmptyData => BinaryError::EmptyData,
             BinaryError::LeftoverData(n) => BinaryError::LeftoverData(*n),
             BinaryError::AttrList(list) => BinaryError::AttrList(list.clone()),
         }
