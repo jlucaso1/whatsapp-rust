@@ -3,6 +3,7 @@ use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
 use crate::token;
 use std::borrow::Cow;
+use std::simd::{Simd, u8x16};
 
 pub(crate) struct Decoder<'a> {
     data: &'a [u8],
@@ -78,12 +79,9 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(len)?;
         match std::str::from_utf8(bytes) {
             Ok(s) => Ok(Cow::Borrowed(s)),
-            Err(_) => {
-                // Fallback to owned string if not valid UTF-8
-                String::from_utf8(bytes.to_vec())
-                    .map(Cow::Owned)
-                    .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
-            }
+            Err(_) => String::from_utf8(bytes.to_vec())
+                .map(Cow::Owned)
+                .map_err(|e| BinaryError::InvalidUtf8(e.utf8_error())),
         }
     }
 
@@ -168,7 +166,6 @@ impl<'a> Decoder<'a> {
         })
     }
 
-    // Zero-copy string parsing that returns Cow
     fn read_value_as_string(&mut self) -> Result<Option<Cow<'a, str>>> {
         let tag = self.read_u8()?;
         match tag {
@@ -200,7 +197,6 @@ impl<'a> Decoder<'a> {
                     .map(|s| Some(Cow::Borrowed(s)))
                     .ok_or(BinaryError::InvalidToken(tag))
             }
-            // All other single-byte tokens - these are from static dictionaries
             _ => token::get_single_token(tag)
                 .map(|s| Some(Cow::Borrowed(s)))
                 .ok_or(BinaryError::InvalidToken(tag)),
@@ -211,23 +207,51 @@ impl<'a> Decoder<'a> {
         let packed_len_byte = self.read_u8()?;
         let is_half_byte = (packed_len_byte & 0x80) != 0;
         let len = (packed_len_byte & 0x7F) as usize;
-        let raw_len = if is_half_byte { len * 2 - 1 } else { len * 2 };
 
-        let mut result = String::with_capacity(raw_len);
+        if len == 0 {
+            return Ok(String::new());
+        }
+
+        let raw_len = if is_half_byte { (len * 2) - 1 } else { len * 2 };
         let packed_data = self.read_bytes(len)?;
+        let mut unpacked_bytes = Vec::with_capacity(raw_len);
 
-        for &byte in packed_data {
+        const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
+        const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
+        let lookup_table = Simd::from_array(if tag == token::NIBBLE_8 {
+            NIBBLE_LOOKUP
+        } else {
+            HEX_LOOKUP
+        });
+        let low_mask = Simd::splat(0x0F);
+
+        let (chunks, remainder) = packed_data.as_chunks::<16>();
+        for chunk in chunks {
+            let data = u8x16::from_slice(chunk);
+
+            let high_nibbles = (data >> 4) & low_mask;
+            let low_nibbles = data & low_mask;
+
+            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
+            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+
+            let (interleaved1, interleaved2) = Simd::deinterleave(high_chars, low_chars);
+            unpacked_bytes.extend_from_slice(interleaved1.as_array());
+            unpacked_bytes.extend_from_slice(interleaved2.as_array());
+        }
+
+        for &byte in remainder {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
-            result.push(Self::unpack_byte(tag, high)?);
-            result.push(Self::unpack_byte(tag, low)?);
+            unpacked_bytes.push(Self::unpack_byte(tag, high)? as u8);
+            unpacked_bytes.push(Self::unpack_byte(tag, low)? as u8);
         }
 
         if is_half_byte {
-            result.pop();
+            unpacked_bytes.pop();
         }
 
-        Ok(result)
+        String::from_utf8(unpacked_bytes).map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
     }
 
     fn unpack_byte(tag: u8, value: u8) -> Result<char> {
@@ -328,5 +352,68 @@ impl<'a> Decoder<'a> {
             attrs,
             content,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::Node;
+
+    #[test]
+    fn test_decode_node() {
+        let node = Node::new(
+            "message",
+            std::collections::HashMap::new(),
+            Some(crate::node::NodeContent::String("receipt".to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        {
+            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer));
+            encoder.write_node(&node).unwrap();
+        }
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref().unwrap();
+
+        assert_eq!(decoded.tag, "message");
+        assert!(decoded.attrs.is_empty());
+        match &decoded.content {
+            Some(content) => match &**content {
+                crate::node::NodeContentRef::String(s) => assert_eq!(s, "receipt"),
+                _ => panic!("Expected string content"),
+            },
+            None => panic!("Expected content"),
+        }
+    }
+
+    #[test]
+    fn test_decode_nibble_packing() {
+        let test_str = "-.0123456789";
+        let node = Node::new(
+            "test",
+            std::collections::HashMap::new(),
+            Some(crate::node::NodeContent::String(test_str.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        {
+            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer));
+            encoder.write_node(&node).unwrap();
+        }
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref().unwrap();
+
+        assert_eq!(decoded.tag, "test");
+        assert!(decoded.attrs.is_empty());
+        match &decoded.content {
+            Some(content) => match &**content {
+                crate::node::NodeContentRef::String(s) => assert_eq!(s, test_str),
+                _ => panic!("Expected string content"),
+            },
+            None => panic!("Expected content"),
+        }
     }
 }
