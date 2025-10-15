@@ -10,7 +10,9 @@ pub(crate) struct Encoder<W: Write> {
 
 impl<W: Write> Encoder<W> {
     pub(crate) fn new(writer: W) -> Self {
-        Self { writer }
+        let mut enc = Self { writer };
+        enc.write_u8(0);
+        enc
     }
 
     fn write_u8(&mut self, val: u8) {
@@ -154,7 +156,7 @@ impl<W: Write> Encoder<W> {
 
     fn write_content(&mut self, content: &NodeContent) -> Result<()> {
         match content {
-            NodeContent::String(s) => self.write_string(s), // <--- ADD THIS LINE
+            NodeContent::String(s) => self.write_string(s),
             NodeContent::Bytes(bytes) => self.write_bytes_with_len(bytes),
             NodeContent::Nodes(nodes) => {
                 self.write_list_start(nodes.len());
@@ -178,5 +180,28 @@ impl<W: Write> Encoder<W> {
             self.write_content(content)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_encode_node() {
+        let node = Node::new(
+            "message",
+            std::collections::HashMap::new(),
+            Some(NodeContent::String("receipt".to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer));
+        encoder.write_node(&node).unwrap();
+
+        let expected = vec![0, 248, 2, 19, 7];
+        assert_eq!(buffer, expected);
+        assert_eq!(buffer.len(), 5);
     }
 }
