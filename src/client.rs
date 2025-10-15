@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use dashmap::DashMap;
 use moka::future::Cache;
 use tokio::sync::watch;
-use wacore::xml::DisplayableNode;
+use wacore::xml::{DisplayableNode, DisplayableNodeRef};
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
@@ -37,7 +37,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
-use crate::socket::{NoiseSocket, SocketError};
+use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
 
 const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -51,6 +51,8 @@ pub enum ClientError {
     NotConnected,
     #[error("socket error: {0}")]
     Socket(#[from] SocketError),
+    #[error("encrypt/send error: {0}")]
+    EncryptSend(#[from] EncryptSendError),
     #[error("client is already connected")]
     AlreadyConnected,
     #[error("client is not logged in")]
@@ -548,10 +550,22 @@ impl Client {
             }
         };
 
-        let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
-            Ok(p) => p,
-            Err(e) => {
+        let encrypted_frame_clone = encrypted_frame.clone();
+        let decrypted_payload_result =
+            tokio::task::spawn_blocking(move || noise_socket.decrypt_frame(&encrypted_frame_clone))
+                .await;
+
+        let decrypted_payload = match decrypted_payload_result {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
                 log::error!(target: "Client", "Failed to decrypt frame: {e}");
+                return;
+            }
+            Err(e) => {
+                log::error!(
+                    target: "Client",
+                    "Failed to decrypt frame (spawn_blocking join error): {e}"
+                );
                 return;
             }
         };
@@ -747,17 +761,16 @@ impl Client {
         self: &Arc<Self>,
         node: &wacore_binary::node::NodeRef<'_>,
     ) {
-        // Convert to owned node for async operations
-        self.handle_success(&node.to_owned()).await;
+        self.handle_success(node).await;
     }
 
-    pub(crate) async fn handle_success(self: &Arc<Self>, node: &Node) {
+    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
         info!("Successfully authenticated with WhatsApp servers!");
         self.is_logged_in.store(true, Ordering::Relaxed);
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
-        if let Some(lid_str) = node.attrs.get("lid") {
+        if let Some(lid_str) = node.get_attr("lid") {
             if let Ok(lid) = lid_str.parse::<Jid>() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
@@ -1165,18 +1178,22 @@ impl Client {
     }
 
     pub(crate) async fn handle_stream_error_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
-        // Convert to owned node for async operations
-        self.handle_stream_error(&node.to_owned()).await;
+        self.handle_stream_error(node).await;
     }
 
-    pub(crate) async fn handle_stream_error(&self, node: &Node) {
+    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::NodeRef<'_>) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
-        let mut attrs = node.attrs();
+        let mut attrs = node.attr_parser();
         let code = attrs.optional_string("code").unwrap_or("");
         let conflict_type = node
             .get_optional_child("conflict")
-            .map(|n| n.attrs().optional_string("type").unwrap_or("").to_string())
+            .map(|n| {
+                n.attr_parser()
+                    .optional_string("type")
+                    .unwrap_or("")
+                    .to_string()
+            })
             .unwrap_or_default();
 
         match (code, conflict_type.as_str()) {
@@ -1202,12 +1219,12 @@ impl Client {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
             }
             _ => {
-                error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
+                error!(target: "Client", "Unknown stream error: {}", DisplayableNodeRef(node));
                 self.expect_disconnect().await;
                 self.core.event_bus.dispatch(&Event::StreamError(
                     crate::types::events::StreamError {
                         code: code.to_string(),
-                        raw: Some(node.clone()),
+                        raw: Some(node.to_owned()),
                     },
                 ));
             }
@@ -1217,15 +1234,14 @@ impl Client {
     }
 
     pub(crate) async fn handle_connect_failure_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
-        // Convert to owned node for async operations
-        self.handle_connect_failure(&node.to_owned()).await;
+        self.handle_connect_failure(node).await;
     }
 
-    pub(crate) async fn handle_connect_failure(&self, node: &Node) {
+    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::NodeRef<'_>) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.shutdown_notifier.notify_one();
 
-        let mut attrs = node.attrs();
+        let mut attrs = node.attr_parser();
         let reason_code = attrs.optional_u64("reason").unwrap_or(0) as i32;
         let reason = ConnectFailureReason::from(reason_code);
 
@@ -1250,7 +1266,7 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNode(node));
+            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNodeRef(node));
             self.core.event_bus.dispatch(&Event::TemporaryBan(
                 crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
@@ -1263,12 +1279,12 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNode(node));
+            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNodeRef(node));
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
                     message: attrs.optional_string("message").unwrap_or("").to_string(),
-                    raw: Some(node.clone()),
+                    raw: Some(node.to_owned()),
                 },
             ));
         }
@@ -1390,18 +1406,30 @@ impl Client {
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
             let mut g = self.send_buffer_pool.lock().await;
-            g.push(plaintext_buf);
-            g.push(encrypted_buf);
+            if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                g.push(plaintext_buf);
+            }
+            if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                g.push(encrypted_buf);
+            }
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
-        let send_res = noise_socket
+        let (plaintext_buf, encrypted_buf) = match noise_socket
             .encrypt_and_send(plaintext_buf, encrypted_buf)
-            .await;
-
-        let (plaintext_buf, encrypted_buf) = match send_res {
+            .await
+        {
             Ok(bufs) => bufs,
-            Err(e) => {
+            Err(mut e) => {
+                let p_buf = std::mem::take(&mut e.plaintext_buf);
+                let o_buf = std::mem::take(&mut e.out_buf);
+                let mut g = self.send_buffer_pool.lock().await;
+                if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(p_buf);
+                }
+                if o_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(o_buf);
+                }
                 return Err(e.into());
             }
         };
