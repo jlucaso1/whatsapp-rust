@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
@@ -122,13 +122,13 @@ pub struct Client {
     pub(crate) id_counter: Arc<AtomicU64>,
 
     pub(crate) chat_locks: Arc<DashMap<Jid, Arc<tokio::sync::Mutex<()>>>>,
-    pub group_cache: Cache<Jid, GroupInfo>,
-    pub device_cache: Cache<Jid, Vec<Jid>>,
+    pub group_cache: OnceCell<Cache<Jid, GroupInfo>>,
+    pub device_cache: OnceCell<Cache<Jid, Vec<Jid>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
-    pub(crate) recent_msg_tx: RecentMessageManagerHandle,
+    pub(crate) recent_msg_tx: OnceCell<RecentMessageManagerHandle>,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
@@ -138,7 +138,7 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    pub(crate) app_state_processor: Option<AppStateProcessor>,
+    pub(crate) app_state_processor: OnceCell<AppStateProcessor>,
     pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
@@ -178,42 +178,6 @@ impl Client {
 
         let (tx, rx) = mpsc::channel(32);
 
-        let (recent_tx, mut recent_rx) = mpsc::channel(256);
-        let recent_handle = RecentMessageManagerHandle(recent_tx);
-
-        let map_inner = Arc::new(Mutex::new(HashMap::with_capacity(256)));
-        let list_inner = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
-        let map_clone = map_inner.clone();
-        let list_clone = list_inner.clone();
-        tokio::spawn(async move {
-            while let Some(cmd) = recent_rx.recv().await {
-                match cmd {
-                    RecentMessageCommand::Insert(key, msg) => {
-                        let mut map = map_clone.lock().await;
-                        let mut list = list_clone.lock().await;
-                        map.insert(key.clone(), msg);
-                        list.push_back(key);
-                        if list.len() > 256
-                            && let Some(old_key) = list.pop_front()
-                        {
-                            map.remove(&old_key);
-                        }
-                    }
-                    RecentMessageCommand::Take(key, responder) => {
-                        let mut map = map_clone.lock().await;
-                        let mut list = list_clone.lock().await;
-                        let msg = map.remove(&key);
-                        list.retain(|k| k != &key);
-                        let _ = responder.send(msg);
-                    }
-                    RecentMessageCommand::Shutdown => {
-                        info!("RecentMessageManager shutting down");
-                        break;
-                    }
-                }
-            }
-        });
-
         let this = Self {
             core,
             persistence_manager: persistence_manager.clone(),
@@ -232,14 +196,8 @@ impl Client {
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             chat_locks: Arc::new(DashMap::new()),
-            group_cache: Cache::builder()
-                .time_to_live(Duration::from_secs(3600))
-                .max_capacity(1_000)
-                .build(),
-            device_cache: Cache::builder()
-                .time_to_live(Duration::from_secs(3600))
-                .max_capacity(5_000)
-                .build(),
+            group_cache: OnceCell::new(),
+            device_cache: OnceCell::new(),
             retried_group_messages: Cache::builder()
                 .time_to_live(Duration::from_secs(300))
                 .max_capacity(2_000)
@@ -247,7 +205,7 @@ impl Client {
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
 
-            recent_msg_tx: recent_handle,
+            recent_msg_tx: OnceCell::new(),
 
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
@@ -257,7 +215,7 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            app_state_processor: Some(AppStateProcessor::new(persistence_manager.backend())),
+            app_state_processor: OnceCell::new(),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
@@ -273,6 +231,85 @@ impl Client {
 
         let arc = Arc::new(this);
         (arc, rx)
+    }
+
+    async fn get_recent_msg_manager(&self) -> &RecentMessageManagerHandle {
+        self.recent_msg_tx
+            .get_or_init(|| async {
+                info!("Initializing RecentMessageManager task for the first time.");
+                let (recent_tx, mut recent_rx) = mpsc::channel(256);
+                let recent_handle = RecentMessageManagerHandle(recent_tx);
+
+                let map_inner = Arc::new(Mutex::new(HashMap::with_capacity(256)));
+                let list_inner = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
+                let map_clone = map_inner.clone();
+                let list_clone = list_inner.clone();
+
+                tokio::spawn(async move {
+                    while let Some(cmd) = recent_rx.recv().await {
+                        match cmd {
+                            RecentMessageCommand::Insert(key, msg) => {
+                                let mut map = map_clone.lock().await;
+                                let mut list = list_clone.lock().await;
+                                map.insert(key.clone(), msg);
+                                list.push_back(key);
+                                if list.len() > 256
+                                    && let Some(old_key) = list.pop_front()
+                                {
+                                    map.remove(&old_key);
+                                }
+                            }
+                            RecentMessageCommand::Take(key, responder) => {
+                                let mut map = map_clone.lock().await;
+                                let mut list = list_clone.lock().await;
+                                let msg = map.remove(&key);
+                                list.retain(|k| k != &key);
+                                let _ = responder.send(msg);
+                            }
+                            RecentMessageCommand::Shutdown => {
+                                info!("RecentMessageManager shutting down");
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                recent_handle
+            })
+            .await
+    }
+
+    pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
+        self.group_cache
+            .get_or_init(|| async {
+                info!("Initializing Group Cache for the first time.");
+                Cache::builder()
+                    .time_to_live(Duration::from_secs(3600))
+                    .max_capacity(1_000)
+                    .build()
+            })
+            .await
+    }
+
+    pub(crate) async fn get_device_cache(&self) -> &Cache<Jid, Vec<Jid>> {
+        self.device_cache
+            .get_or_init(|| async {
+                info!("Initializing Device Cache for the first time.");
+                Cache::builder()
+                    .time_to_live(Duration::from_secs(3600))
+                    .max_capacity(5_000)
+                    .build()
+            })
+            .await
+    }
+
+    pub(crate) async fn get_app_state_processor(&self) -> &AppStateProcessor {
+        self.app_state_processor
+            .get_or_init(|| async {
+                info!("Initializing AppStateProcessor for the first time.");
+                AppStateProcessor::new(self.persistence_manager.backend())
+            })
+            .await
     }
 
     /// Create and configure the stanza router with all the handlers.
@@ -406,7 +443,9 @@ impl Client {
         self.shutdown_notifier.notify_waiters();
 
         // Shutdown recent message manager
-        if let Err(e) = self.recent_msg_tx.shutdown().await {
+        if let Some(manager) = self.recent_msg_tx.get()
+            && let Err(e) = manager.shutdown().await
+        {
             warn!("Failed to shutdown recent message manager: {}", e);
         }
 
@@ -483,12 +522,12 @@ impl Client {
         let key = RecentMessageKey { to, id };
         let (oneshot_tx, oneshot_rx) = oneshot::channel();
 
+        let manager = self.get_recent_msg_manager().await;
         // Use a timeout to prevent hanging if the task is unresponsive
-        if (self
-            .recent_msg_tx
+        if manager
             .0
             .send(RecentMessageCommand::Take(key, oneshot_tx))
-            .await)
+            .await
             .is_err()
         {
             return Err(RecentMessageError::ManagerUnavailable);
@@ -509,7 +548,8 @@ impl Client {
         msg: Arc<wa::Message>,
     ) -> Result<(), RecentMessageError> {
         let key = RecentMessageKey { to, id };
-        self.recent_msg_tx
+        let manager = self.get_recent_msg_manager().await;
+        manager
             .send_insert(key, msg)
             .await
             .map_err(|_| RecentMessageError::ManagerUnavailable)
@@ -919,45 +959,44 @@ impl Client {
                 }
             };
 
-            if let Some(proc) = &self.app_state_processor {
-                let (mutations, new_state, list) =
-                    proc.decode_patch_list(&resp, &download, true).await?;
-                let decode_elapsed = _decode_start.elapsed();
-                if decode_elapsed.as_millis() > 500 {
-                    debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
-                }
-
-                let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
-                if !missing.is_empty() {
-                    let mut to_request: Vec<Vec<u8>> = Vec::new();
-                    let mut guard = self.app_state_key_requests.lock().await;
-                    let now = std::time::Instant::now();
-                    for key_id in missing {
-                        let hex_id = hex::encode(&key_id);
-                        let should = guard
-                            .get(&hex_id)
-                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                            .unwrap_or(true);
-                        if should {
-                            guard.insert(hex_id, now);
-                            to_request.push(key_id);
-                        }
-                    }
-                    drop(guard);
-                    if !to_request.is_empty() {
-                        self.request_app_state_keys(&to_request).await;
-                    }
-                }
-
-                for m in mutations {
-                    debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
-                    self.dispatch_app_state_mutation(&m, full_sync).await;
-                }
-
-                state = new_state;
-                has_more = list.has_more_patches;
-                debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
+            let proc = self.get_app_state_processor().await;
+            let (mutations, new_state, list) =
+                proc.decode_patch_list(&resp, &download, true).await?;
+            let decode_elapsed = _decode_start.elapsed();
+            if decode_elapsed.as_millis() > 500 {
+                debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
             }
+
+            let missing = proc.get_missing_key_ids(&list).await.unwrap_or_default();
+            if !missing.is_empty() {
+                let mut to_request: Vec<Vec<u8>> = Vec::new();
+                let mut guard = self.app_state_key_requests.lock().await;
+                let now = std::time::Instant::now();
+                for key_id in missing {
+                    let hex_id = hex::encode(&key_id);
+                    let should = guard
+                        .get(&hex_id)
+                        .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                        .unwrap_or(true);
+                    if should {
+                        guard.insert(hex_id, now);
+                        to_request.push(key_id);
+                    }
+                }
+                drop(guard);
+                if !to_request.is_empty() {
+                    self.request_app_state_keys(&to_request).await;
+                }
+            }
+
+            for m in mutations {
+                debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
+                self.dispatch_app_state_mutation(&m, full_sync).await;
+            }
+
+            state = new_state;
+            has_more = list.has_more_patches;
+            debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
         }
 
         backend
