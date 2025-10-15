@@ -3,7 +3,7 @@ use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
 use crate::token;
 use std::borrow::Cow;
-use std::simd::{Simd, u8x16};
+use std::simd::{Simd, prelude::*, u8x16};
 
 pub(crate) struct Decoder<'a> {
     data: &'a [u8],
@@ -227,17 +227,27 @@ impl<'a> Decoder<'a> {
 
         let (chunks, remainder) = packed_data.as_chunks::<16>();
         for chunk in chunks {
-            let data = u8x16::from_slice(chunk);
+            let data = u8x16::from_array(*chunk);
 
             let high_nibbles = (data >> 4) & low_mask;
             let low_nibbles = data & low_mask;
 
+            if tag == token::NIBBLE_8 {
+                let le11 = Simd::splat(11);
+                let f15 = Simd::splat(15);
+                let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
+                let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
+                if !(hi_valid & lo_valid).all() {
+                    return Err(BinaryError::InvalidToken(tag));
+                }
+            }
+
             let high_chars = lookup_table.swizzle_dyn(high_nibbles);
             let low_chars = lookup_table.swizzle_dyn(low_nibbles);
 
-            let (interleaved1, interleaved2) = Simd::deinterleave(high_chars, low_chars);
-            unpacked_bytes.extend_from_slice(interleaved1.as_array());
-            unpacked_bytes.extend_from_slice(interleaved2.as_array());
+            let (lo, hi) = Simd::interleave(high_chars, low_chars);
+            unpacked_bytes.extend_from_slice(lo.as_array());
+            unpacked_bytes.extend_from_slice(hi.as_array());
         }
 
         for &byte in remainder {
@@ -414,6 +424,25 @@ mod tests {
                 _ => panic!("Expected string content"),
             },
             None => panic!("Expected content"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_nibble_rejection() {
+        let invalid_data = vec![1, 0xC0];
+
+        let mut decoder = Decoder::new(&invalid_data);
+        let result = decoder.read_packed(token::NIBBLE_8);
+        assert!(
+            result.is_err(),
+            "Expected error for invalid nibble 12, got: {:?}",
+            result
+        );
+
+        if let Err(BinaryError::InvalidToken(invalid_nibble)) = result {
+            assert_eq!(invalid_nibble, 12, "Expected invalid nibble 12");
+        } else {
+            panic!("Expected InvalidToken error, got: {:?}", result);
         }
     }
 }
