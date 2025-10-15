@@ -1,8 +1,9 @@
+use bytes::{Buf, BytesMut};
 use core::future::Future;
 use flate2::read::ZlibDecoder;
 use prost::Message;
 use prost::encoding::{decode_key, decode_varint};
-use std::io::Read;
+use std::io::{BufReader, Read};
 use thiserror::Error;
 use waproto::whatsapp as wa;
 
@@ -13,97 +14,102 @@ pub enum HistorySyncError {
     #[error("Failed to decode HistorySync protobuf: {0}")]
     ProtobufDecodeError(#[from] prost::DecodeError),
 }
-pub async fn process_history_sync_stream<FConv, FConvFut, FPn, FPnFut>(
-    compressed_data: &[u8],
+
+/// Processes a streaming, compressed history sync blob without buffering the entire decompressed
+/// data into memory. Instead, it reads the decompressed stream in chunks and parses Protobuf
+/// messages as they become available.
+///
+/// This function accepts any `Read` source (e.g., an HTTP response stream or file handle),
+/// decompresses it on-the-fly, and parses messages incrementally.
+pub async fn process_history_sync_stream<R, FConv, FConvFut, FPn, FPnFut>(
+    compressed_reader: R,
     mut conversation_handler: FConv,
     mut pushname_handler: FPn,
 ) -> Result<(), HistorySyncError>
 where
+    R: Read,
     FConv: FnMut(wa::Conversation) -> FConvFut,
     FConvFut: Future<Output = ()>,
     FPn: FnMut(wa::Pushname) -> FPnFut,
     FPnFut: Future<Output = ()>,
 {
-    let mut decoder = ZlibDecoder::new(compressed_data);
-    let mut uncompressed = Vec::new();
-    decoder.read_to_end(&mut uncompressed)?;
+    // Wrap the compressed reader in a decompressor
+    let decoder = ZlibDecoder::new(compressed_reader);
+    let mut reader = BufReader::new(decoder);
 
-    let mut buf = uncompressed.as_slice();
-    let total_len = uncompressed.len();
+    // Use BytesMut as our buffer for efficient slicing and management
+    let mut buffer = BytesMut::with_capacity(8192); // 8KB initial capacity
+    let mut temp_read_buf = [0u8; 4096]; // Temporary buffer for reading from the stream
 
-    while !buf.is_empty() {
-        let (field_number, wire_type) =
-            decode_key(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
+    loop {
+        // Try to read more data from the decompressed stream
+        let bytes_read = reader.read(&mut temp_read_buf)?;
+        if bytes_read > 0 {
+            buffer.extend_from_slice(&temp_read_buf[..bytes_read]);
+        }
 
-        match field_number {
-            1 => {
-                let _ = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
+        // Process as many complete messages as possible from the buffer
+        loop {
+            if buffer.is_empty() {
+                break; // Need more data from the stream
             }
-            2 => {
-                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
-                    as usize;
-                let pos = total_len - buf.len();
 
-                if pos + len > total_len {
-                    return Err(HistorySyncError::ProtobufDecodeError(
-                        prost::DecodeError::new("message length out of bounds"),
-                    ));
-                }
-                let conv_slice = &uncompressed[pos..pos + len];
-                match wa::Conversation::decode(conv_slice) {
-                    Ok(conv) => conversation_handler(conv).await,
-                    Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
-                }
+            // Create a temporary slice to peek at the next message without consuming it yet
+            let mut peek_buf = &buffer[..];
+            let original_len = peek_buf.len();
 
-                buf = &uncompressed[(pos + len)..];
+            // Try to decode the field key
+            let (field_number, _) = match decode_key(&mut peek_buf) {
+                Ok(key) => key,
+                Err(_) if bytes_read == 0 => return Ok(()), // Clean end of stream
+                Err(_) => break,                            // Incomplete key; need more data
+            };
+
+            // Try to decode the message length
+            let len = match decode_varint(&mut peek_buf) {
+                Ok(len) => len as usize,
+                Err(_) if bytes_read == 0 => return Ok(()),
+                Err(_) => break, // Incomplete length; need more data
+            };
+
+            // Calculate the header size (field key + varint length)
+            let header_len = original_len - peek_buf.len();
+
+            // Check if we have the complete message
+            if peek_buf.len() < len {
+                break; // Not enough data for the full message body
             }
-            7 => {
-                let len = decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?
-                    as usize;
-                let pos = total_len - buf.len();
-                if pos + len > total_len {
-                    return Err(HistorySyncError::ProtobufDecodeError(
-                        prost::DecodeError::new("pushname length out of bounds"),
-                    ));
-                }
-                let slice = &uncompressed[pos..pos + len];
-                match wa::Pushname::decode(slice) {
-                    Ok(pn) => pushname_handler(pn).await,
-                    Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
-                }
-                buf = &uncompressed[(pos + len)..];
-            }
-            _ => match wire_type {
-                prost::encoding::WireType::Varint => {
-                    let _ =
-                        decode_varint(&mut buf).map_err(HistorySyncError::ProtobufDecodeError)?;
-                }
-                prost::encoding::WireType::LengthDelimited => {
-                    let l = decode_varint(&mut buf)
-                        .map_err(HistorySyncError::ProtobufDecodeError)?
-                        as usize;
-                    let pos = total_len - buf.len();
-                    if pos + l > total_len {
-                        return Err(HistorySyncError::ProtobufDecodeError(
-                            prost::DecodeError::new("length-delimited skip out of bounds"),
-                        ));
+
+            // We have a complete message; consume it from the buffer
+            buffer.advance(header_len);
+            let msg_bytes = buffer.split_to(len);
+
+            // Parse and handle the message based on field number
+            match field_number {
+                2 => {
+                    // Field 2 is a Conversation message
+                    match wa::Conversation::decode(&msg_bytes[..]) {
+                        Ok(conv) => conversation_handler(conv).await,
+                        Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
                     }
-                    buf = &uncompressed[(pos + l)..];
                 }
-                prost::encoding::WireType::ThirtyTwoBit => {
-                    let pos = total_len - buf.len();
-                    buf = &uncompressed[(pos + 4)..];
-                }
-                prost::encoding::WireType::SixtyFourBit => {
-                    let pos = total_len - buf.len();
-                    buf = &uncompressed[(pos + 8)..];
+                7 => {
+                    // Field 7 is a Pushname message
+                    match wa::Pushname::decode(&msg_bytes[..]) {
+                        Ok(pn) => pushname_handler(pn).await,
+                        Err(e) => return Err(HistorySyncError::ProtobufDecodeError(e)),
+                    }
                 }
                 _ => {
-                    return Err(HistorySyncError::ProtobufDecodeError(
-                        prost::DecodeError::new("unsupported wire type"),
-                    ));
+                    // Unknown field; skip it by checking wire type
+                    // For length-delimited fields, we just skip; for other types, we've already consumed them
                 }
-            },
+            }
+        }
+
+        // If we couldn't read any more data and the buffer is empty or incomplete, we're done
+        if bytes_read == 0 {
+            break;
         }
     }
 

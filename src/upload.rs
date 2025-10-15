@@ -48,19 +48,13 @@ impl Client {
             .with_header("Origin", "https://web.whatsapp.com")
             .with_body(enc.data_to_upload);
 
-        let response = self.http_client.execute(request).await?;
+        let mut response = self.http_client.execute(request).await?;
+
+        // Buffer the response body first
+        let body_bytes = response.body_into_vec()?;
 
         if response.status_code >= 400 {
-            let body_str = match response.body_string() {
-                Ok(body) => body,
-                Err(body_err) => {
-                    return Err(anyhow!(
-                        "Upload failed {} and failed to read response body: {}",
-                        response.status_code,
-                        body_err
-                    ));
-                }
-            };
+            let body_str = String::from_utf8_lossy(&body_bytes);
             return Err(anyhow!(
                 "Upload failed {} body={}",
                 response.status_code,
@@ -68,7 +62,7 @@ impl Client {
             ));
         }
 
-        let raw: RawUploadResponse = serde_json::from_slice(&response.body)?;
+        let raw: RawUploadResponse = serde_json::from_slice(&body_bytes)?;
 
         let result = UploadResponse {
             url: raw.url,

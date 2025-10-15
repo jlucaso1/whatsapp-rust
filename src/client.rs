@@ -1532,10 +1532,7 @@ mod tests {
             &self,
             _request: crate::http::HttpRequest,
         ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Ok(crate::http::HttpResponse {
-                status_code: 200,
-                body: Vec::new(),
-            })
+            Ok(crate::http::HttpResponse::empty(200))
         }
     }
 

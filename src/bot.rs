@@ -411,9 +411,12 @@ mod tests {
     impl HttpClient for MockHttpClient {
         async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
             // Return a mock response for version fetching
+            let body_bytes = br#"self.__swData=JSON.parse(/*BTDS*/"{\"dynamic_data\":{\"SiteData\":{\"server_revision\":1026131876,\"client_revision\":1026131876}}}");"#.to_vec();
+            let cursor = std::io::Cursor::new(body_bytes);
+            let body: Box<dyn std::io::Read + Send + Sync> = Box::new(cursor);
             Ok(HttpResponse {
                 status_code: 200,
-                body: br#"self.__swData=JSON.parse(/*BTDS*/"{\"dynamic_data\":{\"SiteData\":{\"server_revision\":1026131876,\"client_revision\":1026131876}}}");"#.to_vec(),
+                body,
             })
         }
     }

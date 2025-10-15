@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use std::io::Read;
 use wacore::net::{HttpClient, HttpRequest, HttpResponse};
 
 /// HTTP client implementation using `ureq` for synchronous HTTP requests.
@@ -50,14 +51,12 @@ impl HttpClient for UreqHttpClient {
 
             let status_code = response.status().as_u16();
 
-            // Read the response body
-            let mut body = response.into_body();
-            let body_bytes = body.read_to_vec()?;
+            // Extract the body and convert it to a reader.
+            // Body::into_reader() returns a BodyReader which implements std::io::Read.
+            // This avoids loading the entire response into memory at once.
+            let body: Box<dyn Read + Send + Sync> = Box::new(response.into_body().into_reader());
 
-            Ok(HttpResponse {
-                status_code,
-                body: body_bytes,
-            })
+            Ok(HttpResponse { status_code, body })
         })
         .await?
     }

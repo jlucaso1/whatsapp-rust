@@ -54,10 +54,19 @@ impl AppStateProcessor {
         let mut pl = parse_patch_list(stanza_root)?;
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
-            && let Ok(data) = download(ext)
-            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
         {
-            pl.snapshot = Some(snapshot);
+            // Call the download closure to get the snapshot data.
+            // The download closure now uses streaming internally, reducing memory pressure at the HTTP/decryption level.
+            match download(ext) {
+                Ok(data) => {
+                    if let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice()) {
+                        pl.snapshot = Some(snapshot);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to download app state snapshot: {:?}", e);
+                }
+            }
         }
         self.process_patch_list(pl, validate_macs).await
     }

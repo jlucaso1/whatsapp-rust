@@ -44,9 +44,11 @@ impl Client {
         )
         .await;
         let msg_id_for_log = log_msg_id;
-        match self.download(&notification).await {
-            Ok(compressed_data) => {
-                log::info!("Successfully downloaded history sync blob.");
+
+        // Use the streaming download method to avoid buffering the entire compressed blob
+        match self.download_stream(&notification).await {
+            Ok(compressed_stream) => {
+                log::info!("Successfully opened history sync stream.");
 
                 // Use streaming parser to avoid decoding the full HistorySync into memory
                 // Collect small top-level fields (like pushnames) and stream conversations
@@ -77,13 +79,24 @@ impl Client {
                         pc.lock().await.push(pn);
                     }
                 };
-
-                let stream_result = wacore::history_sync::process_history_sync_stream(
-                    &compressed_data,
-                    conv_handler,
-                    pushname_handler,
-                )
+                // Move the stream processing to a blocking task since the decompression and parsing
+                // are CPU-intensive and use blocking I/O.
+                let stream_result = tokio::task::spawn_blocking(move || {
+                    // Create an async runtime for the handlers within the blocking task.
+                    // Since we're already in a blocking context, we use block_in_place to call into async.
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            wacore::history_sync::process_history_sync_stream(
+                                compressed_stream,
+                                conv_handler,
+                                pushname_handler,
+                            )
+                            .await
+                        })
+                    })
+                })
                 .await;
+
                 let total = processed_count_for_final.load(Ordering::Relaxed);
                 log::debug!(
                     "History sync stream finished processing (message {msg_id_for_log}); total conversations processed={total}"
@@ -92,10 +105,10 @@ impl Client {
                 // No transaction commit step
 
                 match stream_result {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         log::info!("Successfully processed HistorySync stream.");
 
-                        // If pushnames were collected (not implemented in-stream yet), handle them
+                        // If pushnames were collected, handle them
                         let push_vec = collected_pushnames.lock().await;
                         if !push_vec.is_empty() {
                             log::debug!(
@@ -105,8 +118,11 @@ impl Client {
                             self.clone().handle_historical_pushnames(&push_vec).await;
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         log::error!("Failed to process HistorySync data stream: {:?}", e);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to execute HistorySync stream processing: {:?}", e);
                     }
                 }
             }

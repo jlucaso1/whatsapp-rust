@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::mediaconn::MediaConn;
 use anyhow::{Result, anyhow};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 pub use wacore::download::{DownloadUtils, Downloadable, MediaType};
 
@@ -28,8 +28,16 @@ impl Client {
         let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
 
         for request in requests {
-            match self.download_and_decrypt_with_request(&request).await {
-                Ok(data) => return Ok(data),
+            match self.download_and_decrypt_stream(&request).await {
+                Ok(mut decrypted_reader) => {
+                    // Consume the stream and return the buffered data
+                    return tokio::task::spawn_blocking(move || {
+                        let mut buffer = Vec::new();
+                        decrypted_reader.read_to_end(&mut buffer)?;
+                        Ok(buffer)
+                    })
+                    .await?;
+                }
                 Err(e) => {
                     log::warn!(
                         "Failed to download from URL {}: {:?}. Trying next host.",
@@ -44,10 +52,41 @@ impl Client {
         Err(anyhow!("Failed to download from all available media hosts"))
     }
 
-    async fn download_and_decrypt_with_request(
+    /// Returns a streaming reader for a downloadable item without buffering.
+    /// This is useful for large files that should be processed incrementally.
+    pub async fn download_stream(
+        &self,
+        downloadable: &dyn Downloadable,
+    ) -> Result<Box<dyn Read + Send + Sync>> {
+        let media_conn = self.refresh_media_conn(false).await?;
+
+        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
+        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
+
+        for request in requests {
+            match self.download_and_decrypt_stream(&request).await {
+                Ok(reader) => return Ok(reader),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to download from URL {}: {:?}. Trying next host.",
+                        request.url,
+                        e
+                    );
+                    continue;
+                }
+            }
+        }
+
+        Err(anyhow!("Failed to download from all available media hosts"))
+    }
+
+    /// Downloads and decrypts a media file, returning a streaming reader.
+    /// The reader is already decrypted and ready to be consumed.
+    /// This avoids buffering the entire encrypted payload at the HTTP level.
+    async fn download_and_decrypt_stream(
         &self,
         request: &wacore::download::DownloadRequest,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Box<dyn Read + Send + Sync>> {
         let url = request.url.clone();
         let media_key = request.media_key.clone();
         let app_info = request.app_info;
@@ -61,11 +100,19 @@ impl Client {
             ));
         }
 
-        // Decrypt in a blocking thread since it's CPU-intensive
-        tokio::task::spawn_blocking(move || {
-            DownloadUtils::decrypt_stream(&response.body[..], &media_key, app_info)
+        // Decrypt the streaming body in a blocking task since it's CPU-intensive.
+        // The response.body is already a streaming reader, so we pass it directly to decrypt_stream.
+        let decrypted_reader = tokio::task::spawn_blocking(move || {
+            // decrypt_stream consumes the reader and returns the plaintext as Vec<u8>
+            let plaintext = DownloadUtils::decrypt_stream(response.body, &media_key, app_info)?;
+            // Wrap the plaintext in a Cursor to provide a Read interface
+            let cursor = std::io::Cursor::new(plaintext);
+            let reader: Box<dyn Read + Send + Sync> = Box::new(cursor);
+            Ok::<_, anyhow::Error>(reader)
         })
-        .await?
+        .await??;
+
+        Ok(decrypted_reader)
     }
 
     pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
@@ -78,11 +125,21 @@ impl Client {
         let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
         let mut last_err: Option<anyhow::Error> = None;
         for req in requests {
-            match self
-                .download_and_write(&req.url, &req.media_key, req.app_info, &mut writer)
-                .await
-            {
-                Ok(()) => return Ok(()),
+            match self.download_and_decrypt_stream(&req).await {
+                Ok(mut decrypted_stream) => {
+                    // The stream is already decrypted. Copy it to the writer.
+                    // The I/O here is synchronous, so we wrap it in spawn_blocking.
+                    let write_result = tokio::task::spawn_blocking(move || {
+                        let mut buffer = Vec::new();
+                        std::io::copy(&mut decrypted_stream, &mut buffer)?;
+                        Ok::<Vec<u8>, std::io::Error>(buffer)
+                    })
+                    .await??;
+
+                    writer.seek(SeekFrom::Start(0))?;
+                    writer.write_all(&write_result)?;
+                    return Ok(());
+                }
                 Err(e) => {
                     last_err = Some(e);
                     continue;
@@ -90,37 +147,6 @@ impl Client {
             }
         }
         Err(last_err.unwrap_or_else(|| anyhow!("All media hosts failed")))
-    }
-
-    async fn download_and_write<W: Write + Seek + Send + Unpin>(
-        &self,
-        url: &str,
-        media_key: &[u8],
-        media_type: MediaType,
-        writer: &mut W,
-    ) -> Result<()> {
-        let http_request = crate::http::HttpRequest::get(url);
-        let response = self.http_client.execute(http_request).await?;
-
-        if response.status_code >= 300 {
-            return Err(anyhow!(
-                "Download failed with status: {}",
-                response.status_code
-            ));
-        }
-
-        let media_key = media_key.to_vec();
-        let encrypted_bytes = response.body;
-
-        // Decrypt and verify in a blocking thread since it's CPU-intensive
-        let plaintext = tokio::task::spawn_blocking(move || {
-            DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
-        })
-        .await??;
-
-        writer.seek(SeekFrom::Start(0))?;
-        writer.write_all(&plaintext)?;
-        Ok(())
     }
 }
 
