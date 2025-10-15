@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simd_vs_scalar_consistency() {
+    fn test_simd_determinism_and_consistency() {
         let test_sizes = [2, 4, 8, 16, 18, 32, 64, 128, 256];
 
         for &size in &test_sizes {
