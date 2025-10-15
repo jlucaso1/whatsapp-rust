@@ -1,7 +1,7 @@
 use std::io::Write;
 
-use std::simd::prelude::*;
-use std::simd::{Simd, u8x16};
+use core::simd::prelude::*;
+use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
 use crate::node::{Attrs, Node, NodeContent};

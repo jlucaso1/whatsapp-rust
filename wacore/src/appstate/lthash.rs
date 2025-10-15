@@ -1,6 +1,6 @@
+use core::simd::u16x8;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use std::simd::u16x8;
 
 /// Summation based hash algorithm maintaining integrity of a sequence of mutations.
 /// One-to-one port of whatsmeow/appstate/lthash/lthash.go
