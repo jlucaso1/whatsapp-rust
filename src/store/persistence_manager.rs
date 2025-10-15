@@ -3,13 +3,14 @@ use crate::store::Device;
 use crate::store::traits::Backend;
 use log::{debug, error};
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Notify, RwLock};
 use tokio::time::{Duration, sleep};
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
-    dirty: Arc<Mutex<bool>>,
+    dirty: Arc<AtomicBool>,
     save_notify: Arc<Notify>,
     device_id: Option<i32>, // None for single device mode, Some(id) for multi-account
 }
@@ -54,7 +55,7 @@ impl PersistenceManager {
         Ok(Self {
             device: Arc::new(RwLock::new(device)),
             backend,
-            dirty: Arc::new(Mutex::new(false)),
+            dirty: Arc::new(AtomicBool::new(false)),
             save_notify: Arc::new(Notify::new()),
             device_id: None, // Single device mode
         })
@@ -92,7 +93,7 @@ impl PersistenceManager {
         Ok(Self {
             device: Arc::new(RwLock::new(device)),
             backend,
-            dirty: Arc::new(Mutex::new(false)),
+            dirty: Arc::new(AtomicBool::new(false)),
             save_notify: Arc::new(Notify::new()),
             device_id: Some(device_id),
         })
@@ -127,16 +128,14 @@ impl PersistenceManager {
         let mut device_guard = self.device.write().await;
         let result = modifier(&mut device_guard);
 
-        let mut dirty_guard = self.dirty.lock().await;
-        *dirty_guard = true;
+        self.dirty.store(true, Ordering::Relaxed);
         self.save_notify.notify_one();
 
         result
     }
 
     async fn save_to_disk(&self) -> Result<(), StoreError> {
-        let mut dirty_guard = self.dirty.lock().await;
-        if *dirty_guard {
+        if self.dirty.swap(false, Ordering::AcqRel) {
             debug!("Device state is dirty, saving to disk.");
             let device_guard = self.device.read().await;
             let serializable_device = device_guard.to_serializable();
@@ -155,7 +154,6 @@ impl PersistenceManager {
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
             }
-            *dirty_guard = false;
             debug!("Device state saved successfully.");
         }
         Ok(())
