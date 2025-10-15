@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, Utc};
 use log::{error, info};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -81,6 +81,37 @@ fn main() {
                                 && text == "ping"
                             {
                                 info!("Received text ping, sending pong...");
+
+                                // Send reaction to the ping message
+                                let message_key = wa::MessageKey {
+                                    remote_jid: Some(ctx.info.source.chat.to_string()),
+                                    id: Some(ctx.info.id.clone()),
+                                    from_me: Some(ctx.info.source.is_from_me),
+                                    participant: if ctx.info.source.is_group {
+                                        Some(ctx.info.source.sender.to_string())
+                                    } else {
+                                        None
+                                    },
+                                };
+
+                                let reaction_emoji = "🏓".to_string();
+
+                                let reaction_message = wa::message::ReactionMessage {
+                                    key: Some(message_key),
+                                    text: Some(reaction_emoji),
+                                    sender_timestamp_ms: Some(Utc::now().timestamp_millis()),
+                                    ..Default::default()
+                                };
+
+                                let final_message_to_send = wa::Message {
+                                    reaction_message: Some(reaction_message),
+                                    ..Default::default()
+                                };
+
+                                if let Err(e) = ctx.send_message(final_message_to_send).await {
+                                    error!("Failed to send reaction: {}", e);
+                                }
+
                                 let start = std::time::Instant::now();
 
                                 // Determine participant JID
