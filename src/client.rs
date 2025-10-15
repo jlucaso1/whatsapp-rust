@@ -37,7 +37,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
-use crate::socket::{NoiseSocket, SocketError};
+use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
 
 const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -51,6 +51,8 @@ pub enum ClientError {
     NotConnected,
     #[error("socket error: {0}")]
     Socket(#[from] SocketError),
+    #[error("encrypt/send error: {0}")]
+    EncryptSend(#[from] EncryptSendError),
     #[error("client is already connected")]
     AlreadyConnected,
     #[error("client is not logged in")]
@@ -1404,22 +1406,35 @@ impl Client {
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
             let mut g = self.send_buffer_pool.lock().await;
-            g.push(plaintext_buf);
-            g.push(encrypted_buf);
+            if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                g.push(plaintext_buf);
+            }
+            if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                g.push(encrypted_buf);
+            }
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
-        let send_res = noise_socket
+        let (plaintext_buf, encrypted_buf) = match noise_socket
             .encrypt_and_send(plaintext_buf, encrypted_buf)
-            .await;
-
-        let (plaintext_buf, encrypted_buf) = match send_res {
+            .await
+        {
             Ok(bufs) => bufs,
-            Err((e, p_buf, e_buf)) => {
+            Err(e) => {
+                let EncryptSendError {
+                    source,
+                    plaintext_buf,
+                    out_buf,
+                    ..
+                } = e;
                 let mut g = self.send_buffer_pool.lock().await;
-                g.push(p_buf);
-                g.push(e_buf);
-                return Err(e.into());
+                if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(plaintext_buf);
+                }
+                if out_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(out_buf);
+                }
+                return Err(SocketError::Crypto(source.to_string()).into());
             }
         };
 

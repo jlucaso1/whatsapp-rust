@@ -1,9 +1,11 @@
-use crate::socket::error::{Result, SocketError};
+use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use wacore::aes_gcm::{Aes256Gcm, aead::Aead};
 use wacore::handshake::utils::generate_iv;
+
+const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
 pub struct NoiseSocket {
     transport: Arc<dyn Transport>,
@@ -40,33 +42,42 @@ impl NoiseSocket {
 
     pub async fn encrypt_and_send(
         &self,
-        plaintext_buf: Vec<u8>,
+        mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
-    ) -> std::result::Result<(Vec<u8>, Vec<u8>), (SocketError, Vec<u8>, Vec<u8>)> {
-        let write_key = self.write_key.clone();
-        let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
-
-        let spawn_result = tokio::task::spawn_blocking(move || {
+    ) -> std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError> {
+        let ciphertext_result = if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
+            // Encrypt inline for small messages
+            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
             let iv = generate_iv(counter);
-            let res = write_key.encrypt(iv.as_ref().into(), &plaintext_buf[..]);
-            (res, plaintext_buf)
-        })
-        .await;
+            self.write_key
+                .encrypt(iv.as_ref().into(), &plaintext_buf[..])
+        } else {
+            let write_key = self.write_key.clone();
+            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+            let plaintext_clone = plaintext_buf.clone();
 
-        let (ciphertext_result, mut plaintext_buf) = match spawn_result {
-            Ok(res) => res,
-            Err(join_err) => {
-                return Err((
-                    SocketError::Crypto(format!("spawn_blocking task failed: {}", join_err)),
-                    Vec::new(),
-                    out_buf,
-                ));
+            match tokio::task::spawn_blocking(move || {
+                let iv = generate_iv(counter);
+                write_key.encrypt(iv.as_ref().into(), &plaintext_clone[..])
+            })
+            .await
+            {
+                Ok(res) => res,
+                Err(join_err) => {
+                    return Err(EncryptSendError::join(join_err, plaintext_buf, out_buf));
+                }
             }
         };
 
         let ciphertext = match ciphertext_result {
             Ok(c) => c,
-            Err(e) => return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf)),
+            Err(e) => {
+                return Err(EncryptSendError::crypto(
+                    anyhow::anyhow!(e.to_string()),
+                    plaintext_buf,
+                    out_buf,
+                ));
+            }
         };
 
         out_buf.clear();
@@ -75,11 +86,11 @@ impl NoiseSocket {
 
         let framed = match crate::framing::encode_frame(&out_buf, None) {
             Ok(f) => f,
-            Err(e) => return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf)),
+            Err(e) => return Err(EncryptSendError::framing(e, plaintext_buf, out_buf)),
         };
 
         if let Err(e) = self.transport.send(&framed).await {
-            return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf));
+            return Err(EncryptSendError::transport(e, plaintext_buf, out_buf));
         }
 
         out_buf.clear();
