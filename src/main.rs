@@ -1,4 +1,5 @@
 use chrono::Local;
+use jemallocator::Jemalloc;
 use log::{error, info};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -11,6 +12,9 @@ use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::upload::UploadResponse;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 // This is a demo of a simple ping-pong bot with every type of media.
 
@@ -101,6 +105,9 @@ fn main() {
                                 // 2. Calculate the duration
                                 let duration = start.elapsed();
                                 let duration_str = format!("{:.2?}", duration);
+                                let allocated = jemalloc_ctl::stats::allocated::read().unwrap_or(0);
+                                let memory_usage_mb = allocated as f64 / 1024.0 / 1024.0;
+                                let memory_str = format!("{:.2} MB", memory_usage_mb);
 
                                 info!(
                                     "Send took {}. Editing message {}...",
@@ -111,7 +118,10 @@ fn main() {
                                 let updated_content = wa::Message {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
-                                            text: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                            text: Some(format!(
+                                                "🏓 Pong!\n`{}`\n`Mem: {}`",
+                                                duration_str, memory_str
+                                            )),
                                             ..Default::default()
                                         },
                                     )),
