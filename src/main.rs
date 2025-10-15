@@ -83,14 +83,35 @@ fn main() {
                                 info!("Received text ping, sending pong...");
                                 let start = std::time::Instant::now();
 
+                                // Determine participant JID
+                                let participant_jid = if ctx.info.source.is_from_me {
+                                    ctx.client.get_pn().await.unwrap_or_default().to_string()
+                                } else {
+                                    ctx.info.source.sender.to_string()
+                                };
+
+                                // Construct ContextInfo for quoting
+                                let context_info = wa::ContextInfo {
+                                    stanza_id: Some(ctx.info.id.clone()),
+                                    participant: Some(participant_jid),
+                                    quoted_message: Some(ctx.message.clone()),
+                                    ..Default::default()
+                                };
+
+                                // Create the initial quoted reply message
+                                let reply_message = wa::Message {
+                                    extended_text_message: Some(Box::new(
+                                        wa::message::ExtendedTextMessage {
+                                            text: Some("🏓 Pong!".to_string()),
+                                            context_info: Some(Box::new(context_info.clone())),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                    ..Default::default()
+                                };
+
                                 // 1. Send the initial message and get its ID
-                                let sent_msg_id = match ctx
-                                    .send_message(wa::Message {
-                                        conversation: Some("🏓 Pong!".to_string()),
-                                        ..Default::default()
-                                    })
-                                    .await
-                                {
+                                let sent_msg_id = match ctx.send_message(reply_message).await {
                                     Ok(id) => id,
                                     Err(e) => {
                                         error!("Failed to send initial pong message: {}", e);
@@ -112,6 +133,7 @@ fn main() {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
                                             text: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                            context_info: Some(Box::new(context_info)),
                                             ..Default::default()
                                         },
                                     )),
