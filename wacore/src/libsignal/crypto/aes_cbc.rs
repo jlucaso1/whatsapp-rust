@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_encrypt_into_matches_original() {
         // Test data
-        let test_cases = vec![
+        let test_cases = [
             b"".to_vec(),                                            // Empty
             b"a".to_vec(),                                           // Single byte
             b"hello world".to_vec(),                                 // Short message
@@ -111,12 +111,12 @@ mod tests {
         for (i, plaintext) in test_cases.iter().enumerate() {
             // Test original function
             let original_result = aes_256_cbc_encrypt(plaintext, &key, &iv)
-                .expect(&format!("Original encrypt failed for test case {}", i));
+                .unwrap_or_else(|_| panic!("Original encrypt failed for test case {}", i));
 
             // Test new buffer reuse function
             let mut buffer = Vec::new();
             aes_256_cbc_encrypt_into(plaintext, &key, &iv, &mut buffer)
-                .expect(&format!("Buffer encrypt failed for test case {}", i));
+                .unwrap_or_else(|_| panic!("Buffer encrypt failed for test case {}", i));
 
             // Results should be identical
             assert_eq!(
@@ -128,14 +128,12 @@ mod tests {
             );
 
             // Test that both can be decrypted to same plaintext
-            let decrypted1 = aes_256_cbc_decrypt(&original_result, &key, &iv).expect(&format!(
-                "Failed to decrypt original result for test case {}",
-                i
-            ));
-            let decrypted2 = aes_256_cbc_decrypt(&buffer, &key, &iv).expect(&format!(
-                "Failed to decrypt buffer result for test case {}",
-                i
-            ));
+            let decrypted1 =
+                aes_256_cbc_decrypt(&original_result, &key, &iv).unwrap_or_else(|_| {
+                    panic!("Failed to decrypt original result for test case {}", i)
+                });
+            let decrypted2 = aes_256_cbc_decrypt(&buffer, &key, &iv)
+                .unwrap_or_else(|_| panic!("Failed to decrypt buffer result for test case {}", i));
 
             assert_eq!(
                 decrypted1, *plaintext,
