@@ -42,32 +42,41 @@ impl NoiseSocket {
 
     pub async fn encrypt_and_send(
         &self,
-        mut plaintext_buf: Vec<u8>,
+        plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError> {
-        let ciphertext_result = if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-            // Encrypt inline for small messages
-            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
-            let iv = generate_iv(counter);
-            self.write_key
-                .encrypt(iv.as_ref().into(), &plaintext_buf[..])
-        } else {
-            let write_key = self.write_key.clone();
-            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
-            let plaintext_clone = plaintext_buf.clone();
-
-            match tokio::task::spawn_blocking(move || {
+        let (ciphertext_result, mut plaintext_buf) =
+            if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
+                // Encrypt inline for small messages
+                let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
                 let iv = generate_iv(counter);
-                write_key.encrypt(iv.as_ref().into(), &plaintext_clone[..])
-            })
-            .await
-            {
-                Ok(res) => res,
-                Err(join_err) => {
-                    return Err(EncryptSendError::join(join_err, plaintext_buf, out_buf));
+                let res = self
+                    .write_key
+                    .encrypt(iv.as_ref().into(), &plaintext_buf[..]);
+                (res, plaintext_buf)
+            } else {
+                // Offload larger messages to a blocking thread
+                let write_key = self.write_key.clone();
+                let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+
+                let plaintext_arc = Arc::new(plaintext_buf);
+                let plaintext_arc_for_task = plaintext_arc.clone();
+
+                let spawn_result = tokio::task::spawn_blocking(move || {
+                    let iv = generate_iv(counter);
+                    write_key.encrypt(iv.as_ref().into(), &plaintext_arc_for_task[..])
+                })
+                .await;
+
+                let p_buf = Arc::try_unwrap(plaintext_arc).unwrap_or_else(|arc| (*arc).clone());
+
+                match spawn_result {
+                    Ok(res) => (res, p_buf),
+                    Err(join_err) => {
+                        return Err(EncryptSendError::join(join_err, p_buf, out_buf));
+                    }
                 }
-            }
-        };
+            };
 
         let ciphertext = match ciphertext_result {
             Ok(c) => c,

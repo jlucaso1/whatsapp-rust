@@ -1420,21 +1420,17 @@ impl Client {
             .await
         {
             Ok(bufs) => bufs,
-            Err(e) => {
-                let EncryptSendError {
-                    source,
-                    plaintext_buf,
-                    out_buf,
-                    ..
-                } = e;
+            Err(mut e) => {
+                let p_buf = std::mem::take(&mut e.plaintext_buf);
+                let o_buf = std::mem::take(&mut e.out_buf);
                 let mut g = self.send_buffer_pool.lock().await;
-                if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                    g.push(plaintext_buf);
+                if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(p_buf);
                 }
-                if out_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                    g.push(out_buf);
+                if o_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                    g.push(o_buf);
                 }
-                return Err(SocketError::Crypto(source.to_string()).into());
+                return Err(e.into());
             }
         };
 
