@@ -74,19 +74,12 @@ impl RecentMessageManagerHandle {
     ) -> Result<(), mpsc::error::SendError<RecentMessageCommand>> {
         self.0.send(RecentMessageCommand::Insert(key, msg)).await
     }
-
-    pub(crate) async fn shutdown(
-        &self,
-    ) -> Result<(), mpsc::error::SendError<RecentMessageCommand>> {
-        self.0.send(RecentMessageCommand::Shutdown).await
-    }
 }
 
 #[derive(Debug)]
 pub enum RecentMessageCommand {
     Insert(RecentMessageKey, Arc<wa::Message>),
     Take(RecentMessageKey, oneshot::Sender<Option<Arc<wa::Message>>>),
-    Shutdown,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -267,10 +260,6 @@ impl Client {
                                 list.retain(|k| k != &key);
                                 let _ = responder.send(msg);
                             }
-                            RecentMessageCommand::Shutdown => {
-                                info!("RecentMessageManager shutting down");
-                                break;
-                            }
                         }
                     }
                 });
@@ -442,13 +431,6 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify_waiters();
-
-        // Shutdown recent message manager
-        if let Some(manager) = self.recent_msg_tx.get()
-            && let Err(e) = manager.shutdown().await
-        {
-            warn!("Failed to shutdown recent message manager: {}", e);
-        }
 
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
