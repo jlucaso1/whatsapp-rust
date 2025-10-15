@@ -132,7 +132,7 @@ impl<W: Write> Encoder<W> {
 
             let mut nibbles = if data_type == token::NIBBLE_8 {
                 let indices = input.saturating_sub(Simd::splat(b'-'));
-                const LOOKUP: [u8; 16] = [10, 11, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255];
+                const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
                 Simd::from_array(LOOKUP).swizzle_dyn(indices)
             } else {
                 let ascii_0 = Simd::splat(b'0');
@@ -240,5 +240,26 @@ mod tests {
         let expected = vec![0, 248, 2, 19, 7];
         assert_eq!(buffer, expected);
         assert_eq!(buffer.len(), 5);
+    }
+
+    #[test]
+    fn test_nibble_packing() {
+        // Test string with nibble characters: '-', '.', '0'-'9'
+        let test_str = "-.0123456789";
+        let node = Node::new(
+            "test",
+            std::collections::HashMap::new(),
+            Some(NodeContent::String(test_str.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer));
+        encoder.write_node(&node).unwrap();
+
+        let expected = vec![
+            0, 248, 2, 252, 4, 116, 101, 115, 116, 255, 6, 171, 1, 35, 69, 103, 137,
+        ];
+        assert_eq!(buffer, expected);
+        assert_eq!(buffer.len(), 17);
     }
 }
