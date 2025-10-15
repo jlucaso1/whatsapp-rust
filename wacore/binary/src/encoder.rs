@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use std::simd::prelude::*;
-use std::simd::{Simd, simd_swizzle, u8x16};
+use std::simd::{Simd, u8x16};
 
 use crate::error::Result;
 use crate::node::{Attrs, Node, NodeContent};
@@ -130,10 +130,10 @@ impl<W: Write> Encoder<W> {
             let (chunk, rest) = input_bytes.split_at(16);
             let input = u8x16::from_slice(chunk);
 
-            let nibbles = if data_type == token::NIBBLE_8 {
-                let indices = input.saturating_sub(Simd::splat(b'-')).cast::<usize>();
-                const LOOKUP: [u8; 16] = [10, 11, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0];
-                Simd::gather_or_default(&LOOKUP, indices)
+            let mut nibbles = if data_type == token::NIBBLE_8 {
+                let indices = input.saturating_sub(Simd::splat(b'-'));
+                const LOOKUP: [u8; 16] = [10, 11, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255];
+                Simd::from_array(LOOKUP).swizzle_dyn(indices)
             } else {
                 let ascii_0 = Simd::splat(b'0');
                 let ascii_a = Simd::splat(b'A');
@@ -145,18 +145,13 @@ impl<W: Write> Encoder<W> {
                 is_letter.select(letter_vals, digit_vals)
             };
 
-            let zeros = Simd::splat(0);
-            let hi = simd_swizzle!(
-                nibbles,
-                zeros,
-                [0, 16, 2, 16, 4, 16, 6, 16, 8, 16, 10, 16, 12, 16, 14, 16]
-            );
-            let lo = simd_swizzle!(
-                nibbles,
-                zeros,
-                [1, 16, 3, 16, 5, 16, 7, 16, 9, 16, 11, 16, 13, 16, 15, 16]
-            );
-            let packed = (hi << Simd::splat(4)) | lo;
+            if data_type == token::NIBBLE_8 {
+                let pad_mask = input.simd_eq(Simd::splat(b'\x00'));
+                nibbles = pad_mask.select(Simd::splat(15), nibbles);
+            }
+
+            let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+            let packed = (evens << Simd::splat(4)) | odds;
             let packed_bytes = packed.to_array();
             self.write_raw_bytes(&packed_bytes[..8]);
 
