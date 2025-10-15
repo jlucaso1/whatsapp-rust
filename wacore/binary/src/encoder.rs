@@ -1,5 +1,8 @@
 use std::io::Write;
 
+use std::simd::prelude::*;
+use std::simd::{Simd, simd_swizzle, u8x16};
+
 use crate::error::Result;
 use crate::node::{Attrs, Node, NodeContent};
 use crate::token;
@@ -115,7 +118,7 @@ impl<W: Write> Encoder<W> {
 
         self.write_u8(data_type);
 
-        let mut rounded_len = ((value.len() as f64) / 2.0).ceil() as u8;
+        let mut rounded_len = value.len().div_ceil(2) as u8;
         if !value.len().is_multiple_of(2) {
             rounded_len |= 0x80;
         }
@@ -127,11 +130,83 @@ impl<W: Write> Encoder<W> {
             Self::pack_hex
         };
 
-        let mut chars = value.chars();
+        let mut remaining = value.as_bytes();
+        while remaining.len() >= 16 {
+            let (chunk, rest) = remaining.split_at(16);
+            let packed = Self::pack_chunk_simd(chunk, data_type);
+            self.write_raw_bytes(&packed);
+            remaining = rest;
+        }
+
+        let mut chars = std::str::from_utf8(remaining).unwrap().chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
             self.write_u8(self.pack_byte_pair(packer, part1, part2));
         }
+    }
+
+    fn pack_chunk_simd(chunk: &[u8], data_type: u8) -> [u8; 8] {
+        debug_assert_eq!(chunk.len(), 16);
+
+        let input = u8x16::from_slice(chunk);
+
+        let nibbles = if data_type == token::NIBBLE_8 {
+            Self::nibbles_from_nibble_ascii(input)
+        } else {
+            Self::nibbles_from_hex_ascii(input)
+        };
+
+        let highs = nibbles << Simd::splat(4);
+        let lows = simd_swizzle!(
+            nibbles,
+            [1, 3, 5, 7, 9, 11, 13, 15, 1, 3, 5, 7, 9, 11, 13, 15]
+        );
+        let packed_pairs = highs | lows;
+        let compact = simd_swizzle!(
+            packed_pairs,
+            [0, 2, 4, 6, 8, 10, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+
+        let mut result = [0u8; 8];
+        result.copy_from_slice(&compact.to_array()[..8]);
+        result
+    }
+
+    fn nibbles_from_hex_ascii(input: u8x16) -> u8x16 {
+        let ascii_0 = Simd::splat(b'0');
+        let ascii_9 = Simd::splat(b'9');
+        let ascii_a = Simd::splat(b'A');
+        let ascii_f = Simd::splat(b'F');
+        let ten = Simd::splat(10);
+
+        let mut nibbles = Simd::splat(0);
+
+        let is_digit = input.simd_ge(ascii_0) & input.simd_le(ascii_9);
+        nibbles = is_digit.select(input - ascii_0, nibbles);
+
+        let is_letter = input.simd_ge(ascii_a) & input.simd_le(ascii_f);
+        nibbles = is_letter.select(input - ascii_a + ten, nibbles);
+
+        let is_pad = input.simd_eq(Simd::splat(b'\x00'));
+        is_pad.select(Simd::splat(15), nibbles)
+    }
+
+    fn nibbles_from_nibble_ascii(input: u8x16) -> u8x16 {
+        let mut nibbles = Simd::splat(0);
+
+        let ascii_0 = Simd::splat(b'0');
+        let ascii_9 = Simd::splat(b'9');
+        let is_digit = input.simd_ge(ascii_0) & input.simd_le(ascii_9);
+        nibbles = is_digit.select(input - ascii_0, nibbles);
+
+        let is_dash = input.simd_eq(Simd::splat(b'-'));
+        nibbles = is_dash.select(Simd::splat(10), nibbles);
+
+        let is_dot = input.simd_eq(Simd::splat(b'.'));
+        nibbles = is_dot.select(Simd::splat(11), nibbles);
+
+        let is_pad = input.simd_eq(Simd::splat(b'\x00'));
+        is_pad.select(Simd::splat(15), nibbles)
     }
 
     fn write_list_start(&mut self, len: usize) {
