@@ -84,6 +84,7 @@ mod tests {
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
+            None,
         )
         .await;
 
