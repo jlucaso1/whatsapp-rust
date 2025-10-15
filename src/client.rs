@@ -1415,7 +1415,10 @@ impl Client {
 
         let (plaintext_buf, encrypted_buf) = match send_res {
             Ok(bufs) => bufs,
-            Err(e) => {
+            Err((e, p_buf, e_buf)) => {
+                let mut g = self.send_buffer_pool.lock().await;
+                g.push(p_buf);
+                g.push(e_buf);
                 return Err(e.into());
             }
         };

@@ -42,33 +42,45 @@ impl NoiseSocket {
         &self,
         plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> std::result::Result<(Vec<u8>, Vec<u8>), (SocketError, Vec<u8>, Vec<u8>)> {
         let write_key = self.write_key.clone();
         let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
 
-        let (ciphertext_result, plaintext_buf) = tokio::task::spawn_blocking(move || {
+        let spawn_result = tokio::task::spawn_blocking(move || {
             let iv = generate_iv(counter);
             let res = write_key.encrypt(iv.as_ref().into(), &plaintext_buf[..]);
             (res, plaintext_buf)
         })
-        .await
-        .map_err(|e| SocketError::Crypto(format!("spawn_blocking for encrypt failed: {}", e)))?;
+        .await;
 
-        let mut plaintext_buf = plaintext_buf;
-        let ciphertext = ciphertext_result.map_err(|e| SocketError::Crypto(e.to_string()))?;
+        let (ciphertext_result, mut plaintext_buf) = match spawn_result {
+            Ok(res) => res,
+            Err(join_err) => {
+                return Err((
+                    SocketError::Crypto(format!("spawn_blocking task failed: {}", join_err)),
+                    Vec::new(),
+                    out_buf,
+                ));
+            }
+        };
+
+        let ciphertext = match ciphertext_result {
+            Ok(c) => c,
+            Err(e) => return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf)),
+        };
 
         out_buf.clear();
         out_buf.extend_from_slice(&ciphertext);
         plaintext_buf.clear();
 
-        // Frame the encrypted data with length prefix
-        let framed = crate::framing::encode_frame(&out_buf, None)
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        let framed = match crate::framing::encode_frame(&out_buf, None) {
+            Ok(f) => f,
+            Err(e) => return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf)),
+        };
 
-        self.transport
-            .send(&framed)
-            .await
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        if let Err(e) = self.transport.send(&framed).await {
+            return Err((SocketError::Crypto(e.to_string()), plaintext_buf, out_buf));
+        }
 
         out_buf.clear();
         Ok((plaintext_buf, out_buf))
