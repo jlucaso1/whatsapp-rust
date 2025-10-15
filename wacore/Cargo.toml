@@ -34,7 +34,7 @@ derive_more = { version = "2.0.1", features = [
     "try_from",
 ] }
 displaydoc = "0.2.5"
-flate2 = { workspace = true }
+flate2 = { workspace = true, features = ["zlib-rs"], default-features = false }
 
 ghash = "0.5.1"
 hex = { version = "0.4", features = ["alloc"], default-features = false }
