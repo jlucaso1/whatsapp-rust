@@ -548,10 +548,22 @@ impl Client {
             }
         };
 
-        let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
-            Ok(p) => p,
-            Err(e) => {
+        let encrypted_frame_clone = encrypted_frame.clone();
+        let decrypted_payload_result =
+            tokio::task::spawn_blocking(move || noise_socket.decrypt_frame(&encrypted_frame_clone))
+                .await;
+
+        let decrypted_payload = match decrypted_payload_result {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
                 log::error!(target: "Client", "Failed to decrypt frame: {e}");
+                return;
+            }
+            Err(e) => {
+                log::error!(
+                    target: "Client",
+                    "Failed to decrypt frame (spawn_blocking join error): {e}"
+                );
                 return;
             }
         };

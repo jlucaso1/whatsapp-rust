@@ -7,8 +7,8 @@ use wacore::handshake::utils::generate_iv;
 
 pub struct NoiseSocket {
     transport: Arc<dyn Transport>,
-    write_key: Aes256Gcm,
-    read_key: Aes256Gcm,
+    write_key: Arc<Aes256Gcm>,
+    read_key: Arc<Aes256Gcm>,
     write_counter: Arc<AtomicU32>,
     read_counter: Arc<AtomicU32>,
 }
@@ -17,8 +17,8 @@ impl NoiseSocket {
     pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
         Self {
             transport,
-            write_key,
-            read_key,
+            write_key: Arc::new(write_key),
+            read_key: Arc::new(read_key),
             write_counter: Arc::new(AtomicU32::new(0)),
             read_counter: Arc::new(AtomicU32::new(0)),
         }
@@ -40,10 +40,25 @@ impl NoiseSocket {
 
     pub async fn encrypt_and_send(
         &self,
-        mut plaintext_buf: Vec<u8>,
+        plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        self.encrypt_into(&plaintext_buf, &mut out_buf)?;
+        let write_key = self.write_key.clone();
+        let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+
+        let (ciphertext_result, plaintext_buf) = tokio::task::spawn_blocking(move || {
+            let iv = generate_iv(counter);
+            let res = write_key.encrypt(iv.as_ref().into(), &plaintext_buf[..]);
+            (res, plaintext_buf)
+        })
+        .await
+        .map_err(|e| SocketError::Crypto(format!("spawn_blocking for encrypt failed: {}", e)))?;
+
+        let mut plaintext_buf = plaintext_buf;
+        let ciphertext = ciphertext_result.map_err(|e| SocketError::Crypto(e.to_string()))?;
+
+        out_buf.clear();
+        out_buf.extend_from_slice(&ciphertext);
         plaintext_buf.clear();
 
         // Frame the encrypted data with length prefix
