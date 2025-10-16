@@ -314,6 +314,7 @@ impl PairUtils {
         };
         let cipher = Aes256Gcm::new_from_slice(&encryption_key)
             .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
+        #[allow(deprecated)]
         let nonce = aes_gcm::Nonce::from_slice(&[0; 12]);
         let payload = Payload {
             msg: &final_message,

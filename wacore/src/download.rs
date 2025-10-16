@@ -166,6 +166,7 @@ impl DownloadUtils {
         app_info: MediaType,
     ) -> Result<Vec<u8>> {
         use aes::Aes256;
+        #[allow(deprecated)]
         use aes::cipher::generic_array::GenericArray;
         use aes::cipher::{BlockDecrypt, KeyInit};
 
@@ -202,6 +203,7 @@ impl DownloadUtils {
                     let (to_process, rest) = tail.split_at(processable_len);
                     hmac.update(to_process);
                     for cblock in to_process.chunks_exact(BLOCK) {
+                        #[allow(deprecated)]
                         let mut block = GenericArray::clone_from_slice(cblock);
                         cipher.decrypt_block(&mut block);
                         for (b, p) in block.iter_mut().zip(prev_block.iter()) {
@@ -232,6 +234,7 @@ impl DownloadUtils {
 
         let mut final_plain = Vec::with_capacity(final_ciphertext.len());
         for cblock in final_ciphertext.chunks_exact(BLOCK) {
+            #[allow(deprecated)]
             let mut block = GenericArray::clone_from_slice(cblock);
             cipher.decrypt_block(&mut block);
             for (b, p) in block.iter_mut().zip(prev_block.iter()) {
