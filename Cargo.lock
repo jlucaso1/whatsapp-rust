@@ -2449,7 +2449,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
- "bincode",
  "bytes",
  "chrono",
  "dashmap",
