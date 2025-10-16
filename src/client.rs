@@ -847,6 +847,28 @@ impl Client {
         });
     }
 
+    /// Handles incoming `<ack/>` stanzas by resolving pending response waiters.
+    ///
+    /// If an ack with an ID that matches a pending task in `response_waiters`,
+    /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
+    pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
+        let id_opt = node.attrs.get("id").cloned();
+        if let Some(id) = id_opt
+            && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
+        {
+            if waiter.send(node).is_err() {
+                warn!(target: "Client/Ack", "Failed to send ACK response to waiter for ID {id}. Receiver was likely dropped.");
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Wrapper for `handle_ack_response` that accepts a `NodeRef`.
+    pub(crate) async fn handle_ack_response_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
+        let _ = self.handle_ack_response(node.to_owned()).await;
+    }
+
     async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
         let mut attempt = 0u32;
         loop {
@@ -1638,6 +1660,106 @@ mod tests {
 
         info!(
             "✅ test_send_buffer_pool_reuses_both_buffers passed: Buffer pool properly manages buffers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ack_waiter_resolves() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // 1. Insert a waiter for a specific ID
+        let test_id = "ack-test-123".to_string();
+        let (tx, rx) = oneshot::channel();
+        client
+            .response_waiters
+            .lock()
+            .await
+            .insert(test_id.clone(), tx);
+        assert!(
+            client.response_waiters.lock().await.contains_key(&test_id),
+            "Waiter should be inserted before handling ack"
+        );
+
+        // 2. Create a mock <ack/> node with the test ID
+        let ack_node = NodeBuilder::new("ack")
+            .attr("id", test_id.clone())
+            .attr("from", "s.whatsapp.net")
+            .build();
+
+        // 3. Handle the ack
+        let handled = client.handle_ack_response(ack_node).await;
+        assert!(
+            handled,
+            "handle_ack_response should return true when waiter exists"
+        );
+
+        // 4. Await the receiver with a timeout
+        match tokio::time::timeout(Duration::from_secs(1), rx).await {
+            Ok(Ok(response_node)) => {
+                assert_eq!(
+                    response_node.attrs.get("id"),
+                    Some(&test_id),
+                    "Response node should have correct ID"
+                );
+            }
+            Ok(Err(_)) => panic!("Receiver was dropped without being sent a value"),
+            Err(_) => panic!("Test timed out waiting for ack response"),
+        }
+
+        // 5. Verify the waiter was removed
+        assert!(
+            !client.response_waiters.lock().await.contains_key(&test_id),
+            "Waiter should be removed after handling"
+        );
+
+        info!(
+            "✅ test_ack_waiter_resolves passed: ACK response correctly resolves pending waiters"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ack_without_matching_waiter() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Create an ack without any matching waiter
+        let ack_node = NodeBuilder::new("ack")
+            .attr("id", "non-existent-id")
+            .attr("from", "s.whatsapp.net")
+            .build();
+
+        // Should return false since there's no waiter
+        let handled = client.handle_ack_response(ack_node).await;
+        assert!(
+            !handled,
+            "handle_ack_response should return false when no waiter exists"
+        );
+
+        info!(
+            "✅ test_ack_without_matching_waiter passed: ACK without matching waiter handled gracefully"
         );
     }
 }

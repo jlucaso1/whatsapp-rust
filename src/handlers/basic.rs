@@ -94,16 +94,11 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(
-        &self,
-        _client: Arc<Client>,
-        node: &NodeRef<'_>,
-        _cancelled: &mut bool,
-    ) -> bool {
-        use log::info;
-        use wacore::xml::DisplayableNodeRef;
-
-        info!(target: "Client/Recv", "Received ACK node: {}", DisplayableNodeRef(node));
+    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+        // Delegate to the client to check if any task is waiting for this ack.
+        // The client will resolve pending response waiters if the ID matches.
+        client.handle_ack_response_ref(node).await;
+        // We return `true` because this handler's purpose is to consume all <ack> stanzas.
         true
     }
 }
