@@ -549,6 +549,14 @@ impl Client {
         padding_version: u8,
         info: &MessageInfo,
     ) -> Result<(), anyhow::Error> {
+        // Send delivery receipt immediately in the background.
+        // This should not block further message processing.
+        let client_clone = self.clone();
+        let info_clone = info.clone();
+        tokio::spawn(async move {
+            client_clone.send_delivery_receipt(&info_clone).await;
+        });
+
         let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
             "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
