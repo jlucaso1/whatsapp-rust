@@ -22,6 +22,7 @@ use crate::types::presence::Presence;
 use log::{debug, error, info, warn};
 
 use rand::RngCore;
+use rand_core::{OsRng, TryRngCore};
 use scopeguard;
 use std::collections::{HashMap, HashSet, VecDeque};
 use wacore_binary::jid::Jid;
@@ -166,7 +167,7 @@ impl Client {
         override_version: Option<(u32, u32, u32)>,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
-        rand::rng().fill_bytes(&mut unique_id_bytes);
+        OsRng.unwrap_err().fill_bytes(&mut unique_id_bytes);
 
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());

@@ -1,8 +1,8 @@
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
-use rand::TryRngCore;
 use rand_core::OsRng;
+use rand_core::TryRngCore;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use wacore_binary::jid::Jid;
@@ -140,7 +140,7 @@ impl Device {
             .unwrap();
         let signed_pre_key_signature: [u8; 64] = signature_box.as_ref().try_into().unwrap();
         let mut adv_secret_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut adv_secret_key);
+        OsRng.unwrap_err().fill_bytes(&mut adv_secret_key);
 
         Self {
             pn: None,

@@ -10,6 +10,7 @@ use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand_core::OsRng;
 use std::collections::HashSet;
 use std::time::SystemTime;
 use wacore_binary::builder::NodeBuilder;
@@ -130,7 +131,7 @@ where
                         stores.identity_store,
                         bundle,
                         SystemTime::now(),
-                        &mut rand::rngs::OsRng.unwrap_err(),
+                        &mut OsRng.unwrap_err(),
                         UsePQRatchet::No,
                     )
                     .await
@@ -686,10 +687,10 @@ mod tests {
         async fn fetch_prekeys(&self, jids: &[Jid]) -> Result<HashMap<Jid, PreKeyBundle>> {
             let mut result = HashMap::new();
             for jid in jids {
-                if let Some(bundle_opt) = self.prekey_bundles.get(jid) {
-                    if let Some(bundle) = bundle_opt {
-                        result.insert(jid.clone(), bundle.clone());
-                    }
+                if let Some(bundle_opt) = self.prekey_bundles.get(jid)
+                    && let Some(bundle) = bundle_opt
+                {
+                    result.insert(jid.clone(), bundle.clone());
                 }
             }
             Ok(result)
@@ -701,12 +702,12 @@ mod tests {
         ) -> Result<HashMap<Jid, PreKeyBundle>> {
             let mut result = HashMap::new();
             for jid in jids {
-                if let Some(bundle_opt) = self.prekey_bundles.get(jid) {
-                    if let Some(bundle) = bundle_opt {
-                        result.insert(jid.clone(), bundle.clone());
-                    }
-                    // If None, we intentionally omit it from the result (simulating server not returning it)
+                if let Some(bundle_opt) = self.prekey_bundles.get(jid)
+                    && let Some(bundle) = bundle_opt
+                {
+                    result.insert(jid.clone(), bundle.clone());
                 }
+                // If None, we intentionally omit it from the result (simulating server not returning it)
             }
             Ok(result)
         }
@@ -891,13 +892,13 @@ mod tests {
         let prekey_pair = KeyPair::generate(&mut rng);
 
         PreKeyBundle::new(
-            1,                                                   // registration_id
-            1u32.into(),                                         // device_id
-            Some((1u32.into(), prekey_pair.public_key.clone())), // pre_key
-            2u32.into(),                                         // signed_pre_key_id
-            signed_prekey_pair.public_key.clone(),
+            1,
+            1u32.into(),
+            Some((1u32.into(), prekey_pair.public_key)),
+            2u32.into(),
+            signed_prekey_pair.public_key,
             vec![0u8; 64],
-            identity_pair.identity_key().clone(),
+            *identity_pair.identity_key(),
         )
         .expect("Failed to create PreKeyBundle")
     }

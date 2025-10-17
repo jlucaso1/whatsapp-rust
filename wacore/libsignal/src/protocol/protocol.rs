@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use hmac::{Hmac, Mac};
+use hmac::{HmacReset, KeyInit, Mac};
 use prost::Message;
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
@@ -166,7 +166,7 @@ impl SignalMessage {
         if mac_key.len() != 32 {
             return Err(SignalProtocolError::InvalidMacKeyLength(mac_key.len()));
         }
-        let mut mac = Hmac::<Sha256>::new_from_slice(mac_key)
+        let mut mac = HmacReset::<Sha256>::new_from_slice(mac_key)
             .expect("HMAC-SHA256 should accept any size key");
 
         mac.update(sender_identity_key.public_key().serialize().as_ref());

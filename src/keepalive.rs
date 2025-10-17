@@ -2,6 +2,7 @@ use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use log::{debug, info, warn};
 use rand::Rng;
+use rand_core::{OsRng, TryRngCore};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -49,7 +50,7 @@ impl Client {
         let mut error_count = 0u32;
 
         loop {
-            let interval_ms = rand::rng().random_range(
+            let interval_ms = OsRng.unwrap_err().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
             );
             let interval = Duration::from_millis(interval_ms as u64);
