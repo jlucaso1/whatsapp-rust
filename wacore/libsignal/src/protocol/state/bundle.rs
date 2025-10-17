@@ -5,8 +5,8 @@
 
 use std::clone::Clone;
 
-use crate::libsignal::protocol::state::{PreKeyId, SignedPreKeyId};
-use crate::libsignal::protocol::{DeviceId, IdentityKey, PublicKey, Result, SignalProtocolError};
+use crate::protocol::state::{PreKeyId, SignedPreKeyId};
+use crate::protocol::{DeviceId, IdentityKey, PublicKey, Result, SignalProtocolError};
 
 #[derive(Clone)]
 struct SignedPreKey {

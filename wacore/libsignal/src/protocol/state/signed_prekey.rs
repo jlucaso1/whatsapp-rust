@@ -8,7 +8,7 @@ use std::fmt;
 
 use prost::Message;
 
-use crate::libsignal::protocol::{
+use crate::protocol::{
     KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp,
     stores::SignedPreKeyRecordStructure,
 };

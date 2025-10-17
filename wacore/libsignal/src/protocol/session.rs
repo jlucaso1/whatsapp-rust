@@ -7,9 +7,9 @@ use std::time::SystemTime;
 
 use rand::{CryptoRng, Rng};
 
-use crate::libsignal::protocol::state::GenericSignedPreKey;
-use crate::libsignal::protocol::{AliceSignalProtocolParameters, BobSignalProtocolParameters};
-use crate::libsignal::protocol::{
+use crate::protocol::state::GenericSignedPreKey;
+use crate::protocol::{AliceSignalProtocolParameters, BobSignalProtocolParameters};
+use crate::protocol::{
     Direction, IdentityKey, IdentityKeyStore, KeyPair, PreKeyBundle, PreKeyId, PreKeySignalMessage,
     PreKeyStore, ProtocolAddress, Result, SessionRecord, SessionStore, SignalProtocolError,
     SignedPreKeyStore, ratchet,

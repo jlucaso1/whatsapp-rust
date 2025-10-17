@@ -7,7 +7,7 @@ use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 
-use crate::libsignal::crypto::{Error, Result};
+use crate::crypto::{Error, Result};
 
 #[derive(Clone)]
 pub enum CryptographicMac {
