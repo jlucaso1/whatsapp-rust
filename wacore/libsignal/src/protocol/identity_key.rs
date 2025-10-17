@@ -10,7 +10,7 @@
 use prost::Message;
 use rand::{CryptoRng, Rng};
 
-use crate::libsignal::protocol::{
+use crate::protocol::{
     KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, stores::IdentityKeyPairStructure,
 };
 

@@ -1,4 +1,4 @@
-use crate::libsignal::protocol::ProtocolAddress;
+use crate::protocol::ProtocolAddress;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SenderKeyName {

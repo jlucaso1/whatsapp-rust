@@ -1,4 +1,4 @@
-use crate::libsignal::protocol::{
+use crate::protocol::{
     KeyPair, PreKeyRecord, PrivateKey, PublicKey, SignalProtocolError, SignedPreKeyRecord,
     Timestamp,
 };
@@ -85,7 +85,7 @@ pub fn signed_prekey_structure_to_record(
         .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
     let timestamp = Timestamp::from_epoch_millis(structure.timestamp.unwrap_or(0));
     Ok(
-        <SignedPreKeyRecord as crate::libsignal::protocol::GenericSignedPreKey>::new(
+        <SignedPreKeyRecord as crate::protocol::GenericSignedPreKey>::new(
             id, timestamp, &key_pair, signature,
         ),
     )

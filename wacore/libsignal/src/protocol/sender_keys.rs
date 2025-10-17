@@ -8,11 +8,11 @@ use std::collections::VecDeque;
 use itertools::Itertools;
 use prost::Message;
 
-use crate::libsignal::protocol::crypto::hmac_sha256;
-use crate::libsignal::protocol::stores::{
+use crate::protocol::crypto::hmac_sha256;
+use crate::protocol::stores::{
     SenderKeyRecordStructure, SenderKeyStateStructure, sender_key_state_structure,
 };
-use crate::libsignal::protocol::{PrivateKey, PublicKey, SignalProtocolError, consts};
+use crate::protocol::{PrivateKey, PublicKey, SignalProtocolError, consts};
 
 /// A distinct error type to keep from accidentally propagating deserialization errors.
 #[derive(Debug)]

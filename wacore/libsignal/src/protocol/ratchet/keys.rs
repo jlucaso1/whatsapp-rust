@@ -7,9 +7,7 @@ use std::fmt;
 
 use arrayref::array_ref;
 
-use crate::libsignal::protocol::{
-    PrivateKey, PublicKey, Result, crypto, stores::session_structure,
-};
+use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
 
 pub enum MessageKeyGenerator {
     Keys(MessageKeys),

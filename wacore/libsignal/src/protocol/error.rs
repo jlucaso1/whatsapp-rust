@@ -5,7 +5,7 @@
 
 use std::panic::UnwindSafe;
 
-use crate::libsignal::{
+use crate::{
     core::{
         ProtocolAddress,
         curve::{CurveError, KeyType},

@@ -32,14 +32,14 @@ mod state;
 mod storage;
 mod stores;
 mod timestamp;
-pub use crate::libsignal::core::curve::{CurveError, KeyPair, PrivateKey, PublicKey};
-pub use crate::libsignal::core::{
+pub use crate::core::curve::{CurveError, KeyPair, PrivateKey, PublicKey};
+pub use crate::core::{
     Aci, DeviceId, Pni, ProtocolAddress, ServiceId, ServiceIdFixedWidthBinaryBytes, ServiceIdKind,
 };
-pub use crate::libsignal::crypto::aes_256_cbc_encrypt;
-pub use crate::libsignal::protocol::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
-pub use crate::libsignal::protocol::sender_keys::InvalidSenderKeySessionError;
-pub use crate::libsignal::store::sender_key_name::SenderKeyName;
+pub use crate::crypto::aes_256_cbc_encrypt;
+pub use crate::protocol::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
+pub use crate::protocol::sender_keys::InvalidSenderKeySessionError;
+pub use crate::store::sender_key_name::SenderKeyName;
 use error::Result;
 pub use error::SignalProtocolError;
 pub use group_cipher::{

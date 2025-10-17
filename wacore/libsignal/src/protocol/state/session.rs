@@ -9,14 +9,12 @@ use std::time::{Duration, SystemTime};
 use prost::Message;
 use subtle::ConstantTimeEq;
 
-use crate::libsignal::protocol::ratchet::keys::MessageKeyGenerator;
-use crate::libsignal::protocol::ratchet::{ChainKey, RootKey};
-use crate::libsignal::protocol::state::{PreKeyId, SignedPreKeyId};
-use crate::libsignal::protocol::stores::session_structure::{self};
-use crate::libsignal::protocol::stores::{RecordStructure, SessionStructure};
-use crate::libsignal::protocol::{
-    IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError, consts,
-};
+use crate::protocol::ratchet::keys::MessageKeyGenerator;
+use crate::protocol::ratchet::{ChainKey, RootKey};
+use crate::protocol::state::{PreKeyId, SignedPreKeyId};
+use crate::protocol::stores::session_structure::{self};
+use crate::protocol::stores::{RecordStructure, SessionStructure};
+use crate::protocol::{IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError, consts};
 
 /// A distinct error type to keep from accidentally propagating deserialization errors.
 #[derive(Debug)]

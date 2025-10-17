@@ -10,8 +10,8 @@ use rand::{CryptoRng, Rng};
 
 pub use self::keys::{ChainKey, RootKey};
 pub use self::params::{AliceSignalProtocolParameters, BobSignalProtocolParameters, UsePQRatchet};
-use crate::libsignal::protocol::state::SessionState;
-use crate::libsignal::protocol::{KeyPair, Result, SessionRecord};
+use crate::protocol::state::SessionState;
+use crate::protocol::{KeyPair, Result, SessionRecord};
 
 type InitialPQRKey = [u8; 32];
 
