@@ -7,7 +7,7 @@ use aes::Aes256;
 use aes::cipher::typenum::Unsigned;
 use aes::cipher::{InnerIvInit, KeyInit, StreamCipher, StreamCipherSeek};
 
-use crate::libsignal::crypto::{Error, Result};
+use crate::crypto::{Error, Result};
 
 /// A wrapper around [`ctr::Ctr32BE`] that uses a smaller nonce and supports an initial counter.
 pub struct Aes256Ctr32(ctr::Ctr32BE<Aes256>);

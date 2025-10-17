@@ -7,13 +7,13 @@
 
 use async_trait::async_trait;
 
-use crate::libsignal::protocol::error::Result;
-use crate::libsignal::protocol::sender_keys::SenderKeyRecord;
-use crate::libsignal::protocol::state::{
+use crate::protocol::error::Result;
+use crate::protocol::sender_keys::SenderKeyRecord;
+use crate::protocol::state::{
     PreKeyId, PreKeyRecord, SessionRecord, SignedPreKeyId, SignedPreKeyRecord,
 };
-use crate::libsignal::protocol::{IdentityKey, IdentityKeyPair, ProtocolAddress};
-use crate::libsignal::store::sender_key_name::SenderKeyName;
+use crate::protocol::{IdentityKey, IdentityKeyPair, ProtocolAddress};
+use crate::store::sender_key_name::SenderKeyName;
 
 // TODO: consider moving this enum into utils.rs?
 /// Each Signal message can be considered to have exactly two participants, a sender and receiver.

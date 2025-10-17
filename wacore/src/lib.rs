@@ -6,7 +6,7 @@ pub mod client;
 pub mod download;
 pub mod handshake;
 pub mod history_sync;
-pub mod libsignal;
+pub use wacore_libsignal as libsignal;
 pub mod messages;
 pub mod net;
 pub mod pair;

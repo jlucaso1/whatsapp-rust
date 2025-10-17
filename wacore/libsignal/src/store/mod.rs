@@ -1,7 +1,7 @@
 pub mod record_helpers;
 pub mod sender_key_name;
 
-use crate::libsignal::protocol::{IdentityKeyStore, ProtocolAddress, SessionRecord};
+use crate::protocol::{IdentityKeyStore, ProtocolAddress, SessionRecord};
 use async_trait::async_trait;
 use std::error::Error;
 use waproto::whatsapp::{PreKeyRecordStructure, SignedPreKeyRecordStructure};

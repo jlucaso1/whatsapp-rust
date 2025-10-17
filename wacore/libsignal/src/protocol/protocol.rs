@@ -9,10 +9,8 @@ use rand::{CryptoRng, Rng};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::libsignal::protocol::state::{PreKeyId, SignedPreKeyId};
-use crate::libsignal::protocol::{
-    IdentityKey, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp,
-};
+use crate::protocol::state::{PreKeyId, SignedPreKeyId};
+use crate::protocol::{IdentityKey, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp};
 
 pub const CIPHERTEXT_MESSAGE_CURRENT_VERSION: u8 = 4;
 pub const SENDERKEY_MESSAGE_CURRENT_VERSION: u8 = 3;

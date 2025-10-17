@@ -5,15 +5,15 @@
 
 use rand::{CryptoRng, Rng};
 
-use crate::libsignal::crypto::DecryptionError as DecryptionErrorCrypto;
-use crate::libsignal::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt};
-use crate::libsignal::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
-use crate::libsignal::protocol::sender_keys::{SenderKeyState, SenderMessageKey};
-use crate::libsignal::protocol::{
+use crate::crypto::DecryptionError as DecryptionErrorCrypto;
+use crate::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt};
+use crate::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
+use crate::protocol::sender_keys::{SenderKeyState, SenderMessageKey};
+use crate::protocol::{
     CiphertextMessageType, KeyPair, Result, SenderKeyDistributionMessage, SenderKeyMessage,
     SenderKeyRecord, SenderKeyStore, SignalProtocolError, consts,
 };
-use crate::libsignal::store::sender_key_name::SenderKeyName;
+use crate::store::sender_key_name::SenderKeyName;
 
 pub async fn group_encrypt<R: Rng + CryptoRng>(
     sender_key_store: &mut dyn SenderKeyStore,

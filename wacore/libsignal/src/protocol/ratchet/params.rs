@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use crate::libsignal::protocol::{IdentityKey, IdentityKeyPair, KeyPair, PublicKey};
+use crate::protocol::{IdentityKey, IdentityKeyPair, KeyPair, PublicKey};
 
 #[derive(Clone, Copy)]
 pub enum UsePQRatchet {

@@ -8,8 +8,8 @@ use std::time::SystemTime;
 
 use rand::{CryptoRng, Rng};
 
-use crate::libsignal::crypto::DecryptionError as DecryptionErrorCrypto;
-use crate::libsignal::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt_into};
+use crate::crypto::DecryptionError as DecryptionErrorCrypto;
+use crate::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt_into};
 
 // Thread-local buffer for AES encryption to reduce allocations and memory fragmentation
 thread_local! {
@@ -52,11 +52,11 @@ impl EncryptionBuffer {
         &mut self.buffer
     }
 }
-use crate::libsignal::protocol::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
-use crate::libsignal::protocol::ratchet::keys::MessageKeyGenerator;
-use crate::libsignal::protocol::ratchet::{ChainKey, UsePQRatchet};
-use crate::libsignal::protocol::state::SessionState;
-use crate::libsignal::protocol::{
+use crate::protocol::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
+use crate::protocol::ratchet::keys::MessageKeyGenerator;
+use crate::protocol::ratchet::{ChainKey, UsePQRatchet};
+use crate::protocol::state::SessionState;
+use crate::protocol::{
     CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair,
     PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey, Result, SessionRecord,
     SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore, session,
@@ -362,10 +362,7 @@ fn create_decryption_failure_log(
     fn append_session_summary(
         lines: &mut Vec<String>,
         idx: usize,
-        state: std::result::Result<
-            &SessionState,
-            crate::libsignal::protocol::state::InvalidSessionError,
-        >,
+        state: std::result::Result<&SessionState, crate::protocol::state::InvalidSessionError>,
         err: Option<&SignalProtocolError>,
     ) {
         let chains = state.map(|state| state.all_receiver_chain_logging_info());

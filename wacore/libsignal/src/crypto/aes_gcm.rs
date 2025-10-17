@@ -11,7 +11,7 @@ use ghash::GHash;
 use ghash::universal_hash::UniversalHash;
 use subtle::ConstantTimeEq;
 
-use crate::libsignal::crypto::{Aes256Ctr32, Error, Result};
+use crate::crypto::{Aes256Ctr32, Error, Result};
 
 pub const TAG_SIZE: usize = 16;
 pub const NONCE_SIZE: usize = 12;
