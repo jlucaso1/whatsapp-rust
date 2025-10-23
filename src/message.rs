@@ -891,7 +891,7 @@ mod tests {
                 .expect("Failed to create test backend"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None, 200).await;
 
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
@@ -940,7 +940,7 @@ mod tests {
                 .expect("Failed to create test backend"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None, 200).await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
         let info = MessageInfo {
@@ -1004,7 +1004,7 @@ mod tests {
                 .expect("Failed to create test backend"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None, 200).await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
@@ -1096,7 +1096,7 @@ mod tests {
                 .expect("Failed to open whatsapp.db - ensure you have an authenticated session"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None, 200).await;
 
         // Simulate a group message from a LID user we haven't chatted with 1-on-1
         let lid_sender: Jid = "236395184570386.1:75@lid".parse().unwrap();
@@ -1172,7 +1172,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         // Simulate own LID: 236395184570386.1:75@lid (note: using device 75 to match real scenario)
         // Phone number: 559984726662:75@s.whatsapp.net
@@ -1279,7 +1279,7 @@ mod tests {
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let transport_factory = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let (_client, _sync_rx) =
-            Client::new(pm.clone(), transport_factory, mock_http_client(), None).await;
+            Client::new(pm.clone(), transport_factory, mock_http_client(), None, 200).await;
 
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
 
@@ -1458,7 +1458,7 @@ mod tests {
             device.lid = Some("236395184570386.1@lid".parse().unwrap());
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None, 200).await;
 
         // Test case 1: LID group message with participant_pn
         let lid_group_node = NodeBuilder::new("message")
@@ -1663,7 +1663,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
         let display_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
@@ -1742,7 +1742,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         let sender_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
@@ -1846,7 +1846,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net".parse().unwrap();
 
@@ -1912,7 +1912,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net".parse().unwrap();
 
@@ -1980,7 +1980,7 @@ mod tests {
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None, 200).await;
 
         // Simulate a group chat scenario
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();

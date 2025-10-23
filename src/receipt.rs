@@ -107,6 +107,66 @@ impl Client {
             log::warn!(target: "Client/Receipt", "Failed to send delivery receipt for message {}: {:?}", info.id, e);
         }
     }
+
+    /// Sends a custom receipt to a specified JID.
+    ///
+    /// # Arguments
+    ///
+    /// * `jid` - The JID to send the receipt to.
+    /// * `participant` - Optional participant JID for group messages.
+    /// * `message_ids` - Vector of message IDs to include in the receipt.
+    /// * `receipt_type` - Optional receipt type (e.g., "delivery", "read").
+    ///
+    
+    pub async fn send_receipt(
+        &self,
+        jid: &str,
+        participant: Option<&str>,
+        message_ids: &Vec<std::string::String>,
+        receipt_type: &Option<String>,
+    ) -> Result<(), anyhow::Error> {
+
+        let mut attrs = HashMap::new();
+        attrs.insert("to", jid.to_string());
+        attrs.insert("id", message_ids[0].to_string());
+        attrs.insert("t", chrono::Utc::now().timestamp().to_string());
+
+        if let Some(receipt_type) = receipt_type {
+            attrs.insert("type", receipt_type.to_string());
+        }
+
+        if let Some(participant) = participant {
+            attrs.insert("participant", participant.to_string());
+        }
+
+        let node_receipt;
+
+        if message_ids.len() > 1 {
+
+            let list_content = message_ids[1..].iter().map(|id| NodeBuilder::new("item")
+                .attr("id", id.clone())
+                .build());
+
+            let list_build = NodeBuilder::new("list")
+                .children(list_content);
+
+            node_receipt = NodeBuilder::new("receipt")
+                .attrs(attrs)
+                .children([list_build.build()]);
+
+            info!(target: "Client", "Sending receipt: {:?}", node_receipt);
+        } else {
+            node_receipt = NodeBuilder::new("receipt")
+                .attrs(attrs);
+        }
+
+        info!(target: "Client", "Sending receipt with {} message ids", message_ids.len());
+
+        if let Err(e) = self.send_node(node_receipt.build()).await {
+            log::warn!(target: "Client/Receipt", "Failed to send receipt for messages {:?}: {:?}", message_ids, e);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +202,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -177,6 +238,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -205,6 +267,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -235,6 +298,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -263,6 +327,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 

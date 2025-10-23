@@ -65,6 +65,20 @@ pub struct RecentMessageKey {
     pub id: String,
 }
 
+#[derive(Debug)]
+pub struct OfflinePreview {
+    pub expected_count: u32,
+    pub received_count: u32,
+    pub total_received: u32,
+}
+#[derive(Debug)]
+pub struct MessageBatch {
+    from: String,
+    list: Vec<String>,
+    participant: Option<String>,
+}
+
+
 #[derive(Debug, Clone)]
 pub(crate) struct RecentMessageManagerHandle(pub mpsc::Sender<RecentMessageCommand>);
 
@@ -156,6 +170,15 @@ pub struct Client {
 
     /// Version override for testing or manual specification
     pub(crate) override_version: Option<(u32, u32, u32)>,
+
+    /// Batch size for offline messages
+    pub(crate) offline_batch_size: u32,
+
+    /// Preview of offline messages
+    pub(crate) offline_preview: Arc<Mutex<OfflinePreview>>,
+
+    /// Map of batch ID -> MessageBatch for offline messages
+    pub(crate) offline_messages_batch: Arc<Mutex<HashMap<String, MessageBatch>>>,
 }
 
 impl Client {
@@ -164,6 +187,7 @@ impl Client {
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
         override_version: Option<(u32, u32, u32)>,
+        offline_batch_size: u32,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
@@ -222,6 +246,13 @@ impl Client {
             synchronous_ack: false,
             http_client,
             override_version,
+            offline_batch_size,
+            offline_preview: Arc::new(Mutex::new(OfflinePreview {
+                expected_count: 0,
+                received_count: 0,
+                total_received: 0,
+            })),
+            offline_messages_batch: Arc::new(Mutex::new(HashMap::new())),
         };
 
         let arc = Arc::new(this);
@@ -336,6 +367,27 @@ impl Client {
         router.register(Arc::new(UnimplementedHandler::for_chatstate()));
 
         router
+    }
+
+    pub async fn request_offline_batch(&self, count: u32) {
+        let offline_batch = NodeBuilder::new("offline_batch")
+            .attr("count", count.to_string());
+
+        let attrs = NodeBuilder::new("ib")
+            .children([offline_batch.build()]);
+
+        info!("Requesting offline batch with count: {}", count);
+        let results = self.send_node(attrs.build()).await;
+        let results = match results {
+            Ok(results) => results,
+            Err(e) => {
+                error!("Failed to request offline batch: {:?}", e);
+                return;
+            }
+        };
+
+        info!("Offline batch request sent successfully.");
+        info!("{:?}", results);
     }
 
     pub async fn run(self: &Arc<Self>) {
@@ -617,6 +669,72 @@ impl Client {
                     return;
                 }
             }
+        }
+
+        let is_offline = match node.get_attr("offline") {
+            Some(_v) => true,
+            None => false
+        };
+        info!(target: "Client", "is_offline: {is_offline}, nodeoffline: {:?}", node.get_attr("offline"));
+
+        if is_offline {
+            info!(target: "Client", "Received offline node: {}", DisplayableNodeRef(node));
+            let mut count = self.offline_preview.lock().await;
+            count.received_count += 1;
+            count.total_received += 1;
+            info!(target: "Client", "Offline preview: {:?}", count);
+            if node.tag == "notification" || node.tag == "receipt" {
+                self.maybe_deferred_ack_ref(node).await;
+                info!(target: "Client", "Received notification or receipt: {}", DisplayableNodeRef(node));
+            } else {
+                let mut batch = self.offline_messages_batch.lock().await;
+                let from = node.get_attr("from").unwrap().to_string();
+                // devolver participant o none
+                let participant = match node.get_attr("participant") {
+                    Some(participant) => Some(participant.to_string()),
+                    None => None,
+                };
+                let id = node.get_attr("id").unwrap().to_string();
+                let chat_key = format!("{}:{:?}", from, participant);
+
+                 let offline_messages_batch = batch.entry(chat_key).or_insert_with(|| MessageBatch {
+                    from: from.clone(),
+                    list: Vec::new(),
+                    participant: participant.clone(),
+                });
+                
+                offline_messages_batch.list.push(id);
+                info!(target: "Client", "Added message to batch")
+            }
+
+            if count.received_count >= self.offline_batch_size {
+                count.received_count = 0;
+                let mut batch = self.offline_messages_batch.lock().await;
+                info!(target: "Client", "Sending offline batch with count: {}", batch.values().map(|v| v.list.len()).sum::<usize>());
+                for batch in batch.values() {
+                    let _ = self.send_receipt(
+                    &batch.from,
+                    batch.participant.as_deref(), // Option<&str>
+                    &batch.list,
+                    &None,
+                    ).await;
+                }
+                batch.clear();
+                self.request_offline_batch(self.offline_batch_size).await;
+            // self.send_offline_messages_batch(chat_key.clone(), offline_messages_batch.clone()).await;
+        }
+            info!(target: "Client", "Current batch size: {}", self.offline_batch_size);
+
+            return
+        } else
+
+        if node.tag.as_ref() == "message" {
+            let _ = self.send_receipt(
+                &node.get_attr("from").unwrap().to_string(),
+                node.get_attr("participant").map(|v| v.as_ref()), // Option<&str>
+                &vec![node.get_attr("id").unwrap().to_string()],
+                &None,
+            ).await;
         }
 
         // Dispatch to appropriate handler using the router
@@ -1344,6 +1462,22 @@ impl Client {
         false
     }
 
+    pub async fn send_offline_batch(
+        &self
+    ) -> Result<(), anyhow::Error> {
+        let mut batch = self.offline_messages_batch.lock().await;
+        for batch in batch.values() {
+            let _ = self.send_receipt(
+            &batch.from,
+            batch.participant.as_deref(), // Option<&str>
+            &batch.list,
+            &None,
+            ).await;
+        }
+        batch.clear();
+        Ok(())
+    }
+
     pub fn is_connected(&self) -> bool {
         self.noise_socket
             .try_lock()
@@ -1574,6 +1708,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -1629,6 +1764,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -1676,6 +1812,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
@@ -1742,6 +1879,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 

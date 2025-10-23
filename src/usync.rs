@@ -88,6 +88,7 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            200,
         )
         .await;
 
