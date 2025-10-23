@@ -153,8 +153,7 @@ impl Client {
             node_receipt = NodeBuilder::new("receipt")
                 .attrs(attrs)
                 .children([list_build.build()]);
-
-            info!(target: "Client", "Sending receipt: {:?}", node_receipt);
+            
         } else {
             node_receipt = NodeBuilder::new("receipt")
                 .attrs(attrs);

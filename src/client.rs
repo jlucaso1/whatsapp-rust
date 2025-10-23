@@ -376,18 +376,12 @@ impl Client {
         let attrs = NodeBuilder::new("ib")
             .children([offline_batch.build()]);
 
-        info!("Requesting offline batch with count: {}", count);
-        let results = self.send_node(attrs.build()).await;
-        let results = match results {
-            Ok(results) => results,
-            Err(e) => {
-                error!("Failed to request offline batch: {:?}", e);
-                return;
-            }
-        };
+        debug!(target: "Client/OfflineBatch", "Requesting offline batch with count: {}", count);
 
-        info!("Offline batch request sent successfully.");
-        info!("{:?}", results);
+        if let Err(e) = self.send_node(attrs.build()).await {
+            error!("Failed to request offline batch: {:?}", e);
+            return;
+        };
     }
 
     pub async fn run(self: &Arc<Self>) {
@@ -675,17 +669,15 @@ impl Client {
             Some(_v) => true,
             None => false
         };
-        info!(target: "Client", "is_offline: {is_offline}, nodeoffline: {:?}", node.get_attr("offline"));
-
+        
         if is_offline {
-            info!(target: "Client", "Received offline node: {}", DisplayableNodeRef(node));
             let mut count = self.offline_preview.lock().await;
             count.received_count += 1;
             count.total_received += 1;
-            info!(target: "Client", "Offline preview: {:?}", count);
+            debug!(target: "Client/OfflineBatch", "Received offline node: {}, current count: {:?}", DisplayableNodeRef(node), count);
             if node.tag == "notification" || node.tag == "receipt" {
                 self.maybe_deferred_ack_ref(node).await;
-                info!(target: "Client", "Received notification or receipt: {}", DisplayableNodeRef(node));
+                debug!(target: "Client/OfflineBatch", "Received notification or receipt: {}", DisplayableNodeRef(node));
             } else {
                 let mut batch = self.offline_messages_batch.lock().await;
                 let from = node.get_attr("from").unwrap().to_string();
@@ -704,13 +696,12 @@ impl Client {
                 });
                 
                 offline_messages_batch.list.push(id);
-                info!(target: "Client", "Added message to batch")
             }
 
             if count.received_count >= self.offline_batch_size {
                 count.received_count = 0;
                 let mut batch = self.offline_messages_batch.lock().await;
-                info!(target: "Client", "Sending offline batch with count: {}", batch.values().map(|v| v.list.len()).sum::<usize>());
+                debug!(target: "Client/OfflineBatch", "Sending offline batch with count: {}", batch.values().map(|v| v.list.len()).sum::<usize>());
                 for batch in batch.values() {
                     let _ = self.send_receipt(
                     &batch.from,
@@ -721,10 +712,7 @@ impl Client {
                 }
                 batch.clear();
                 self.request_offline_batch(self.offline_batch_size).await;
-            // self.send_offline_messages_batch(chat_key.clone(), offline_messages_batch.clone()).await;
         }
-            info!(target: "Client", "Current batch size: {}", self.offline_batch_size);
-
             return
         } else
 
