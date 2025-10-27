@@ -142,6 +142,7 @@ pub struct BotBuilder {
     http_client: Option<Arc<dyn crate::http::HttpClient>>,
     override_version: Option<(u32, u32, u32)>,
     os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
+    offline_batch_size: Option<u32>,
 }
 
 impl BotBuilder {
@@ -155,6 +156,7 @@ impl BotBuilder {
             http_client: None,
             override_version: None,
             os_info: None,
+            offline_batch_size: None,
         }
     }
 
@@ -321,6 +323,27 @@ impl BotBuilder {
         self
     }
 
+    /// Set the batch size for offline message syncing.
+    ///
+    /// # Arguments
+    /// * `batch_size` - The number of messages to sync in each batch
+    ///
+    /// # Default
+    /// If not set, a default batch size of 200 will be used.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .offline_batch_size(200)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn offline_batch_size(mut self, batch_size: u32) -> Self {
+        self.offline_batch_size = Some(batch_size);
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -380,6 +403,7 @@ impl BotBuilder {
             transport_factory,
             http_client,
             self.override_version,
+            self.offline_batch_size.unwrap_or(200),
         )
         .await;
 
