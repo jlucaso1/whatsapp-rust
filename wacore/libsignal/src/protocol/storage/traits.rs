@@ -37,6 +37,16 @@ pub enum IdentityChange {
     ReplacedExisting,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub trait ThreadSafe: Send + Sync {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send + Sync> ThreadSafe for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait ThreadSafe {}
+#[cfg(target_arch = "wasm32")]
+impl<T> ThreadSafe for T {}
+
 /// Interface defining the identity store, which may be in-memory, on-disk, etc.
 ///
 /// Signal clients usually use the identity store in a [TOFU] manner, but this is not required.
@@ -44,7 +54,7 @@ pub enum IdentityChange {
 /// [TOFU]: https://en.wikipedia.org/wiki/Trust_on_first_use
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-pub trait IdentityKeyStore: Send + Sync {
+pub trait IdentityKeyStore: ThreadSafe {
     /// Return the single specific identity the store is assumed to represent, with private key.
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair>;
 
@@ -82,7 +92,7 @@ pub trait IdentityKeyStore: Send + Sync {
 /// Interface for storing pre-keys downloaded from a server.
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-pub trait PreKeyStore: Send + Sync {
+pub trait PreKeyStore: ThreadSafe {
     /// Look up the pre-key corresponding to `prekey_id`.
     async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord>;
 
@@ -96,7 +106,7 @@ pub trait PreKeyStore: Send + Sync {
 /// Interface for storing signed pre-keys downloaded from a server.
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-pub trait SignedPreKeyStore: Send + Sync {
+pub trait SignedPreKeyStore: ThreadSafe {
     /// Look up the signed pre-key corresponding to `signed_prekey_id`.
     async fn get_signed_pre_key(
         &self,
@@ -120,7 +130,7 @@ pub trait SignedPreKeyStore: Send + Sync {
 /// [Double Ratchet]: https://signal.org/docs/specifications/doubleratchet/
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-pub trait SessionStore: Send + Sync {
+pub trait SessionStore: ThreadSafe {
     /// Look up the session corresponding to `address`.
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>>;
 
@@ -135,7 +145,7 @@ pub trait SessionStore: Send + Sync {
 /// Interface for storing sender key records, allowing multiple keys per user.
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-pub trait SenderKeyStore: Send + Sync {
+pub trait SenderKeyStore: ThreadSafe {
     /// Assign `record` to the entry for `(sender, distribution_id)`.
     async fn store_sender_key(
         &mut self,
