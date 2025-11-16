@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::cell::RefCell;
+
 use rand::{CryptoRng, Rng};
 
-use crate::crypto::DecryptionError as DecryptionErrorCrypto;
-use crate::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt};
+use crate::crypto::aes_256_cbc_decrypt;
+use crate::crypto::{DecryptionError as DecryptionErrorCrypto, aes_256_cbc_encrypt_into};
 use crate::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
 use crate::protocol::sender_keys::{SenderKeyState, SenderMessageKey};
 use crate::protocol::{
@@ -14,6 +16,26 @@ use crate::protocol::{
     SenderKeyRecord, SenderKeyStore, SignalProtocolError, consts,
 };
 use crate::store::sender_key_name::SenderKeyName;
+
+struct EncryptionBuffer {
+    buffer: Vec<u8>,
+}
+
+impl EncryptionBuffer {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(1024),
+        }
+    }
+    fn get_buffer(&mut self) -> &mut Vec<u8> {
+        self.buffer.clear();
+        &mut self.buffer
+    }
+}
+
+thread_local! {
+    static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
+}
 
 pub async fn group_encrypt<R: Rng + CryptoRng>(
     sender_key_store: &mut dyn SenderKeyStore,
@@ -41,10 +63,15 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
 
     let message_keys = sender_chain_key.sender_message_key();
 
-    let ciphertext = aes_256_cbc_encrypt(plaintext, message_keys.cipher_key(), message_keys.iv())
-        .map_err(|_| {
-        log::error!("outgoing sender key state corrupt for distribution",);
-        SignalProtocolError::InvalidSenderKeySession
+    let ciphertext = ENCRYPTION_BUFFER.with(|buffer| {
+        let mut buf_wrapper = buffer.borrow_mut();
+        let buf = buf_wrapper.get_buffer();
+        aes_256_cbc_encrypt_into(plaintext, message_keys.cipher_key(), message_keys.iv(), buf)
+            .map_err(|_| {
+                log::error!("outgoing sender key state corrupt for distribution");
+                SignalProtocolError::InvalidSenderKeySession
+            })?;
+        Ok::<Vec<u8>, SignalProtocolError>(buf.clone())
     })?;
 
     let signing_key = sender_key_state
