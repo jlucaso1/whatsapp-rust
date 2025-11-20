@@ -25,48 +25,38 @@ impl MessageKeyGenerator {
         }
     }
     pub fn into_pb(self) -> session_structure::chain::MessageKey {
-        match self {
-            Self::Keys(k) => session_structure::chain::MessageKey {
-                cipher_key: k.cipher_key().to_vec(),
-                mac_key: k.mac_key().to_vec(),
-                iv: k.iv().to_vec(),
-                index: k.counter(),
-                seed: vec![],
-            },
-            Self::Seed((seed, counter)) => session_structure::chain::MessageKey {
-                cipher_key: vec![],
-                mac_key: vec![],
-                iv: vec![],
-                index: counter,
-                seed,
-            },
+        let keys = self.generate_keys();
+        session_structure::chain::MessageKey {
+            cipher_key: Some(keys.cipher_key().to_vec()),
+            mac_key: Some(keys.mac_key().to_vec()),
+            iv: Some(keys.iv().to_vec()),
+            index: Some(keys.counter()),
         }
     }
     pub fn from_pb(
         pb: session_structure::chain::MessageKey,
     ) -> std::result::Result<Self, &'static str> {
-        Ok(if pb.seed.is_empty() {
-            Self::Keys(MessageKeys {
-                cipher_key: pb
-                    .cipher_key
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "invalid message cipher key")?,
-                mac_key: pb
-                    .mac_key
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "invalid message MAC key")?,
-                iv: pb
-                    .iv
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "invalid message IV")?,
-                counter: pb.index,
-            })
-        } else {
-            Self::Seed((pb.seed, pb.index))
-        })
+        Ok(Self::Keys(MessageKeys {
+            cipher_key: pb
+                .cipher_key
+                .as_deref()
+                .ok_or("missing cipher key")?
+                .try_into()
+                .map_err(|_| "invalid message cipher key")?,
+            mac_key: pb
+                .mac_key
+                .as_deref()
+                .ok_or("missing mac key")?
+                .try_into()
+                .map_err(|_| "invalid message MAC key")?,
+            iv: pb
+                .iv
+                .as_deref()
+                .ok_or("missing iv")?
+                .try_into()
+                .map_err(|_| "invalid message IV")?,
+            counter: pb.index.unwrap_or(0),
+        }))
     }
 }
 
