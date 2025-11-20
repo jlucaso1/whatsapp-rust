@@ -262,7 +262,10 @@ impl SessionState {
                     let chain_key_bytes = key_bytes[..]
                         .try_into()
                         .map_err(|_| InvalidSessionError("invalid receiver chain key"))?;
-                    Ok(Some(ChainKey::new(chain_key_bytes, c.index.unwrap_or(0))))
+                    let index = c
+                        .index
+                        .ok_or(InvalidSessionError("missing receiver chain key index"))?;
+                    Ok(Some(ChainKey::new(chain_key_bytes, index)))
                 }
             },
         }
@@ -340,7 +343,10 @@ impl SessionState {
             .try_into()
             .map_err(|_| InvalidSessionError("invalid sender chain key"))?;
 
-        Ok(ChainKey::new(chain_key_bytes, chain_key.index.unwrap_or(0)))
+        let index = chain_key
+            .index
+            .ok_or(InvalidSessionError("missing sender chain key index"))?;
+        Ok(ChainKey::new(chain_key_bytes, index))
     }
 
     pub fn get_sender_chain_key_bytes(&self) -> Result<Vec<u8>, InvalidSessionError> {
@@ -377,11 +383,16 @@ impl SessionState {
         counter: u32,
     ) -> Result<Option<MessageKeyGenerator>, InvalidSessionError> {
         if let Some(mut chain_and_index) = self.get_receiver_chain(sender)? {
-            let message_key_idx = chain_and_index
-                .0
-                .message_keys
-                .iter()
-                .position(|m| m.index.unwrap_or(0) == counter);
+            let mut message_key_idx = None;
+            for (i, m) in chain_and_index.0.message_keys.iter().enumerate() {
+                let idx = m
+                    .index
+                    .ok_or(InvalidSessionError("missing message key index"))?;
+                if idx == counter {
+                    message_key_idx = Some(i);
+                    break;
+                }
+            }
 
             if let Some(position) = message_key_idx {
                 let message_key = chain_and_index.0.message_keys.remove(position);
