@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::time::SystemTime;
-
 use rand::{CryptoRng, Rng};
 
 use crate::protocol::state::GenericSignedPreKey;
@@ -137,7 +135,6 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
     session_store: &mut dyn SessionStore,
     identity_store: &mut dyn IdentityKeyStore,
     bundle: &PreKeyBundle,
-    now: SystemTime,
     mut csprng: &mut R,
     use_pq_ratchet: ratchet::UsePQRatchet,
 ) -> Result<()> {
@@ -195,7 +192,6 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         their_one_time_prekey_id,
         bundle.signed_pre_key_id()?,
         &our_base_key_pair.public_key,
-        now,
     );
 
     session.set_local_registration_id(identity_store.get_local_registration_id().await?);

@@ -34,9 +34,9 @@ impl PreKeyRecord {
         let private_key = key.private_key.serialize().to_vec();
         Self {
             pre_key: PreKeyRecordStructure {
-                id: id.into(),
-                public_key,
-                private_key,
+                id: Some(id.into()),
+                public_key: Some(public_key),
+                private_key: Some(private_key),
             },
         }
     }
@@ -49,22 +49,42 @@ impl PreKeyRecord {
     }
 
     pub fn id(&self) -> Result<PreKeyId> {
-        Ok(self.pre_key.id.into())
+        Ok(self
+            .pre_key
+            .id
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
+            .into())
     }
 
     pub fn key_pair(&self) -> Result<KeyPair> {
         Ok(KeyPair::from_public_and_private(
-            &self.pre_key.public_key,
-            &self.pre_key.private_key,
+            self.pre_key
+                .public_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+            self.pre_key
+                .private_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
         )?)
     }
 
     pub fn public_key(&self) -> Result<PublicKey> {
-        Ok(PublicKey::deserialize(&self.pre_key.public_key)?)
+        Ok(PublicKey::deserialize(
+            self.pre_key
+                .public_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+        )?)
     }
 
     pub fn private_key(&self) -> Result<PrivateKey> {
-        Ok(PrivateKey::deserialize(&self.pre_key.private_key)?)
+        Ok(PrivateKey::deserialize(
+            self.pre_key
+                .private_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+        )?)
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
