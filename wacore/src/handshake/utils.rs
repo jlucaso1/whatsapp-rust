@@ -209,6 +209,7 @@ impl HandshakeUtils {
             client_finish: Some(wa::handshake_message::ClientFinish {
                 r#static: Some(encrypted_pubkey),
                 payload: Some(encrypted_payload),
+                extended_ciphertext: None,
             }),
             ..Default::default()
         }
