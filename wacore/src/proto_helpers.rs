@@ -117,7 +117,11 @@ impl ConversationExt for wa::Conversation {
     fn participant_jids(&self) -> Vec<Jid> {
         self.participant
             .iter()
-            .filter_map(|p| Jid::from_str(&p.user_jid).ok())
+            .filter_map(|p| {
+                p.user_jid
+                    .as_deref()
+                    .and_then(|jid| Jid::from_str(jid).ok())
+            })
             .collect()
     }
 
@@ -128,7 +132,11 @@ impl ConversationExt for wa::Conversation {
                 p.rank() == wa::group_participant::Rank::Admin
                     || p.rank() == wa::group_participant::Rank::Superadmin
             })
-            .filter_map(|p| Jid::from_str(&p.user_jid).ok())
+            .filter_map(|p| {
+                p.user_jid
+                    .as_deref()
+                    .and_then(|jid| Jid::from_str(jid).ok())
+            })
             .collect()
     }
 
