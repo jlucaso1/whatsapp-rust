@@ -11,7 +11,6 @@ use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::collections::HashSet;
-use std::time::SystemTime;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
@@ -129,7 +128,6 @@ where
                         stores.session_store,
                         stores.identity_store,
                         bundle,
-                        SystemTime::now(),
                         &mut rand::rngs::OsRng.unwrap_err(),
                         UsePQRatchet::No,
                     )
@@ -179,7 +177,6 @@ where
             &signal_address,
             stores.session_store,
             stores.identity_store,
-            SystemTime::now(),
         )
         .await
         {
@@ -353,14 +350,8 @@ where
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let signal_address = to_jid.to_protocol_address();
 
-    let encrypted_message = message_encrypt(
-        &plaintext,
-        &signal_address,
-        session_store,
-        identity_store,
-        SystemTime::now(),
-    )
-    .await?;
+    let encrypted_message =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
 
     let (enc_type, serialized_bytes) = match encrypted_message {
         CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),

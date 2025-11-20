@@ -125,8 +125,8 @@ impl IdentityKeyPair {
     /// Return a byte slice which can later be deserialized with [`Self::try_from`].
     pub fn serialize(&self) -> Box<[u8]> {
         let structure = IdentityKeyPairStructure {
-            public_key: self.identity_key.serialize().to_vec(),
-            private_key: self.private_key.serialize().to_vec(),
+            public_key: Some(self.identity_key.serialize().to_vec()),
+            private_key: Some(self.private_key.serialize().to_vec()),
         };
 
         let result = structure.encode_to_vec();
@@ -157,8 +157,19 @@ impl TryFrom<&[u8]> for IdentityKeyPair {
         let structure = IdentityKeyPairStructure::decode(value)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         Ok(Self {
-            identity_key: IdentityKey::try_from(&structure.public_key[..])?,
-            private_key: PrivateKey::deserialize(&structure.private_key)?,
+            identity_key: IdentityKey::try_from(
+                structure
+                    .public_key
+                    .as_ref()
+                    .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
+                    .as_slice(),
+            )?,
+            private_key: PrivateKey::deserialize(
+                structure
+                    .private_key
+                    .as_ref()
+                    .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+            )?,
         })
     }
 }

@@ -32,7 +32,12 @@ pub struct SignedPreKeyRecord {
 
 impl SignedPreKeyRecord {
     pub fn private_key(&self) -> Result<PrivateKey> {
-        Ok(PrivateKey::deserialize(&self.get_storage().private_key)?)
+        Ok(PrivateKey::deserialize(
+            self.get_storage()
+                .private_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+        )?)
     }
 }
 
@@ -67,11 +72,11 @@ pub trait GenericSignedPreKey {
         let private_key = key_pair.get_private().serialize();
         let signature = signature.to_vec();
         Self::from_storage(SignedPreKeyRecordStructure {
-            id: id.into(),
-            timestamp,
-            public_key,
-            private_key,
-            signature,
+            id: Some(id.into()),
+            timestamp: Some(timestamp),
+            public_key: Some(public_key),
+            private_key: Some(private_key),
+            signature: Some(signature),
         })
     }
 
@@ -90,25 +95,47 @@ pub trait GenericSignedPreKey {
     }
 
     fn id(&self) -> Result<Self::Id> {
-        Ok(self.get_storage().id.into())
+        Ok(self
+            .get_storage()
+            .id
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
+            .into())
     }
 
     fn timestamp(&self) -> Result<Timestamp> {
-        Ok(Timestamp::from_epoch_millis(self.get_storage().timestamp))
+        Ok(Timestamp::from_epoch_millis(
+            self.get_storage()
+                .timestamp
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+        ))
     }
 
     fn signature(&self) -> Result<Vec<u8>> {
-        Ok(self.get_storage().signature.clone())
+        self.get_storage()
+            .signature
+            .clone()
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
     }
 
     fn public_key(&self) -> Result<<Self::KeyPair as KeyPairSerde>::PublicKey> {
-        <Self::KeyPair as KeyPairSerde>::PublicKey::deserialize(&self.get_storage().public_key)
+        <Self::KeyPair as KeyPairSerde>::PublicKey::deserialize(
+            self.get_storage()
+                .public_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+        )
     }
 
     fn key_pair(&self) -> Result<Self::KeyPair> {
         Self::KeyPair::from_public_and_private(
-            &self.get_storage().public_key,
-            &self.get_storage().private_key,
+            self.get_storage()
+                .public_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
+            self.get_storage()
+                .private_key
+                .as_ref()
+                .ok_or(SignalProtocolError::InvalidProtobufEncoding)?,
         )
     }
 }
