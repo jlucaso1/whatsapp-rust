@@ -1,9 +1,9 @@
 use crate::client::Client;
+use crate::jid_utils::server_jid;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::SERVER_JID;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MediaConnHost {
@@ -40,7 +40,7 @@ impl Client {
             .send_iq(InfoQuery {
                 namespace: "w:m",
                 query_type: InfoQueryType::Set,
-                to: SERVER_JID.parse().unwrap(),
+                to: server_jid(),
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![

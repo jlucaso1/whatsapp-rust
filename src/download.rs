@@ -89,7 +89,10 @@ impl Client {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow!("All media hosts failed")))
+        match last_err {
+            Some(err) => Err(err),
+            None => Err(anyhow!("Failed to download from all available media hosts")),
+        }
     }
 
     async fn download_and_write<W: Write + Seek + Send + Unpin>(
