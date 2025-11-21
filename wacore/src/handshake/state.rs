@@ -24,7 +24,7 @@ impl HandshakeState {
         let mut noise = noise::NoiseHandshake::new(NOISE_START_PATTERN, wa_header)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
-        noise.authenticate(ephemeral_kp.public_key.public_key_bytes());
+        noise.authenticate(ephemeral_kp.public_key.public_key_bytes())?;
 
         Ok(Self {
             noise,
@@ -55,7 +55,7 @@ impl HandshakeState {
             .try_into()
             .map_err(|_| HandshakeError::InvalidKeyLength)?;
 
-        self.noise.authenticate(&server_ephemeral);
+        self.noise.authenticate(&server_ephemeral)?;
         self.noise
             .mix_shared_secret(
                 &self.ephemeral_kp.private_key.serialize(),

@@ -1,7 +1,8 @@
 use crate::client::Client;
+use crate::jid_utils::server_jid;
 use log;
 use wacore::libsignal::protocol::PreKeyBundle;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::Jid;
 use wacore_binary::node::NodeContent;
 
 use crate::request::{InfoQuery, InfoQueryType};
@@ -30,7 +31,7 @@ impl Client {
             .send_iq(crate::request::InfoQuery {
                 namespace: "encrypt",
                 query_type: crate::request::InfoQueryType::Get,
-                to: SERVER_JID.parse().unwrap(),
+                to: server_jid(),
                 content: Some(NodeContent::Nodes(vec![content])),
                 id: None,
                 target: None,
@@ -53,7 +54,7 @@ impl Client {
         let iq = InfoQuery {
             namespace: "encrypt",
             query_type: InfoQueryType::Get,
-            to: SERVER_JID.parse().unwrap(),
+            to: server_jid(),
             content: Some(wacore_binary::node::NodeContent::Nodes(vec![count_node])),
             id: None,
             target: None,
@@ -185,7 +186,7 @@ impl Client {
         let iq = InfoQuery {
             namespace: "encrypt",
             query_type: InfoQueryType::Set,
-            to: SERVER_JID.parse().unwrap(),
+            to: server_jid(),
             content: Some(wacore_binary::node::NodeContent::Nodes(iq_content)),
             id: None,
             target: None,

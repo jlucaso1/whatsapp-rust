@@ -12,62 +12,68 @@ pub(crate) struct Encoder<W: Write> {
 }
 
 impl<W: Write> Encoder<W> {
-    pub(crate) fn new(writer: W) -> Self {
+    pub(crate) fn new(writer: W) -> Result<Self> {
         let mut enc = Self { writer };
-        enc.write_u8(0);
-        enc
+        enc.write_u8(0)?;
+        Ok(enc)
     }
 
-    fn write_u8(&mut self, val: u8) {
-        self.writer.write_all(&[val]).unwrap();
+    fn write_u8(&mut self, val: u8) -> Result<()> {
+        self.writer.write_all(&[val])?;
+        Ok(())
     }
 
-    fn write_u16_be(&mut self, val: u16) {
-        self.writer.write_all(&val.to_be_bytes()).unwrap();
+    fn write_u16_be(&mut self, val: u16) -> Result<()> {
+        self.writer.write_all(&val.to_be_bytes())?;
+        Ok(())
     }
 
-    fn write_u32_be(&mut self, val: u32) {
-        self.writer.write_all(&val.to_be_bytes()).unwrap();
+    fn write_u32_be(&mut self, val: u32) -> Result<()> {
+        self.writer.write_all(&val.to_be_bytes())?;
+        Ok(())
     }
 
-    fn write_u20_be(&mut self, value: u32) {
-        let _ = self.writer.write_all(&[((value >> 16) & 0x0F) as u8]);
-        let _ = self.writer.write_all(&[((value >> 8) & 0xFF) as u8]);
-        let _ = self.writer.write_all(&[(value & 0xFF) as u8]);
+    fn write_u20_be(&mut self, value: u32) -> Result<()> {
+        self.writer.write_all(&[((value >> 16) & 0x0F) as u8])?;
+        self.writer.write_all(&[((value >> 8) & 0xFF) as u8])?;
+        self.writer.write_all(&[(value & 0xFF) as u8])?;
+        Ok(())
     }
 
-    fn write_raw_bytes(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
+    fn write_raw_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes)?;
+        Ok(())
     }
 
-    fn write_bytes_with_len(&mut self, bytes: &[u8]) {
+    fn write_bytes_with_len(&mut self, bytes: &[u8]) -> Result<()> {
         let len = bytes.len();
         if len < 256 {
-            self.write_u8(token::BINARY_8);
-            self.write_u8(len as u8);
+            self.write_u8(token::BINARY_8)?;
+            self.write_u8(len as u8)?;
         } else if len < (1 << 20) {
-            self.write_u8(token::BINARY_20);
-            self.write_u20_be(len as u32);
+            self.write_u8(token::BINARY_20)?;
+            self.write_u20_be(len as u32)?;
         } else {
-            self.write_u8(token::BINARY_32);
-            self.write_u32_be(len as u32);
+            self.write_u8(token::BINARY_32)?;
+            self.write_u32_be(len as u32)?;
         }
-        self.write_raw_bytes(bytes);
+        self.write_raw_bytes(bytes)
     }
 
-    fn write_string(&mut self, s: &str) {
+    fn write_string(&mut self, s: &str) -> Result<()> {
         if let Some(token) = token::index_of_single_token(s) {
-            self.write_u8(token);
+            self.write_u8(token)?;
         } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
-            self.write_u8(token::DICTIONARY_0 + dict);
-            self.write_u8(token);
+            self.write_u8(token::DICTIONARY_0 + dict)?;
+            self.write_u8(token)?;
         } else if Self::validate_nibble(s) {
-            self.write_packed_bytes(s, token::NIBBLE_8);
+            self.write_packed_bytes(s, token::NIBBLE_8)?;
         } else if Self::validate_hex(s) {
-            self.write_packed_bytes(s, token::HEX_8);
+            self.write_packed_bytes(s, token::HEX_8)?;
         } else {
-            self.write_bytes_with_len(s.as_bytes());
+            self.write_bytes_with_len(s.as_bytes())?;
         }
+        Ok(())
     }
 
     fn validate_nibble(value: &str) -> bool {
@@ -111,18 +117,18 @@ impl<W: Write> Encoder<W> {
         (packer(part1) << 4) | packer(part2)
     }
 
-    fn write_packed_bytes(&mut self, value: &str, data_type: u8) {
+    fn write_packed_bytes(&mut self, value: &str, data_type: u8) -> Result<()> {
         if value.len() > token::PACKED_MAX as usize {
             panic!("String too long to be packed: {}", value.len());
         }
 
-        self.write_u8(data_type);
+        self.write_u8(data_type)?;
 
         let mut rounded_len = value.len().div_ceil(2) as u8;
         if !value.len().is_multiple_of(2) {
             rounded_len |= 0x80;
         }
-        self.write_u8(rounded_len);
+        self.write_u8(rounded_len)?;
 
         let mut input_bytes = value.as_bytes();
 
@@ -153,7 +159,7 @@ impl<W: Write> Encoder<W> {
             let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
             let packed = (evens << Simd::splat(4)) | odds;
             let packed_bytes = packed.to_array();
-            self.write_raw_bytes(&packed_bytes[..8]);
+            self.write_raw_bytes(&packed_bytes[..8])?;
 
             input_bytes = rest;
         }
@@ -164,39 +170,41 @@ impl<W: Write> Encoder<W> {
             Self::pack_hex
         };
 
-        let mut chars = core::str::from_utf8(input_bytes).unwrap().chars();
+        let mut chars = core::str::from_utf8(input_bytes)?.chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
-            self.write_u8(self.pack_byte_pair(packer, part1, part2));
+            self.write_u8(self.pack_byte_pair(packer, part1, part2))?;
         }
+        Ok(())
     }
 
-    fn write_list_start(&mut self, len: usize) {
+    fn write_list_start(&mut self, len: usize) -> Result<()> {
         if len == 0 {
-            self.write_u8(token::LIST_EMPTY);
+            self.write_u8(token::LIST_EMPTY)?;
         } else if len < 256 {
-            self.write_u8(248);
-            self.write_u8(len as u8);
+            self.write_u8(248)?;
+            self.write_u8(len as u8)?;
         } else {
-            self.write_u8(249);
-            self.write_u16_be(len as u16);
+            self.write_u8(249)?;
+            self.write_u16_be(len as u16)?;
         }
+        Ok(())
     }
 
     fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
         for (key, value) in attrs {
-            self.write_string(key);
-            self.write_string(value);
+            self.write_string(key)?;
+            self.write_string(value)?;
         }
         Ok(())
     }
 
     fn write_content(&mut self, content: &NodeContent) -> Result<()> {
         match content {
-            NodeContent::String(s) => self.write_string(s),
-            NodeContent::Bytes(bytes) => self.write_bytes_with_len(bytes),
+            NodeContent::String(s) => self.write_string(s)?,
+            NodeContent::Bytes(bytes) => self.write_bytes_with_len(bytes)?,
             NodeContent::Nodes(nodes) => {
-                self.write_list_start(nodes.len());
+                self.write_list_start(nodes.len())?;
                 for node in nodes {
                     self.write_node(node)?;
                 }
@@ -209,8 +217,8 @@ impl<W: Write> Encoder<W> {
         let content_len = if node.content.is_some() { 1 } else { 0 };
         let list_len = 1 + (node.attrs.len() * 2) + content_len;
 
-        self.write_list_start(list_len);
-        self.write_string(&node.tag);
+        self.write_list_start(list_len)?;
+        self.write_string(&node.tag)?;
         self.write_attributes(&node.attrs)?;
 
         if let Some(content) = &node.content {
@@ -225,8 +233,10 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    type TestResult = crate::error::Result<()>;
+
     #[test]
-    fn test_encode_node() {
+    fn test_encode_node() -> TestResult {
         let node = Node::new(
             "message",
             std::collections::HashMap::new(),
@@ -234,16 +244,17 @@ mod tests {
         );
 
         let mut buffer = Vec::new();
-        let mut encoder = Encoder::new(Cursor::new(&mut buffer));
-        encoder.write_node(&node).unwrap();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
 
         let expected = vec![0, 248, 2, 19, 7];
         assert_eq!(buffer, expected);
         assert_eq!(buffer.len(), 5);
+        Ok(())
     }
 
     #[test]
-    fn test_nibble_packing() {
+    fn test_nibble_packing() -> TestResult {
         // Test string with nibble characters: '-', '.', '0'-'9'
         let test_str = "-.0123456789";
         let node = Node::new(
@@ -253,13 +264,14 @@ mod tests {
         );
 
         let mut buffer = Vec::new();
-        let mut encoder = Encoder::new(Cursor::new(&mut buffer));
-        encoder.write_node(&node).unwrap();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
 
         let expected = vec![
             0, 248, 2, 252, 4, 116, 101, 115, 116, 255, 6, 171, 1, 35, 69, 103, 137,
         ];
         assert_eq!(buffer, expected);
         assert_eq!(buffer.len(), 17);
+        Ok(())
     }
 }

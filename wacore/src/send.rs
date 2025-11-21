@@ -561,8 +561,14 @@ pub async fn prepare_group_stanza<
 
     // Add phash if we distributed keys in this message
     if let Some(devices) = &resolved_devices_for_phash {
-        let phash = MessageUtils::participant_list_hash(devices);
-        stanza_attrs.insert("phash".to_string(), phash);
+        match MessageUtils::participant_list_hash(devices) {
+            Ok(phash) => {
+                stanza_attrs.insert("phash".to_string(), phash);
+            }
+            Err(e) => {
+                log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
+            }
+        }
     }
 
     let stanza = NodeBuilder::new("message")
@@ -615,8 +621,12 @@ pub async fn create_sender_key_distribution_message_for_group(
         .sender_chain_key()
         .ok_or_else(|| anyhow!("Missing chain key"))?;
 
+    let message_version = state
+        .message_version()
+        .try_into()
+        .map_err(|e| anyhow!("Invalid sender key message version: {e}"))?;
     let skdm = SenderKeyDistributionMessage::new(
-        state.message_version().try_into().unwrap(),
+        message_version,
         state.chain_id(),
         chain_key.iteration(),
         chain_key.seed().to_vec(),

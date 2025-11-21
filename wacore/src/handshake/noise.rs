@@ -7,6 +7,22 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
+fn to_array(slice: &[u8], name: &'static str) -> Result<[u8; 32]> {
+    slice.try_into().map_err(|_| HandshakeError::InvalidLength {
+        name: name.to_string(),
+        expected: 32,
+        got: slice.len(),
+    })
+}
+
+fn sha256_digest(data: &[u8], name: &'static str) -> Result<[u8; 32]> {
+    let mut hasher =
+        CryptographicHash::new("SHA-256").map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+    hasher.update(data);
+    let out = hasher.finalize();
+    to_array(out.as_slice(), name)
+}
+
 pub struct NoiseHandshake {
     pub hash: [u8; 32],
     pub salt: [u8; 32],
@@ -24,12 +40,9 @@ impl NoiseHandshake {
 
     pub fn new(pattern: &str, header: &[u8]) -> Result<Self> {
         let h: [u8; 32] = if pattern.len() == 32 {
-            pattern.as_bytes().try_into().unwrap()
+            to_array(pattern.as_bytes(), "noise pattern prefix")?
         } else {
-            let mut hasher = CryptographicHash::new("SHA-256").unwrap();
-            hasher.update(pattern.as_bytes());
-            let out = hasher.finalize();
-            <[u8; 32]>::try_from(out.as_slice()).unwrap()
+            sha256_digest(pattern.as_bytes(), "noise pattern derivation")?
         };
 
         let mut new_self = Self {
@@ -40,18 +53,16 @@ impl NoiseHandshake {
             counter: 0,
         };
 
-        new_self.authenticate(header);
+        new_self.authenticate(header)?;
         Ok(new_self)
     }
 
-    pub fn authenticate(&mut self, data: &[u8]) {
+    pub fn authenticate(&mut self, data: &[u8]) -> Result<()> {
         let mut concat = Vec::with_capacity(self.hash.len() + data.len());
         concat.extend_from_slice(&self.hash);
         concat.extend_from_slice(data);
-        let mut hasher = CryptographicHash::new("SHA-256").unwrap();
-        hasher.update(&concat);
-        let out = hasher.finalize();
-        self.hash = <[u8; 32]>::try_from(out.as_slice()).unwrap();
+        self.hash = sha256_digest(&concat, "noise authenticate")?;
+        Ok(())
     }
 
     fn post_increment_counter(&mut self) -> u32 {
@@ -70,7 +81,7 @@ impl NoiseHandshake {
             .key
             .encrypt(iv.as_ref().into(), payload)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
-        self.authenticate(&ciphertext);
+        self.authenticate(&ciphertext)?;
         Ok(ciphertext)
     }
 
@@ -86,7 +97,7 @@ impl NoiseHandshake {
             .decrypt(iv.as_ref().into(), payload)
             .map_err(|e| HandshakeError::Crypto(format!("Noise decrypt failed: {e}")))?;
 
-        self.authenticate(ciphertext);
+        self.authenticate(ciphertext)?;
         Ok(plaintext)
     }
 
