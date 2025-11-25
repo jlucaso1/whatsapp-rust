@@ -216,31 +216,39 @@ impl FromStr for Jid {
             None => ("", s.to_string()),
         };
 
+        let known_servers = [
+            DEFAULT_USER_SERVER,
+            GROUP_SERVER,
+            LEGACY_USER_SERVER,
+            BROADCAST_SERVER,
+            HIDDEN_USER_SERVER,
+            NEWSLETTER_SERVER,
+            HOSTED_SERVER,
+            MESSENGER_SERVER,
+            INTEROP_SERVER,
+            BOT_SERVER,
+            STATUS_BROADCAST_USER,
+        ];
+
         if user_part.is_empty() {
             if s.contains('@') {
-                return Err(JidError::InvalidFormat(
-                    "Invalid JID format: empty user part".to_string(),
-                ));
-            } else {
-                let known_servers = [
-                    DEFAULT_USER_SERVER,
-                    GROUP_SERVER,
-                    LEGACY_USER_SERVER,
-                    BROADCAST_SERVER,
-                    HIDDEN_USER_SERVER,
-                    NEWSLETTER_SERVER,
-                    HOSTED_SERVER,
-                    MESSENGER_SERVER,
-                    INTEROP_SERVER,
-                    BOT_SERVER,
-                    STATUS_BROADCAST_USER,
-                ];
+                if server.is_empty() {
+                    return Err(JidError::InvalidFormat(
+                        "Invalid JID format: missing server".to_string(),
+                    ));
+                }
                 if !known_servers.contains(&server.as_str()) {
                     return Err(JidError::InvalidFormat(format!(
                         "Invalid JID format: unknown server '{}'",
                         server
                     )));
                 }
+                // Allow empty user parts when an '@' is present (e.g. "@g.us").
+            } else if !known_servers.contains(&server.as_str()) {
+                return Err(JidError::InvalidFormat(format!(
+                    "Invalid JID format: unknown server '{}'",
+                    server
+                )));
             }
         }
 
@@ -473,6 +481,17 @@ mod tests {
     }
 
     #[test]
+    fn test_allow_empty_user_with_known_server() {
+        let group_jid = Jid::from_str("@g.us").unwrap();
+        assert_eq!(group_jid.user, "");
+        assert_eq!(group_jid.server, GROUP_SERVER);
+
+        let default_server_jid = Jid::from_str("@s.whatsapp.net").unwrap();
+        assert_eq!(default_server_jid.user, "");
+        assert_eq!(default_server_jid.server, DEFAULT_USER_SERVER);
+    }
+
+    #[test]
     fn test_manual_jid_formatting_edge_cases() {
         // This test directly validates the fixes for the parity failures.
         // We manually construct the Jid struct as the binary decoder would,
@@ -533,7 +552,8 @@ mod tests {
     fn test_invalid_jids_should_fail_to_parse() {
         assert!(Jid::from_str("thisisnotajid").is_err());
         assert!(Jid::from_str("").is_err());
-        assert!(Jid::from_str("@s.whatsapp.net").is_err());
+        assert!(Jid::from_str("@").is_err());
+        assert!(Jid::from_str("@unknown.server").is_err());
         // Jid::from_str("2") should not be possible due to type constraints,
         // but if it were, it should fail. The string must contain '@'.
         assert!(Jid::from_str("2").is_err());

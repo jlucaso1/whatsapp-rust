@@ -4,6 +4,7 @@ use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
+use crate::jid::{Jid, JidExt};
 use crate::node::{Attrs, Node, NodeContent};
 use crate::token;
 
@@ -60,7 +61,25 @@ impl<W: Write> Encoder<W> {
         self.write_raw_bytes(bytes)
     }
 
-    fn write_string(&mut self, s: &str) -> Result<()> {
+    fn write_jid(&mut self, jid: &Jid) -> Result<()> {
+        if jid.is_ad() {
+            self.write_u8(token::AD_JID)?;
+            self.write_u8(jid.agent)?;
+            self.write_u8(jid.device as u8)?;
+            self.write_string_internal(&jid.user, false)?;
+        } else {
+            self.write_u8(token::JID_PAIR)?;
+            if jid.user.is_empty() {
+                self.write_u8(token::LIST_EMPTY)?;
+            } else {
+                self.write_string_internal(&jid.user, false)?;
+            }
+            self.write_string_internal(&jid.server, false)?;
+        }
+        Ok(())
+    }
+
+    fn write_string_internal(&mut self, s: &str, allow_jid: bool) -> Result<()> {
         if let Some(token) = token::index_of_single_token(s) {
             self.write_u8(token)?;
         } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
@@ -70,10 +89,16 @@ impl<W: Write> Encoder<W> {
             self.write_packed_bytes(s, token::NIBBLE_8)?;
         } else if Self::validate_hex(s) {
             self.write_packed_bytes(s, token::HEX_8)?;
+        } else if allow_jid && let Ok(jid) = s.parse::<Jid>() {
+            self.write_jid(&jid)?;
         } else {
             self.write_bytes_with_len(s.as_bytes())?;
         }
         Ok(())
+    }
+
+    fn write_string(&mut self, s: &str) -> Result<()> {
+        self.write_string_internal(s, true)
     }
 
     fn validate_nibble(value: &str) -> bool {
@@ -272,6 +297,27 @@ mod tests {
         ];
         assert_eq!(buffer, expected);
         assert_eq!(buffer.len(), 17);
+        Ok(())
+    }
+
+    #[test]
+    fn test_jid_string_encodes_as_pair() -> TestResult {
+        let mut encoder = Encoder {
+            writer: Cursor::new(Vec::new()),
+        };
+
+        encoder.write_string("@g.us")?;
+        let buffer = encoder.writer.into_inner();
+
+        assert!(buffer.len() >= 3);
+        assert_eq!(buffer[0], token::JID_PAIR);
+        assert_eq!(buffer[1], token::LIST_EMPTY);
+
+        if let Some(server_token) = token::index_of_single_token("g.us") {
+            assert_eq!(buffer[2], server_token);
+            assert_eq!(buffer.len(), 3);
+        }
+
         Ok(())
     }
 }
