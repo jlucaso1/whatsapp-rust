@@ -46,7 +46,13 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
     let mut record = sender_key_store
         .load_sender_key(sender_key_name)
         .await?
-        .ok_or(SignalProtocolError::NoSenderKeyState)?;
+        .ok_or_else(|| {
+            SignalProtocolError::NoSenderKeyState(format!(
+                "no sender key record for group {} sender {}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            ))
+        })?;
 
     let sender_key_state = record
         .sender_key_state_mut()
@@ -150,7 +156,13 @@ pub async fn group_decrypt(
     let mut record = sender_key_store
         .load_sender_key(sender_key_name)
         .await?
-        .ok_or(SignalProtocolError::NoSenderKeyState)?;
+        .ok_or_else(|| {
+            SignalProtocolError::NoSenderKeyState(format!(
+                "no sender key record for group {} sender {}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            ))
+        })?;
 
     let sender_key_state = match record.sender_key_state_for_chain_id(chain_id) {
         Some(state) => state,
@@ -160,7 +172,11 @@ pub async fn group_decrypt(
                 chain_id,
                 record.chain_ids_for_logging().collect::<Vec<_>>(),
             );
-            return Err(SignalProtocolError::NoSenderKeyState);
+            return Err(SignalProtocolError::NoSenderKeyState(format!(
+                "no sender key state for chain id {} (known chain IDs: {:?})",
+                chain_id,
+                record.chain_ids_for_logging().collect::<Vec<_>>()
+            )));
         }
     };
 
