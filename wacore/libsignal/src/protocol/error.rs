@@ -62,8 +62,8 @@ pub enum SignalProtocolError {
     /// invalid MAC key length <{0}>
     InvalidMacKeyLength(usize),
 
-    /// no sender key state
-    NoSenderKeyState,
+    /// no sender key state: {0}
+    NoSenderKeyState(String),
 
     /// session with {0} not found
     SessionNotFound(ProtocolAddress),

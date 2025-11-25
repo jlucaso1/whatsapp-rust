@@ -39,7 +39,13 @@ where
     let mut record = sender_key_store
         .load_sender_key(&sender_key_name)
         .await?
-        .ok_or(SignalProtocolError::NoSenderKeyState)?;
+        .ok_or_else(|| {
+            SignalProtocolError::NoSenderKeyState(format!(
+                "no sender key record for group {} sender {}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            ))
+        })?;
 
     let sender_key_state = record
         .sender_key_state_mut()
