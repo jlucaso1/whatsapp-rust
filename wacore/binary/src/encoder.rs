@@ -217,7 +217,14 @@ impl<W: Write> Encoder<W> {
     }
 
     fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
-        for (key, value) in attrs {
+        if attrs.is_empty() {
+            return Ok(());
+        }
+
+        let mut pairs: Vec<_> = attrs.iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (key, value) in pairs {
             self.write_string(key)?;
             self.write_string(value)?;
         }
@@ -257,6 +264,7 @@ impl<W: Write> Encoder<W> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use crate::decoder::Decoder;
 
     type TestResult = crate::error::Result<()>;
 
@@ -318,6 +326,31 @@ mod tests {
             assert_eq!(buffer.len(), 3);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_attribute_ordering_is_sorted() -> TestResult {
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("beta".to_string(), "2".to_string());
+        attrs.insert("alpha".to_string(), "1".to_string());
+        attrs.insert("gamma".to_string(), "3".to_string());
+
+        let node = Node::new("attr-test", attrs, None);
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref().unwrap();
+        let keys: Vec<_> = decoded
+            .attrs
+            .iter()
+            .map(|(key, _)| key.as_ref().to_string())
+            .collect();
+
+        assert_eq!(keys, vec!["alpha", "beta", "gamma"]);
         Ok(())
     }
 }
