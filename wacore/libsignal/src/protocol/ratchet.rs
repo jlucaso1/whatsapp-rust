@@ -6,7 +6,7 @@
 pub mod keys;
 mod params;
 
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 
 pub use self::keys::{ChainKey, RootKey};
 pub use self::params::{AliceSignalProtocolParameters, BobSignalProtocolParameters, UsePQRatchet};
@@ -38,13 +38,13 @@ fn derive_keys_with_label(label: &[u8], secret_input: &[u8]) -> (RootKey, ChainK
     (root_key, chain_key, pqr_key)
 }
 
-pub fn initialize_alice_session<R: Rng + CryptoRng>(
+pub fn initialize_alice_session<R: TryRngCore + TryCryptoRng>(
     parameters: &AliceSignalProtocolParameters,
-    mut csprng: &mut R,
+    csprng: &mut R,
 ) -> Result<SessionState> {
     let local_identity = parameters.our_identity_key_pair().identity_key();
 
-    let sending_ratchet_key = KeyPair::generate(&mut csprng);
+    let sending_ratchet_key = KeyPair::generate(csprng);
 
     let mut secrets = Vec::with_capacity(32 * 5);
 
@@ -142,7 +142,7 @@ pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Resul
     Ok(session)
 }
 
-pub fn initialize_alice_session_record<R: Rng + CryptoRng>(
+pub fn initialize_alice_session_record<R: TryRngCore + TryCryptoRng>(
     parameters: &AliceSignalProtocolParameters,
     csprng: &mut R,
 ) -> Result<SessionRecord> {

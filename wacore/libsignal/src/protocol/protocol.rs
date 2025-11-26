@@ -5,7 +5,7 @@
 
 use hmac::{HmacReset, KeyInit, Mac};
 use prost::Message;
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -381,7 +381,7 @@ pub struct SenderKeyMessage {
 impl SenderKeyMessage {
     const SIGNATURE_LEN: usize = 64;
 
-    pub fn new<R: CryptoRng + Rng>(
+    pub fn new<R: TryCryptoRng + TryRngCore>(
         message_version: u8,
         chain_id: u32,
         iteration: u32,

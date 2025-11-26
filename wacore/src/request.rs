@@ -1,4 +1,3 @@
-use rand::RngCore;
 use rand_core::{OsRng, TryRngCore};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -99,7 +98,9 @@ impl RequestUtils {
         }
 
         let mut random_bytes = [0u8; 16];
-        OsRng.unwrap_err().fill_bytes(&mut random_bytes);
+        OsRng
+            .try_fill_bytes(&mut random_bytes)
+            .expect("failed to fill random bytes for message id");
         data.extend_from_slice(&random_bytes);
 
         let hash = Sha256::digest(&data);

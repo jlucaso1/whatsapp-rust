@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 
 use crate::protocol::state::GenericSignedPreKey;
 use crate::protocol::{AliceSignalProtocolParameters, BobSignalProtocolParameters};
@@ -130,12 +130,12 @@ async fn process_prekey_impl(
     Ok(pre_keys_used)
 }
 
-pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
+pub async fn process_prekey_bundle<R: TryRngCore + TryCryptoRng>(
     remote_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
     identity_store: &mut dyn IdentityKeyStore,
     bundle: &PreKeyBundle,
-    mut csprng: &mut R,
+    csprng: &mut R,
     use_pq_ratchet: ratchet::UsePQRatchet,
 ) -> Result<()> {
     let their_identity_key = bundle.identity_key()?;
@@ -161,7 +161,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         .await?
         .unwrap_or_else(SessionRecord::new_fresh);
 
-    let our_base_key_pair = KeyPair::generate(&mut csprng);
+    let our_base_key_pair = KeyPair::generate(csprng);
     let their_signed_prekey = bundle.signed_pre_key_public()?;
 
     let their_one_time_prekey_id = bundle.pre_key_id()?;

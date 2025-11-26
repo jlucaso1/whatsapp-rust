@@ -2,7 +2,6 @@ use crate::client::Client;
 use crate::jid_utils::server_jid;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use log::{debug, info, warn};
-use rand::Rng;
 use rand_core::{OsRng, TryRngCore};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -50,10 +49,9 @@ impl Client {
         let mut error_count = 0u32;
 
         loop {
-            let interval_ms = OsRng.unwrap_err().random_range(
-                KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
-            );
-            let interval = Duration::from_millis(interval_ms as u64);
+            let mut rng = OsRng;
+            let interval_ms = random_keepalive_interval_ms(&mut rng);
+            let interval = Duration::from_millis(interval_ms);
 
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {
@@ -90,6 +88,21 @@ impl Client {
                     return;
                 }
             }
+        }
+    }
+}
+
+fn random_keepalive_interval_ms(rng: &mut OsRng) -> u64 {
+    let min = u64::try_from(KEEP_ALIVE_INTERVAL_MIN.as_millis()).expect("min interval fits in u64");
+    let max = u64::try_from(KEEP_ALIVE_INTERVAL_MAX.as_millis()).expect("max interval fits in u64");
+    let span = max - min + 1;
+    let rejection_zone = u64::MAX - u64::MAX % span;
+    loop {
+        let sample = rng
+            .try_next_u64()
+            .expect("failed to sample keepalive interval");
+        if sample < rejection_zone {
+            return min + (sample % span);
         }
     }
 }

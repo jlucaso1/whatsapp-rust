@@ -9,7 +9,6 @@ use crate::request::{InfoQuery, InfoQueryType};
 use wacore_binary::builder::NodeBuilder;
 
 use anyhow;
-use rand::TryRngCore;
 use rand_core::OsRng;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
@@ -136,6 +135,7 @@ impl Client {
 
         let start_id = highest_existing_id + 1;
 
+        let mut rng = OsRng;
         for i in 0..WANTED_PRE_KEY_COUNT {
             let pre_key_id = start_id + i as u32;
 
@@ -148,7 +148,7 @@ impl Client {
                 break;
             }
 
-            let key_pair = KeyPair::generate(&mut OsRng.unwrap_err());
+            let key_pair = KeyPair::generate(&mut rng);
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
 
             keys_to_upload.push((pre_key_id, pre_key_record));

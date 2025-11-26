@@ -122,31 +122,28 @@ impl Default for Device {
 
 impl Device {
     pub fn new() -> Self {
-        use rand::RngCore;
-
-        let identity_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+        let mut rng = OsRng;
+        let identity_key_pair = IdentityKeyPair::generate(&mut rng);
 
         let identity_key: KeyPair = KeyPair::new(
             *identity_key_pair.public_key(),
             *identity_key_pair.private_key(),
         );
-        let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
+        let signed_pre_key = KeyPair::generate(&mut rng);
         let signature_box = identity_key_pair
             .private_key()
-            .calculate_signature(
-                &signed_pre_key.public_key.serialize(),
-                &mut OsRng.unwrap_err(),
-            )
+            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut rng)
             .unwrap();
         let signed_pre_key_signature: [u8; 64] = signature_box.as_ref().try_into().unwrap();
         let mut adv_secret_key = [0u8; 32];
-        OsRng.unwrap_err().fill_bytes(&mut adv_secret_key);
+        rng.try_fill_bytes(&mut adv_secret_key)
+            .expect("failed to seed adv secret key");
 
         Self {
             pn: None,
             lid: None,
             registration_id: 3718719151,
-            noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
+            noise_key: KeyPair::generate(&mut rng),
             identity_key,
             signed_pre_key,
             signed_pre_key_id: 1,

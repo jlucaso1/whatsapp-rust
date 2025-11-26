@@ -8,7 +8,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::scalar;
 use curve25519_dalek::scalar::Scalar;
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 use sha2::{Digest, Sha512};
 use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -26,11 +26,13 @@ pub struct PrivateKey {
 impl PrivateKey {
     pub fn new<R>(csprng: &mut R) -> Self
     where
-        R: CryptoRng + Rng,
+        R: TryRngCore + TryCryptoRng,
     {
         // This is essentially StaticSecret::random_from_rng only with clamping
         let mut bytes = [0u8; 32];
-        csprng.fill_bytes(&mut bytes);
+        csprng
+            .try_fill_bytes(&mut bytes)
+            .expect("failed to fill bytes from csprng");
         bytes = scalar::clamp_integer(bytes);
 
         let secret = StaticSecret::from(bytes);
@@ -61,10 +63,12 @@ impl PrivateKey {
         message: &[&[u8]],
     ) -> [u8; SIGNATURE_LENGTH]
     where
-        R: CryptoRng + Rng,
+        R: TryRngCore + TryCryptoRng,
     {
         let mut random_bytes = [0u8; 64];
-        csprng.fill_bytes(&mut random_bytes);
+        csprng
+            .try_fill_bytes(&mut random_bytes)
+            .expect("failed to fill random bytes for signature");
 
         let key_data = self.secret.to_bytes();
         let a = Scalar::from_bytes_mod_order(key_data);

@@ -1,14 +1,17 @@
 use crate::libsignal::crypto::CryptographicHash;
 use anyhow::{Result, anyhow};
 use base64::Engine as _;
-use rand_core::{OsRng, RngCore, TryRngCore};
+use rand_core::{OsRng, TryRngCore};
 
 pub struct MessageUtils;
 
 impl MessageUtils {
     pub fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
-        let mut rng = OsRng.unwrap_err();
-        let mut pad_val = (rng.next_u32() as u8) & 0x0F;
+        let mut rng = OsRng;
+        let mut pad_val = (rng
+            .try_next_u32()
+            .expect("OsRng failed while generating padding") as u8)
+            & 0x0F;
         if pad_val == 0 {
             pad_val = 0x0F;
         }
