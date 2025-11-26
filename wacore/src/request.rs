@@ -136,9 +136,9 @@ impl RequestUtils {
         builder.build()
     }
 
-    pub fn parse_iq_response(&self, response_node: &Node) -> Result<(), IqError> {
+    pub fn parse_iq_response(&self, response_node: &Node) -> Box<Result<(), IqError>> {
         if response_node.tag == "stream:error" || response_node.tag == "xmlstreamend" {
-            return Err(IqError::Disconnected(response_node.clone()));
+            return Box::new(Err(IqError::Disconnected(response_node.clone())));
         }
 
         if let Some(res_type) = response_node.attrs.get("type")
@@ -149,14 +149,14 @@ impl RequestUtils {
                 let mut parser = wacore_binary::attrs::AttrParser::new(error_node);
                 let code = parser.optional_u64("code").unwrap_or(0) as u16;
                 let text = parser.optional_string("text").unwrap_or("").to_string();
-                return Err(IqError::ServerError { code, text });
+                return Box::new(Err(IqError::ServerError { code, text }));
             }
-            return Err(IqError::ServerError {
+            return Box::new(Err(IqError::ServerError {
                 code: 0,
                 text: "Malformed error response".to_string(),
-            });
+            }));
         }
 
-        Ok(())
+        Box::new(Ok(()))
     }
 }

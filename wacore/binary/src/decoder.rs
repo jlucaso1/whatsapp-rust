@@ -380,7 +380,7 @@ mod tests {
     fn test_decode_node() -> TestResult {
         let node = Node::new(
             "message",
-            std::collections::HashMap::new(),
+            indexmap::IndexMap::new(),
             Some(crate::node::NodeContent::String("receipt".to_string())),
         );
 
@@ -410,7 +410,7 @@ mod tests {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
-            std::collections::HashMap::new(),
+            indexmap::IndexMap::new(),
             Some(crate::node::NodeContent::String(test_str.to_string())),
         );
 

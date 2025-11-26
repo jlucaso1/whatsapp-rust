@@ -4,8 +4,57 @@ use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
+use crate::jid;
 use crate::node::{Attrs, Node, NodeContent};
 use crate::token;
+
+struct ParsedJid<'a> {
+    user: &'a str,
+    server: &'a str,
+    domain_type: u8,
+    device: Option<u16>,
+}
+
+fn parse_jid(input: &str) -> Option<ParsedJid<'_>> {
+    let sep_idx = input.find('@')?;
+    let server = &input[sep_idx + 1..];
+    let user_combined = &input[..sep_idx];
+
+    let (user_agent, device) = match user_combined.split_once(':') {
+        Some((ua, device_part)) => {
+            let parsed_device = if device_part.is_empty() {
+                None
+            } else {
+                device_part.parse::<u16>().ok()
+            };
+            (ua, parsed_device)
+        }
+        None => (user_combined, None),
+    };
+
+    let (user, agent_override) = match user_agent.split_once('_') {
+        Some((u, agent_part)) => (u, agent_part.parse::<u16>().ok()),
+        None => (user_agent, None),
+    };
+
+    let agent_byte = agent_override.unwrap_or(0) as u8;
+    let domain_type = if server == jid::HIDDEN_USER_SERVER {
+        1
+    } else if server == jid::HOSTED_SERVER {
+        128
+    } else if server == "hosted.lid" {
+        129
+    } else {
+        agent_byte
+    };
+
+    Some(ParsedJid {
+        user,
+        server,
+        domain_type,
+        device,
+    })
+}
 
 pub(crate) struct Encoder<W: Write> {
     writer: W,
@@ -70,8 +119,28 @@ impl<W: Write> Encoder<W> {
             self.write_packed_bytes(s, token::NIBBLE_8)?;
         } else if Self::validate_hex(s) {
             self.write_packed_bytes(s, token::HEX_8)?;
+        } else if let Some(jid) = parse_jid(s) {
+            self.write_jid(&jid)?;
         } else {
             self.write_bytes_with_len(s.as_bytes())?;
+        }
+        Ok(())
+    }
+
+    fn write_jid(&mut self, jid: &ParsedJid<'_>) -> Result<()> {
+        if let Some(device) = jid.device {
+            self.write_u8(token::AD_JID)?;
+            self.write_u8(jid.domain_type)?;
+            self.write_u8(device as u8)?;
+            self.write_string(jid.user)?;
+        } else {
+            self.write_u8(token::JID_PAIR)?;
+            if jid.user.is_empty() {
+                self.write_u8(token::LIST_EMPTY)?;
+            } else {
+                self.write_string(jid.user)?;
+            }
+            self.write_string(jid.server)?;
         }
         Ok(())
     }
@@ -239,7 +308,7 @@ mod tests {
     fn test_encode_node() -> TestResult {
         let node = Node::new(
             "message",
-            std::collections::HashMap::new(),
+            indexmap::IndexMap::new(),
             Some(NodeContent::String("receipt".to_string())),
         );
 
@@ -259,7 +328,7 @@ mod tests {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
-            std::collections::HashMap::new(),
+            indexmap::IndexMap::new(),
             Some(NodeContent::String(test_str.to_string())),
         );
 

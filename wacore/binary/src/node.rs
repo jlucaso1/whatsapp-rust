@@ -1,8 +1,8 @@
 use crate::attrs::{AttrParser, AttrParserRef};
+use indexmap::IndexMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 
-pub type Attrs = HashMap<String, String>;
+pub type Attrs = IndexMap<String, String>;
 pub type AttrsRef<'a> = Vec<(Cow<'a, str>, Cow<'a, str>)>;
 
 pub type NodeVec<'a> = Vec<NodeRef<'a>>;
@@ -155,7 +155,7 @@ impl<'a> NodeRef<'a> {
                 .attrs
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<HashMap<String, String>>(),
+                .collect::<IndexMap<String, String>>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
                 NodeContentRef::String(s) => NodeContent::String(s.to_string()),
