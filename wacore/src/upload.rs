@@ -23,7 +23,7 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
     let mut media_key = [0u8; 32];
     rng().fill(&mut media_key);
     let (iv, cipher_key, mac_key) =
-        crate::download::DownloadUtils::get_media_keys(&media_key, media_type);
+        crate::download::DownloadUtils::get_media_keys(&media_key, media_type)?;
 
     let data = aes_256_cbc_encrypt(plaintext, &cipher_key, &iv)?;
 

@@ -1,4 +1,5 @@
 use crate::libsignal::crypto::CryptographicHash;
+use anyhow::{Result, anyhow};
 use base64::Engine as _;
 use rand_core::{OsRng, RngCore, TryRngCore};
 
@@ -17,25 +18,27 @@ impl MessageUtils {
         plaintext
     }
 
-    pub fn participant_list_hash(devices: &[wacore_binary::jid::Jid]) -> String {
+    pub fn participant_list_hash(devices: &[wacore_binary::jid::Jid]) -> Result<String> {
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
         jids.sort();
 
         let concatenated_jids = jids.join("");
 
         let full_hash = {
-            let mut h = CryptographicHash::new("SHA-256").unwrap();
+            let mut h = CryptographicHash::new("SHA-256")
+                .map_err(|e| anyhow!("failed to initialize SHA-256 hasher: {:?}", e))?;
             h.update(concatenated_jids.as_bytes());
             let v = h.finalize();
-            <[u8; 32]>::try_from(v.as_slice()).unwrap()
+            <[u8; 32]>::try_from(v.as_slice())
+                .map_err(|_| anyhow!("unexpected SHA-256 hash length"))?
         };
 
         let truncated_hash = &full_hash[..6];
 
-        format!(
+        Ok(format!(
             "2:{hash}",
             hash = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(truncated_hash)
-        )
+        ))
     }
 
     pub fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {

@@ -130,8 +130,11 @@ impl HandshakeUtils {
         //     })?;
 
         // Unmarshal details and perform further checks
+        let intermediate_details_bytes = intermediate.details.as_ref().ok_or_else(|| {
+            HandshakeError::CertVerification("Missing intermediate details".into())
+        })?;
         let intermediate_details =
-            noise_certificate::Details::decode(intermediate.details.as_ref().unwrap().as_slice())?;
+            noise_certificate::Details::decode(intermediate_details_bytes.as_slice())?;
 
         if i64::from(intermediate_details.issuer_serial()) != WA_CERT_ISSUER_SERIAL {
             return Err(HandshakeError::CertVerification(format!(
@@ -180,8 +183,11 @@ impl HandshakeUtils {
         //         HandshakeError::CertVerification(format!("Leaf cert verification failed: {e}"))
         //     })?;
 
-        let leaf_details =
-            noise_certificate::Details::decode(leaf.details.as_ref().unwrap().as_slice())?;
+        let leaf_details_bytes = leaf
+            .details
+            .as_ref()
+            .ok_or_else(|| HandshakeError::CertVerification("Missing leaf details".into()))?;
+        let leaf_details = noise_certificate::Details::decode(leaf_details_bytes.as_slice())?;
 
         if leaf_details.issuer_serial() != intermediate_details.serial() {
             return Err(HandshakeError::CertVerification(format!(
@@ -209,6 +215,7 @@ impl HandshakeUtils {
             client_finish: Some(wa::handshake_message::ClientFinish {
                 r#static: Some(encrypted_pubkey),
                 payload: Some(encrypted_payload),
+                extended_ciphertext: None,
             }),
             ..Default::default()
         }

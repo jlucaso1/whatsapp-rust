@@ -174,7 +174,7 @@ impl DownloadUtils {
         const BLOCK: usize = 16;
         const CHUNK: usize = 8 * 1024;
 
-        let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, app_info);
+        let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, app_info)?;
 
         let mut hmac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(&mac_key)
             .map_err(|_| anyhow!("Failed to init HMAC"))?;
@@ -264,15 +264,24 @@ impl DownloadUtils {
         Ok(plaintext)
     }
 
-    pub fn get_media_keys(media_key: &[u8], app_info: MediaType) -> ([u8; 16], [u8; 32], [u8; 32]) {
+    pub fn get_media_keys(
+        media_key: &[u8],
+        app_info: MediaType,
+    ) -> Result<([u8; 16], [u8; 32], [u8; 32])> {
         let hk = Hkdf::<Sha256>::new(None, media_key);
         let mut expanded = vec![0u8; 112];
         hk.expand(app_info.app_info().as_bytes(), &mut expanded)
-            .unwrap();
-        let iv: [u8; 16] = expanded[0..16].try_into().unwrap();
-        let cipher_key: [u8; 32] = expanded[16..48].try_into().unwrap();
-        let mac_key: [u8; 32] = expanded[48..80].try_into().unwrap();
-        (iv, cipher_key, mac_key)
+            .map_err(|e| anyhow!("HKDF expand failed: {e}"))?;
+        let iv: [u8; 16] = expanded[0..16]
+            .try_into()
+            .map_err(|_| anyhow!("HKDF output has unexpected length for IV"))?;
+        let cipher_key: [u8; 32] = expanded[16..48]
+            .try_into()
+            .map_err(|_| anyhow!("HKDF output has unexpected length for cipher key"))?;
+        let mac_key: [u8; 32] = expanded[48..80]
+            .try_into()
+            .map_err(|_| anyhow!("HKDF output has unexpected length for MAC key"))?;
+        Ok((iv, cipher_key, mac_key))
     }
 
     pub fn decrypt_cbc(cipher_key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
@@ -292,7 +301,7 @@ impl DownloadUtils {
         let (ciphertext, received_mac) =
             encrypted_payload.split_at(encrypted_payload.len() - MAC_SIZE);
 
-        let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, media_type);
+        let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, media_type)?;
 
         let computed_mac_full = {
             let mut mac = CryptographicMac::new("HmacSha256", &mac_key)

@@ -10,9 +10,7 @@ use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng, TryRngCore as _};
-use rand_core::OsRng;
 use std::collections::HashSet;
-use std::time::SystemTime;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
@@ -41,7 +39,13 @@ where
     let mut record = sender_key_store
         .load_sender_key(&sender_key_name)
         .await?
-        .ok_or(SignalProtocolError::NoSenderKeyState)?;
+        .ok_or_else(|| {
+            SignalProtocolError::NoSenderKeyState(format!(
+                "no sender key record for group {} sender {}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            ))
+        })?;
 
     let sender_key_state = record
         .sender_key_state_mut()
@@ -130,8 +134,7 @@ where
                         stores.session_store,
                         stores.identity_store,
                         bundle,
-                        SystemTime::now(),
-                        &mut OsRng.unwrap_err(),
+                        &mut rand::rngs::OsRng.unwrap_err(),
                         UsePQRatchet::No,
                     )
                     .await
@@ -180,7 +183,6 @@ where
             &signal_address,
             stores.session_store,
             stores.identity_store,
-            SystemTime::now(),
         )
         .await
         {
@@ -354,14 +356,8 @@ where
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
     let signal_address = to_jid.to_protocol_address();
 
-    let encrypted_message = message_encrypt(
-        &plaintext,
-        &signal_address,
-        session_store,
-        identity_store,
-        SystemTime::now(),
-    )
-    .await?;
+    let encrypted_message =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
 
     let (enc_type, serialized_bytes) = match encrypted_message {
         CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
@@ -571,8 +567,14 @@ pub async fn prepare_group_stanza<
 
     // Add phash if we distributed keys in this message
     if let Some(devices) = &resolved_devices_for_phash {
-        let phash = MessageUtils::participant_list_hash(devices);
-        stanza_attrs.insert("phash".to_string(), phash);
+        match MessageUtils::participant_list_hash(devices) {
+            Ok(phash) => {
+                stanza_attrs.insert("phash".to_string(), phash);
+            }
+            Err(e) => {
+                log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
+            }
+        }
     }
 
     let stanza = NodeBuilder::new("message")
@@ -625,8 +627,12 @@ pub async fn create_sender_key_distribution_message_for_group(
         .sender_chain_key()
         .ok_or_else(|| anyhow!("Missing chain key"))?;
 
+    let message_version = state
+        .message_version()
+        .try_into()
+        .map_err(|e| anyhow!("Invalid sender key message version: {e}"))?;
     let skdm = SenderKeyDistributionMessage::new(
-        state.message_version().try_into().unwrap(),
+        message_version,
         state.chain_id(),
         chain_key.iteration(),
         chain_key.seed().to_vec(),
@@ -892,10 +898,10 @@ mod tests {
         let prekey_pair = KeyPair::generate(&mut rng);
 
         PreKeyBundle::new(
-            1,
-            1u32.into(),
-            Some((1u32.into(), prekey_pair.public_key)),
-            2u32.into(),
+            1,                                           // registration_id
+            1u32.into(),                                 // device_id
+            Some((1u32.into(), prekey_pair.public_key)), // pre_key
+            2u32.into(),                                 // signed_pre_key_id
             signed_prekey_pair.public_key,
             vec![0u8; 64],
             *identity_pair.identity_key(),

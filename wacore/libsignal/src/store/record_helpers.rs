@@ -24,7 +24,12 @@ pub fn new_signed_pre_key_record(
         public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
         private_key: Some(key_pair.private_key.serialize()),
         signature: Some(signature.to_vec()),
-        timestamp: Some(timestamp.timestamp().try_into().unwrap()),
+        timestamp: Some(
+            timestamp
+                .timestamp()
+                .try_into()
+                .expect("Timestamp conversion failed"),
+        ),
     }
 }
 

@@ -47,7 +47,10 @@ impl SenderMessageKey {
     }
 
     pub(crate) fn from_protobuf(smk: sender_key_state_structure::SenderMessageKey) -> Self {
-        Self::new(smk.iteration, smk.seed)
+        Self::new(
+            smk.iteration.unwrap_or_default(),
+            smk.seed.unwrap_or_default(),
+        )
     }
 
     pub fn iteration(&self) -> u32 {
@@ -64,8 +67,8 @@ impl SenderMessageKey {
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderMessageKey {
         sender_key_state_structure::SenderMessageKey {
-            iteration: self.iteration,
-            seed: self.seed.clone(),
+            iteration: Some(self.iteration),
+            seed: Some(self.seed.clone()),
         }
     }
 }
@@ -120,8 +123,8 @@ impl SenderChainKey {
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderChainKey {
         sender_key_state_structure::SenderChainKey {
-            iteration: self.iteration,
-            seed: self.chain_key.clone(),
+            iteration: Some(self.iteration),
+            seed: Some(self.chain_key.clone()),
         }
     }
 }
@@ -133,7 +136,7 @@ pub struct SenderKeyState {
 
 impl SenderKeyState {
     pub fn new(
-        message_version: u8,
+        _message_version: u8,
         chain_id: u32,
         iteration: u32,
         chain_key: &[u8],
@@ -141,17 +144,13 @@ impl SenderKeyState {
         signature_private_key: Option<PrivateKey>,
     ) -> SenderKeyState {
         let state = SenderKeyStateStructure {
-            message_version: message_version as u32,
-            chain_id,
+            sender_key_id: Some(chain_id),
             sender_chain_key: Some(
                 SenderChainKey::new(iteration, chain_key.to_vec()).as_protobuf(),
             ),
             sender_signing_key: Some(sender_key_state_structure::SenderSigningKey {
-                public: signature_key.serialize().to_vec(),
-                private: match signature_private_key {
-                    None => vec![],
-                    Some(k) => k.serialize().to_vec(),
-                },
+                public: Some(signature_key.serialize().to_vec()),
+                private: signature_private_key.map(|k| k.serialize().to_vec()),
             }),
             sender_message_keys: vec![],
         };
@@ -164,21 +163,18 @@ impl SenderKeyState {
     }
 
     pub fn message_version(&self) -> u32 {
-        match self.state.message_version {
-            0 => 3, // the first SenderKey version
-            v => v,
-        }
+        3
     }
 
     pub fn chain_id(&self) -> u32 {
-        self.state.chain_id
+        self.state.sender_key_id.unwrap_or_default()
     }
 
     pub fn sender_chain_key(&self) -> Option<SenderChainKey> {
         let sender_chain = self.state.sender_chain_key.as_ref()?;
         Some(SenderChainKey::new(
-            sender_chain.iteration,
-            sender_chain.seed.clone(),
+            sender_chain.iteration.unwrap_or_default(),
+            sender_chain.seed.clone().unwrap_or_default(),
         ))
     }
 
@@ -188,7 +184,11 @@ impl SenderKeyState {
 
     pub fn signing_key_public(&self) -> Result<PublicKey, InvalidSenderKeySessionError> {
         if let Some(ref signing_key) = self.state.sender_signing_key {
-            PublicKey::try_from(&signing_key.public[..])
+            let public = signing_key
+                .public
+                .as_ref()
+                .ok_or(InvalidSenderKeySessionError("missing public key bytes"))?;
+            PublicKey::try_from(&public[..])
                 .map_err(|_| InvalidSenderKeySessionError("invalid public signing key"))
         } else {
             Err(InvalidSenderKeySessionError("missing signing key"))
@@ -197,7 +197,11 @@ impl SenderKeyState {
 
     pub fn signing_key_private(&self) -> Result<PrivateKey, InvalidSenderKeySessionError> {
         if let Some(ref signing_key) = self.state.sender_signing_key {
-            PrivateKey::deserialize(&signing_key.private)
+            let private = signing_key
+                .private
+                .as_ref()
+                .ok_or(InvalidSenderKeySessionError("missing private key bytes"))?;
+            PrivateKey::deserialize(private)
                 .map_err(|_| InvalidSenderKeySessionError("invalid private signing key"))
         } else {
             Err(InvalidSenderKeySessionError("missing signing key"))
@@ -222,7 +226,7 @@ impl SenderKeyState {
             .state
             .sender_message_keys
             .iter()
-            .position(|x| x.iteration == iteration)
+            .position(|x| x.iteration.unwrap_or_default() == iteration)
         {
             let smk = self.state.sender_message_keys.remove(index);
             Some(SenderMessageKey::from_protobuf(smk))

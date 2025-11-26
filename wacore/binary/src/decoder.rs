@@ -374,8 +374,10 @@ mod tests {
     use super::*;
     use crate::node::Node;
 
+    type TestResult = crate::error::Result<()>;
+
     #[test]
-    fn test_decode_node() {
+    fn test_decode_node() -> TestResult {
         let node = Node::new(
             "message",
             std::collections::HashMap::new(),
@@ -384,8 +386,8 @@ mod tests {
 
         let mut buffer = Vec::new();
         {
-            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer));
-            encoder.write_node(&node).unwrap();
+            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer))?;
+            encoder.write_node(&node)?;
         }
 
         let mut decoder = Decoder::new(&buffer[1..]);
@@ -400,10 +402,11 @@ mod tests {
             },
             None => panic!("Expected content"),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_decode_nibble_packing() {
+    fn test_decode_nibble_packing() -> TestResult {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
@@ -413,8 +416,8 @@ mod tests {
 
         let mut buffer = Vec::new();
         {
-            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer));
-            encoder.write_node(&node).unwrap();
+            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer))?;
+            encoder.write_node(&node)?;
         }
 
         let mut decoder = Decoder::new(&buffer[1..]);
@@ -429,6 +432,7 @@ mod tests {
             },
             None => panic!("Expected content"),
         }
+        Ok(())
     }
 
     #[test]

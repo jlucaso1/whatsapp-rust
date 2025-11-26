@@ -12,6 +12,7 @@ use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
 
 use crate::appstate_sync::AppStateProcessor;
+use crate::jid_utils::server_jid;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
@@ -26,7 +27,6 @@ use rand_core::{OsRng, TryRngCore};
 use scopeguard;
 use std::collections::{HashMap, HashSet, VecDeque};
 use wacore_binary::jid::Jid;
-use wacore_binary::jid::SERVER_JID;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -739,14 +739,13 @@ impl Client {
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
         use crate::request::{InfoQuery, InfoQueryType};
-        use SERVER_JID;
 
         let tag = if passive { "passive" } else { "active" };
 
         let query = InfoQuery {
             namespace: "passive",
             query_type: InfoQueryType::Set,
-            to: SERVER_JID.parse().unwrap(),
+            to: server_jid(),
             target: None,
             id: None,
             content: Some(wacore_binary::node::NodeContent::Nodes(vec![
@@ -940,7 +939,7 @@ impl Client {
             let iq = crate::request::InfoQuery {
                 namespace: "w:sync:app:state",
                 query_type: crate::request::InfoQueryType::Set,
-                to: SERVER_JID.parse().unwrap(),
+                to: server_jid(),
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),

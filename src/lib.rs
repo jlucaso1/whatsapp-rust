@@ -9,6 +9,7 @@ pub mod download;
 pub mod framing;
 pub mod handlers;
 pub mod handshake;
+pub mod jid_utils;
 pub mod keepalive;
 pub mod mediaconn;
 pub mod message;

@@ -114,7 +114,14 @@ impl PairUtils {
         let is_hosted_account = hmac_container.account_type.is_some()
             && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(&device_state.adv_secret_key).unwrap();
+        let mut mac =
+            <HmacSha256 as Mac>::new_from_slice(&device_state.adv_secret_key).map_err(|e| {
+                PairCryptoError {
+                    code: 500,
+                    text: "internal-error",
+                    source: e.into(),
+                }
+            })?;
         // Get details and hmac as slices, handling potential None values
         let details_bytes = hmac_container
             .details
@@ -288,7 +295,8 @@ impl PairUtils {
         let adv_key = &device_state.adv_secret_key;
         let identity_key = &device_state.identity_key;
 
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(adv_key).unwrap();
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(adv_key)
+            .map_err(|e| anyhow::anyhow!("Failed to init HMAC for master pairing: {e}"))?;
         mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
         mac.update(dut_identity_pub);
         mac.update(master_ephemeral.public_key.public_key_bytes());

@@ -516,10 +516,10 @@ impl Client {
                     );
                     // This is expected when messages are redelivered, just continue silently
                 }
-                Err(SignalProtocolError::NoSenderKeyState) => {
+                Err(SignalProtocolError::NoSenderKeyState(msg)) => {
                     warn!(
-                        "No sender key state for batched group message from {}, sending retry receipt.",
-                        info.source.sender
+                        "No sender key state for batched group message from {}: {}. Sending retry receipt.",
+                        info.source.sender, msg
                     );
                     let client_clone = self.clone();
                     let info_clone = info.clone();

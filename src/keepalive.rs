@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::jid_utils::server_jid;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use log::{debug, info, warn};
 use rand::Rng;
@@ -7,7 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::SERVER_JID;
 use wacore_binary::node::NodeContent;
 
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
@@ -26,7 +26,7 @@ impl Client {
         let iq = InfoQuery {
             namespace: "w:p",
             query_type: InfoQueryType::Get,
-            to: SERVER_JID.parse().unwrap(),
+            to: server_jid(),
             target: None,
             id: None,
             content: Some(NodeContent::Nodes(vec![NodeBuilder::new("ping").build()])),
@@ -76,7 +76,8 @@ impl Client {
 
                         if self.enable_auto_reconnect.load(Ordering::Relaxed)
                             && chrono::Utc::now().signed_duration_since(last_success)
-                                > chrono::Duration::from_std(KEEP_ALIVE_MAX_FAIL_TIME).unwrap()
+                                > chrono::Duration::from_std(KEEP_ALIVE_MAX_FAIL_TIME)
+                                    .expect("KEEP_ALIVE_MAX_FAIL_TIME fits in chrono::Duration")
                         {
                             warn!(target: "Client/Keepalive", "Forcing reconnect due to keepalive failure for over {} seconds.", KEEP_ALIVE_MAX_FAIL_TIME.as_secs());
                             self.disconnect().await;

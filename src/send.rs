@@ -135,7 +135,7 @@ impl Client {
             {
                 Ok(stanza) => stanza,
                 Err(e) => {
-                    if let Some(SignalProtocolError::NoSenderKeyState) =
+                    if let Some(SignalProtocolError::NoSenderKeyState(_)) =
                         e.downcast_ref::<SignalProtocolError>()
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
