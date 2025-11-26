@@ -1,10 +1,10 @@
 use crate::node::{Node, NodeContent};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 #[derive(Debug, Default)]
 pub struct NodeBuilder {
     tag: String,
-    attrs: HashMap<String, String>,
+    attrs: IndexMap<String, String>,
     content: Option<NodeContent>,
 }
 

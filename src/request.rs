@@ -147,10 +147,10 @@ impl Client {
         }
 
         match timeout(query.timeout.unwrap_or(default_timeout), rx).await {
-            Ok(Ok(response_node)) => {
-                request_utils.parse_iq_response(&response_node)?;
-                Ok(response_node)
-            }
+            Ok(Ok(response_node)) => match *request_utils.parse_iq_response(&response_node) {
+                Ok(()) => Ok(response_node),
+                Err(e) => Err(e.into()),
+            },
             Ok(Err(_)) => Err(IqError::InternalChannelClosed),
             Err(_) => {
                 self.response_waiters.lock().await.remove(&req_id);
