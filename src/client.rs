@@ -4,6 +4,7 @@ use crate::handshake;
 use crate::pair;
 use anyhow::anyhow;
 use dashmap::DashMap;
+use indexmap::IndexMap;
 use moka::future::Cache;
 use tokio::sync::watch;
 use wacore::xml::{DisplayableNode, DisplayableNodeRef};
@@ -677,7 +678,7 @@ impl Client {
         } else {
             None
         };
-        let mut attrs = std::collections::HashMap::new();
+        let mut attrs = IndexMap::new();
         attrs.insert("class".to_string(), node.tag.clone());
         attrs.insert("id".to_string(), id);
         attrs.insert("to".to_string(), from);
@@ -714,7 +715,7 @@ impl Client {
         } else {
             None
         };
-        let mut attrs = std::collections::HashMap::new();
+        let mut attrs = IndexMap::new();
         attrs.insert("class".to_string(), node.tag.to_string());
         attrs.insert("id".to_string(), id);
         attrs.insert("to".to_string(), from);
