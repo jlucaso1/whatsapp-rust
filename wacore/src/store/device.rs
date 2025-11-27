@@ -85,8 +85,13 @@ pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
         ..Default::default()
     }),
     platform_type: Some(wa::device_props::PlatformType::Unknown as i32),
-    require_full_sync: Some(false),
-    ..Default::default()
+    require_full_sync: Some(true),
+    history_sync_config: Some(wa::device_props::HistorySyncConfig {
+        full_sync_days_limit: Some(30),
+        inline_initial_payload_in_e2_ee_msg: Some(true),
+        storage_quota_mb: Some(10240),
+        ..Default::default()
+    }),
 });
 
 #[derive(Clone, Serialize, Deserialize)]
