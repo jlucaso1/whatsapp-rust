@@ -45,11 +45,25 @@ async fn handle_ib_impl(client: Arc<Client>, node: &NodeRef<'_>) {
             "dirty" => {
                 let mut attrs = child.attr_parser();
                 let dirty_type = attrs.string("type");
+                let timestamp = attrs.optional_string("timestamp");
 
                 info!(
                     target: "Client",
-                    "Received dirty state notification for type: '{dirty_type}'. Awaiting server_sync notification."
+                    "Received dirty state notification for type: '{dirty_type}'. Sending clean IQ."
                 );
+
+                let client_clone = client.clone();
+                let dirty_type_owned = dirty_type.to_string();
+                let timestamp_owned = timestamp.map(|s| s.to_string());
+
+                tokio::spawn(async move {
+                    if let Err(e) = client_clone
+                        .clean_dirty_bits(&dirty_type_owned, timestamp_owned.as_deref())
+                        .await
+                    {
+                        warn!(target: "Client", "Failed to send clean dirty bits IQ: {e:?}");
+                    }
+                });
             }
             "edge_routing" => {
                 info!(target: "Client", "Received edge routing info, ignoring for now.");

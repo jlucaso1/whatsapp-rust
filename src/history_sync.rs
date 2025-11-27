@@ -29,10 +29,9 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
-        // Do not take the global full_sync_lock here to avoid deadlocks with IQ/presence flows.
         let log_msg_id = message_id.clone();
         log::info!(
-            "Downloading history sync blob for message {} (Size: {}, Type: {:?})",
+            "Processing history sync for message {} (Size: {}, Type: {:?})",
             message_id,
             notification.file_length(),
             notification.sync_type()
@@ -43,75 +42,81 @@ impl Client {
             crate::types::presence::ReceiptType::HistorySync,
         )
         .await;
-        let msg_id_for_log = log_msg_id;
-        match self.download(&notification).await {
-            Ok(compressed_data) => {
-                log::info!("Successfully downloaded history sync blob.");
 
-                // Use streaming parser to avoid decoding the full HistorySync into memory
-                // Collect small top-level fields (like pushnames) and stream conversations
-                let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> =
-                    Arc::new(Mutex::new(Vec::new()));
+        let compressed_data = if let Some(inline_payload) =
+            notification.initial_hist_bootstrap_inline_payload.clone()
+        {
+            log::info!(
+                "Found inline history sync payload ({} bytes). Using directly.",
+                inline_payload.len()
+            );
+            inline_payload
+        } else {
+            log::info!("Downloading external history sync blob...");
+            match self.download(&notification).await {
+                Ok(data) => {
+                    log::info!("Successfully downloaded history sync blob.");
+                    data
+                }
+                Err(e) => {
+                    log::error!("Failed to download history sync blob: {:?}", e);
+                    return;
+                }
+            }
+        };
 
-                let core_bus = self.core.event_bus.clone();
-                // Per-conversation writes; track progress
-                let processed_count = Arc::new(AtomicUsize::new(0));
-                let processed_count_for_final = processed_count.clone();
+        // Use streaming parser to avoid decoding the full HistorySync into memory
+        let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> = Arc::new(Mutex::new(Vec::new()));
 
-                let conv_handler = move |conv: wa::Conversation| {
-                    let bus = core_bus.clone();
-                    let processed = processed_count.clone();
-                    async move {
-                        let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                        if new.is_multiple_of(25) {
-                            log::info!("History sync progress: {new} conversations processed...");
-                        }
-                        bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
-                    }
-                };
+        let core_bus = self.core.event_bus.clone();
+        let processed_count = Arc::new(AtomicUsize::new(0));
+        let processed_count_for_final = processed_count.clone();
 
-                let push_collector = collected_pushnames.clone();
-                let pushname_handler = move |pn: wa::Pushname| {
-                    let pc = push_collector.clone();
-                    async move {
-                        pc.lock().await.push(pn);
-                    }
-                };
+        let conv_handler = move |conv: wa::Conversation| {
+            let bus = core_bus.clone();
+            let processed = processed_count.clone();
+            async move {
+                let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                if new.is_multiple_of(25) {
+                    log::info!("History sync progress: {new} conversations processed...");
+                }
+                bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
+            }
+        };
 
-                let stream_result = wacore::history_sync::process_history_sync_stream(
-                    &compressed_data,
-                    conv_handler,
-                    pushname_handler,
-                )
-                .await;
-                let total = processed_count_for_final.load(Ordering::Relaxed);
-                log::debug!(
-                    "History sync stream finished processing (message {msg_id_for_log}); total conversations processed={total}"
-                );
+        let push_collector = collected_pushnames.clone();
+        let pushname_handler = move |pn: wa::Pushname| {
+            let pc = push_collector.clone();
+            async move {
+                pc.lock().await.push(pn);
+            }
+        };
 
-                // No transaction commit step
+        let stream_result = wacore::history_sync::process_history_sync_stream(
+            &compressed_data,
+            conv_handler,
+            pushname_handler,
+        )
+        .await;
+        let total = processed_count_for_final.load(Ordering::Relaxed);
+        log::debug!(
+            "History sync stream finished processing (message {log_msg_id}); total conversations processed={total}"
+        );
 
-                match stream_result {
-                    Ok(()) => {
-                        log::info!("Successfully processed HistorySync stream.");
-
-                        // If pushnames were collected (not implemented in-stream yet), handle them
-                        let push_vec = collected_pushnames.lock().await;
-                        if !push_vec.is_empty() {
-                            log::debug!(
-                                "Collected {} push names from history sync; invoking handler",
-                                push_vec.len()
-                            );
-                            self.clone().handle_historical_pushnames(&push_vec).await;
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to process HistorySync data stream: {:?}", e);
-                    }
+        match stream_result {
+            Ok(()) => {
+                log::info!("Successfully processed HistorySync stream.");
+                let push_vec = collected_pushnames.lock().await;
+                if !push_vec.is_empty() {
+                    log::debug!(
+                        "Collected {} push names from history sync; invoking handler",
+                        push_vec.len()
+                    );
+                    self.clone().handle_historical_pushnames(&push_vec).await;
                 }
             }
             Err(e) => {
-                log::error!("Failed to download history sync blob: {:?}", e);
+                log::error!("Failed to process HistorySync data stream: {:?}", e);
             }
         }
     }
