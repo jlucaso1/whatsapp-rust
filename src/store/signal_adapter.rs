@@ -104,7 +104,7 @@ impl SignalProtocolStoreAdapter {
 
     /// Clears the entire session cache.
     /// Useful when reconnecting or when session state may be stale.
-    pub async fn clear_session_cache(&self) {
+    pub fn clear_session_cache(&self) {
         self.session_store.0.session_cache.invalidate_all();
     }
 }
@@ -131,9 +131,11 @@ impl SessionStore for SessionAdapter {
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
         {
             Some(data) => {
-                // 3. Populate cache with the loaded data
-                self.0.session_cache.insert(addr_str, data.clone()).await;
-                Ok(Some(SessionRecord::deserialize(&data)?))
+                // 3. Attempt deserialization first - only cache if successful
+                let record = SessionRecord::deserialize(&data)?;
+                // 4. Populate cache with validated data
+                self.0.session_cache.insert(addr_str, data).await;
+                Ok(Some(record))
             }
             None => Ok(None),
         }
