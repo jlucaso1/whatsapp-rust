@@ -15,6 +15,8 @@ pub enum Error {
     InvalidInputSize,
     /// invalid authentication tag
     InvalidTag,
+    /// output buffer too small: required {required} bytes, provided {provided}
+    OutputBufferTooSmall { required: usize, provided: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

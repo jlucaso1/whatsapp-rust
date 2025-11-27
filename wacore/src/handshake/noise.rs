@@ -85,6 +85,26 @@ impl NoiseHandshake {
         Ok(ciphertext)
     }
 
+    /// Zero-allocation encryption that appends the ciphertext to the provided buffer.
+    /// This allows buffer reuse across multiple handshake operations.
+    ///
+    /// The ciphertext (including the AES-GCM tag) is appended to `out`.
+    /// The buffer is NOT cleared before appending.
+    pub fn encrypt_into(&mut self, plaintext: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        let iv = generate_iv(self.post_increment_counter());
+        let payload = Payload {
+            msg: plaintext,
+            aad: &self.hash,
+        };
+        let ciphertext = self
+            .key
+            .encrypt(iv.as_ref().into(), payload)
+            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        self.authenticate(&ciphertext)?;
+        out.extend_from_slice(&ciphertext);
+        Ok(())
+    }
+
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let aad = self.hash;
         let iv = generate_iv(self.post_increment_counter());
@@ -99,6 +119,27 @@ impl NoiseHandshake {
 
         self.authenticate(ciphertext)?;
         Ok(plaintext)
+    }
+
+    /// Zero-allocation decryption that appends the plaintext to the provided buffer.
+    /// This allows buffer reuse across multiple handshake operations.
+    ///
+    /// The plaintext is appended to `out`. The buffer is NOT cleared before appending.
+    pub fn decrypt_into(&mut self, ciphertext: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        let aad = self.hash;
+        let iv = generate_iv(self.post_increment_counter());
+        let payload = Payload {
+            msg: ciphertext,
+            aad: &aad,
+        };
+        let plaintext = self
+            .key
+            .decrypt(iv.as_ref().into(), payload)
+            .map_err(|e| HandshakeError::Crypto(format!("Noise decrypt failed: {e}")))?;
+
+        self.authenticate(ciphertext)?;
+        out.extend_from_slice(&plaintext);
+        Ok(())
     }
 
     pub fn mix_into_key(&mut self, data: &[u8]) -> Result<()> {

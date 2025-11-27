@@ -4,9 +4,14 @@ use log::trace;
 pub const FRAME_LENGTH_SIZE: usize = 3;
 pub const FRAME_MAX_SIZE: usize = 2 << 23;
 
-/// Encodes a payload into a WhatsApp frame with length prefix.
+/// Encodes a payload into a WhatsApp frame with length prefix, writing directly into `out`.
+/// The `out` buffer is cleared before use, allowing buffer reuse without allocation.
 /// Optionally prepends a header (used for the initial connection frame).
-pub fn encode_frame(payload: &[u8], header: Option<&[u8]>) -> Result<Vec<u8>, anyhow::Error> {
+pub fn encode_frame_into(
+    payload: &[u8],
+    header: Option<&[u8]>,
+    out: &mut Vec<u8>,
+) -> Result<(), anyhow::Error> {
     let payload_len = payload.len();
 
     if payload_len >= FRAME_MAX_SIZE {
@@ -19,20 +24,35 @@ pub fn encode_frame(payload: &[u8], header: Option<&[u8]>) -> Result<Vec<u8>, an
 
     let header_len = header.map(|h| h.len()).unwrap_or(0);
     let prefix_len = header_len + FRAME_LENGTH_SIZE;
+    let total_len = prefix_len + payload_len;
 
-    let mut data = Vec::with_capacity(prefix_len + payload_len);
-    data.resize(prefix_len, 0);
-    data.extend_from_slice(payload);
+    out.clear();
+    out.reserve(total_len);
 
     // Write header if provided
     if let Some(header_data) = header {
-        data[0..header_len].copy_from_slice(header_data);
+        out.extend_from_slice(header_data);
     }
 
     // Write 3-byte big-endian length
     let len_bytes = u32::to_be_bytes(payload_len as u32);
-    data[header_len..prefix_len].copy_from_slice(&len_bytes[1..]);
+    out.extend_from_slice(&len_bytes[1..]);
 
+    // Append payload
+    out.extend_from_slice(payload);
+
+    Ok(())
+}
+
+/// Encodes a payload into a WhatsApp frame with length prefix.
+/// Optionally prepends a header (used for the initial connection frame).
+///
+/// Note: For performance-critical paths, prefer `encode_frame_into` to avoid allocation.
+pub fn encode_frame(payload: &[u8], header: Option<&[u8]>) -> Result<Vec<u8>, anyhow::Error> {
+    let header_len = header.map(|h| h.len()).unwrap_or(0);
+    let prefix_len = header_len + FRAME_LENGTH_SIZE;
+    let mut data = Vec::with_capacity(prefix_len + payload.len());
+    encode_frame_into(payload, header, &mut data)?;
     Ok(data)
 }
 
@@ -166,5 +186,43 @@ mod tests {
         let large_payload = vec![0u8; FRAME_MAX_SIZE];
         let result = encode_frame(&large_payload, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_frame_into_reuses_buffer() {
+        let mut buffer = Vec::with_capacity(100);
+        let original_ptr = buffer.as_ptr();
+
+        // First encode
+        let payload1 = vec![1, 2, 3, 4, 5];
+        encode_frame_into(&payload1, None, &mut buffer).unwrap();
+        assert_eq!(&buffer[3..], &payload1[..]);
+
+        // Second encode - should reuse the same buffer allocation
+        let payload2 = vec![6, 7, 8];
+        encode_frame_into(&payload2, None, &mut buffer).unwrap();
+        assert_eq!(&buffer[3..], &payload2[..]);
+
+        // Buffer pointer should remain the same (no reallocation for smaller payloads)
+        assert_eq!(buffer.as_ptr(), original_ptr);
+    }
+
+    #[test]
+    fn test_encode_frame_into_with_header() {
+        let mut buffer = Vec::new();
+        let payload = vec![1, 2, 3];
+        let header = vec![0xAA, 0xBB];
+        encode_frame_into(&payload, Some(&header), &mut buffer).unwrap();
+
+        // Check header
+        assert_eq!(&buffer[0..2], &header[..]);
+
+        // Check length prefix
+        assert_eq!(buffer[2], 0);
+        assert_eq!(buffer[3], 0);
+        assert_eq!(buffer[4], 3);
+
+        // Check payload
+        assert_eq!(&buffer[5..], &payload[..]);
     }
 }
