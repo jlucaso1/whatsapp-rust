@@ -41,7 +41,6 @@ use waproto::whatsapp as wa;
 use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
 
-const APP_STATE_KEY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
 const MAX_POOLED_BUFFER_CAP: usize = 512 * 1024;
@@ -757,6 +756,110 @@ impl Client {
         self.send_iq(query).await.map(|_| ())
     }
 
+    pub async fn clean_dirty_bits(
+        &self,
+        type_: &str,
+        timestamp: Option<&str>,
+    ) -> Result<(), ClientError> {
+        let id = self.generate_request_id();
+        let mut clean_builder = NodeBuilder::new("clean").attr("type", type_);
+        if let Some(ts) = timestamp {
+            clean_builder = clean_builder.attr("timestamp", ts);
+        }
+
+        let node = NodeBuilder::new("iq")
+            .attr("to", server_jid().to_string())
+            .attr("type", "set")
+            .attr("xmlns", "urn:xmpp:whatsapp:dirty")
+            .attr("id", id)
+            .children([clean_builder.build()])
+            .build();
+
+        self.send_node(node).await
+    }
+
+    pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
+        use crate::request::{InfoQuery, InfoQueryType};
+
+        debug!(target: "Client", "Fetching properties (props)...");
+
+        let props_node = NodeBuilder::new("props")
+            .attr("protocol", "2")
+            .attr("hash", "") // TODO: load hash from persistence
+            .build();
+
+        let iq = InfoQuery {
+            namespace: "w",
+            query_type: InfoQueryType::Get,
+            to: server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![props_node])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await.map(|_| ())
+    }
+
+    pub async fn fetch_blocklist(&self) -> Result<(), crate::request::IqError> {
+        use crate::request::{InfoQuery, InfoQueryType};
+
+        debug!(target: "Client", "Fetching blocklist...");
+
+        let iq = InfoQuery {
+            namespace: "blocklist",
+            query_type: InfoQueryType::Get,
+            to: server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
+                NodeBuilder::new("blocklist").build(),
+            ])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await.map(|_| ())
+    }
+
+    pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
+        use crate::request::{InfoQuery, InfoQueryType};
+
+        debug!(target: "Client", "Fetching privacy settings...");
+
+        let iq = InfoQuery {
+            namespace: "privacy",
+            query_type: InfoQueryType::Get,
+            to: server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
+                NodeBuilder::new("privacy").build(),
+            ])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await.map(|_| ())
+    }
+
+    pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
+        use crate::request::{InfoQuery, InfoQueryType};
+
+        debug!(target: "Client", "Sending digest key bundle...");
+
+        let digest_node = NodeBuilder::new("digest").build();
+        let iq = InfoQuery {
+            namespace: "encrypt",
+            query_type: InfoQueryType::Get,
+            to: server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![digest_node])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await.map(|_| ())
+    }
+
     pub(crate) async fn handle_success_ref(
         self: &Arc<Self>,
         node: &wacore_binary::node::NodeRef<'_>,
@@ -788,14 +891,64 @@ impl Client {
 
         let client_clone = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = client_clone.set_passive(false).await {
-                warn!("Failed to send post-connect passive IQ: {e:?}");
+            info!(target: "Client", "Starting post-login initialization sequence...");
+
+            let mut force_initial_sync = false;
+            let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
+            if device_snapshot.push_name.is_empty() {
+                const DEFAULT_PUSH_NAME: &str = "WhatsApp Rust";
+                warn!(
+                    target: "Client",
+                    "Push name is empty! Setting default to '{DEFAULT_PUSH_NAME}' to allow presence."
+                );
+                client_clone
+                    .persistence_manager
+                    .process_command(DeviceCommand::SetPushName(DEFAULT_PUSH_NAME.to_string()))
+                    .await;
+                force_initial_sync = true;
             }
 
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                warn!(
-                    "Could not send initial presence: {e:?}. This is expected if push_name is not yet known."
+            if let Err(e) = client_clone.upload_pre_keys().await {
+                warn!("Failed to upload pre-keys during startup: {e:?}");
+            }
+
+            if let Err(e) = client_clone.set_passive(false).await {
+                warn!("Failed to send post-connect active IQ: {e:?}");
+            }
+
+            let bg_client = client_clone.clone();
+            tokio::spawn(async move {
+                info!(
+                    target: "Client",
+                    "Sending background initialization queries (Props, Blocklist, Privacy, Digest)..."
                 );
+
+                let props_fut = bg_client.fetch_props();
+                let blocklist_fut = bg_client.fetch_blocklist();
+                let privacy_fut = bg_client.fetch_privacy_settings();
+                let digest_fut = bg_client.send_digest_key_bundle();
+
+                let (r_props, r_block, r_priv, r_digest) =
+                    tokio::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
+
+                if let Err(e) = r_props {
+                    warn!("Background init: Failed to fetch props: {e:?}");
+                }
+                if let Err(e) = r_block {
+                    warn!("Background init: Failed to fetch blocklist: {e:?}");
+                }
+                if let Err(e) = r_priv {
+                    warn!("Background init: Failed to fetch privacy settings: {e:?}");
+                }
+                if let Err(e) = r_digest {
+                    warn!("Background init: Failed to send digest: {e:?}");
+                }
+            });
+
+            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+                error!("Failed to send initial presence: {e:?}");
+            } else {
+                info!("Initial presence sent successfully.");
             }
 
             client_clone
@@ -803,46 +956,49 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
 
-            if client_clone.needs_initial_full_sync.load(Ordering::Relaxed) {
+            let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
+            if flag_set || force_initial_sync {
+                info!(
+                    target: "Client/AppState",
+                    "Starting Initial App State Sync (flag_set={flag_set}, force={force_initial_sync})"
+                );
+
                 if !client_clone
                     .initial_app_state_keys_received
                     .load(Ordering::Relaxed)
                 {
-                    info!(target: "Client/AppState", "Waiting for initial app state keys before starting full sync (15s timeout)...");
-                    match tokio::time::timeout(
-                        APP_STATE_KEY_WAIT_TIMEOUT,
+                    info!(
+                        target: "Client/AppState",
+                        "Waiting up to 5s for app state keys..."
+                    );
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(5),
                         client_clone.initial_keys_synced_notifier.notified(),
                     )
-                    .await
-                    {
-                        Ok(_) => {
-                            info!(target: "Client/AppState", "Initial app state keys received; proceeding with full sync.")
-                        }
-                        Err(_) => {
-                            warn!(target: "Client/AppState", "Timed out waiting for initial app state keys; continuing anyway (may see 'app state key not found' warnings).")
+                    .await;
+                }
+
+                let sync_client = client_clone.clone();
+                tokio::spawn(async move {
+                    let names = [
+                        WAPatchName::CriticalBlock,
+                        WAPatchName::CriticalUnblockLow,
+                        WAPatchName::RegularLow,
+                        WAPatchName::RegularHigh,
+                        WAPatchName::Regular,
+                    ];
+
+                    for name in names {
+                        if let Err(e) = sync_client.fetch_app_state_with_retry(name).await {
+                            warn!("Failed to full sync app state {:?}: {e}", name);
                         }
                     }
-                } else {
-                    info!(target: "Client/AppState", "Initial app state keys already present; starting full sync immediately.");
-                }
-                let names = [
-                    WAPatchName::CriticalBlock,
-                    WAPatchName::CriticalUnblockLow,
-                    WAPatchName::RegularLow,
-                    WAPatchName::RegularHigh,
-                    WAPatchName::Regular,
-                ];
-                for name in names {
-                    if let Err(e) = client_clone.fetch_app_state_with_retry(name).await {
-                        warn!(
-                            "Failed to full sync app state {:?} after retry logic: {e}",
-                            name
-                        );
-                    }
-                }
-                client_clone
-                    .needs_initial_full_sync
-                    .store(false, Ordering::Relaxed);
+
+                    sync_client
+                        .needs_initial_full_sync
+                        .store(false, Ordering::Relaxed);
+                    info!(target: "Client/AppState", "Initial App State Sync Completed.");
+                });
             }
         });
     }
@@ -1522,10 +1678,25 @@ impl Client {
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         if let Some(own_jid) = &device_snapshot.pn {
+            let type_str = match receipt_type {
+                crate::types::presence::ReceiptType::HistorySync => "hist_sync",
+                crate::types::presence::ReceiptType::Read => "read",
+                crate::types::presence::ReceiptType::ReadSelf => "read-self",
+                crate::types::presence::ReceiptType::Delivered => "delivery",
+                crate::types::presence::ReceiptType::Played => "played",
+                crate::types::presence::ReceiptType::PlayedSelf => "played-self",
+                crate::types::presence::ReceiptType::Inactive => "inactive",
+                crate::types::presence::ReceiptType::PeerMsg => "peer_msg",
+                crate::types::presence::ReceiptType::Sender => "sender",
+                crate::types::presence::ReceiptType::ServerError => "server-error",
+                crate::types::presence::ReceiptType::Retry => "retry",
+                crate::types::presence::ReceiptType::Other(ref s) => s.as_str(),
+            };
+
             let node = NodeBuilder::new("receipt")
                 .attrs([
                     ("id", id),
-                    ("type", format!("{:?}", receipt_type).to_lowercase()),
+                    ("type", type_str.to_string()),
                     ("to", own_jid.to_non_ad().to_string()),
                 ])
                 .build();
