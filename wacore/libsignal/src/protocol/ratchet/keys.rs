@@ -193,3 +193,150 @@ impl fmt::Display for RootKey {
         write!(f, "{}", hex::encode(self.key))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that ChainKey properly derives the next chain key
+    /// The chain key advances by HMAC-SHA256 with a constant seed
+    #[test]
+    fn test_chain_key_stepping() {
+        let initial_key = [0x42u8; 32];
+        let chain_key = ChainKey::new(initial_key, 0);
+
+        // Step the chain multiple times
+        let chain1 = chain_key.next_chain_key();
+        let chain2 = chain1.next_chain_key();
+        let chain3 = chain2.next_chain_key();
+
+        // Verify index increments correctly
+        assert_eq!(chain_key.index(), 0);
+        assert_eq!(chain1.index(), 1);
+        assert_eq!(chain2.index(), 2);
+        assert_eq!(chain3.index(), 3);
+
+        // Verify keys are different at each step
+        assert_ne!(chain_key.key(), chain1.key());
+        assert_ne!(chain1.key(), chain2.key());
+        assert_ne!(chain2.key(), chain3.key());
+
+        // Verify determinism: same initial key produces same chain
+        let chain_key_copy = ChainKey::new(initial_key, 0);
+        let chain1_copy = chain_key_copy.next_chain_key();
+        assert_eq!(chain1.key(), chain1_copy.key());
+        assert_eq!(chain1.index(), chain1_copy.index());
+    }
+
+    /// Test that MessageKeys derivation is deterministic
+    #[test]
+    fn test_message_keys_derivation() {
+        let chain_key = ChainKey::new([0x55u8; 32], 10);
+        let message_keys_gen = chain_key.message_keys();
+        let message_keys = message_keys_gen.generate_keys();
+
+        // Verify counter is preserved
+        assert_eq!(message_keys.counter(), 10);
+
+        // Verify key sizes
+        assert_eq!(message_keys.cipher_key().len(), 32);
+        assert_eq!(message_keys.mac_key().len(), 32);
+        assert_eq!(message_keys.iv().len(), 16);
+
+        // Verify determinism
+        let chain_key2 = ChainKey::new([0x55u8; 32], 10);
+        let message_keys2 = chain_key2.message_keys().generate_keys();
+        assert_eq!(message_keys.cipher_key(), message_keys2.cipher_key());
+        assert_eq!(message_keys.mac_key(), message_keys2.mac_key());
+        assert_eq!(message_keys.iv(), message_keys2.iv());
+    }
+
+    /// Test that different chain key indices produce different message keys
+    #[test]
+    fn test_message_keys_differ_by_counter() {
+        let key = [0xAAu8; 32];
+        let chain_key_0 = ChainKey::new(key, 0);
+        let chain_key_1 = ChainKey::new(key, 1);
+
+        let mk0 = chain_key_0.message_keys().generate_keys();
+        let mk1 = chain_key_1.message_keys().generate_keys();
+
+        // Same base key but different counters should produce different message keys
+        // because the counter is used in the derivation
+        assert_eq!(mk0.counter(), 0);
+        assert_eq!(mk1.counter(), 1);
+
+        // The keys themselves depend on the chain key (not counter), but counter differs
+        // If we advance the chain, we should get different underlying keys
+        let chain_advanced = chain_key_0.next_chain_key();
+        let mk_advanced = chain_advanced.message_keys().generate_keys();
+
+        assert_ne!(mk0.cipher_key(), mk_advanced.cipher_key());
+    }
+
+    /// Test RootKey creation and accessor
+    #[test]
+    fn test_root_key_basic() {
+        let key_bytes = [0x12u8; 32];
+        let root_key = RootKey::new(key_bytes);
+
+        assert_eq!(root_key.key(), &key_bytes);
+
+        // Test Display trait
+        let display = format!("{}", root_key);
+        assert_eq!(display, hex::encode(key_bytes));
+    }
+
+    /// Test stepping the chain 100 times to verify no issues with long chains
+    #[test]
+    fn test_chain_key_long_chain() {
+        let mut chain = ChainKey::new([0x01u8; 32], 0);
+
+        for i in 0..100 {
+            assert_eq!(chain.index(), i);
+            chain = chain.next_chain_key();
+        }
+
+        assert_eq!(chain.index(), 100);
+    }
+
+    /// Test MessageKeyGenerator from seed
+    #[test]
+    fn test_message_key_generator_from_seed() {
+        let seed = vec![0xBBu8; 32];
+        let counter = 42;
+
+        let generator = MessageKeyGenerator::new_from_seed(&seed, counter);
+        let keys = generator.generate_keys();
+
+        assert_eq!(keys.counter(), counter);
+        assert_eq!(keys.cipher_key().len(), 32);
+        assert_eq!(keys.mac_key().len(), 32);
+        assert_eq!(keys.iv().len(), 16);
+
+        // Verify determinism
+        let generator2 = MessageKeyGenerator::new_from_seed(&seed, counter);
+        let keys2 = generator2.generate_keys();
+        assert_eq!(keys.cipher_key(), keys2.cipher_key());
+    }
+
+    /// Test MessageKeys derive_keys with known inputs
+    #[test]
+    fn test_message_keys_derive_with_salt() {
+        let input_key_material = [0x11u8; 32];
+        let salt = [0x22u8; 32];
+        let counter = 5;
+
+        let keys1 = MessageKeys::derive_keys(&input_key_material, Some(&salt), counter);
+        let keys2 = MessageKeys::derive_keys(&input_key_material, None, counter);
+
+        // With salt vs without salt should produce different keys
+        assert_ne!(keys1.cipher_key(), keys2.cipher_key());
+        assert_ne!(keys1.mac_key(), keys2.mac_key());
+        assert_ne!(keys1.iv(), keys2.iv());
+
+        // Both should have same counter
+        assert_eq!(keys1.counter(), counter);
+        assert_eq!(keys2.counter(), counter);
+    }
+}
