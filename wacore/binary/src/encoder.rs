@@ -383,4 +383,171 @@ mod tests {
         assert_eq!(buffer.len(), 17);
         Ok(())
     }
+
+    /// Test LIST_8 boundary (length 255)
+    #[test]
+    fn test_list_size_list8_boundary() -> TestResult {
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+
+        // LIST_8 should be used for lengths 1-255
+        encoder.write_list_start(255)?;
+
+        // Expected: LIST_8 (248), then length 255
+        assert_eq!(buffer[1], token::LIST_8);
+        assert_eq!(buffer[2], 255);
+        Ok(())
+    }
+
+    /// Test LIST_16 boundary (length 256)
+    #[test]
+    fn test_list_size_list16_boundary() -> TestResult {
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+
+        // LIST_16 should be used for lengths 256+
+        encoder.write_list_start(256)?;
+
+        // Expected: LIST_16 (249), then length as u16 big-endian
+        assert_eq!(buffer[1], token::LIST_16);
+        assert_eq!(buffer[2], 0x01); // 256 >> 8
+        assert_eq!(buffer[3], 0x00); // 256 & 0xFF
+        Ok(())
+    }
+
+    /// Test empty list encoding
+    #[test]
+    fn test_list_size_empty() -> TestResult {
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+
+        encoder.write_list_start(0)?;
+
+        // Empty list uses LIST_EMPTY token
+        assert_eq!(buffer[1], token::LIST_EMPTY);
+        Ok(())
+    }
+
+    /// Test hex packing validation
+    #[test]
+    fn test_hex_validation() {
+        // Valid hex strings (uppercase A-F, digits 0-9)
+        assert!(Encoder::<Vec<u8>>::validate_hex("0123456789ABCDEF"));
+        assert!(Encoder::<Vec<u8>>::validate_hex("DEADBEEF"));
+        assert!(Encoder::<Vec<u8>>::validate_hex("1234"));
+
+        // Invalid: lowercase letters
+        assert!(!Encoder::<Vec<u8>>::validate_hex("abcdef"));
+        assert!(!Encoder::<Vec<u8>>::validate_hex("DeadBeef"));
+
+        // Invalid: special characters
+        assert!(!Encoder::<Vec<u8>>::validate_hex("-"));
+        assert!(!Encoder::<Vec<u8>>::validate_hex("."));
+        assert!(!Encoder::<Vec<u8>>::validate_hex(" "));
+
+        // Empty string is valid (but will be encoded as regular string)
+        assert!(Encoder::<Vec<u8>>::validate_hex(""));
+    }
+
+    /// Test nibble packing validation
+    #[test]
+    fn test_nibble_validation() {
+        // Valid nibble strings: digits, dash, dot
+        assert!(Encoder::<Vec<u8>>::validate_nibble("0123456789"));
+        assert!(Encoder::<Vec<u8>>::validate_nibble("-"));
+        assert!(Encoder::<Vec<u8>>::validate_nibble("."));
+        assert!(Encoder::<Vec<u8>>::validate_nibble("123-456.789"));
+
+        // Invalid: letters
+        assert!(!Encoder::<Vec<u8>>::validate_nibble("abc"));
+        assert!(!Encoder::<Vec<u8>>::validate_nibble("123abc"));
+
+        // Invalid: uppercase letters
+        assert!(!Encoder::<Vec<u8>>::validate_nibble("ABC"));
+
+        // Invalid: special characters other than - and .
+        assert!(!Encoder::<Vec<u8>>::validate_nibble("123!456"));
+        assert!(!Encoder::<Vec<u8>>::validate_nibble("@"));
+    }
+
+    /// Test BINARY_8, BINARY_20, BINARY_32 boundary transitions
+    #[test]
+    fn test_binary_length_boundaries() -> TestResult {
+        // BINARY_8: length < 256
+        let short_data = vec![0x42; 255];
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_bytes_with_len(&short_data)?;
+        assert_eq!(buffer[1], token::BINARY_8);
+        assert_eq!(buffer[2], 255);
+
+        // BINARY_20: 256 <= length < 2^20
+        let medium_data = vec![0x42; 256];
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_bytes_with_len(&medium_data)?;
+        assert_eq!(buffer[1], token::BINARY_20);
+        // 256 in u20 big-endian: 0x00, 0x01, 0x00
+        assert_eq!(buffer[2], 0x00);
+        assert_eq!(buffer[3], 0x01);
+        assert_eq!(buffer[4], 0x00);
+
+        Ok(())
+    }
+
+    /// Test node with many children uses correct list encoding
+    #[test]
+    fn test_node_with_255_children() -> TestResult {
+        let children: Vec<Node> = (0..255)
+            .map(|_| Node::new("child", indexmap::IndexMap::new(), None))
+            .collect();
+
+        let parent = Node::new(
+            "parent",
+            indexmap::IndexMap::new(),
+            Some(NodeContent::Nodes(children)),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&parent)?;
+
+        // Should encode successfully with LIST_8 for children
+        assert!(!buffer.is_empty());
+        Ok(())
+    }
+
+    /// Test node with 256 children uses LIST_16
+    #[test]
+    fn test_node_with_256_children() -> TestResult {
+        let children: Vec<Node> = (0..256)
+            .map(|_| Node::new("x", indexmap::IndexMap::new(), None))
+            .collect();
+
+        let parent = Node::new(
+            "parent",
+            indexmap::IndexMap::new(),
+            Some(NodeContent::Nodes(children)),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&parent)?;
+
+        // Should encode successfully with LIST_16 for children
+        assert!(!buffer.is_empty());
+        Ok(())
+    }
+
+    /// Test string at PACKED_MAX boundary (127 chars)
+    #[test]
+    fn test_packed_max_boundary() {
+        // Exactly PACKED_MAX characters should be valid for packing
+        let max_nibble = "0".repeat(token::PACKED_MAX as usize);
+        assert!(Encoder::<Vec<u8>>::validate_nibble(&max_nibble));
+
+        // One more than PACKED_MAX should NOT be packed
+        let over_max = "0".repeat(token::PACKED_MAX as usize + 1);
+        assert!(!Encoder::<Vec<u8>>::validate_nibble(&over_max));
+    }
 }

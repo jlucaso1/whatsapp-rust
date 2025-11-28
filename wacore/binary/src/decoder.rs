@@ -453,4 +453,251 @@ mod tests {
             panic!("Expected InvalidToken error, got: {:?}", result);
         }
     }
+
+    /// Test empty input returns appropriate error
+    #[test]
+    fn test_empty_input() {
+        let mut decoder = Decoder::new(&[]);
+        let result = decoder.read_node_ref();
+        assert!(result.is_err());
+    }
+
+    /// Test truncated u16 read
+    #[test]
+    fn test_truncated_u16() {
+        // Only one byte when u16 expected
+        let data = vec![0x42];
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_u16_be();
+        assert!(result.is_err());
+        if let Err(BinaryError::UnexpectedEof) = result {
+            // Expected
+        } else {
+            panic!("Expected UnexpectedEof, got: {:?}", result);
+        }
+    }
+
+    /// Test truncated u20 read
+    #[test]
+    fn test_truncated_u20() {
+        // Only two bytes when u20 (3 bytes) expected
+        let data = vec![0x42, 0x43];
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_u20_be();
+        assert!(result.is_err());
+    }
+
+    /// Test truncated u32 read
+    #[test]
+    fn test_truncated_u32() {
+        // Only three bytes when u32 expected
+        let data = vec![0x42, 0x43, 0x44];
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_u32_be();
+        assert!(result.is_err());
+    }
+
+    /// Test BINARY_8 with length larger than remaining buffer
+    #[test]
+    fn test_binary8_length_exceeds_buffer() {
+        // BINARY_8 token, length 100, but only 5 bytes of data
+        let data = vec![token::BINARY_8, 100, 1, 2, 3, 4, 5];
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_value_as_string();
+        assert!(result.is_err());
+    }
+
+    /// Test BINARY_20 with length larger than remaining buffer
+    #[test]
+    fn test_binary20_length_exceeds_buffer() {
+        // BINARY_20 token, length encoded as 256, but only a few bytes of data
+        let data = vec![token::BINARY_20, 0x00, 0x01, 0x00, 1, 2, 3]; // length = 256
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_value_as_string();
+        assert!(result.is_err());
+    }
+
+    /// Test LIST_8 with size larger than remaining data
+    #[test]
+    fn test_list8_size_exceeds_data() {
+        // LIST_8 token, size 10, but not enough data for 10 nodes
+        let data = vec![token::LIST_8, 10, 1]; // Only 1 byte of data for nodes
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_node_ref();
+        assert!(result.is_err());
+    }
+
+    /// Test invalid token value
+    #[test]
+    fn test_invalid_token() {
+        // Use a token value that's reserved and not valid as a string token
+        // e.g., AD_JID (247) followed by insufficient data
+        let data = vec![token::AD_JID]; // No data following
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_value_as_string();
+        assert!(result.is_err());
+    }
+
+    /// Test read_bytes with exact length
+    #[test]
+    fn test_read_bytes_exact_length() {
+        let data = vec![1, 2, 3, 4, 5];
+        let mut decoder = Decoder::new(&data);
+        let bytes = decoder.read_bytes(5).unwrap();
+        assert_eq!(bytes, &[1, 2, 3, 4, 5]);
+        assert!(decoder.is_finished());
+    }
+
+    /// Test read_bytes exceeding length
+    #[test]
+    fn test_read_bytes_exceeding_length() {
+        let data = vec![1, 2, 3];
+        let mut decoder = Decoder::new(&data);
+        let result = decoder.read_bytes(5);
+        assert!(result.is_err());
+    }
+
+    /// Test u20 encoding/decoding values
+    #[test]
+    fn test_u20_encoding() {
+        // Test value 0
+        let data = vec![0x00, 0x00, 0x00];
+        let mut decoder = Decoder::new(&data);
+        assert_eq!(decoder.read_u20_be().unwrap(), 0);
+
+        // Test value 256 (0x100)
+        let data = vec![0x00, 0x01, 0x00];
+        let mut decoder = Decoder::new(&data);
+        assert_eq!(decoder.read_u20_be().unwrap(), 256);
+
+        // Test value 65536 (0x10000)
+        let data = vec![0x01, 0x00, 0x00];
+        let mut decoder = Decoder::new(&data);
+        assert_eq!(decoder.read_u20_be().unwrap(), 65536);
+
+        // Test max u20 value (0xFFFFF = 1048575)
+        let data = vec![0x0F, 0xFF, 0xFF];
+        let mut decoder = Decoder::new(&data);
+        assert_eq!(decoder.read_u20_be().unwrap(), 1048575);
+    }
+
+    /// Test bytes_left tracking
+    #[test]
+    fn test_bytes_left() {
+        let data = vec![1, 2, 3, 4, 5];
+        let mut decoder = Decoder::new(&data);
+
+        assert_eq!(decoder.bytes_left(), 5);
+        decoder.read_u8().unwrap();
+        assert_eq!(decoder.bytes_left(), 4);
+        decoder.read_u8().unwrap();
+        assert_eq!(decoder.bytes_left(), 3);
+        decoder.read_bytes(3).unwrap();
+        assert_eq!(decoder.bytes_left(), 0);
+        assert!(decoder.is_finished());
+    }
+
+    /// Test hex packed string decoding
+    #[test]
+    fn test_hex_packed_decoding() {
+        // Encode "ABCDEF" as hex packed
+        // Each byte packs two hex digits
+        // A=10, B=11, C=12, D=13, E=14, F=15
+        let packed_data = vec![
+            3,    // length = 3 bytes = 6 characters
+            0xAB, // AB
+            0xCD, // CD
+            0xEF, // EF
+        ];
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::HEX_8).unwrap();
+        assert_eq!(result, "ABCDEF");
+    }
+
+    /// Test nibble packed string with odd length
+    #[test]
+    fn test_nibble_packed_odd_length() {
+        // Encode "123" as nibble packed (odd length = 3)
+        // 1=1, 2=2, 3=3, pad=15
+        let packed_data = vec![
+            0x82, // length = 2 bytes, high bit set for odd
+            0x12, // 12
+            0x3F, // 3 + pad (15)
+        ];
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::NIBBLE_8).unwrap();
+        assert_eq!(result, "123");
+    }
+
+    /// Test empty packed string
+    #[test]
+    fn test_empty_packed_string() {
+        let packed_data = vec![0]; // length = 0
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::NIBBLE_8).unwrap();
+        assert_eq!(result, "");
+    }
+
+    /// Test invalid nibble value 12 (only 0-11, 15 are valid)
+    #[test]
+    fn test_invalid_nibble_value_12() {
+        // 12 (0xC) is not a valid nibble
+        let packed_data = vec![1, 0xC0]; // first nibble is 12
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::NIBBLE_8);
+        assert!(result.is_err());
+    }
+
+    /// Test invalid nibble value 13
+    #[test]
+    fn test_invalid_nibble_value_13() {
+        let packed_data = vec![1, 0xD0]; // first nibble is 13
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::NIBBLE_8);
+        assert!(result.is_err());
+    }
+
+    /// Test invalid nibble value 14
+    #[test]
+    fn test_invalid_nibble_value_14() {
+        let packed_data = vec![1, 0xE0]; // first nibble is 14
+
+        let mut decoder = Decoder::new(&packed_data);
+        let result = decoder.read_packed(token::NIBBLE_8);
+        assert!(result.is_err());
+    }
+
+    /// Test deeply nested nodes (recursion safety)
+    #[test]
+    fn test_nested_nodes() -> TestResult {
+        // Create a 50-level deep node structure
+        let mut current = Node::new("leaf", indexmap::IndexMap::new(), None);
+
+        for i in 0..50 {
+            let tag = format!("level{}", i);
+            current = Node::new(
+                &tag,
+                indexmap::IndexMap::new(),
+                Some(crate::node::NodeContent::Nodes(vec![current])),
+            );
+        }
+
+        let mut buffer = Vec::new();
+        {
+            let mut encoder = crate::encoder::Encoder::new(std::io::Cursor::new(&mut buffer))?;
+            encoder.write_node(&current)?;
+        }
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?;
+
+        // Verify top level tag
+        assert_eq!(decoded.tag, "level49");
+        Ok(())
+    }
 }

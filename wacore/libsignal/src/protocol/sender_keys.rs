@@ -366,3 +366,332 @@ impl SenderKeyRecord {
         Ok(self.as_protobuf().encode_to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::KeyPair;
+
+    /// Test SenderMessageKey derivation is deterministic
+    #[test]
+    fn test_sender_message_key_derivation() {
+        let seed = vec![0x42u8; 32];
+        let iteration = 10;
+
+        let smk1 = SenderMessageKey::new(iteration, seed.clone());
+        let smk2 = SenderMessageKey::new(iteration, seed.clone());
+
+        // Same seed and iteration should produce same keys
+        assert_eq!(smk1.iteration(), smk2.iteration());
+        assert_eq!(smk1.iv(), smk2.iv());
+        assert_eq!(smk1.cipher_key(), smk2.cipher_key());
+    }
+
+    /// Test SenderMessageKey produces different keys for different seeds
+    #[test]
+    fn test_sender_message_key_different_seeds() {
+        let seed1 = vec![0x42u8; 32];
+        let seed2 = vec![0x43u8; 32];
+
+        let smk1 = SenderMessageKey::new(0, seed1);
+        let smk2 = SenderMessageKey::new(0, seed2);
+
+        assert_ne!(smk1.iv(), smk2.iv());
+        assert_ne!(smk1.cipher_key(), smk2.cipher_key());
+    }
+
+    /// Test SenderChainKey iteration and stepping
+    #[test]
+    fn test_sender_chain_key_stepping() {
+        let initial_chain = vec![0x55u8; 32];
+        let sck = SenderChainKey::new(0, initial_chain);
+
+        let sck1 = sck.next().unwrap();
+        let sck2 = sck1.next().unwrap();
+        let sck3 = sck2.next().unwrap();
+
+        // Verify iteration increments
+        assert_eq!(sck.iteration(), 0);
+        assert_eq!(sck1.iteration(), 1);
+        assert_eq!(sck2.iteration(), 2);
+        assert_eq!(sck3.iteration(), 3);
+
+        // Verify seeds change at each step
+        assert_ne!(sck.seed(), sck1.seed());
+        assert_ne!(sck1.seed(), sck2.seed());
+        assert_ne!(sck2.seed(), sck3.seed());
+    }
+
+    /// Test SenderChainKey produces correct message keys
+    #[test]
+    fn test_sender_chain_key_message_key() {
+        let chain = vec![0x55u8; 32];
+        let sck = SenderChainKey::new(5, chain);
+
+        let smk = sck.sender_message_key();
+
+        assert_eq!(smk.iteration(), 5);
+        assert_eq!(smk.iv().len(), 16);
+        assert_eq!(smk.cipher_key().len(), 32);
+    }
+
+    /// Test SenderChainKey stepping is deterministic
+    #[test]
+    fn test_sender_chain_key_determinism() {
+        let chain = vec![0x77u8; 32];
+
+        let sck1 = SenderChainKey::new(0, chain.clone());
+        let sck2 = SenderChainKey::new(0, chain);
+
+        let next1 = sck1.next().unwrap();
+        let next2 = sck2.next().unwrap();
+
+        assert_eq!(next1.seed(), next2.seed());
+        assert_eq!(next1.iteration(), next2.iteration());
+    }
+
+    /// Test SenderKeyState basic operations
+    #[test]
+    fn test_sender_key_state_basic() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let state = SenderKeyState::new(3, 12345, 0, &chain_key, keypair.public_key, None);
+
+        assert_eq!(state.chain_id(), 12345);
+        assert_eq!(state.message_version(), 3);
+        assert!(state.sender_chain_key().is_some());
+        assert!(state.signing_key_public().is_ok());
+        // Private key was not provided
+        assert!(state.signing_key_private().is_err());
+    }
+
+    /// Test SenderKeyState with private signing key
+    #[test]
+    fn test_sender_key_state_with_private_key() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let state = SenderKeyState::new(
+            3,
+            12345,
+            0,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        assert!(state.signing_key_public().is_ok());
+        assert!(state.signing_key_private().is_ok());
+    }
+
+    /// Test SenderKeyState chain key operations
+    #[test]
+    fn test_sender_key_state_chain_key_update() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut state = SenderKeyState::new(
+            3,
+            12345,
+            0,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        let initial_sck = state.sender_chain_key().unwrap();
+        let next_sck = initial_sck.next().unwrap();
+
+        state.set_sender_chain_key(next_sck.clone());
+
+        let updated_sck = state.sender_chain_key().unwrap();
+        assert_eq!(updated_sck.iteration(), 1);
+    }
+
+    /// Test SenderKeyState message key storage
+    #[test]
+    fn test_sender_key_state_message_key_storage() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut state = SenderKeyState::new(
+            3,
+            12345,
+            0,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        let smk = SenderMessageKey::new(5, vec![0xAA; 32]);
+        state.add_sender_message_key(&smk);
+
+        // Should be able to retrieve it
+        let retrieved = state.remove_sender_message_key(5);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().iteration(), 5);
+
+        // Should not find it again
+        let not_found = state.remove_sender_message_key(5);
+        assert!(not_found.is_none());
+    }
+
+    /// Test SenderKeyState message key limit
+    #[test]
+    fn test_sender_key_state_message_key_limit() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut state = SenderKeyState::new(
+            3,
+            12345,
+            0,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        // Add more than MAX_MESSAGE_KEYS
+        for i in 0..(consts::MAX_MESSAGE_KEYS + 100) {
+            let smk = SenderMessageKey::new(i as u32, vec![0xBB; 32]);
+            state.add_sender_message_key(&smk);
+        }
+
+        // Old keys should have been evicted
+        // The first keys should be gone
+        for i in 0..100 {
+            let not_found = state.remove_sender_message_key(i as u32);
+            assert!(
+                not_found.is_none(),
+                "Key at iteration {} should have been evicted",
+                i
+            );
+        }
+    }
+
+    /// Test SenderKeyRecord basic operations
+    #[test]
+    fn test_sender_key_record_basic() {
+        let record = SenderKeyRecord::new_empty();
+        assert!(record.sender_key_state().is_err());
+    }
+
+    /// Test SenderKeyRecord add and retrieve state
+    #[test]
+    fn test_sender_key_record_add_state() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut record = SenderKeyRecord::new_empty();
+        record.add_sender_key_state(
+            3,
+            12345,
+            0,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        let state = record.sender_key_state().unwrap();
+        assert_eq!(state.chain_id(), 12345);
+    }
+
+    /// Test SenderKeyRecord state limit
+    #[test]
+    fn test_sender_key_record_state_limit() {
+        let mut rng = rand::rng();
+        let chain_key = [0x42u8; 32];
+
+        let mut record = SenderKeyRecord::new_empty();
+
+        // Add more than MAX_SENDER_KEY_STATES
+        for i in 0..(consts::MAX_SENDER_KEY_STATES + 5) {
+            let keypair = KeyPair::generate(&mut rng);
+            record.add_sender_key_state(
+                3,
+                i as u32,
+                0,
+                &chain_key,
+                keypair.public_key,
+                Some(keypair.private_key),
+            );
+        }
+
+        // Should not have more than MAX_SENDER_KEY_STATES
+        let chain_ids: Vec<u32> = record.chain_ids_for_logging().collect();
+        assert!(chain_ids.len() <= consts::MAX_SENDER_KEY_STATES);
+    }
+
+    /// Test SenderKeyRecord chain ID lookup
+    #[test]
+    fn test_sender_key_record_chain_id_lookup() {
+        let mut rng = rand::rng();
+        let keypair1 = KeyPair::generate(&mut rng);
+        let keypair2 = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut record = SenderKeyRecord::new_empty();
+        record.add_sender_key_state(
+            3,
+            111,
+            0,
+            &chain_key,
+            keypair1.public_key,
+            Some(keypair1.private_key),
+        );
+        record.add_sender_key_state(
+            3,
+            222,
+            0,
+            &chain_key,
+            keypair2.public_key,
+            Some(keypair2.private_key),
+        );
+
+        // Should find chain 222 (most recent is at front)
+        let state = record.sender_key_state_for_chain_id(222);
+        assert!(state.is_some());
+        assert_eq!(state.unwrap().chain_id(), 222);
+
+        // Should find chain 111
+        let state = record.sender_key_state_for_chain_id(111);
+        assert!(state.is_some());
+        assert_eq!(state.unwrap().chain_id(), 111);
+
+        // Should not find non-existent chain
+        let state = record.sender_key_state_for_chain_id(333);
+        assert!(state.is_none());
+    }
+
+    /// Test SenderKeyRecord serialization roundtrip
+    #[test]
+    fn test_sender_key_record_serialization() {
+        let mut rng = rand::rng();
+        let keypair = KeyPair::generate(&mut rng);
+        let chain_key = [0x42u8; 32];
+
+        let mut record = SenderKeyRecord::new_empty();
+        record.add_sender_key_state(
+            3,
+            12345,
+            5,
+            &chain_key,
+            keypair.public_key,
+            Some(keypair.private_key),
+        );
+
+        let serialized = record.serialize().unwrap();
+        let deserialized = SenderKeyRecord::deserialize(&serialized).unwrap();
+
+        let state = deserialized.sender_key_state().unwrap();
+        assert_eq!(state.chain_id(), 12345);
+        assert!(state.sender_chain_key().is_some());
+    }
+}
