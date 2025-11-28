@@ -5,7 +5,6 @@ use crate::types::message::MessageInfo;
 use chrono::DateTime;
 use log::warn;
 use prost::Message as ProtoMessage;
-use rand::TryRngCore;
 use std::sync::Arc;
 use wacore::libsignal::crypto::DecryptionError;
 use wacore::libsignal::protocol::SenderKeyDistributionMessage;
@@ -254,7 +253,7 @@ impl Client {
 
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
-        let rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::OsRng;
         let mut any_success = false;
         let mut any_duplicate = false;
         let mut dispatched_undecryptable = false;
@@ -297,7 +296,7 @@ impl Client {
                 &mut adapter.identity_store,
                 &mut adapter.pre_key_store,
                 &adapter.signed_pre_key_store,
-                &mut rng.unwrap_err(),
+                &mut rng,
                 UsePQRatchet::No,
             )
             .await;
@@ -373,7 +372,7 @@ impl Client {
                             &mut adapter.identity_store,
                             &mut adapter.pre_key_store,
                             &adapter.signed_pre_key_store,
-                            &mut rng.unwrap_err(),
+                            &mut rng,
                             UsePQRatchet::No,
                         )
                         .await;
@@ -954,9 +953,10 @@ mod tests {
 
         // 2. Create a valid but undecryptable SignalMessage (encrypted with a dummy key)
         let dummy_key = [0u8; 32];
-        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
-        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let mut rng = rand::rngs::OsRng;
+        let sender_ratchet = KeyPair::generate(&mut rng).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rng);
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rng);
         let signal_message = SignalMessage::new(
             4,
             &dummy_key,
@@ -1012,9 +1012,10 @@ mod tests {
         // 2. Create a message node with both msg and skmsg
         // The msg will fail to decrypt (no session), so skmsg should be skipped
         let dummy_key = [0u8; 32];
-        let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
-        let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
-        let receiver_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let mut rng = rand::rngs::OsRng;
+        let sender_ratchet = KeyPair::generate(&mut rng).public_key;
+        let sender_identity_pair = IdentityKeyPair::generate(&mut rng);
+        let receiver_identity_pair = IdentityKeyPair::generate(&mut rng);
         let signal_message = SignalMessage::new(
             4,
             &dummy_key,
@@ -1189,10 +1190,11 @@ mod tests {
         let device_arc = pm.get_device_arc().await;
         let skdm = {
             let mut device_guard = device_arc.write().await;
+            let mut rng = rand::rngs::OsRng;
             create_sender_key_distribution_message(
                 &lid_sender_key_name,
                 &mut *device_guard,
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut rng,
             )
             .await
             .expect("Failed to create SKDM")
@@ -1301,10 +1303,11 @@ mod tests {
 
             let skdm = {
                 let mut device_guard = device_arc.write().await;
+                let mut rng = rand::rngs::OsRng;
                 create_sender_key_distribution_message(
                     &lid_sender_key_name,
                     &mut *device_guard,
-                    &mut rand::rngs::OsRng.unwrap_err(),
+                    &mut rng,
                 )
                 .await
                 .expect("Failed to create SKDM")
@@ -1677,10 +1680,11 @@ mod tests {
         let device_arc = pm.get_device_arc().await;
         {
             let mut device_guard = device_arc.write().await;
+            let mut rng = rand::rngs::OsRng;
             create_sender_key_distribution_message(
                 &display_sender_key_name,
                 &mut *device_guard,
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut rng,
             )
             .await
             .expect("Failed to create SKDM");
@@ -1755,10 +1759,11 @@ mod tests {
         let device_arc = pm.get_device_arc().await;
         {
             let mut device_guard = device_arc.write().await;
+            let mut rng = rand::rngs::OsRng;
             let skdm = create_sender_key_distribution_message(
                 &sender_key_name,
                 &mut *device_guard,
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut rng,
             )
             .await
             .expect("Failed to create SKDM");
@@ -1774,11 +1779,12 @@ mod tests {
         // This simulates the second message after session is established
         let skmsg_ciphertext = {
             let mut device_guard = device_arc.write().await;
+            let mut rng = rand::rngs::OsRng;
             let sender_key_msg = wacore::libsignal::protocol::group_encrypt(
                 &mut *device_guard,
                 &sender_key_name,
                 b"ping",
-                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut rng,
             )
             .await
             .expect("Failed to encrypt with sender key");

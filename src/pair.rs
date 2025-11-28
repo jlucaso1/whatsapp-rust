@@ -2,7 +2,6 @@ use crate::client::Client;
 use crate::types::events::{Event, PairError, PairSuccess};
 use log::{error, info, warn};
 use prost::Message;
-use rand::TryRngCore;
 use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -296,7 +295,8 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = KeyPair::generate(&mut OsRng::unwrap_err(OsRng));
+    let mut rng = OsRng;
+    let master_ephemeral = KeyPair::generate(&mut rng);
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {

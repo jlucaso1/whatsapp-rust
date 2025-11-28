@@ -2,7 +2,6 @@ use crate::client::Client;
 use crate::types::events::Receipt;
 use log::{info, warn};
 use prost::Message;
-use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
 use wacore::libsignal::protocol::{KeyPair, ProtocolAddress};
@@ -175,7 +174,8 @@ impl Client {
         let device_guard = device_store.read().await;
 
         let new_prekey_id = (rand::random::<u32>() % 16777215) + 1;
-        let new_prekey_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let mut rng = rand::rngs::OsRng;
+        let new_prekey_keypair = KeyPair::generate(&mut rng);
         let new_prekey_record = wacore::libsignal::store::record_helpers::new_pre_key_record(
             new_prekey_id,
             &new_prekey_keypair,

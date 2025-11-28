@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 
 use crate::crypto::DecryptionError as DecryptionErrorCrypto;
 use crate::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt_into};
@@ -179,7 +179,7 @@ pub async fn message_encrypt(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn message_decrypt<R: Rng + CryptoRng>(
+pub async fn message_decrypt<R: TryRngCore + TryCryptoRng>(
     ciphertext: &CiphertextMessage,
     remote_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
@@ -214,7 +214,7 @@ pub async fn message_decrypt<R: Rng + CryptoRng>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
+pub async fn message_decrypt_prekey<R: TryRngCore + TryCryptoRng>(
     ciphertext: &PreKeySignalMessage,
     remote_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
@@ -285,7 +285,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
     Ok(ptext)
 }
 
-pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
+pub async fn message_decrypt_signal<R: TryRngCore + TryCryptoRng>(
     ciphertext: &SignalMessage,
     remote_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
@@ -429,7 +429,7 @@ fn create_decryption_failure_log(
     Ok(lines.join("\n"))
 }
 
-fn decrypt_message_with_record<R: Rng + CryptoRng>(
+fn decrypt_message_with_record<R: TryRngCore + TryCryptoRng>(
     remote_address: &ProtocolAddress,
     record: &mut SessionRecord,
     ciphertext: &SignalMessage,
@@ -604,7 +604,7 @@ impl std::fmt::Display for CurrentOrPrevious {
     }
 }
 
-fn decrypt_message_with_state<R: Rng + CryptoRng>(
+fn decrypt_message_with_state<R: TryRngCore + TryCryptoRng>(
     current_or_previous: CurrentOrPrevious,
     state: &mut SessionState,
     ciphertext: &SignalMessage,
@@ -687,7 +687,7 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
     Ok(ptext)
 }
 
-fn get_or_create_chain_key<R: Rng + CryptoRng>(
+fn get_or_create_chain_key<R: TryRngCore + TryCryptoRng>(
     state: &mut SessionState,
     their_ephemeral: &PublicKey,
     remote_address: &ProtocolAddress,

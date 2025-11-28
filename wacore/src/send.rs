@@ -9,7 +9,7 @@ use crate::messages::MessageUtils;
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
-use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand::{TryCryptoRng, TryRngCore};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -26,7 +26,7 @@ pub async fn encrypt_group_message<S, R>(
 ) -> Result<SenderKeyMessage>
 where
     S: SenderKeyStore + ?Sized,
-    R: Rng + CryptoRng,
+    R: TryRngCore + TryCryptoRng,
 {
     let sender_address = sender_jid.to_protocol_address();
     let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
@@ -129,12 +129,13 @@ where
             let signal_address = device_jid.to_protocol_address();
             match prekey_bundles.get(device_jid) {
                 Some(bundle) => {
+                    let mut rng = rand::rngs::OsRng;
                     match process_prekey_bundle(
                         &signal_address,
                         stores.session_store,
                         stores.identity_store,
                         bundle,
-                        &mut rand::rngs::OsRng.unwrap_err(),
+                        &mut rng,
                         UsePQRatchet::No,
                     )
                     .await
@@ -526,12 +527,13 @@ pub async fn prepare_group_stanza<
     }
 
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let mut rng = rand::rngs::OsRng;
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
         &own_sending_jid,
         &plaintext,
-        &mut rand::rngs::OsRng.unwrap_err(),
+        &mut rng,
     )
     .await?;
 
@@ -604,11 +606,16 @@ pub async fn create_sender_key_distribution_message_for_group(
             group_jid
         );
 
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::rngs::OsRng;
         let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
 
-        let chain_id = (rng.random::<u32>()) >> 1;
-        let sender_key_seed: [u8; 32] = rng.random();
+        let chain_id = (rng
+            .try_next_u32()
+            .expect("failed to draw sender key chain id"))
+            >> 1;
+        let mut sender_key_seed = [0u8; 32];
+        rng.try_fill_bytes(&mut sender_key_seed)
+            .expect("failed to seed sender key");
         record.add_sender_key_state(
             SENDERKEY_MESSAGE_CURRENT_VERSION,
             chain_id,
@@ -892,7 +899,7 @@ mod tests {
 
     /// Helper function to create a mock PreKeyBundle with valid types
     fn create_mock_bundle() -> PreKeyBundle {
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::rngs::OsRng;
         let identity_pair = IdentityKeyPair::generate(&mut rng);
         let signed_prekey_pair = KeyPair::generate(&mut rng);
         let prekey_pair = KeyPair::generate(&mut rng);

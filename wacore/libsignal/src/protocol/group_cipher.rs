@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 
 use crate::crypto::aes_256_cbc_decrypt;
 use crate::crypto::{DecryptionError as DecryptionErrorCrypto, aes_256_cbc_encrypt_into};
@@ -37,7 +37,7 @@ thread_local! {
     static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
 }
 
-pub async fn group_encrypt<R: Rng + CryptoRng>(
+pub async fn group_encrypt<R: TryRngCore + TryCryptoRng>(
     sender_key_store: &mut dyn SenderKeyStore,
     sender_key_name: &SenderKeyName,
     plaintext: &[u8],
@@ -257,7 +257,7 @@ pub async fn process_sender_key_distribution_message(
     Ok(())
 }
 
-pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
+pub async fn create_sender_key_distribution_message<R: TryRngCore + TryCryptoRng>(
     sender_key_name: &SenderKeyName,
     sender_key_store: &mut dyn SenderKeyStore,
     csprng: &mut R,
@@ -268,11 +268,17 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
         Some(record) => record,
         None => {
             // libsignal-protocol-java uses 31-bit integers for sender key chain IDs
-            let chain_id = (csprng.random::<u32>()) >> 1;
+            let chain_id = (csprng
+                .try_next_u32()
+                .expect("failed to draw chain id from csprng"))
+                >> 1;
             log::info!("Creating SenderKey with chain ID {chain_id}");
 
             let iteration = 0;
-            let sender_key: [u8; 32] = csprng.random();
+            let mut sender_key = [0u8; 32];
+            csprng
+                .try_fill_bytes(&mut sender_key)
+                .expect("failed to draw sender key seed");
             let signing_key = KeyPair::generate(csprng);
             let mut record = SenderKeyRecord::new_empty();
             record.add_sender_key_state(

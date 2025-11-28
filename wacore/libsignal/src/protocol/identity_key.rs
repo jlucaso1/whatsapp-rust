@@ -8,7 +8,7 @@
 #![warn(missing_docs)]
 
 use prost::Message;
-use rand::{CryptoRng, Rng};
+use rand::{TryCryptoRng, TryRngCore};
 
 use crate::protocol::{
     KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, stores::IdentityKeyPairStructure,
@@ -95,7 +95,7 @@ impl IdentityKeyPair {
     }
 
     /// Generate a random new identity from randomness in `csprng`.
-    pub fn generate<R: CryptoRng + Rng>(csprng: &mut R) -> Self {
+    pub fn generate<R: TryCryptoRng + TryRngCore>(csprng: &mut R) -> Self {
         let keypair = KeyPair::generate(csprng);
 
         Self {
@@ -134,7 +134,7 @@ impl IdentityKeyPair {
     }
 
     /// Generate a signature claiming that `other` represents the same user as `self`.
-    pub fn sign_alternate_identity<R: Rng + CryptoRng>(
+    pub fn sign_alternate_identity<R: TryRngCore + TryCryptoRng>(
         &self,
         other: &IdentityKey,
         rng: &mut R,
