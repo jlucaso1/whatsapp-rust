@@ -613,7 +613,7 @@ impl Client {
             let id_opt = node.get_attr("id");
             if let Some(id) = id_opt {
                 let has_waiter = self.response_waiters.lock().await.contains_key(id.as_ref());
-                if has_waiter && self.handle_iq_response(node.to_owned()).await {
+                if has_waiter && self.handle_iq_response(node).await {
                     return;
                 }
             }

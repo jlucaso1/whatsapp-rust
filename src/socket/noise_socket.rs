@@ -89,16 +89,16 @@ impl NoiseSocket {
             }
         };
 
-        out_buf.clear();
-        out_buf.extend_from_slice(&ciphertext);
+        // Clear plaintext and reuse out_buf for framing to avoid allocation
         plaintext_buf.clear();
 
-        let framed = match crate::framing::encode_frame(&out_buf, None) {
-            Ok(f) => f,
-            Err(e) => return Err(EncryptSendError::framing(e, plaintext_buf, out_buf)),
-        };
+        // Use encode_frame_into to write directly into out_buf (zero-allocation framing)
+        out_buf.clear();
+        if let Err(e) = crate::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
+            return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+        }
 
-        if let Err(e) = self.transport.send(&framed).await {
+        if let Err(e) = self.transport.send(&out_buf).await {
             return Err(EncryptSendError::transport(e, plaintext_buf, out_buf));
         }
 
