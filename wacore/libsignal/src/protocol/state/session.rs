@@ -561,8 +561,19 @@ impl SessionRecord {
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self, SignalProtocolError> {
-        let record = RecordStructure::decode(bytes)
+        let mut record = RecordStructure::decode(bytes)
             .map_err(|_| InvalidSessionError("failed to decode session record protobuf"))?;
+
+        // OPTIMIZATION: Aggressively prune previous_sessions on load.
+        // This avoids deserializing and keeping in memory more sessions than needed.
+        // The constant ARCHIVED_STATES_MAX_LENGTH (40) defines the maximum we ever use,
+        // so any sessions beyond that are wasted memory and CPU cycles.
+        if record.previous_sessions.len() > consts::ARCHIVED_STATES_MAX_LENGTH {
+            // Keep only the most recent sessions (at the front of the vec)
+            record
+                .previous_sessions
+                .truncate(consts::ARCHIVED_STATES_MAX_LENGTH);
+        }
 
         Ok(Self {
             current_session: record.current_session.map(|s| s.into()),

@@ -2,6 +2,170 @@ use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
+/// Intermediate result from fast JID parsing.
+/// This avoids allocations by returning byte indices into the original string.
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedJidParts<'a> {
+    pub user: &'a str,
+    pub server: &'a str,
+    pub agent: u8,
+    pub device: u16,
+    pub integrator: u16,
+}
+
+/// Single-pass JID parser optimized for hot paths.
+/// Scans the input string once to find all relevant separators (@, :)
+/// and returns slices into the original string without allocation.
+///
+/// Returns `None` for JIDs that need full validation (edge cases, unknown servers, etc.)
+#[inline]
+pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
+    if s.is_empty() {
+        return None;
+    }
+
+    let bytes = s.as_bytes();
+
+    // Single pass to find key separator positions
+    let mut at_pos: Option<usize> = None;
+    let mut colon_pos: Option<usize> = None;
+    let mut last_dot_pos: Option<usize> = None;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'@' => {
+                if at_pos.is_none() {
+                    at_pos = Some(i);
+                }
+            }
+            b':' => {
+                // Only track colon in user part (before @)
+                if at_pos.is_none() {
+                    colon_pos = Some(i);
+                }
+            }
+            b'.' => {
+                // Only track dots in user part (before @ and before :)
+                if at_pos.is_none() && colon_pos.is_none() {
+                    last_dot_pos = Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (user_part, server) = match at_pos {
+        Some(pos) => (&s[..pos], &s[pos + 1..]),
+        None => {
+            // Server-only JID - let the fallback validate it
+            return None;
+        }
+    };
+
+    // Validate that user_part is not empty
+    if user_part.is_empty() {
+        return None;
+    }
+
+    // Fast path for LID JIDs - dots in user are not agent separators
+    if server == HIDDEN_USER_SERVER {
+        let (user, device) = match colon_pos {
+            Some(pos) if pos < at_pos.unwrap() => {
+                let device_slice = &s[pos + 1..at_pos.unwrap()];
+                (&s[..pos], device_slice.parse::<u16>().unwrap_or(0))
+            }
+            _ => (user_part, 0),
+        };
+        return Some(ParsedJidParts {
+            user,
+            server,
+            agent: 0,
+            device,
+            integrator: 0,
+        });
+    }
+
+    // For DEFAULT_USER_SERVER (s.whatsapp.net), handle legacy dot format as device
+    if server == DEFAULT_USER_SERVER {
+        // Check for colon format first (modern: user:device@server)
+        if let Some(pos) = colon_pos {
+            let user_end = pos;
+            let device_start = pos + 1;
+            let device_slice = &s[device_start..at_pos.unwrap()];
+            let device = device_slice.parse::<u16>().unwrap_or(0);
+            return Some(ParsedJidParts {
+                user: &s[..user_end],
+                server,
+                agent: 0,
+                device,
+                integrator: 0,
+            });
+        }
+        // Check for legacy dot format (legacy: user.device@server)
+        if let Some(dot_pos) = last_dot_pos {
+            // dot_pos is absolute position in s
+            let suffix = &s[dot_pos + 1..at_pos.unwrap()];
+            if let Ok(device_val) = suffix.parse::<u16>() {
+                return Some(ParsedJidParts {
+                    user: &s[..dot_pos],
+                    server,
+                    agent: 0,
+                    device: device_val,
+                    integrator: 0,
+                });
+            }
+        }
+        // No device component
+        return Some(ParsedJidParts {
+            user: user_part,
+            server,
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        });
+    }
+
+    // Parse device from colon separator (user:device@server)
+    let (user_before_colon, device) = match colon_pos {
+        Some(pos) => {
+            // Colon is at `pos` in the original string
+            let user_end = pos;
+            let device_start = pos + 1;
+            let device_end = at_pos.unwrap();
+            let device_slice = &s[device_start..device_end];
+            (&s[..user_end], device_slice.parse::<u16>().unwrap_or(0))
+        }
+        None => (user_part, 0),
+    };
+
+    // Parse agent from last dot in user part (for non-default, non-LID servers)
+    let user_to_check = user_before_colon;
+    let (final_user, agent) = {
+        if let Some(dot_pos) = user_to_check.rfind('.') {
+            let suffix = &user_to_check[dot_pos + 1..];
+            if let Ok(agent_val) = suffix.parse::<u16>() {
+                if agent_val <= u8::MAX as u16 {
+                    (&user_to_check[..dot_pos], agent_val as u8)
+                } else {
+                    (user_to_check, 0)
+                }
+            } else {
+                (user_to_check, 0)
+            }
+        } else {
+            (user_to_check, 0)
+        }
+    };
+
+    Some(ParsedJidParts {
+        user: final_user,
+        server,
+        agent,
+        device,
+        integrator: 0,
+    })
+}
+
 pub const DEFAULT_USER_SERVER: &str = "s.whatsapp.net";
 pub const SERVER_JID: &str = "s.whatsapp.net";
 pub const GROUP_SERVER: &str = "g.us";
@@ -211,6 +375,18 @@ impl<'a> JidRef<'a> {
 impl FromStr for Jid {
     type Err = JidError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Try fast path first for well-formed JIDs
+        if let Some(parts) = parse_jid_fast(s) {
+            return Ok(Jid {
+                user: parts.user.to_string(),
+                server: parts.server.to_string(),
+                agent: parts.agent,
+                device: parts.device,
+                integrator: parts.integrator,
+            });
+        }
+
+        // Fallback to original parsing for edge cases and validation
         let (user_part, server) = match s.split_once('@') {
             Some((u, s)) => (u, s.to_string()),
             None => ("", s.to_string()),

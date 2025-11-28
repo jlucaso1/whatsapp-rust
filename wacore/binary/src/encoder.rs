@@ -5,7 +5,7 @@ use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
 use crate::jid;
-use crate::node::{Attrs, Node, NodeContent};
+use crate::node::{Attrs, AttrsRef, Node, NodeContent, NodeContentRef, NodeRef};
 use crate::token;
 
 struct ParsedJid<'a> {
@@ -292,6 +292,46 @@ impl<W: Write> Encoder<W> {
 
         if let Some(content) = &node.content {
             self.write_content(content)?;
+        }
+        Ok(())
+    }
+
+    /// Zero-copy serialization of a borrowed `NodeRef`.
+    /// This avoids the need to call `.to_owned()` when encoding nodes that were just parsed.
+    pub(crate) fn write_node_ref(&mut self, node: &NodeRef<'_>) -> Result<()> {
+        let content_len = if node.content.is_some() { 1 } else { 0 };
+        let list_len = 1 + (node.attrs.len() * 2) + content_len;
+
+        self.write_list_start(list_len)?;
+        self.write_string(&node.tag)?;
+        self.write_attributes_ref(&node.attrs)?;
+
+        if let Some(content) = node.content.as_deref() {
+            self.write_content_ref(content)?;
+        }
+        Ok(())
+    }
+
+    /// Write attributes from a borrowed AttrsRef (Vec of Cow pairs).
+    fn write_attributes_ref(&mut self, attrs: &AttrsRef<'_>) -> Result<()> {
+        for (key, value) in attrs {
+            self.write_string(key)?;
+            self.write_string(value)?;
+        }
+        Ok(())
+    }
+
+    /// Write content from a borrowed NodeContentRef.
+    fn write_content_ref(&mut self, content: &NodeContentRef<'_>) -> Result<()> {
+        match content {
+            NodeContentRef::String(s) => self.write_string(s)?,
+            NodeContentRef::Bytes(bytes) => self.write_bytes_with_len(bytes)?,
+            NodeContentRef::Nodes(nodes) => {
+                self.write_list_start(nodes.len())?;
+                for node in nodes.iter() {
+                    self.write_node_ref(node)?;
+                }
+            }
         }
         Ok(())
     }

@@ -4,7 +4,7 @@ use log::warn;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
-use wacore_binary::node::Node;
+use wacore_binary::node::{Node, NodeRef};
 
 pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 
@@ -159,15 +159,25 @@ impl Client {
         }
     }
 
-    pub(crate) async fn handle_iq_response(&self, node: Node) -> bool {
-        let id_opt = node.attrs.get("id").cloned();
-        if let Some(id) = id_opt
-            && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
-        {
-            if waiter.send(node).is_err() {
-                warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id}. Receiver was likely dropped.");
+    /// Handles an IQ response by checking if there's a waiter for this response ID.
+    ///
+    /// This method accepts a `NodeRef` to avoid unnecessary deep copying in the common
+    /// case where there is no waiter. Only when a waiter is found will the node be
+    /// converted to an owned `Node`.
+    pub(crate) async fn handle_iq_response(&self, node: &NodeRef<'_>) -> bool {
+        let id_opt = node.get_attr("id");
+        if let Some(id) = id_opt {
+            let id_str = id.as_ref();
+            // First check if there's a waiter (without cloning)
+            let waiter = self.response_waiters.lock().await.remove(id_str);
+            if let Some(waiter) = waiter {
+                // Only convert to owned Node when we actually have a waiter
+                let owned_node = node.to_owned();
+                if waiter.send(owned_node).is_err() {
+                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter for ID {id_str}. Receiver was likely dropped.");
+                }
+                return true;
             }
-            return true;
         }
         false
     }
