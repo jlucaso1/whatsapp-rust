@@ -12,8 +12,13 @@ use subtle::ConstantTimeEq;
 use crate::protocol::state::{PreKeyId, SignedPreKeyId};
 use crate::protocol::{IdentityKey, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp};
 
-pub const CIPHERTEXT_MESSAGE_CURRENT_VERSION: u8 = 4;
+// Signal's original implementation uses version 4, but WhatsApp Web,
+// Baileys (libsignal-node), and whatsmeow all use version 3.
+pub const CIPHERTEXT_MESSAGE_CURRENT_VERSION: u8 = 3;
 pub const SENDERKEY_MESSAGE_CURRENT_VERSION: u8 = 3;
+
+const MIN_SUPPORTED_VERSION: u8 = 3;
+const MAX_SUPPORTED_VERSION: u8 = 4;
 
 #[derive(Debug)]
 pub enum CiphertextMessage {
@@ -193,7 +198,7 @@ impl TryFrom<&[u8]> for SignalMessage {
         }
         let message_version = value[0] >> 4;
 
-        if message_version > CIPHERTEXT_MESSAGE_CURRENT_VERSION {
+        if !(MIN_SUPPORTED_VERSION..=MAX_SUPPORTED_VERSION).contains(&message_version) {
             return Err(SignalProtocolError::UnrecognizedCiphertextVersion(
                 message_version,
             ));
@@ -332,7 +337,7 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
 
         let message_version = value[0] >> 4;
 
-        if message_version > CIPHERTEXT_MESSAGE_CURRENT_VERSION {
+        if !(MIN_SUPPORTED_VERSION..=MAX_SUPPORTED_VERSION).contains(&message_version) {
             return Err(SignalProtocolError::UnrecognizedCiphertextVersion(
                 message_version,
             ));
