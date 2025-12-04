@@ -678,25 +678,21 @@ impl Client {
             || (own_lid.is_some() && from.is_same_user_as(own_lid.as_ref().unwrap()))
         {
             // DM from self (either via PN or LID)
-            // For LID senders, extract the PN from peer_recipient_pn for session lookup
-            let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
-                attrs.optional_jid("peer_recipient_pn")
-            } else {
-                None
-            };
-
+            // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
+            // For self-sent messages, we don't set sender_alt here - the decryption
+            // logic will use our own PN via the is_from_me fallback path.
             crate::types::message::MessageSource {
                 chat: attrs.non_ad_jid("recipient"),
                 sender: from.clone(),
                 is_from_me: true,
-                sender_alt,
+                // sender_alt stays None - decryption uses own PN for self-sent messages
                 ..Default::default()
             }
         } else {
             // DM from someone else
-            // For LID senders, extract the PN from peer_recipient_pn for session lookup
+            // For LID senders, look for sender_pn attribute to get their phone number
             let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
-                attrs.optional_jid("peer_recipient_pn")
+                attrs.optional_jid("sender_pn")
             } else {
                 None
             };
@@ -2039,5 +2035,242 @@ mod tests {
         println!("   - Sender with error handled gracefully");
         println!("   - No panic when processing group messages with errors");
         println!("   - Error doesn't affect group processing");
+    }
+
+    /// Test case: DM message parsing for self-sent messages via LID
+    ///
+    /// Scenario:
+    /// - You send a DM to another user from your phone
+    /// - Your bot receives the echo with from=your_LID, recipient=their_LID
+    /// - peer_recipient_pn contains the RECIPIENT's phone number (not sender's)
+    ///
+    /// The fix ensures:
+    /// 1. is_from_me is correctly detected for LID senders
+    /// 2. sender_alt is NOT populated with peer_recipient_pn (that's the recipient's PN)
+    /// 3. Decryption uses own PN via the is_from_me fallback path
+    #[tokio::test]
+    async fn test_parse_message_info_self_sent_dm_via_lid() {
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_self_dm_lid_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+
+        // Set up own phone number and LID
+        {
+            let device_arc = pm.get_device_arc().await;
+            let mut device = device_arc.write().await;
+            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
+            device.lid = Some("236395184570386@lid".parse().unwrap());
+        }
+
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        // Simulate self-sent DM to another user (from your phone to your bot echo)
+        // Real log example:
+        // from="236395184570386@lid" recipient="39492358562039@lid" peer_recipient_pn="559985213786@s.whatsapp.net"
+        let self_dm_node = NodeBuilder::new("message")
+            .attr("from", "236395184570386@lid") // Your LID
+            .attr("recipient", "39492358562039@lid") // Recipient's LID
+            .attr("peer_recipient_pn", "559985213786@s.whatsapp.net") // Recipient's PN (NOT sender's!)
+            .attr("notify", "jl")
+            .attr("id", "AC756E00B560721DBC4C0680131827EA")
+            .attr("t", "1764845025")
+            .attr("type", "text")
+            .build();
+
+        let info = client.parse_message_info(&self_dm_node).await.unwrap();
+
+        // Assertions:
+        // 1. is_from_me should be true (LID matches own_lid)
+        assert!(
+            info.source.is_from_me,
+            "Should detect self-sent DM from own LID"
+        );
+
+        // 2. sender_alt should be None (peer_recipient_pn is recipient's PN, not sender's)
+        assert!(
+            info.source.sender_alt.is_none(),
+            "sender_alt should be None for self-sent DMs (peer_recipient_pn is recipient's PN)"
+        );
+
+        // 3. Chat should be the recipient
+        assert_eq!(
+            info.source.chat.user, "39492358562039",
+            "Chat should be the recipient's LID"
+        );
+
+        // 4. Sender should be own LID
+        assert_eq!(
+            info.source.sender.user, "236395184570386",
+            "Sender should be own LID"
+        );
+
+        println!("✅ Self-sent DM via LID:");
+        println!("   - is_from_me correctly detected: true");
+        println!("   - sender_alt correctly NOT set (peer_recipient_pn is recipient's PN)");
+        println!("   - Decryption will use own PN via is_from_me fallback path");
+    }
+
+    /// Test case: DM message parsing for messages from others via LID
+    ///
+    /// Scenario:
+    /// - Another user sends you a DM
+    /// - Message arrives with from=their_LID, sender_pn=their_phone_number
+    ///
+    /// The fix ensures:
+    /// 1. is_from_me is false
+    /// 2. sender_alt is populated from sender_pn attribute (if present)
+    /// 3. Decryption uses sender_alt for session lookup
+    #[tokio::test]
+    async fn test_parse_message_info_dm_from_other_via_lid() {
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_other_dm_lid_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+
+        // Set up own phone number and LID
+        {
+            let device_arc = pm.get_device_arc().await;
+            let mut device = device_arc.write().await;
+            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
+            device.lid = Some("236395184570386@lid".parse().unwrap());
+        }
+
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        // Simulate DM from another user via their LID
+        // The sender_pn attribute should contain their phone number for session lookup
+        let other_dm_node = NodeBuilder::new("message")
+            .attr("from", "39492358562039@lid") // Sender's LID (not ours)
+            .attr("sender_pn", "559985213786@s.whatsapp.net") // Sender's phone number
+            .attr("notify", "Other User")
+            .attr("id", "AABBCCDD1234567890")
+            .attr("t", "1764845100")
+            .attr("type", "text")
+            .build();
+
+        let info = client.parse_message_info(&other_dm_node).await.unwrap();
+
+        // Assertions:
+        // 1. is_from_me should be false
+        assert!(
+            !info.source.is_from_me,
+            "Should NOT be detected as self-sent"
+        );
+
+        // 2. sender_alt should be populated from sender_pn
+        assert!(
+            info.source.sender_alt.is_some(),
+            "sender_alt should be set from sender_pn attribute"
+        );
+        assert_eq!(
+            info.source.sender_alt.as_ref().unwrap().user,
+            "559985213786",
+            "sender_alt should contain sender's phone number"
+        );
+
+        // 3. Chat should be the sender (non-AD version)
+        assert_eq!(
+            info.source.chat.user, "39492358562039",
+            "Chat should be the sender's LID (non-AD)"
+        );
+
+        // 4. Sender should be the other user's LID
+        assert_eq!(
+            info.source.sender.user, "39492358562039",
+            "Sender should be other user's LID"
+        );
+
+        println!("✅ DM from other user via LID:");
+        println!("   - is_from_me correctly detected: false");
+        println!("   - sender_alt correctly set from sender_pn attribute");
+        println!("   - Decryption will use sender_alt for session lookup");
+    }
+
+    /// Test case: DM message to self (own chat, like "Notes to Myself")
+    ///
+    /// Scenario:
+    /// - You send a message to yourself (your own chat)
+    /// - from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
+    ///
+    /// This is the original bug case that was fixed earlier.
+    #[tokio::test]
+    async fn test_parse_message_info_dm_to_self() {
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_dm_to_self_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+
+        // Set up own phone number and LID
+        {
+            let device_arc = pm.get_device_arc().await;
+            let mut device = device_arc.write().await;
+            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
+            device.lid = Some("236395184570386@lid".parse().unwrap());
+        }
+
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        // Simulate DM to self (like "Notes to Myself" or pinging yourself)
+        // from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
+        let self_chat_node = NodeBuilder::new("message")
+            .attr("from", "236395184570386@lid") // Your LID
+            .attr("recipient", "236395184570386@lid") // Also your LID (self-chat)
+            .attr("peer_recipient_pn", "559984726662@s.whatsapp.net") // Your PN
+            .attr("notify", "jl")
+            .attr("id", "AC391DD54A28E1CE1F3B106DF9951FAD")
+            .attr("t", "1764822437")
+            .attr("type", "text")
+            .build();
+
+        let info = client.parse_message_info(&self_chat_node).await.unwrap();
+
+        // Assertions:
+        // 1. is_from_me should be true
+        assert!(
+            info.source.is_from_me,
+            "Should detect self-sent message to self-chat"
+        );
+
+        // 2. sender_alt should be None (we don't use peer_recipient_pn for self-sent)
+        assert!(
+            info.source.sender_alt.is_none(),
+            "sender_alt should be None for self-sent messages"
+        );
+
+        // 3. Chat should be the recipient (self)
+        assert_eq!(
+            info.source.chat.user, "236395184570386",
+            "Chat should be self (recipient)"
+        );
+
+        // 4. Sender should be own LID
+        assert_eq!(
+            info.source.sender.user, "236395184570386",
+            "Sender should be own LID"
+        );
+
+        println!("✅ DM to self (self-chat):");
+        println!("   - is_from_me correctly detected: true");
+        println!("   - sender_alt correctly NOT set");
+        println!("   - Decryption will use own PN via is_from_me fallback path");
     }
 }
