@@ -466,6 +466,23 @@ mod tests {
     }
 
     #[async_trait]
+    impl wacore::store::traits::SenderKeyDistributionStore for MockBackend {
+        async fn get_skdm_recipients(&self, _group_jid: &str) -> StoreResult<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn add_skdm_recipients(
+            &self,
+            _group_jid: &str,
+            _device_jids: &[String],
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn clear_skdm_recipients(&self, _group_jid: &str) -> StoreResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
     impl crate::store::traits::DevicePersistence for MockBackend {
         async fn save_device_data(&self, _device_data: &wacore::store::Device) -> StoreResult<()> {
             Ok(())

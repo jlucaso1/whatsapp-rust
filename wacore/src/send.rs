@@ -401,6 +401,7 @@ pub async fn prepare_group_stanza<
     message: &wa::Message,
     request_id: String,
     force_skdm_distribution: bool,
+    skdm_target_devices: Option<Vec<Jid>>,
     edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
@@ -421,7 +422,21 @@ pub async fn prepare_group_stanza<
     let mut includes_prekey_message = false;
     let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
 
-    if force_skdm_distribution {
+    // Determine if we need to distribute SKDM and to which devices
+    let distribution_list: Option<Vec<Jid>> = if let Some(target_devices) = skdm_target_devices {
+        // Use the specific list of devices that need SKDM
+        if target_devices.is_empty() {
+            None
+        } else {
+            log::debug!(
+                "SKDM distribution to {} specific devices for group {}",
+                target_devices.len(),
+                to_jid
+            );
+            Some(target_devices)
+        }
+    } else if force_skdm_distribution {
+        // Resolve all devices for all participants (legacy behavior)
         // For LID groups, use phone numbers for device queries (LID usync may not work for own JID)
         // For PN groups, use JIDs directly
         let mut jids_to_resolve: Vec<Jid> = group_info
@@ -469,17 +484,23 @@ pub async fn prepare_group_stanza<
             jids_to_resolve.len()
         );
 
-        let mut distribution_list = resolver.resolve_devices(&jids_to_resolve).await?;
+        let mut resolved_list = resolver.resolve_devices(&jids_to_resolve).await?;
 
         let mut seen = HashSet::new();
-        distribution_list.retain(|jid| seen.insert(jid.to_string()));
+        resolved_list.retain(|jid| seen.insert(jid.to_string()));
 
         log::debug!(
             "SKDM distribution list for {} resolved to {} devices",
             to_jid,
-            distribution_list.len(),
+            resolved_list.len(),
         );
 
+        Some(resolved_list)
+    } else {
+        None
+    };
+
+    if let Some(ref distribution_list) = distribution_list {
         resolved_devices_for_phash = Some(distribution_list.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
@@ -503,7 +524,7 @@ pub async fn prepare_group_stanza<
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
-            &distribution_list,
+            distribution_list,
             &skdm_plaintext_to_encrypt,
             &empty_attrs,
         )

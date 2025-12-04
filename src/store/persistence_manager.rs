@@ -188,3 +188,34 @@ impl PersistenceManager {
         .await;
     }
 }
+
+// SKDM recipient tracking methods
+impl PersistenceManager {
+    /// Get the list of device JIDs that have already received SKDM for a group
+    pub async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>, StoreError> {
+        self.backend
+            .get_skdm_recipients(group_jid)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
+    /// Mark devices as having received SKDM for a group
+    pub async fn add_skdm_recipients(
+        &self,
+        group_jid: &str,
+        device_jids: &[String],
+    ) -> Result<(), StoreError> {
+        self.backend
+            .add_skdm_recipients(group_jid, device_jids)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
+    /// Clear all SKDM recipients for a group (used when sender key is rotated)
+    pub async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<(), StoreError> {
+        self.backend
+            .clear_skdm_recipients(group_jid)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+}
