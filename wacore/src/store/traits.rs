@@ -74,6 +74,20 @@ pub struct AppStateMutationMAC {
     pub value_mac: Vec<u8>,
 }
 
+/// Trait for tracking which devices have received Sender Key Distribution Messages (SKDM)
+/// for each group. This prevents sending SKDM to devices that already have the sender key.
+#[async_trait]
+pub trait SenderKeyDistributionStore: Send + Sync {
+    /// Get the list of device JIDs that have already received SKDM for a group
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>>;
+
+    /// Mark devices as having received SKDM for a group
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()>;
+
+    /// Clear all SKDM recipients for a group (used when sender key is rotated)
+    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
+}
+
 /// Trait for device data persistence operations
 #[async_trait]
 pub trait DevicePersistence: Send + Sync {
@@ -111,6 +125,7 @@ pub trait Backend:
     + crate::libsignal::store::PreKeyStore
     + crate::libsignal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
+    + SenderKeyDistributionStore
     + DevicePersistence
     + Send
     + Sync
@@ -125,6 +140,7 @@ impl<T> Backend for T where
         + crate::libsignal::store::PreKeyStore
         + crate::libsignal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
+        + SenderKeyDistributionStore
         + DevicePersistence
         + Send
         + Sync

@@ -24,13 +24,18 @@ impl Client {
 
         let message_id = retry_child.attrs().string("id");
 
-        // For group messages, only retry once per message id to avoid loops
+        // For group messages, only retry once per message id per participant to avoid loops
+        // Each participant may need their own retry (e.g., if they didn't receive SKDM)
         if receipt.source.chat.is_group() {
-            let dedupe_key = format!("{}:{}", receipt.source.chat, message_id);
+            let dedupe_key = format!(
+                "{}:{}:{}",
+                receipt.source.chat, message_id, receipt.source.sender
+            );
             if self.retried_group_messages.contains_key(&dedupe_key) {
                 log::debug!(
-                    "Ignoring subsequent retry for group message {}: already handled.",
-                    dedupe_key
+                    "Ignoring subsequent retry for group message {} from {}: already handled.",
+                    message_id,
+                    receipt.source.sender
                 );
                 return Ok(());
             }
@@ -67,11 +72,6 @@ impl Client {
                 return Ok(()); // Continue without the original message if retrieval failed
             }
         };
-
-        if receipt.source.chat.is_group() {
-            let dedupe_key = format!("{}:{}", receipt.source.chat, message_id);
-            self.retried_group_messages.insert(dedupe_key, ()).await;
-        }
 
         let participant_jid = receipt.source.sender.clone();
 

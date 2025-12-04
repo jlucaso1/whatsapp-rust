@@ -455,3 +455,24 @@ impl wacore::store::traits::DevicePersistence for DeviceAwareSqliteStore {
         self.store.create_new_device().await
     }
 }
+
+#[async_trait]
+impl SenderKeyDistributionStore for DeviceAwareSqliteStore {
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>> {
+        self.store
+            .get_skdm_recipients_for_device(group_jid, self.device_id)
+            .await
+    }
+
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()> {
+        self.store
+            .add_skdm_recipients_for_device(group_jid, device_jids, self.device_id)
+            .await
+    }
+
+    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
+        self.store
+            .clear_skdm_recipients_for_device(group_jid, self.device_id)
+            .await
+    }
+}

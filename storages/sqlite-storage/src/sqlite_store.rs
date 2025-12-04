@@ -1631,3 +1631,170 @@ impl wacore::store::traits::DevicePersistence for SqliteStore {
         SqliteStore::create_new_device(self).await
     }
 }
+
+#[async_trait]
+impl SenderKeyDistributionStore for SqliteStore {
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let recipients: Vec<String> = skdm_recipients::table
+                .select(skdm_recipients::device_jid)
+                .filter(skdm_recipients::group_jid.eq(&group_jid))
+                .filter(skdm_recipients::device_id.eq(1))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(recipients)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()> {
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        let device_jids: Vec<String> = device_jids.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            for device_jid in device_jids {
+                diesel::insert_into(skdm_recipients::table)
+                    .values((
+                        skdm_recipients::group_jid.eq(&group_jid),
+                        skdm_recipients::device_jid.eq(&device_jid),
+                        skdm_recipients::device_id.eq(1),
+                    ))
+                    .on_conflict((
+                        skdm_recipients::group_jid,
+                        skdm_recipients::device_jid,
+                        skdm_recipients::device_id,
+                    ))
+                    .do_nothing()
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                skdm_recipients::table
+                    .filter(skdm_recipients::group_jid.eq(&group_jid))
+                    .filter(skdm_recipients::device_id.eq(1)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+}
+
+// Device-aware helper methods for SKDM recipients
+impl SqliteStore {
+    pub async fn get_skdm_recipients_for_device(
+        &self,
+        group_jid: &str,
+        device_id: i32,
+    ) -> Result<Vec<String>> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let recipients: Vec<String> = skdm_recipients::table
+                .select(skdm_recipients::device_jid)
+                .filter(skdm_recipients::group_jid.eq(&group_jid))
+                .filter(skdm_recipients::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(recipients)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    pub async fn add_skdm_recipients_for_device(
+        &self,
+        group_jid: &str,
+        device_jids: &[String],
+        device_id: i32,
+    ) -> Result<()> {
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        let device_jids: Vec<String> = device_jids.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            for device_jid in device_jids {
+                diesel::insert_into(skdm_recipients::table)
+                    .values((
+                        skdm_recipients::group_jid.eq(&group_jid),
+                        skdm_recipients::device_jid.eq(&device_jid),
+                        skdm_recipients::device_id.eq(device_id),
+                    ))
+                    .on_conflict((
+                        skdm_recipients::group_jid,
+                        skdm_recipients::device_jid,
+                        skdm_recipients::device_id,
+                    ))
+                    .do_nothing()
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn clear_skdm_recipients_for_device(
+        &self,
+        group_jid: &str,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                skdm_recipients::table
+                    .filter(skdm_recipients::group_jid.eq(&group_jid))
+                    .filter(skdm_recipients::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+}

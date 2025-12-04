@@ -2,6 +2,7 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
 use std::sync::Arc;
+use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -118,6 +119,64 @@ impl Client {
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 
+            // Determine which devices need SKDM distribution
+            let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
+                // Forcing full distribution (either first message or explicit request)
+                None // Let prepare_group_stanza resolve all devices
+            } else {
+                // Check which devices already have SKDM and find new ones
+                let known_recipients = self
+                    .persistence_manager
+                    .get_skdm_recipients(&to.to_string())
+                    .await
+                    .unwrap_or_default();
+
+                if known_recipients.is_empty() {
+                    // No known recipients, need full distribution
+                    None
+                } else {
+                    // Get current devices for all participants
+                    let jids_to_resolve: Vec<Jid> = group_info
+                        .participants
+                        .iter()
+                        .map(|jid| jid.to_non_ad())
+                        .collect();
+
+                    match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+                        Ok(all_devices) => {
+                            // Filter to find devices that don't have SKDM yet
+                            let new_devices: Vec<Jid> = all_devices
+                                .into_iter()
+                                .filter(|device: &Jid| {
+                                    !known_recipients.contains(&device.to_string())
+                                })
+                                .collect();
+
+                            if new_devices.is_empty() {
+                                Some(vec![]) // No new devices, no SKDM needed
+                            } else {
+                                log::debug!(
+                                    "Found {} new devices needing SKDM for group {}",
+                                    new_devices.len(),
+                                    to
+                                );
+                                Some(new_devices)
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
+                            None // Fall back to full distribution
+                        }
+                    }
+                }
+            };
+
+            // Track devices that will receive SKDM in this message
+            let devices_receiving_skdm: Vec<String> = skdm_target_devices
+                .as_ref()
+                .map(|devices: &Vec<Jid>| devices.iter().map(|d: &Jid| d.to_string()).collect())
+                .unwrap_or_default();
+
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
@@ -129,16 +188,59 @@ impl Client {
                 message.as_ref(),
                 request_id.clone(),
                 force_skdm,
+                skdm_target_devices.clone(),
                 edit.clone(),
             )
             .await
             {
-                Ok(stanza) => stanza,
+                Ok(stanza) => {
+                    // Update SKDM recipients tracking after preparing the stanza
+                    if !devices_receiving_skdm.is_empty() {
+                        if let Err(e) = self
+                            .persistence_manager
+                            .add_skdm_recipients(&to.to_string(), &devices_receiving_skdm)
+                            .await
+                        {
+                            log::warn!("Failed to update SKDM recipients: {:?}", e);
+                        }
+                    } else if force_skdm || skdm_target_devices.is_none() {
+                        // Full distribution happened, query all devices and track them
+                        let jids_to_resolve: Vec<Jid> = group_info
+                            .participants
+                            .iter()
+                            .map(|jid| jid.to_non_ad())
+                            .collect();
+
+                        if let Ok(all_devices) =
+                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
+                        {
+                            let all_device_strs: Vec<String> =
+                                all_devices.iter().map(|d| d.to_string()).collect();
+                            if let Err(e) = self
+                                .persistence_manager
+                                .add_skdm_recipients(&to.to_string(), &all_device_strs)
+                                .await
+                            {
+                                log::warn!("Failed to update SKDM recipients: {:?}", e);
+                            }
+                        }
+                    }
+                    stanza
+                }
                 Err(e) => {
                     if let Some(SignalProtocolError::NoSenderKeyState(_)) =
                         e.downcast_ref::<SignalProtocolError>()
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
+
+                        // Clear SKDM recipients since we're rotating the key
+                        if let Err(e) = self
+                            .persistence_manager
+                            .clear_skdm_recipients(&to.to_string())
+                            .await
+                        {
+                            log::warn!("Failed to clear SKDM recipients: {:?}", e);
+                        }
 
                         let mut store_adapter_retry =
                             SignalProtocolStoreAdapter::new(device_store_arc.clone());
@@ -161,6 +263,7 @@ impl Client {
                             message.as_ref(),
                             request_id,
                             true, // Force distribution on retry
+                            None, // Distribute to all devices
                             edit.clone(),
                         )
                         .await?
