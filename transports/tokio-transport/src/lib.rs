@@ -8,12 +8,15 @@ use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory};
+
+/// Ensures the rustls crypto provider is only installed once
+static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
 type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<RawWs, Message>;
@@ -95,13 +98,10 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error> {
-        // Install rustls crypto provider
-        if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
-            warn!(
-                "rustls crypto provider install failed (may be already installed): {:?}",
-                e
-            );
-        }
+        // Install rustls crypto provider (only once)
+        CRYPTO_PROVIDER_INIT.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
 
         info!("Dialing {URL}");
         let uri: http::Uri = URL

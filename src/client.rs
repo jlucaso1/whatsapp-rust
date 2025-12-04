@@ -353,8 +353,10 @@ impl Client {
                     warn!(
                         "Message loop exited with an error. Will attempt to reconnect if enabled."
                     );
+                } else if self.expected_disconnect.load(Ordering::Relaxed) {
+                    debug!("Message loop exited gracefully (expected disconnect).");
                 } else {
-                    warn!("Message loop exited gracefully.");
+                    info!("Message loop exited gracefully.");
                 }
 
                 self.cleanup_connection_state().await;
@@ -604,7 +606,11 @@ impl Client {
         let mut cancelled = false;
 
         if node.tag.as_ref() == "xmlstreamend" {
-            warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
+            if self.expected_disconnect.load(Ordering::Relaxed) {
+                debug!(target: "Client", "Received <xmlstreamend/>, expected disconnect.");
+            } else {
+                warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
+            }
             self.shutdown_notifier.notify_one();
             return;
         }
@@ -1376,7 +1382,9 @@ impl Client {
 
         match (code, conflict_type.as_str()) {
             ("515", _) => {
-                info!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
+                // 515 is expected during registration/pairing phase - server closes stream after pairing
+                debug!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
+                self.expect_disconnect().await;
             }
             ("401", "device_removed") | (_, "replaced") => {
                 info!(target: "Client", "Got stream error indicating client was removed or replaced. Logging out.");
