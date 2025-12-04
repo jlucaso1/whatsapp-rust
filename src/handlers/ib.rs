@@ -1,6 +1,6 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
-use crate::types::events::{Event, OfflineSyncCompleted};
+use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::sync::Arc;
@@ -68,7 +68,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &NodeRef<'_>) {
                     total, messages, notifications, receipts, app_data_changes,
                 );
 
-                /*client
+                client
                     .core
                     .event_bus
                     .dispatch(&Event::OfflineSyncPreview(OfflineSyncPreview {
@@ -77,7 +77,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &NodeRef<'_>) {
                         messages,
                         notifications,
                         receipts,
-                    }));*/
+                    }));
 
 
                 let mut preview = client.offline_preview.lock().await;
