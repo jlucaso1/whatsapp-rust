@@ -486,7 +486,7 @@ impl FromStr for Jid {
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.user.is_empty() {
-            write!(f, "{}", self.server)
+            write!(f, "@{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
 
@@ -519,7 +519,7 @@ impl fmt::Display for Jid {
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.user.is_empty() {
-            write!(f, "{}", self.server)
+            write!(f, "@{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
 
@@ -581,6 +581,25 @@ mod tests {
         expected_device: u16,
         expected_agent: u8,
     ) {
+        assert_jid_parse_and_display(
+            input,
+            expected_user,
+            expected_server,
+            expected_device,
+            expected_agent,
+            input,
+        );
+    }
+
+    /// Helper function to test parsing and display with a custom expected output.
+    fn assert_jid_parse_and_display(
+        input: &str,
+        expected_user: &str,
+        expected_server: &str,
+        expected_device: u16,
+        expected_agent: u8,
+        expected_output: &str,
+    ) {
         // 1. Test parsing from string (FromStr trait)
         let jid = Jid::from_str(input).unwrap_or_else(|_| panic!("Failed to parse JID: {}", input));
 
@@ -608,8 +627,9 @@ mod tests {
         // 2. Test formatting back to string (Display trait)
         let formatted = jid.to_string();
         assert_eq!(
-            formatted, input,
-            "Formatted string did not match original input"
+            formatted, expected_output,
+            "Formatted string did not match expected output for {}",
+            input
         );
     }
 
@@ -631,7 +651,16 @@ mod tests {
             0,
         );
         assert_jid_roundtrip("123-456@g.us", "123-456", "g.us", 0, 0);
-        assert_jid_roundtrip("s.whatsapp.net", "", "s.whatsapp.net", 0, 0);
+
+        // Server-only JID: parsing "s.whatsapp.net" should display as "@s.whatsapp.net"
+        assert_jid_parse_and_display(
+            "s.whatsapp.net",
+            "",
+            "s.whatsapp.net",
+            0,
+            0,
+            "@s.whatsapp.net",
+        );
 
         // LID JID cases (critical for the bug)
         assert_jid_roundtrip("12345.6789@lid", "12345.6789", "lid", 0, 0);
