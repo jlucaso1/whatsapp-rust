@@ -1,8 +1,7 @@
-use crate::types::events::Event;
+use crate::types::events::{Event, LazyConversation};
+use bytes::Bytes;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::Mutex;
-use waproto::whatsapp as wa;
+use wacore::history_sync::process_history_sync;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
@@ -23,13 +22,15 @@ impl Client {
         }
     }
 
-    // Private worker-invoked implementation containing the heavy logic (moved from original handle_history_sync)
+    /// Process history sync with streaming and lazy parsing.
+    ///
+    /// Memory efficient: raw bytes are wrapped in LazyConversation and only
+    /// parsed if the event handler actually accesses the conversation data.
     pub(crate) async fn process_history_sync_task(
         self: &Arc<Self>,
         message_id: String,
-        notification: HistorySyncNotification,
+        mut notification: HistorySyncNotification,
     ) {
-        let log_msg_id = message_id.clone();
         log::info!(
             "Processing history sync for message {} (Size: {}, Type: {:?})",
             message_id,
@@ -43,8 +44,9 @@ impl Client {
         )
         .await;
 
+        // Use take() to avoid cloning large payloads - moves ownership instead
         let compressed_data = if let Some(inline_payload) =
-            notification.initial_hist_bootstrap_inline_payload.clone()
+            notification.initial_hist_bootstrap_inline_payload.take()
         {
             log::info!(
                 "Found inline history sync payload ({} bytes). Using directly.",
@@ -65,99 +67,86 @@ impl Client {
             }
         };
 
-        // Use streaming parser to avoid decoding the full HistorySync into memory
-        let collected_pushnames: Arc<Mutex<Vec<wa::Pushname>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let core_bus = self.core.event_bus.clone();
-        let processed_count = Arc::new(AtomicUsize::new(0));
-        let processed_count_for_final = processed_count.clone();
-
-        let conv_handler = move |conv: wa::Conversation| {
-            let bus = core_bus.clone();
-            let processed = processed_count.clone();
-            async move {
-                let new = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                if new.is_multiple_of(25) {
-                    log::info!("History sync progress: {new} conversations processed...");
-                }
-                bus.dispatch(&Event::JoinedGroup(Box::new(conv)));
-            }
+        // Get own user for pushname extraction (moved into blocking task, no clone needed)
+        let own_user = {
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            device_snapshot.pn.as_ref().map(|j| j.to_non_ad().user)
         };
 
-        let push_collector = collected_pushnames.clone();
-        let pushname_handler = move |pn: wa::Pushname| {
-            let pc = push_collector.clone();
-            async move {
-                pc.lock().await.push(pn);
+        // Check if anyone is listening for events
+        let has_listeners = self.core.event_bus.has_handlers();
+
+        let parse_result = if has_listeners {
+            // Use a bounded channel to stream raw conversation bytes as Bytes (zero-copy)
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(16);
+
+            // Run streaming parsing in blocking thread
+            // own_user is moved directly, no clone needed
+            let parse_handle = tokio::task::spawn_blocking(move || {
+                let own_user_ref = own_user.as_deref();
+
+                // Streaming: decompresses and extracts raw bytes incrementally
+                // No parsing happens here - just raw byte extraction
+                // Uses Bytes for zero-copy reference counting
+                process_history_sync(
+                    &compressed_data,
+                    own_user_ref,
+                    Some(|raw_bytes: Bytes| {
+                        // Send Bytes through channel (zero-copy clone)
+                        let _ = tx.blocking_send(raw_bytes);
+                    }),
+                )
+                // tx dropped here, closing channel
+            });
+
+            // Receive and dispatch lazy conversations as they come in
+            let mut conv_count = 0usize;
+            while let Some(raw_bytes) = rx.recv().await {
+                conv_count += 1;
+                if conv_count.is_multiple_of(25) {
+                    log::info!("History sync progress: {conv_count} conversations processed...");
+                }
+                // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
+                // Parsing only happens if the event handler calls .conversation() or .get()
+                let lazy_conv = LazyConversation::from_bytes(raw_bytes);
+                self.core.event_bus.dispatch(&Event::JoinedGroup(lazy_conv));
             }
+
+            // Wait for parsing to complete
+            parse_handle.await
+        } else {
+            // No listeners - skip conversation processing entirely
+            log::debug!("No event handlers registered, skipping conversation processing");
+
+            // own_user is moved directly, no clone needed
+            tokio::task::spawn_blocking(move || {
+                let own_user_ref = own_user.as_deref();
+
+                // Pass None for callback - conversations are skipped at protobuf level
+                process_history_sync::<fn(Bytes)>(&compressed_data, own_user_ref, None)
+            })
+            .await
         };
 
-        let stream_result = wacore::history_sync::process_history_sync_stream(
-            &compressed_data,
-            conv_handler,
-            pushname_handler,
-        )
-        .await;
-        let total = processed_count_for_final.load(Ordering::Relaxed);
-        log::debug!(
-            "History sync stream finished processing (message {log_msg_id}); total conversations processed={total}"
-        );
+        match parse_result {
+            Ok(Ok(sync_result)) => {
+                log::info!(
+                    "Successfully processed HistorySync (message {message_id}); {} conversations",
+                    sync_result.conversations_processed
+                );
 
-        match stream_result {
-            Ok(()) => {
-                log::info!("Successfully processed HistorySync stream.");
-                let push_vec = collected_pushnames.lock().await;
-                if !push_vec.is_empty() {
-                    log::debug!(
-                        "Collected {} push names from history sync; invoking handler",
-                        push_vec.len()
-                    );
-                    self.clone().handle_historical_pushnames(&push_vec).await;
+                // Update own push name if found
+                if let Some(new_name) = sync_result.own_pushname {
+                    log::info!("Updating own push name from history sync to '{new_name}'");
+                    self.update_push_name_and_notify(new_name).await;
                 }
+            }
+            Ok(Err(e)) => {
+                log::error!("Failed to process HistorySync data: {:?}", e);
             }
             Err(e) => {
-                log::error!("Failed to process HistorySync data stream: {:?}", e);
+                log::error!("History sync blocking task panicked: {:?}", e);
             }
-        }
-    }
-
-    pub(crate) async fn handle_historical_pushnames(self: Arc<Self>, pushnames: &[wa::Pushname]) {
-        if pushnames.is_empty() {
-            return;
-        }
-
-        log::info!(
-            "Processing {} push names from history sync.",
-            pushnames.len()
-        );
-
-        let mut latest_own_pushname = None;
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        // Compare against the non-AD (base) user so 5599xxxx:58 matches pushname id 5599xxxx
-        let own_base_user = device_snapshot.pn.as_ref().map(|j| j.to_non_ad().user);
-
-        if let Some(own_user) = own_base_user {
-            log::debug!(
-                "Looking for own push name among {} entries (own_user={})",
-                pushnames.len(),
-                own_user
-            );
-            for pn in pushnames {
-                if let Some(id) = &pn.id
-                    && *id == own_user
-                    && let Some(name) = &pn.pushname
-                {
-                    log::debug!("Matched own push name candidate id={} name={}", id, name);
-                    latest_own_pushname = Some(name.clone());
-                }
-            }
-        } else {
-            log::warn!("Could not determine own JID user to extract push name from history sync.");
-        }
-
-        if let Some(new_name) = latest_own_pushname {
-            log::info!("Updating own push name from history sync to '{new_name}'");
-            self.clone().update_push_name_and_notify(new_name).await;
         }
     }
 }
