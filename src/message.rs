@@ -674,18 +674,38 @@ impl Client {
                 sender_alt,
                 ..Default::default()
             }
-        } else if from.is_same_user_as(&own_jid) {
+        } else if from.is_same_user_as(&own_jid)
+            || (own_lid.is_some() && from.is_same_user_as(own_lid.as_ref().unwrap()))
+        {
+            // DM from self (either via PN or LID)
+            // For LID senders, extract the PN from peer_recipient_pn for session lookup
+            let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
+                attrs.optional_jid("peer_recipient_pn")
+            } else {
+                None
+            };
+
             crate::types::message::MessageSource {
                 chat: attrs.non_ad_jid("recipient"),
                 sender: from.clone(),
                 is_from_me: true,
+                sender_alt,
                 ..Default::default()
             }
         } else {
+            // DM from someone else
+            // For LID senders, extract the PN from peer_recipient_pn for session lookup
+            let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
+                attrs.optional_jid("peer_recipient_pn")
+            } else {
+                None
+            };
+
             crate::types::message::MessageSource {
                 chat: from.to_non_ad(),
                 sender: from.clone(),
                 is_from_me: false,
+                sender_alt,
                 ..Default::default()
             }
         };
