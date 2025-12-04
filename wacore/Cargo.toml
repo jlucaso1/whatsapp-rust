@@ -31,12 +31,14 @@ log = "0.4.28"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
 prost = { version = "0.14.1", default-features = false }
+protobuf = { version = "3", default-features = false }
 
 # Cryptography
 rand = { version = "0.9" }
 rand_core = "0.9"
 serde = { version = "1.0.228", features = ["derive"] }
 serde-big-array = "0.5"
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha2 = "0.10.6"
 thiserror = { workspace = true }
 tokio = { version = "1.47.1", default-features = false, features = ["sync"] }

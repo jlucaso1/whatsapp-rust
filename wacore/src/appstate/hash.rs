@@ -71,6 +71,26 @@ impl HashState {
         (warnings, Ok(()))
     }
 
+    /// Update hash state from snapshot records directly (avoids cloning into SyncdMutation).
+    ///
+    /// This is an optimized version for snapshots where all operations are SET
+    /// and there are no previous values to look up.
+    pub fn update_hash_from_records(&mut self, records: &[wa::SyncdRecord]) {
+        let added: Vec<Vec<u8>> = records
+            .iter()
+            .filter_map(|record| {
+                record
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.blob.as_ref())
+                    .filter(|blob| blob.len() >= 32)
+                    .map(|blob| blob[blob.len() - 32..].to_vec())
+            })
+            .collect();
+
+        WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &[], &added);
+    }
+
     pub fn generate_snapshot_mac(&self, name: &str, key: &[u8]) -> Vec<u8> {
         let version_be = u64_to_be(self.version);
         let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();

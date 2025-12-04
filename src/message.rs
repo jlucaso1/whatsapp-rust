@@ -576,7 +576,7 @@ impl Client {
             }
         } else {
             match wa::Message::decode(plaintext_slice) {
-                Ok(original_msg) => {
+                Ok(mut original_msg) => {
                     if let Some(skdm) = &original_msg.sender_key_distribution_message
                         && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
                     {
@@ -594,20 +594,22 @@ impl Client {
                         self.handle_app_state_sync_key_share(keys).await;
                     }
 
-                    if let Some(protocol_msg) = &original_msg.protocol_message
-                        && let Some(history_sync) = &protocol_msg.history_sync_notification
-                    {
+                    // Take ownership of history_sync_notification to avoid cloning large inline payload
+                    let history_sync_taken = original_msg
+                        .protocol_message
+                        .as_mut()
+                        .and_then(|pm| pm.history_sync_notification.take());
+
+                    if let Some(history_sync) = history_sync_taken {
                         log::info!(
                             "Received HistorySyncNotification, dispatching for download and processing."
                         );
                         let client_clone = self.clone();
-                        let history_sync_clone = history_sync.clone();
                         let msg_id = info.id.clone();
                         tokio::spawn(async move {
                             // Enqueue history sync task to dedicated worker
-                            client_clone
-                                .handle_history_sync(msg_id, history_sync_clone)
-                                .await;
+                            // history_sync is moved, not cloned - avoids copying large inline payload
+                            client_clone.handle_history_sync(msg_id, history_sync).await;
                         });
                     }
 

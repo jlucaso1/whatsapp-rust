@@ -493,7 +493,9 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                     CiphertextMessageType::PreKey => {
                         // A PreKey message creates a session and then decrypts a Whisper message
                         // using that session. No need to check older sessions.
-                        log::error!(
+                        // Log at warn level since this error may be recoverable at higher layers
+                        // (e.g., UntrustedIdentity can be handled by clearing old identity and retrying)
+                        log::warn!(
                             "{}",
                             create_decryption_failure_log(
                                 remote_address,
