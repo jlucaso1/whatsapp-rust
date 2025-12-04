@@ -27,6 +27,7 @@ pub mod retry;
 
 pub mod appstate_sync;
 pub mod groups;
+pub use groups::{GroupMetadata, GroupParticipant};
 pub mod history_sync;
 pub mod presence;
 pub mod usync;
