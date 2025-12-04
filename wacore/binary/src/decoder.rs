@@ -249,7 +249,7 @@ impl<'a> Decoder<'a> {
             let high_chars = lookup_table.swizzle_dyn(high_nibbles);
             let low_chars = lookup_table.swizzle_dyn(low_nibbles);
 
-            let (lo, hi) = Simd::deinterleave(high_chars, low_chars);
+            let (lo, hi) = Simd::interleave(high_chars, low_chars);
             unpacked_bytes.extend_from_slice(lo.as_array());
             unpacked_bytes.extend_from_slice(hi.as_array());
         }
