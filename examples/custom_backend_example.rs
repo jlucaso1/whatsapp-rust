@@ -150,6 +150,26 @@ impl SenderKeyStoreHelper for RedisBackend {
 }
 
 #[async_trait]
+impl wacore::store::traits::SenderKeyDistributionStore for RedisBackend {
+    async fn get_skdm_recipients(
+        &self,
+        _group_jid: &str,
+    ) -> wacore::store::error::Result<Vec<String>> {
+        todo!()
+    }
+    async fn add_skdm_recipients(
+        &self,
+        _group_jid: &str,
+        _device_jids: &[String],
+    ) -> wacore::store::error::Result<()> {
+        todo!()
+    }
+    async fn clear_skdm_recipients(&self, _group_jid: &str) -> wacore::store::error::Result<()> {
+        todo!()
+    }
+}
+
+#[async_trait]
 impl AppStateKeyStore for RedisBackend {
     async fn get_app_state_sync_key(
         &self,

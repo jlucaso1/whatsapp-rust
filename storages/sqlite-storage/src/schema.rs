@@ -88,6 +88,15 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    skdm_recipients (group_jid, device_jid, device_id) {
+        group_jid -> Text,
+        device_jid -> Text,
+        device_id -> Integer,
+        created_at -> Integer,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_mutation_macs,
@@ -98,4 +107,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     sender_keys,
     sessions,
     signed_prekeys,
+    skdm_recipients,
 );
