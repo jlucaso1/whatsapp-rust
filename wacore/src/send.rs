@@ -244,7 +244,7 @@ pub async fn prepare_dm_stanza<
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
-    let recipient_plaintext = message.encode_to_vec();
+    let recipient_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
