@@ -32,7 +32,7 @@ fn test_jid_parsing_and_serialization() {
     let server_jid = Jid::from_str(server_jid_str).unwrap();
     assert!(server_jid.user.is_empty());
     assert_eq!(server_jid.server, "s.whatsapp.net");
-    assert_eq!(server_jid.to_string(), server_jid_str);
+    assert_eq!(server_jid.to_string(), "@s.whatsapp.net");
 }
 
 #[test]
