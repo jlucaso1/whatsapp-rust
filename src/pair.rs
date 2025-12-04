@@ -27,7 +27,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
         .get_attr("from")
         .map(|s| s.as_ref())
         .unwrap_or_default()
-        != "s.whatsapp.net"
+        != "@s.whatsapp.net"
     {
         return false;
     }

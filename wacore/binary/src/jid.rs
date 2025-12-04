@@ -393,30 +393,24 @@ impl FromStr for Jid {
         };
 
         if user_part.is_empty() {
-            if s.contains('@') {
-                return Err(JidError::InvalidFormat(
-                    "Invalid JID format: empty user part".to_string(),
-                ));
-            } else {
-                let known_servers = [
-                    DEFAULT_USER_SERVER,
-                    GROUP_SERVER,
-                    LEGACY_USER_SERVER,
-                    BROADCAST_SERVER,
-                    HIDDEN_USER_SERVER,
-                    NEWSLETTER_SERVER,
-                    HOSTED_SERVER,
-                    MESSENGER_SERVER,
-                    INTEROP_SERVER,
-                    BOT_SERVER,
-                    STATUS_BROADCAST_USER,
-                ];
-                if !known_servers.contains(&server.as_str()) {
-                    return Err(JidError::InvalidFormat(format!(
-                        "Invalid JID format: unknown server '{}'",
-                        server
-                    )));
-                }
+            let known_servers = [
+                DEFAULT_USER_SERVER,
+                GROUP_SERVER,
+                LEGACY_USER_SERVER,
+                BROADCAST_SERVER,
+                HIDDEN_USER_SERVER,
+                NEWSLETTER_SERVER,
+                HOSTED_SERVER,
+                MESSENGER_SERVER,
+                INTEROP_SERVER,
+                BOT_SERVER,
+                STATUS_BROADCAST_USER,
+            ];
+            if !known_servers.contains(&server.as_str()) {
+                return Err(JidError::InvalidFormat(format!(
+                    "Invalid JID format: unknown server '{}'",
+                    server
+                )));
             }
         }
 
@@ -662,6 +656,9 @@ mod tests {
             "@s.whatsapp.net",
         );
 
+        // Server-only JID with @ prefix: parsing "@s.whatsapp.net" should also work (roundtrip)
+        assert_jid_roundtrip("@s.whatsapp.net", "", "s.whatsapp.net", 0, 0);
+
         // LID JID cases (critical for the bug)
         assert_jid_roundtrip("12345.6789@lid", "12345.6789", "lid", 0, 0);
         assert_jid_roundtrip("12345.6789:25@lid", "12345.6789", "lid", 25, 0);
@@ -738,7 +735,10 @@ mod tests {
     fn test_invalid_jids_should_fail_to_parse() {
         assert!(Jid::from_str("thisisnotajid").is_err());
         assert!(Jid::from_str("").is_err());
-        assert!(Jid::from_str("@s.whatsapp.net").is_err());
+        // "@s.whatsapp.net" is now valid - it's the protocol format for server-only JIDs
+        assert!(Jid::from_str("@s.whatsapp.net").is_ok());
+        // But "@unknown.server" should still fail
+        assert!(Jid::from_str("@unknown.server").is_err());
         // Jid::from_str("2") should not be possible due to type constraints,
         // but if it were, it should fail. The string must contain '@'.
         assert!(Jid::from_str("2").is_err());

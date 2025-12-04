@@ -1758,7 +1758,7 @@ mod tests {
         let receipt_node_ref = NodeRef::new(
             Cow::Borrowed("receipt"),
             vec![
-                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("from"), Cow::Borrowed("@s.whatsapp.net")),
                 (Cow::Borrowed("id"), Cow::Borrowed("RCPT-1")),
             ],
             Some(NodeContentRef::String(Cow::Borrowed("test"))),
@@ -1767,7 +1767,7 @@ mod tests {
         let notification_node_ref = NodeRef::new(
             Cow::Borrowed("notification"),
             vec![
-                (Cow::Borrowed("from"), Cow::Borrowed("s.whatsapp.net")),
+                (Cow::Borrowed("from"), Cow::Borrowed("@s.whatsapp.net")),
                 (Cow::Borrowed("id"), Cow::Borrowed("NOTIF-1")),
             ],
             Some(NodeContentRef::String(Cow::Borrowed("test"))),
