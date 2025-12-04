@@ -142,7 +142,6 @@ pub struct BotBuilder {
     http_client: Option<Arc<dyn crate::http::HttpClient>>,
     override_version: Option<(u32, u32, u32)>,
     os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
-    emit_history_sync_events: bool,
 }
 
 impl BotBuilder {
@@ -156,7 +155,6 @@ impl BotBuilder {
             http_client: None,
             override_version: None,
             os_info: None,
-            emit_history_sync_events: false,
         }
     }
 
@@ -323,36 +321,6 @@ impl BotBuilder {
         self
     }
 
-    /// Enable emitting `JoinedGroup` events from history sync.
-    ///
-    /// By default, history sync only extracts the user's own pushname to minimize
-    /// memory usage. When this is enabled, the client will parse and emit all
-    /// conversations from history sync as `Event::JoinedGroup` events.
-    ///
-    /// **Memory Warning**: Enabling this can significantly increase memory usage
-    /// during initial sync, as it requires parsing potentially hundreds of
-    /// conversations with their metadata.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let bot = Bot::builder()
-    ///     .with_backend(backend)
-    ///     .with_transport_factory(transport)
-    ///     .with_http_client(http_client)
-    ///     .with_history_sync_events(true)
-    ///     .on_event(|event, client| async move {
-    ///         if let Event::JoinedGroup(conv) = event {
-    ///             println!("Got conversation: {:?}", conv.id);
-    ///         }
-    ///     })
-    ///     .build()
-    ///     .await?;
-    /// ```
-    pub fn with_history_sync_events(mut self, enabled: bool) -> Self {
-        self.emit_history_sync_events = enabled;
-        self
-    }
-
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -419,12 +387,6 @@ impl BotBuilder {
         for (enc_type, handler) in self.custom_enc_handlers {
             client.custom_enc_handlers.insert(enc_type, handler);
         }
-
-        // Apply history sync events setting
-        client.emit_history_sync_events.store(
-            self.emit_history_sync_events,
-            std::sync::atomic::Ordering::Relaxed,
-        );
 
         Ok(Bot {
             client,

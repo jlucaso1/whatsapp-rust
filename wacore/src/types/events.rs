@@ -3,12 +3,128 @@ use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, Newslett
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
 use chrono::{DateTime, Duration, Utc};
+use prost::Message;
 use serde::Serialize;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use wacore_binary::jid::{Jid, MessageId};
 use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa, HistorySync};
+
+/// Wrapper for large event data that uses Arc for cheap cloning.
+/// This avoids cloning large protobuf messages when dispatching events.
+#[derive(Debug, Clone)]
+pub struct SharedData<T>(pub Arc<T>);
+
+impl<T> SharedData<T> {
+    pub fn new(data: T) -> Self {
+        Self(Arc::new(data))
+    }
+}
+
+impl<T> std::ops::Deref for SharedData<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Serialize> Serialize for SharedData<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+/// A lazily-parsed conversation from history sync.
+///
+/// The raw protobuf bytes are stored and only parsed when accessed.
+/// This allows emitting events without the cost of parsing if the
+/// consumer doesn't actually need the conversation data.
+///
+/// Cloning is cheap (Arc), and parsing only happens once on first access.
+#[derive(Clone)]
+pub struct LazyConversation {
+    raw_bytes: Arc<Vec<u8>>,
+    parsed: Arc<OnceLock<wa::Conversation>>,
+}
+
+impl LazyConversation {
+    /// Create a new lazy conversation from raw protobuf bytes.
+    pub fn new(raw_bytes: Vec<u8>) -> Self {
+        Self {
+            raw_bytes: Arc::new(raw_bytes),
+            parsed: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Get the parsed conversation, parsing on first access.
+    /// Returns None if parsing fails.
+    pub fn get(&self) -> Option<&wa::Conversation> {
+        self.parsed
+            .get_or_init(|| {
+                wa::Conversation::decode(self.raw_bytes.as_slice()).unwrap_or_default()
+            })
+            .id
+            .as_ref()
+            .map(|_| self.parsed.get().unwrap())
+    }
+
+    /// Get the parsed conversation, parsing on first access.
+    /// Panics if parsing fails (use `get()` for fallible access).
+    pub fn conversation(&self) -> &wa::Conversation {
+        self.parsed.get_or_init(|| {
+            let mut conv = wa::Conversation::decode(self.raw_bytes.as_slice())
+                .expect("Failed to decode conversation");
+            // Strip heavy fields after parsing to reduce memory
+            conv.messages.clear();
+            conv.messages.shrink_to_fit();
+            conv
+        })
+    }
+
+    /// Returns true if the conversation has been parsed.
+    pub fn is_parsed(&self) -> bool {
+        self.parsed.get().is_some()
+    }
+
+    /// Get the raw bytes size (useful for debugging/metrics).
+    pub fn raw_size(&self) -> usize {
+        self.raw_bytes.len()
+    }
+}
+
+impl fmt::Debug for LazyConversation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(conv) = self.parsed.get() {
+            f.debug_struct("LazyConversation")
+                .field("id", &conv.id)
+                .field("parsed", &true)
+                .finish()
+        } else {
+            f.debug_struct("LazyConversation")
+                .field("raw_size", &self.raw_bytes.len())
+                .field("parsed", &false)
+                .finish()
+        }
+    }
+}
+
+impl Serialize for LazyConversation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Only serialize if parsed, otherwise serialize as null/empty
+        if let Some(conv) = self.parsed.get() {
+            conv.serialize(serializer)
+        } else {
+            serializer.serialize_none()
+        }
+    }
+}
 
 pub trait EventHandler: Send + Sync {
     fn handle_event(&self, event: &Event);
@@ -26,6 +142,12 @@ impl CoreEventBus {
 
     pub fn add_handler(&self, handler: Arc<dyn EventHandler>) {
         self.handlers.write().unwrap().push(handler);
+    }
+
+    /// Returns true if there are any event handlers registered.
+    /// Useful for skipping expensive work when no one is listening.
+    pub fn has_handlers(&self) -> bool {
+        !self.handlers.read().unwrap().is_empty()
     }
 
     pub fn dispatch(&self, event: &Event) {
@@ -66,7 +188,7 @@ pub enum Event {
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
 
-    JoinedGroup(Box<wa::Conversation>),
+    JoinedGroup(LazyConversation),
     GroupInfoUpdate {
         jid: Jid,
         update: Box<wa::SyncActionValue>,

@@ -31,6 +31,7 @@ log = "0.4.28"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
 prost = { version = "0.14.1", default-features = false }
+protobuf = { version = "3", default-features = false }
 
 # Cryptography
 rand = { version = "0.9" }

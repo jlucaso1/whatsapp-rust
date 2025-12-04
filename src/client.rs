@@ -156,11 +156,6 @@ pub struct Client {
 
     /// Version override for testing or manual specification
     pub(crate) override_version: Option<(u32, u32, u32)>,
-
-    /// Whether to emit JoinedGroup events from history sync.
-    /// When false (default), history sync only extracts own pushname to save memory.
-    /// When true, parses and emits all conversations as JoinedGroup events.
-    pub(crate) emit_history_sync_events: Arc<AtomicBool>,
 }
 
 impl Client {
@@ -227,7 +222,6 @@ impl Client {
             synchronous_ack: false,
             http_client,
             override_version,
-            emit_history_sync_events: Arc::new(AtomicBool::new(false)),
         };
 
         let arc = Arc::new(this);
