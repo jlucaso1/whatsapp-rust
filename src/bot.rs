@@ -421,9 +421,10 @@ impl BotBuilder {
         }
 
         // Apply history sync events setting
-        client
-            .emit_history_sync_events
-            .store(self.emit_history_sync_events, std::sync::atomic::Ordering::Relaxed);
+        client.emit_history_sync_events.store(
+            self.emit_history_sync_events,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         Ok(Bot {
             client,

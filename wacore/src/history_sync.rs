@@ -110,11 +110,11 @@ where
                     ));
                 }
                 let conv_slice = &uncompressed[pos..pos + len];
-                if let Ok(conv) = wa::Conversation::decode(conv_slice) {
-                    if let Some(ref mut callback) = on_conversation {
-                        callback(conv);
-                        result.conversations_processed += 1;
-                    }
+                if let Ok(conv) = wa::Conversation::decode(conv_slice)
+                    && let Some(ref mut callback) = on_conversation
+                {
+                    callback(conv);
+                    result.conversations_processed += 1;
                 }
                 buf = &uncompressed[(pos + len)..];
             }
@@ -160,10 +160,20 @@ where
                     }
                     prost::encoding::WireType::ThirtyTwoBit => {
                         let pos = total_len - buf.len();
+                        if pos + 4 > total_len {
+                            return Err(HistorySyncError::ProtobufDecodeError(
+                                prost::DecodeError::new("thirty-two-bit skip out of bounds"),
+                            ));
+                        }
                         buf = &uncompressed[(pos + 4)..];
                     }
                     prost::encoding::WireType::SixtyFourBit => {
                         let pos = total_len - buf.len();
+                        if pos + 8 > total_len {
+                            return Err(HistorySyncError::ProtobufDecodeError(
+                                prost::DecodeError::new("sixty-four-bit skip out of bounds"),
+                            ));
+                        }
                         buf = &uncompressed[(pos + 8)..];
                     }
                     _ => {

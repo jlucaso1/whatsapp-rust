@@ -149,7 +149,10 @@ impl Client {
             );
 
             result.map(|sync_result| {
-                (sync_result.own_pushname, sync_result.conversations_processed)
+                (
+                    sync_result.own_pushname,
+                    sync_result.conversations_processed,
+                )
             })
             // tx dropped here, closing channel
             // compressed_data dropped here
@@ -159,7 +162,7 @@ impl Client {
         let mut conv_count = 0usize;
         while let Some(conv) = rx.recv().await {
             conv_count += 1;
-            if conv_count % 25 == 0 {
+            if conv_count.is_multiple_of(25) {
                 log::info!("History sync progress: {conv_count} conversations processed...");
             }
             self.core
