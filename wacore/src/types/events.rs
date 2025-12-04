@@ -2,6 +2,7 @@ use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use crate::types::user::PrivacySettings;
+use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use prost::Message;
 use serde::Serialize;
@@ -44,18 +45,31 @@ impl<T: Serialize> Serialize for SharedData<T> {
 /// This allows emitting events without the cost of parsing if the
 /// consumer doesn't actually need the conversation data.
 ///
-/// Cloning is cheap (Arc), and parsing only happens once on first access.
+/// Uses `bytes::Bytes` for zero-copy reference counting. Cloning is O(1)
+/// and parsing only happens once on first access.
 #[derive(Clone)]
 pub struct LazyConversation {
-    raw_bytes: Arc<Vec<u8>>,
+    /// Raw protobuf bytes using Bytes for zero-copy cloning.
+    /// Bytes is reference-counted internally, so clones share the same data.
+    raw_bytes: Bytes,
+    /// Cached parsed result, initialized on first access.
     parsed: Arc<OnceLock<wa::Conversation>>,
 }
 
 impl LazyConversation {
     /// Create a new lazy conversation from raw protobuf bytes.
+    /// The bytes are moved into Bytes for zero-copy sharing.
     pub fn new(raw_bytes: Vec<u8>) -> Self {
         Self {
-            raw_bytes: Arc::new(raw_bytes),
+            raw_bytes: Bytes::from(raw_bytes),
+            parsed: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Create from an existing Bytes instance (true zero-copy).
+    pub fn from_bytes(raw_bytes: Bytes) -> Self {
+        Self {
+            raw_bytes,
             parsed: Arc::new(OnceLock::new()),
         }
     }
@@ -64,9 +78,7 @@ impl LazyConversation {
     /// Returns None if parsing fails.
     pub fn get(&self) -> Option<&wa::Conversation> {
         self.parsed
-            .get_or_init(|| {
-                wa::Conversation::decode(self.raw_bytes.as_slice()).unwrap_or_default()
-            })
+            .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default())
             .id
             .as_ref()
             .map(|_| self.parsed.get().unwrap())
@@ -76,7 +88,7 @@ impl LazyConversation {
     /// Panics if parsing fails (use `get()` for fallible access).
     pub fn conversation(&self) -> &wa::Conversation {
         self.parsed.get_or_init(|| {
-            let mut conv = wa::Conversation::decode(self.raw_bytes.as_slice())
+            let mut conv = wa::Conversation::decode(&self.raw_bytes[..])
                 .expect("Failed to decode conversation");
             // Strip heavy fields after parsing to reduce memory
             conv.messages.clear();

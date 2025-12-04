@@ -1,4 +1,5 @@
 use crate::types::events::{Event, LazyConversation};
+use bytes::Bytes;
 use std::sync::Arc;
 use wacore::history_sync::process_history_sync;
 use waproto::whatsapp::message::HistorySyncNotification;
@@ -66,7 +67,7 @@ impl Client {
             }
         };
 
-        // Get own user for pushname extraction
+        // Get own user for pushname extraction (moved into blocking task, no clone needed)
         let own_user = {
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             device_snapshot.pn.as_ref().map(|j| j.to_non_ad().user)
@@ -76,22 +77,22 @@ impl Client {
         let has_listeners = self.core.event_bus.has_handlers();
 
         let parse_result = if has_listeners {
-            // Use a bounded channel to stream raw conversation bytes
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
-
-            let own_user_for_task = own_user.clone();
+            // Use a bounded channel to stream raw conversation bytes as Bytes (zero-copy)
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(16);
 
             // Run streaming parsing in blocking thread
+            // own_user is moved directly, no clone needed
             let parse_handle = tokio::task::spawn_blocking(move || {
-                let own_user_ref = own_user_for_task.as_deref();
+                let own_user_ref = own_user.as_deref();
 
                 // Streaming: decompresses and extracts raw bytes incrementally
                 // No parsing happens here - just raw byte extraction
+                // Uses Bytes for zero-copy reference counting
                 process_history_sync(
                     &compressed_data,
                     own_user_ref,
-                    Some(|raw_bytes: Vec<u8>| {
-                        // Send raw bytes through channel
+                    Some(|raw_bytes: Bytes| {
+                        // Send Bytes through channel (zero-copy clone)
                         let _ = tx.blocking_send(raw_bytes);
                     }),
                 )
@@ -105,12 +106,10 @@ impl Client {
                 if conv_count.is_multiple_of(25) {
                     log::info!("History sync progress: {conv_count} conversations processed...");
                 }
-                // Wrap raw bytes in LazyConversation - parsing only happens
-                // if the event handler calls .conversation() or .get()
-                let lazy_conv = LazyConversation::new(raw_bytes);
-                self.core
-                    .event_bus
-                    .dispatch(&Event::JoinedGroup(lazy_conv));
+                // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
+                // Parsing only happens if the event handler calls .conversation() or .get()
+                let lazy_conv = LazyConversation::from_bytes(raw_bytes);
+                self.core.event_bus.dispatch(&Event::JoinedGroup(lazy_conv));
             }
 
             // Wait for parsing to complete
@@ -118,13 +117,13 @@ impl Client {
         } else {
             // No listeners - skip conversation processing entirely
             log::debug!("No event handlers registered, skipping conversation processing");
-            let own_user_for_task = own_user.clone();
 
+            // own_user is moved directly, no clone needed
             tokio::task::spawn_blocking(move || {
-                let own_user_ref = own_user_for_task.as_deref();
+                let own_user_ref = own_user.as_deref();
 
                 // Pass None for callback - conversations are skipped at protobuf level
-                process_history_sync::<fn(Vec<u8>)>(&compressed_data, own_user_ref, None)
+                process_history_sync::<fn(Bytes)>(&compressed_data, own_user_ref, None)
             })
             .await
         };

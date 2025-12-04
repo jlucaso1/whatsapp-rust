@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use flate2::read::ZlibDecoder;
 use prost::Message;
 use protobuf::CodedInputStream;
@@ -46,7 +47,7 @@ mod wire_type {
 /// 1. `ZlibDecoder` decompresses data on-demand as bytes are requested
 /// 2. `BufReader` provides buffered reading (64KB buffer)
 /// 3. `CodedInputStream` parses protobuf fields incrementally
-/// 4. Each conversation's raw bytes are passed to callback (lazy parsing)
+/// 4. Each conversation's raw bytes are passed to callback as `Bytes` (zero-copy)
 ///
 /// # Memory Profile
 ///
@@ -62,19 +63,20 @@ mod wire_type {
 ///
 /// * `compressed_data` - The zlib-compressed history sync blob
 /// * `own_user` - Optional user JID to extract own pushname
-/// * `on_conversation_bytes` - Callback invoked with raw bytes for each conversation.
-///   If `None`, conversations are skipped entirely. Parsing is deferred to the caller.
+/// * `on_conversation_bytes` - Callback invoked with `Bytes` for each conversation.
+///   If `None`, conversations are skipped entirely. Uses `Bytes` for zero-copy cloning.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use wacore::history_sync::process_history_sync;
+/// use bytes::Bytes;
 ///
 /// let result = process_history_sync(
 ///     &compressed_data,
 ///     Some("1234567890"),
-///     Some(|raw_bytes: Vec<u8>| {
-///         // raw_bytes can be wrapped in LazyConversation for deferred parsing
+///     Some(|raw_bytes: Bytes| {
+///         // raw_bytes can be wrapped in LazyConversation::from_bytes() for deferred parsing
 ///         println!("Got conversation bytes: {} bytes", raw_bytes.len());
 ///     }),
 /// )?;
@@ -90,7 +92,7 @@ pub fn process_history_sync<F>(
     mut on_conversation_bytes: Option<F>,
 ) -> Result<HistorySyncResult, HistorySyncError>
 where
-    F: FnMut(Vec<u8>),
+    F: FnMut(Bytes),
 {
     // Set up streaming pipeline:
     // compressed_data -> ZlibDecoder -> BufReader -> CodedInputStream
@@ -115,13 +117,14 @@ where
                 if let Some(ref mut callback) = on_conversation_bytes {
                     // Read raw bytes for this conversation - no parsing here!
                     // Parsing is deferred to the caller via LazyConversation
-                    let raw_bytes = cis.read_bytes()?;
+                    // Convert Vec<u8> to Bytes for zero-copy reference counting
+                    let raw_bytes = Bytes::from(cis.read_bytes()?);
                     callback(raw_bytes);
                     result.conversations_processed += 1;
                 } else {
-                    // No callback - skip conversation entirely without even reading
+                    // No callback - skip conversation entirely without allocating
                     let len = cis.read_raw_varint32()?;
-                    cis.read_raw_bytes(len)?;
+                    cis.skip_raw_bytes(len)?;
                 }
             }
 
@@ -151,7 +154,7 @@ where
     Ok(result)
 }
 
-/// Skip a field based on its wire type
+/// Skip a field based on its wire type without allocating
 fn skip_field_by_wire_type(
     cis: &mut CodedInputStream<'_>,
     wire_type: u32,
@@ -164,8 +167,9 @@ fn skip_field_by_wire_type(
             cis.read_raw_little_endian64()?;
         }
         wire_type::LENGTH_DELIMITED => {
+            // Use skip_raw_bytes to avoid allocating a Vec<u8>
             let len = cis.read_raw_varint32()?;
-            cis.read_raw_bytes(len)?;
+            cis.skip_raw_bytes(len)?;
         }
         wire_type::FIXED32 => {
             cis.read_raw_little_endian32()?;
