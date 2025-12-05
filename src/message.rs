@@ -26,6 +26,24 @@ use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa};
 
 impl Client {
+    /// Helper method to spawn a task that sends a retry receipt for a failed decryption.
+    /// This is used when sessions are not found or invalid to request the sender to resend
+    /// the message with a PreKeySignalMessage to re-establish the session.
+    fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, error_context: &str) {
+        let client_clone = Arc::clone(self);
+        let info_clone = info.clone();
+        let error_context = error_context.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
+                log::error!(
+                    "Failed to send retry receipt for {}: {:?}",
+                    error_context,
+                    e
+                );
+            }
+        });
+    }
+
     pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => info,
@@ -440,16 +458,7 @@ impl Client {
                         dispatched_undecryptable = true;
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        let client_clone = self.clone();
-                        let info_clone = info.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
-                                log::error!(
-                                    "Failed to send retry receipt for SessionNotFound: {:?}",
-                                    e
-                                );
-                            }
-                        });
+                        self.spawn_retry_receipt(info, "SessionNotFound");
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
                         // InvalidMessage typically means MAC verification failed or session is out of sync.
@@ -466,7 +475,7 @@ impl Client {
 
                         // Delete the stale session
                         let device_arc = self.persistence_manager.get_device_arc().await;
-                        let device_guard = device_arc.read().await;
+                        let device_guard = device_arc.write().await;
                         let address_str = signal_address.to_string();
                         if let Err(err) = device_guard.backend.delete_session(&address_str).await {
                             log::warn!(
@@ -494,16 +503,7 @@ impl Client {
                         dispatched_undecryptable = true;
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        let client_clone = self.clone();
-                        let info_clone = info.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
-                                log::error!(
-                                    "Failed to send retry receipt for InvalidMessage: {:?}",
-                                    e
-                                );
-                            }
-                        });
+                        self.spawn_retry_receipt(info, "InvalidMessage");
                         continue;
                     } else {
                         // For other unexpected errors, just log them
