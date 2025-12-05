@@ -259,13 +259,14 @@ pub trait AppStateSyncDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::traits::{AppStateMutationMAC, AppStateStore};
+    use crate::store::traits::AppStateStore;
     use prost::Message;
     use std::collections::HashMap;
     use wacore::appstate::WAPATCH_INTEGRITY;
     use wacore::appstate::hash::HashState;
     use wacore::appstate::hash::generate_content_mac;
     use wacore::appstate::keys::expand_app_state_keys;
+    use wacore::appstate::processor::AppStateMutationMAC;
     use wacore::libsignal::crypto::aes_256_cbc_encrypt;
     use wacore::store::error::Result as StoreResult;
     use wacore::store::traits::AppStateKeyStore as _;

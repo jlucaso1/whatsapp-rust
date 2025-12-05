@@ -1,6 +1,7 @@
 use crate::appstate::hash::HashState;
 use crate::store::error::Result;
 use async_trait::async_trait;
+use wacore_appstate::processor::AppStateMutationMAC;
 
 use crate::libsignal::protocol::Direction;
 use serde::{Deserialize, Serialize};
@@ -66,12 +67,6 @@ pub trait AppStateStore: Send + Sync {
         name: &str,
         index_mac: &[u8],
     ) -> Result<Option<Vec<u8>>>;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppStateMutationMAC {
-    pub index_mac: Vec<u8>,
-    pub value_mac: Vec<u8>,
 }
 
 /// Trait for tracking which devices have received Sender Key Distribution Messages (SKDM)

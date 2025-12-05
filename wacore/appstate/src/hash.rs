@@ -1,10 +1,10 @@
-use crate::appstate::AppStateError;
-use crate::appstate::lthash::WAPATCH_INTEGRITY;
-use crate::libsignal::crypto::CryptographicMac;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::collections::HashMap;
+use wacore_libsignal::crypto::CryptographicMac;
 use waproto::whatsapp as wa;
+
+use crate::{AppStateError, WAPATCH_INTEGRITY};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashState {
