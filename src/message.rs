@@ -422,10 +422,10 @@ impl Client {
                         }
                         continue;
                     }
-                    // Handle SessionNotFound gracefully during offline sync
+                    // Handle SessionNotFound gracefully - send retry receipt to request session establishment
                     if let SignalProtocolError::SessionNotFound(_) = e {
                         warn!(
-                            "Gracefully failing decryption for {} from {} due to missing session. This is common during offline sync. Dispatching UndecryptableMessage event.",
+                            "No session found for {} message from {}. Sending retry receipt to request session establishment.",
                             enc_type, info.source.sender
                         );
                         // Dispatch an event so the library user knows a message was missed.
@@ -438,11 +438,77 @@ impl Client {
                             },
                         ));
                         dispatched_undecryptable = true;
-                        // IMPORTANT: Continue the loop instead of returning an error.
+
+                        // Send retry receipt so the sender resends with a PreKeySignalMessage
+                        let client_clone = self.clone();
+                        let info_clone = info.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
+                                log::error!(
+                                    "Failed to send retry receipt for SessionNotFound: {:?}",
+                                    e
+                                );
+                            }
+                        });
+                        continue;
+                    } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
+                        // InvalidMessage typically means MAC verification failed or session is out of sync.
+                        // This happens when the sender's session state diverged from ours (e.g., they reinstalled).
+                        // We need to:
+                        // 1. Delete the stale session so a new one can be established
+                        // 2. Send a retry receipt so the sender resends with a PreKeySignalMessage
+                        log::warn!(
+                            "Decryption failed for {} message from {} due to InvalidMessage (likely MAC failure). \
+                             Deleting stale session and sending retry receipt.",
+                            enc_type,
+                            info.source.sender
+                        );
+
+                        // Delete the stale session
+                        let device_arc = self.persistence_manager.get_device_arc().await;
+                        let device_guard = device_arc.read().await;
+                        let address_str = signal_address.to_string();
+                        if let Err(err) = device_guard.backend.delete_session(&address_str).await {
+                            log::warn!(
+                                "Failed to delete stale session for {}: {:?}",
+                                signal_address,
+                                err
+                            );
+                        } else {
+                            log::info!(
+                                "Deleted stale session for {} to allow re-establishment",
+                                signal_address
+                            );
+                        }
+                        drop(device_guard);
+
+                        // Dispatch UndecryptableMessage event
+                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                            crate::types::events::UndecryptableMessage {
+                                info: info.clone(),
+                                is_unavailable: false,
+                                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                            },
+                        ));
+                        dispatched_undecryptable = true;
+
+                        // Send retry receipt so the sender resends with a PreKeySignalMessage
+                        let client_clone = self.clone();
+                        let info_clone = info.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
+                                log::error!(
+                                    "Failed to send retry receipt for InvalidMessage: {:?}",
+                                    e
+                                );
+                            }
+                        });
                         continue;
                     } else {
-                        // For other errors, log them but still don't crash the whole batch.
+                        // For other unexpected errors, just log them
                         log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                        continue;
                     }
                 }
             }
