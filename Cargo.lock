@@ -2319,10 +2319,27 @@ dependencies = [
  "rand_core 0.9.3",
  "serde",
  "serde-big-array",
- "serde_json",
  "sha2",
  "thiserror 2.0.17",
  "tokio",
+ "wacore-appstate",
+ "wacore-binary",
+ "wacore-libsignal",
+ "waproto",
+]
+
+[[package]]
+name = "wacore-appstate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hkdf",
+ "prost",
+ "serde",
+ "serde-big-array",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
  "wacore-binary",
  "wacore-libsignal",
  "waproto",

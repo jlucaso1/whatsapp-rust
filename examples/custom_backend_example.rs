@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use wacore::appstate::processor::AppStateMutationMAC;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::*;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;

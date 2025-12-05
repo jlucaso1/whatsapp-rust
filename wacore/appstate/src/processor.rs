@@ -4,12 +4,18 @@
 //! All functions are synchronous and take callbacks for key lookup, making them
 //! suitable for use in both async and sync contexts.
 
-use crate::appstate::AppStateError;
-use crate::appstate::decode::{Mutation, decode_record};
-use crate::appstate::hash::{HashState, generate_patch_mac};
-use crate::appstate::keys::ExpandedAppStateKeys;
-use crate::store::traits::AppStateMutationMAC;
+use crate::AppStateError;
+use crate::decode::{Mutation, decode_record};
+use crate::hash::{HashState, generate_patch_mac};
+use crate::keys::ExpandedAppStateKeys;
+use serde::{Deserialize, Serialize};
 use waproto::whatsapp as wa;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppStateMutationMAC {
+    pub index_mac: Vec<u8>,
+    pub value_mac: Vec<u8>,
+}
 
 /// Result of processing a snapshot.
 #[derive(Debug, Clone)]
@@ -264,11 +270,11 @@ pub fn validate_snapshot_mac(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::appstate::hash::generate_content_mac;
-    use crate::appstate::keys::expand_app_state_keys;
-    use crate::appstate::lthash::WAPATCH_INTEGRITY;
-    use crate::libsignal::crypto::aes_256_cbc_encrypt;
+    use crate::hash::generate_content_mac;
+    use crate::keys::expand_app_state_keys;
+    use crate::lthash::WAPATCH_INTEGRITY;
     use prost::Message;
+    use wacore_libsignal::crypto::aes_256_cbc_encrypt;
 
     fn create_encrypted_record(
         op: wa::syncd_mutation::SyncdOperation,

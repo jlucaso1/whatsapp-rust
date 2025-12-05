@@ -1,0 +1,26 @@
+[package]
+name = "wacore-appstate"
+version = "0.1.0"
+edition = "2024"
+authors = ["João Lucas <jlucaso@hotmail.com>"]
+license = "MIT"
+repository = "https://github.com/jlucaso1/whatsapp-rust"
+description = "Appstate for WhatsApp protocol"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = { version = "1.0", default-features = false }
+hkdf = "0.12.3"
+prost = { version = "0.14.1", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde-big-array = "0.5"
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+sha2 = "0.10.6"
+thiserror = { workspace = true }
+wacore-binary = { path = "../binary", version = "0.1.0", features = ["serde"] }
+wacore-libsignal = { path = "../libsignal", version = "0.1.0" }
+waproto = { path = "../../waproto", version = "0.1.0" }
+
+[dev-dependencies]

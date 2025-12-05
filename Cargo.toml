@@ -16,6 +16,7 @@ members = [
     "storages/sqlite-storage",
     "transports/tokio-transport",
     "wacore",
+    "wacore/appstate",
     "wacore/binary",
     "wacore/libsignal",
     "waproto",
@@ -27,6 +28,7 @@ rand = "0.9"
 rand_core = "0.9"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", default-features = false }
+wacore-appstate = { path = "./wacore/appstate", version = "0.1.0" }
 wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
 

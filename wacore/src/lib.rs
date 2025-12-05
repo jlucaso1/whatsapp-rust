@@ -1,7 +1,7 @@
 #![feature(portable_simd)]
 
 pub use aes_gcm;
-pub mod appstate;
+pub use wacore_appstate as appstate;
 pub mod client;
 pub mod download;
 pub mod handshake;

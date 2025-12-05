@@ -7,10 +7,10 @@ use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use prost::Message;
 use wacore::appstate::hash::HashState;
+use wacore::appstate::processor::AppStateMutationMAC;
 use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
 use wacore::store::error::{Result, StoreError};
-use wacore::store::traits::AppStateMutationMAC;
 use wacore::store::traits::*;
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 

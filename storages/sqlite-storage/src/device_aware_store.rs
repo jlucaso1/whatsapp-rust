@@ -5,6 +5,7 @@ use diesel::prelude::*;
 use prost::Message;
 use std::sync::Arc;
 use wacore::appstate::hash::HashState;
+use wacore::appstate::processor::AppStateMutationMAC;
 use wacore::store::error::Result;
 use wacore::store::traits::*;
 

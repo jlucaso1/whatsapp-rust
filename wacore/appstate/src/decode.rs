@@ -1,13 +1,8 @@
-//! Pure, synchronous record decoding logic for app state mutations.
-//!
-//! This module provides runtime-agnostic decoding of encrypted app state records
-//! without any async dependencies.
-
-use crate::appstate::AppStateError;
-use crate::appstate::hash::{generate_content_mac, validate_index_mac};
-use crate::appstate::keys::ExpandedAppStateKeys;
-use crate::libsignal::crypto::aes_256_cbc_decrypt;
+use crate::AppStateError;
+use crate::hash::{generate_content_mac, validate_index_mac};
+use crate::keys::ExpandedAppStateKeys;
 use prost::Message;
+use wacore_libsignal::crypto::aes_256_cbc_decrypt;
 use waproto::whatsapp as wa;
 
 /// A decoded mutation from an app state record.
@@ -143,10 +138,10 @@ pub fn collect_key_ids_from_patch_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::appstate::hash::generate_content_mac;
-    use crate::appstate::keys::expand_app_state_keys;
-    use crate::libsignal::crypto::aes_256_cbc_encrypt;
+    use crate::hash::generate_content_mac;
+    use crate::keys::expand_app_state_keys;
     use prost::Message;
+    use wacore_libsignal::crypto::aes_256_cbc_encrypt;
 
     fn create_test_record(
         op: wa::syncd_mutation::SyncdOperation,
