@@ -29,6 +29,11 @@ impl Client {
     /// Helper method to spawn a task that sends a retry receipt for a failed decryption.
     /// This is used when sessions are not found or invalid to request the sender to resend
     /// the message with a PreKeySignalMessage to re-establish the session.
+    ///
+    /// Additionally spawns a PDO (Peer Data Operation) request to our primary phone as a
+    /// backup recovery mechanism. The phone can share the already-decrypted message content
+    /// with us, which is useful when the sender's retry doesn't work (e.g., they send msg
+    /// instead of pkmsg).
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, error_context: &str) {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
@@ -42,6 +47,9 @@ impl Client {
                 );
             }
         });
+
+        // Also spawn a PDO request to our primary phone as a backup recovery mechanism
+        self.spawn_pdo_request(info);
     }
 
     pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
@@ -611,6 +619,8 @@ impl Client {
                             log::error!("Failed to send retry receipt (batch): {:?}", e);
                         }
                     });
+                    // Also spawn PDO request as backup recovery mechanism
+                    self.spawn_pdo_request(info);
                 }
                 Err(e) => {
                     log::error!(
@@ -675,6 +685,14 @@ impl Client {
                         && let Some(keys) = &protocol_msg.app_state_sync_key_share
                     {
                         self.handle_app_state_sync_key_share(keys).await;
+                    }
+
+                    // Handle PDO (Peer Data Operation) responses from our primary phone
+                    if let Some(protocol_msg) = &original_msg.protocol_message
+                        && let Some(pdo_response) =
+                            &protocol_msg.peer_data_operation_request_response_message
+                    {
+                        self.handle_pdo_response(pdo_response, info).await;
                     }
 
                     // Take ownership of history_sync_notification to avoid cloning large inline payload

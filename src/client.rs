@@ -145,6 +145,10 @@ pub struct Client {
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
 
+    /// Cache for pending PDO (Peer Data Operation) requests.
+    /// Maps message cache keys (chat:id) to pending request info.
+    pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
+
     /// Router for dispatching stanzas to their appropriate handlers
     pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
 
@@ -218,6 +222,7 @@ impl Client {
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
+            pdo_pending_requests: crate::pdo::new_pdo_cache(),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
