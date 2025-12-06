@@ -2,7 +2,7 @@ use crate::AppStateError;
 use crate::hash::{generate_content_mac, validate_index_mac};
 use crate::keys::ExpandedAppStateKeys;
 use prost::Message;
-use wacore_libsignal::crypto::aes_256_cbc_decrypt;
+use wacore_libsignal::crypto::aes_256_cbc_decrypt_into;
 use waproto::whatsapp as wa;
 
 /// A decoded mutation from an app state record.
@@ -66,7 +66,8 @@ pub fn decode_record(
         }
     }
 
-    let plaintext = aes_256_cbc_decrypt(ciphertext, &keys.value_encryption, iv)
+    let mut plaintext = Vec::new();
+    aes_256_cbc_decrypt_into(ciphertext, &keys.value_encryption, iv, &mut plaintext)
         .map_err(|_| AppStateError::DecryptionFailed)?;
 
     let action = wa::SyncActionData::decode(plaintext.as_slice())
@@ -141,7 +142,7 @@ mod tests {
     use crate::hash::generate_content_mac;
     use crate::keys::expand_app_state_keys;
     use prost::Message;
-    use wacore_libsignal::crypto::aes_256_cbc_encrypt;
+    use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 
     fn create_test_record(
         op: wa::syncd_mutation::SyncdOperation,
@@ -151,7 +152,8 @@ mod tests {
     ) -> wa::SyncdRecord {
         let plaintext = action_data.encode_to_vec();
         let iv = vec![0u8; 16];
-        let ciphertext = aes_256_cbc_encrypt(&plaintext, &keys.value_encryption, &iv).unwrap();
+        let mut ciphertext = Vec::new();
+        aes_256_cbc_encrypt_into(&plaintext, &keys.value_encryption, &iv, &mut ciphertext).unwrap();
 
         let mut value_with_iv = iv;
         value_with_iv.extend_from_slice(&ciphertext);

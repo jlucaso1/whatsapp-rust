@@ -267,7 +267,7 @@ mod tests {
     use wacore::appstate::hash::generate_content_mac;
     use wacore::appstate::keys::expand_app_state_keys;
     use wacore::appstate::processor::AppStateMutationMAC;
-    use wacore::libsignal::crypto::aes_256_cbc_encrypt;
+    use wacore::libsignal::crypto::aes_256_cbc_encrypt_into;
     use wacore::store::error::Result as StoreResult;
     use wacore::store::traits::AppStateKeyStore as _;
     use wacore::store::traits::AppStateSyncKey;
@@ -525,7 +525,9 @@ mod tests {
         key_id_bytes: &[u8],
     ) -> wa::SyncdMutation {
         let iv = vec![0u8; 16];
-        let ciphertext = aes_256_cbc_encrypt(plaintext, &keys.value_encryption, &iv).unwrap();
+
+        let mut ciphertext = Vec::new();
+        aes_256_cbc_encrypt_into(plaintext, &keys.value_encryption, &iv, &mut ciphertext).unwrap();
         let mut value_with_iv = iv;
         value_with_iv.extend_from_slice(&ciphertext);
         let value_mac = generate_content_mac(op, &value_with_iv, key_id_bytes, &keys.value_mac);

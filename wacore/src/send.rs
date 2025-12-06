@@ -2,7 +2,7 @@ use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
     CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
     SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
-    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
+    message_encrypt, process_prekey_bundle,
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
+use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
@@ -57,8 +58,14 @@ where
 
     let message_keys = sender_chain_key.sender_message_key();
 
-    let ciphertext = aes_256_cbc_encrypt(plaintext, message_keys.cipher_key(), message_keys.iv())
-        .map_err(|_| anyhow!("AES encryption failed"))?;
+    let mut ciphertext = Vec::new();
+    aes_256_cbc_encrypt_into(
+        plaintext,
+        message_keys.cipher_key(),
+        message_keys.iv(),
+        &mut ciphertext,
+    )
+    .map_err(|_| anyhow!("AES encryption failed"))?;
 
     let signing_key = sender_key_state
         .signing_key_private()
