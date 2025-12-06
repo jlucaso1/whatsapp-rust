@@ -8,11 +8,12 @@ use std::cell::RefCell;
 use rand::{CryptoRng, Rng};
 
 use crate::crypto::DecryptionError as DecryptionErrorCrypto;
-use crate::crypto::{aes_256_cbc_decrypt, aes_256_cbc_encrypt_into};
+use crate::crypto::{aes_256_cbc_decrypt_into, aes_256_cbc_encrypt_into};
 
-// Thread-local buffer for AES encryption to reduce allocations and memory fragmentation
+// Thread-local buffers for AES operations to reduce allocations and memory fragmentation
 thread_local! {
     static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
+    static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
 }
 
 // Wrapper for the encryption buffer with intelligent size management
@@ -663,26 +664,31 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
         ));
     }
 
-    let ptext = match aes_256_cbc_decrypt(
-        ciphertext.body(),
-        message_keys.cipher_key(),
-        message_keys.iv(),
-    ) {
-        Ok(ptext) => ptext,
-        Err(DecryptionErrorCrypto::BadKeyOrIv) => {
-            log::warn!("{current_or_previous} session state corrupt for {remote_address}",);
-            return Err(SignalProtocolError::InvalidSessionStructure(
-                "invalid receiver chain message keys",
-            ));
+    let ptext = DECRYPTION_BUFFER.with(|buffer| {
+        let mut buf_wrapper = buffer.borrow_mut();
+        let buf = buf_wrapper.get_buffer();
+        match aes_256_cbc_decrypt_into(
+            ciphertext.body(),
+            message_keys.cipher_key(),
+            message_keys.iv(),
+            buf,
+        ) {
+            Ok(()) => Ok(buf.clone()),
+            Err(DecryptionErrorCrypto::BadKeyOrIv) => {
+                log::warn!("{current_or_previous} session state corrupt for {remote_address}",);
+                Err(SignalProtocolError::InvalidSessionStructure(
+                    "invalid receiver chain message keys",
+                ))
+            }
+            Err(DecryptionErrorCrypto::BadCiphertext(msg)) => {
+                log::warn!("failed to decrypt 1:1 message: {msg}");
+                Err(SignalProtocolError::InvalidMessage(
+                    original_message_type,
+                    "failed to decrypt",
+                ))
+            }
         }
-        Err(DecryptionErrorCrypto::BadCiphertext(msg)) => {
-            log::warn!("failed to decrypt 1:1 message: {msg}");
-            return Err(SignalProtocolError::InvalidMessage(
-                original_message_type,
-                "failed to decrypt",
-            ));
-        }
-    };
+    })?;
 
     state.clear_unacknowledged_pre_key_message();
 

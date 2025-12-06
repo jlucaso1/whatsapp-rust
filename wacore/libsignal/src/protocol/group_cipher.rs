@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use rand::{CryptoRng, Rng};
 
-use crate::crypto::aes_256_cbc_decrypt;
+use crate::crypto::aes_256_cbc_decrypt_into;
 use crate::crypto::{DecryptionError as DecryptionErrorCrypto, aes_256_cbc_encrypt_into};
 use crate::protocol::SENDERKEY_MESSAGE_CURRENT_VERSION;
 use crate::protocol::sender_keys::{SenderKeyState, SenderMessageKey};
@@ -196,28 +196,31 @@ pub async fn group_decrypt(
 
     let sender_key = get_sender_key(sender_key_state, skm.iteration())?;
 
-    let plaintext = match aes_256_cbc_decrypt(
+    let mut plaintext = Vec::new();
+    if let Err(e) = aes_256_cbc_decrypt_into(
         skm.ciphertext(),
         sender_key.cipher_key(),
         sender_key.iv(),
+        &mut plaintext,
     ) {
-        Ok(plaintext) => plaintext,
-        Err(DecryptionErrorCrypto::BadKeyOrIv) => {
-            log::error!(
-                "incoming sender key state corrupt for group {} sender {} (chain ID {chain_id})",
-                sender_key_name.group_id(),
-                sender_key_name.sender_id()
-            );
-            return Err(SignalProtocolError::InvalidSenderKeySession);
+        match e {
+            DecryptionErrorCrypto::BadKeyOrIv => {
+                log::error!(
+                    "incoming sender key state corrupt for group {} sender {} (chain ID {chain_id})",
+                    sender_key_name.group_id(),
+                    sender_key_name.sender_id()
+                );
+                return Err(SignalProtocolError::InvalidSenderKeySession);
+            }
+            DecryptionErrorCrypto::BadCiphertext(msg) => {
+                log::error!("sender key decryption failed: {msg}");
+                return Err(SignalProtocolError::InvalidMessage(
+                    CiphertextMessageType::SenderKey,
+                    "decryption failed",
+                ));
+            }
         }
-        Err(DecryptionErrorCrypto::BadCiphertext(msg)) => {
-            log::error!("sender key decryption failed: {msg}");
-            return Err(SignalProtocolError::InvalidMessage(
-                CiphertextMessageType::SenderKey,
-                "decryption failed",
-            ));
-        }
-    };
+    }
 
     sender_key_store
         .store_sender_key(sender_key_name, &record)

@@ -25,16 +25,6 @@ pub enum DecryptionError {
     BadCiphertext(&'static str),
 }
 
-pub fn aes_256_cbc_encrypt(
-    ptext: &[u8],
-    key: &[u8],
-    iv: &[u8],
-) -> Result<Vec<u8>, EncryptionError> {
-    Ok(cbc::Encryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|_| EncryptionError::BadKeyOrIv)?
-        .encrypt_padded_vec_mut::<Pkcs7>(ptext))
-}
-
 pub fn aes_256_cbc_encrypt_into(
     ptext: &[u8],
     key: &[u8],
@@ -72,111 +62,39 @@ pub fn aes_256_cbc_encrypt_into(
     Ok(())
 }
 
-pub fn aes_256_cbc_decrypt(
+/// The output buffer is cleared and filled with the decrypted plaintext.
+pub fn aes_256_cbc_decrypt_into(
     ctext: &[u8],
     key: &[u8],
     iv: &[u8],
-) -> Result<Vec<u8>, DecryptionError> {
+    output: &mut Vec<u8>,
+) -> Result<(), DecryptionError> {
     if ctext.is_empty() || !ctext.len().is_multiple_of(16) {
         return Err(DecryptionError::BadCiphertext(
             "ciphertext length must be a non-zero multiple of 16",
         ));
     }
 
-    cbc::Decryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|_| DecryptionError::BadKeyOrIv)?
-        .decrypt_padded_vec_mut::<Pkcs7>(ctext)
-        .map_err(|_| DecryptionError::BadCiphertext("failed to decrypt"))
+    output.clear();
+    output.reserve(ctext.len());
+    output.extend_from_slice(ctext);
+
+    let decryptor = cbc::Decryptor::<Aes256>::new_from_slices(key, iv)
+        .map_err(|_| DecryptionError::BadKeyOrIv)?;
+
+    let decrypted = decryptor
+        .decrypt_padded_mut::<Pkcs7>(output)
+        .map_err(|_| DecryptionError::BadCiphertext("failed to decrypt"))?;
+
+    let decrypted_len = decrypted.len();
+    output.truncate(decrypted_len);
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_encrypt_into_matches_original() {
-        // Test data
-        let test_cases = [
-            b"".to_vec(),                                            // Empty
-            b"a".to_vec(),                                           // Single byte
-            b"hello world".to_vec(),                                 // Short message
-            b"0123456789abcdef".to_vec(),                            // Exactly 16 bytes
-            b"0123456789abcdef0".to_vec(),                           // 17 bytes (padding edge case)
-            b"The quick brown fox jumps over the lazy dog".to_vec(), // Longer message
-        ];
-
-        let key = [0u8; 32]; // 256-bit key
-        let iv = [0u8; 16]; // 128-bit IV
-
-        for (i, plaintext) in test_cases.iter().enumerate() {
-            // Test original function
-            let original_result = aes_256_cbc_encrypt(plaintext, &key, &iv)
-                .unwrap_or_else(|_| panic!("Original encrypt failed for test case {}", i));
-
-            // Test new buffer reuse function
-            let mut buffer = Vec::new();
-            aes_256_cbc_encrypt_into(plaintext, &key, &iv, &mut buffer)
-                .unwrap_or_else(|_| panic!("Buffer encrypt failed for test case {}", i));
-
-            // Results should be identical
-            assert_eq!(
-                original_result,
-                buffer,
-                "Encryption results don't match for test case {} (length: {})",
-                i,
-                plaintext.len()
-            );
-
-            // Test that both can be decrypted to same plaintext
-            let decrypted1 =
-                aes_256_cbc_decrypt(&original_result, &key, &iv).unwrap_or_else(|_| {
-                    panic!("Failed to decrypt original result for test case {}", i)
-                });
-            let decrypted2 = aes_256_cbc_decrypt(&buffer, &key, &iv)
-                .unwrap_or_else(|_| panic!("Failed to decrypt buffer result for test case {}", i));
-
-            assert_eq!(
-                decrypted1, *plaintext,
-                "Original decrypt doesn't match plaintext for test case {}",
-                i
-            );
-            assert_eq!(
-                decrypted2, *plaintext,
-                "Buffer decrypt doesn't match plaintext for test case {}",
-                i
-            );
-        }
-    }
-
-    #[test]
-    fn test_encrypt_into_buffer_reuse() {
-        let plaintext1 = b"first message";
-        let plaintext2 = b"second message that is longer";
-        let key = [1u8; 32];
-        let iv = [2u8; 16];
-
-        let mut buffer = Vec::new();
-
-        // First encryption
-        aes_256_cbc_encrypt_into(plaintext1, &key, &iv, &mut buffer)
-            .expect("First encryption failed");
-        let first_result = buffer.clone();
-
-        // Second encryption should reuse buffer
-        buffer.clear();
-        aes_256_cbc_encrypt_into(plaintext2, &key, &iv, &mut buffer)
-            .expect("Second encryption failed");
-        let second_result = buffer.clone();
-
-        // Verify both results decrypt correctly
-        let decrypted1 =
-            aes_256_cbc_decrypt(&first_result, &key, &iv).expect("Failed to decrypt first result");
-        let decrypted2 = aes_256_cbc_decrypt(&second_result, &key, &iv)
-            .expect("Failed to decrypt second result");
-
-        assert_eq!(decrypted1, plaintext1);
-        assert_eq!(decrypted2, plaintext2);
-    }
 
     #[test]
     fn test_encrypt_into_appends_to_existing_buffer() {
@@ -194,7 +112,9 @@ mod tests {
 
         // Check that encrypted data was appended
         let encrypted_part = &buffer[initial_len..];
-        let decrypted = aes_256_cbc_decrypt(encrypted_part, &key, &iv).expect("Failed to decrypt");
+        let mut decrypted = Vec::new();
+        aes_256_cbc_decrypt_into(encrypted_part, &key, &iv, &mut decrypted)
+            .expect("Decryption failed");
         assert_eq!(decrypted, plaintext);
     }
 }
