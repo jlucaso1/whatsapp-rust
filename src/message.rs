@@ -419,23 +419,40 @@ impl Client {
                                 }
                             }
                             Err(retry_err) => {
-                                log::error!(
-                                    "Decryption failed even after clearing untrusted identity for {}: {:?}",
-                                    address,
+                                // Handle DuplicatedMessage in retry path: This commonly happens during reconnection
+                                // when the same message is redelivered by the server after we already processed it.
+                                // The first attempt triggered UntrustedIdentity, we cleared the session, but meanwhile
+                                // another message from the same sender re-established the session and consumed the counter.
+                                // This is benign - the message was already successfully processed.
+                                if let SignalProtocolError::DuplicatedMessage(chain, counter) =
                                     retry_err
-                                );
-                                // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
-                                self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                                    crate::types::events::UndecryptableMessage {
-                                        info: info.clone(),
-                                        is_unavailable: false,
-                                        unavailable_type:
-                                            crate::types::events::UnavailableType::Unknown,
-                                        decrypt_fail_mode:
-                                            crate::types::events::DecryptFailMode::Show,
-                                    },
-                                ));
-                                dispatched_undecryptable = true;
+                                {
+                                    log::debug!(
+                                        "Message from {} was already processed (chain {}, counter {}) - detected during untrusted identity retry. This is normal during reconnection.",
+                                        address,
+                                        chain,
+                                        counter
+                                    );
+                                    any_duplicate = true;
+                                } else {
+                                    log::error!(
+                                        "Decryption failed even after clearing untrusted identity for {}: {:?}",
+                                        address,
+                                        retry_err
+                                    );
+                                    // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
+                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                                        crate::types::events::UndecryptableMessage {
+                                            info: info.clone(),
+                                            is_unavailable: false,
+                                            unavailable_type:
+                                                crate::types::events::UnavailableType::Unknown,
+                                            decrypt_fail_mode:
+                                                crate::types::events::DecryptFailMode::Show,
+                                        },
+                                    ));
+                                    dispatched_undecryptable = true;
+                                }
                             }
                         }
                         continue;
