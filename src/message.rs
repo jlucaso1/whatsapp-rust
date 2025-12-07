@@ -442,10 +442,8 @@ impl Client {
                                         counter
                                     );
                                     any_duplicate = true;
-                                } else if matches!(
-                                    retry_err,
-                                    SignalProtocolError::InvalidPreKeyId
-                                ) {
+                                } else if matches!(retry_err, SignalProtocolError::InvalidPreKeyId)
+                                {
                                     // InvalidPreKeyId after identity change means the sender is using
                                     // an old prekey that we no longer have. This typically happens when:
                                     // 1. The sender reinstalled WhatsApp and cached our old prekey bundle
