@@ -442,6 +442,41 @@ impl Client {
                                         counter
                                     );
                                     any_duplicate = true;
+                                } else if matches!(
+                                    retry_err,
+                                    SignalProtocolError::InvalidPreKeyId
+                                ) {
+                                    // InvalidPreKeyId after identity change means the sender is using
+                                    // an old prekey that we no longer have. This typically happens when:
+                                    // 1. The sender reinstalled WhatsApp and cached our old prekey bundle
+                                    // 2. The prekey they're using has been consumed or rotated out
+                                    //
+                                    // Solution: Send a retry receipt with a fresh prekey so the sender
+                                    // can establish a new session and resend the message.
+                                    log::warn!(
+                                        "Decryption failed for {} due to InvalidPreKeyId after identity change. \
+                                         The sender is using an old prekey we no longer have. \
+                                         Sending retry receipt with fresh keys.",
+                                        address
+                                    );
+
+                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                                        crate::types::events::UndecryptableMessage {
+                                            info: info.clone(),
+                                            is_unavailable: false,
+                                            unavailable_type:
+                                                crate::types::events::UnavailableType::Unknown,
+                                            decrypt_fail_mode:
+                                                crate::types::events::DecryptFailMode::Show,
+                                        },
+                                    ));
+                                    dispatched_undecryptable = true;
+
+                                    // Send retry receipt so the sender fetches our new prekey bundle
+                                    self.spawn_retry_receipt(
+                                        info,
+                                        "InvalidPreKeyId after identity change",
+                                    );
                                 } else {
                                     log::error!(
                                         "Decryption failed even after clearing untrusted identity for {}: {:?}",
