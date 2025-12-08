@@ -1727,6 +1727,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wacore_binary::jid::SERVER_JID;
 
     // Mock HTTP client for tests
     #[derive(Debug, Clone)]
@@ -1879,7 +1880,7 @@ mod tests {
         // 2. Create a mock <ack/> node with the test ID
         let ack_node = NodeBuilder::new("ack")
             .attr("id", test_id.clone())
-            .attr("from", "s.whatsapp.net")
+            .attr("from", SERVER_JID)
             .build();
 
         // 3. Handle the ack
@@ -1932,7 +1933,7 @@ mod tests {
         // Create an ack without any matching waiter
         let ack_node = NodeBuilder::new("ack")
             .attr("id", "non-existent-id")
-            .attr("from", "s.whatsapp.net")
+            .attr("from", SERVER_JID)
             .build();
 
         // Should return false since there's no waiter

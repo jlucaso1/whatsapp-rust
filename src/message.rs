@@ -1007,7 +1007,7 @@ mod tests {
     use crate::store::persistence_manager::PersistenceManager;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::jid::{Jid, SERVER_JID};
 
     fn mock_transport() -> Arc<dyn crate::transport::TransportFactory> {
         Arc::new(crate::transport::mock::MockTransportFactory::new())
@@ -1704,7 +1704,7 @@ mod tests {
         // Verify all queries use phone numbers, not LID JIDs
         for jid in &jids_to_query {
             assert_eq!(
-                jid.server, "s.whatsapp.net",
+                jid.server, SERVER_JID,
                 "Device query should use phone number, got: {}",
                 jid
             );
@@ -1760,7 +1760,7 @@ mod tests {
         // Both should end up as phone numbers
         assert_eq!(jids_to_query.len(), 2);
         for jid in &jids_to_query {
-            assert_eq!(jid.server, "s.whatsapp.net");
+            assert_eq!(jid.server, SERVER_JID);
         }
 
         println!("✅ Mixed LID and phone number participants handled correctly");
@@ -1794,7 +1794,7 @@ mod tests {
 
         // Verify we're checking using the phone number
         assert_eq!(own_jid_to_check.user, "559984726662");
-        assert_eq!(own_jid_to_check.server, "s.whatsapp.net");
+        assert_eq!(own_jid_to_check.server, SERVER_JID);
 
         println!("✅ Own JID check correctly uses phone number in LID mode");
     }
