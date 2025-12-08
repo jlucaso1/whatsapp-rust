@@ -2633,6 +2633,7 @@ dependencies = [
  "prost",
  "rand",
  "rand_core 0.9.3",
+ "serde_json",
  "sha2",
  "thiserror 2.0.17",
  "tokio",
