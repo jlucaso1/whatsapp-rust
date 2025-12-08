@@ -27,7 +27,7 @@ flate2 = { workspace = true, features = ["zlib-rs"], default-features = false }
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 hkdf = "0.12.3"
 hmac = { version = "0.12.1", features = ["reset"] }
-log = "0.4.28"
+log = "0.4.29"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
 prost = { version = "0.14.1", default-features = false }

@@ -17,7 +17,7 @@ futures-util = { version = "0.3.31", default-features = false, features = [
     "std",
 ] }
 http = "1.4.0"
-log = "0.4.27"
+log = "0.4.29"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio = { version = "1.47.1", features = [
     "macros",
