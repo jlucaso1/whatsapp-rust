@@ -40,6 +40,6 @@ sha1 = { version = "0.10.6", default-features = false }
 sha2 = { version = "0.10.6", default-features = false }
 subtle = "2.6.1"
 thiserror = { workspace = true }
-uuid = { version = "1.18.1", default-features = false }
+uuid = { version = "1.19.0", default-features = false }
 waproto = { path = "../../waproto", version = "0.1.0" }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
