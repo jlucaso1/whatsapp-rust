@@ -2,7 +2,7 @@ use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
     CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
     SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
-    aes_256_cbc_encrypt, message_encrypt, process_prekey_bundle,
+    message_encrypt, process_prekey_bundle,
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
+use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
@@ -57,8 +58,14 @@ where
 
     let message_keys = sender_chain_key.sender_message_key();
 
-    let ciphertext = aes_256_cbc_encrypt(plaintext, message_keys.cipher_key(), message_keys.iv())
-        .map_err(|_| anyhow!("AES encryption failed"))?;
+    let mut ciphertext = Vec::new();
+    aes_256_cbc_encrypt_into(
+        plaintext,
+        message_keys.cipher_key(),
+        message_keys.iv(),
+        &mut ciphertext,
+    )
+    .map_err(|_| anyhow!("AES encryption failed"))?;
 
     let signing_key = sender_key_state
         .signing_key_private()
@@ -143,12 +150,73 @@ where
                             // Session established successfully
                         }
                         Err(SignalProtocolError::UntrustedIdentity(ref addr)) => {
-                            log::warn!(
-                                "Untrusted identity for device {}. Skipping this device.",
+                            // The stored identity doesn't match the server's identity.
+                            // This typically happens when a user reinstalls WhatsApp.
+                            // We trust the server's identity and update our local store,
+                            // then retry establishing the session.
+                            log::info!(
+                                "Untrusted identity for device {}. Updating identity and retrying session establishment.",
                                 addr
                             );
-                            // Skip this device and continue with others
-                            continue;
+
+                            // Get the new identity from the prekey bundle and save it
+                            let new_identity = match bundle.identity_key() {
+                                Ok(key) => key,
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to get identity key from bundle for {}: {:?}. Skipping device.",
+                                        addr,
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            // Save the new identity (this replaces the old one)
+                            if let Err(e) = stores
+                                .identity_store
+                                .save_identity(&signal_address, new_identity)
+                                .await
+                            {
+                                log::warn!(
+                                    "Failed to save updated identity for {}: {:?}. Skipping device.",
+                                    addr,
+                                    e
+                                );
+                                continue;
+                            }
+
+                            log::debug!(
+                                "Identity updated for {}. Retrying session establishment.",
+                                addr
+                            );
+
+                            // Retry processing the prekey bundle with the updated identity
+                            match process_prekey_bundle(
+                                &signal_address,
+                                stores.session_store,
+                                stores.identity_store,
+                                bundle,
+                                &mut rand::rngs::OsRng.unwrap_err(),
+                                UsePQRatchet::No,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    log::info!(
+                                        "Successfully established session with {} after identity update.",
+                                        addr
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to establish session with {} even after identity update: {:?}. Skipping device.",
+                                        addr,
+                                        e
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                         Err(e) => {
                             // Propagate other unexpected errors

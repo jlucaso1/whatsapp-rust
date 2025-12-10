@@ -1,5 +1,5 @@
 use crate::download::MediaType;
-use crate::libsignal::crypto::{CryptographicHash, CryptographicMac, aes_256_cbc_encrypt};
+use crate::libsignal::crypto::{CryptographicHash, CryptographicMac, aes_256_cbc_encrypt_into};
 use anyhow::Result;
 use rand::Rng;
 use rand::rng;
@@ -25,7 +25,8 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
     let (iv, cipher_key, mac_key) =
         crate::download::DownloadUtils::get_media_keys(&media_key, media_type)?;
 
-    let data = aes_256_cbc_encrypt(plaintext, &cipher_key, &iv)?;
+    let mut data = Vec::new();
+    aes_256_cbc_encrypt_into(plaintext, &cipher_key, &iv, &mut data)?;
 
     let mac_full = {
         let mut mac =

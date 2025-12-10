@@ -406,9 +406,15 @@ mod tests {
         let initial_chain = vec![0x55u8; 32];
         let sck = SenderChainKey::new(0, initial_chain);
 
-        let sck1 = sck.next().unwrap();
-        let sck2 = sck1.next().unwrap();
-        let sck3 = sck2.next().unwrap();
+        let sck1 = sck
+            .next()
+            .expect("sender chain key iteration should succeed");
+        let sck2 = sck1
+            .next()
+            .expect("sender chain key iteration should succeed");
+        let sck3 = sck2
+            .next()
+            .expect("sender chain key iteration should succeed");
 
         // Verify iteration increments
         assert_eq!(sck.iteration(), 0);
@@ -443,8 +449,12 @@ mod tests {
         let sck1 = SenderChainKey::new(0, chain.clone());
         let sck2 = SenderChainKey::new(0, chain);
 
-        let next1 = sck1.next().unwrap();
-        let next2 = sck2.next().unwrap();
+        let next1 = sck1
+            .next()
+            .expect("sender chain key iteration should succeed");
+        let next2 = sck2
+            .next()
+            .expect("sender chain key iteration should succeed");
 
         assert_eq!(next1.seed(), next2.seed());
         assert_eq!(next1.iteration(), next2.iteration());
@@ -503,12 +513,18 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        let initial_sck = state.sender_chain_key().unwrap();
-        let next_sck = initial_sck.next().unwrap();
+        let initial_sck = state
+            .sender_chain_key()
+            .expect("sender chain key should exist");
+        let next_sck = initial_sck
+            .next()
+            .expect("sender chain key iteration should succeed");
 
         state.set_sender_chain_key(next_sck.clone());
 
-        let updated_sck = state.sender_chain_key().unwrap();
+        let updated_sck = state
+            .sender_chain_key()
+            .expect("sender chain key should exist");
         assert_eq!(updated_sck.iteration(), 1);
     }
 
@@ -534,7 +550,7 @@ mod tests {
         // Should be able to retrieve it
         let retrieved = state.remove_sender_message_key(5);
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().iteration(), 5);
+        assert_eq!(retrieved.expect("message key should exist").iteration(), 5);
 
         // Should not find it again
         let not_found = state.remove_sender_message_key(5);
@@ -599,7 +615,9 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        let state = record.sender_key_state().unwrap();
+        let state = record
+            .sender_key_state()
+            .expect("sender key state should exist");
         assert_eq!(state.chain_id(), 12345);
     }
 
@@ -658,12 +676,12 @@ mod tests {
         // Should find chain 222 (most recent is at front)
         let state = record.sender_key_state_for_chain_id(222);
         assert!(state.is_some());
-        assert_eq!(state.unwrap().chain_id(), 222);
+        assert_eq!(state.expect("state should exist").chain_id(), 222);
 
         // Should find chain 111
         let state = record.sender_key_state_for_chain_id(111);
         assert!(state.is_some());
-        assert_eq!(state.unwrap().chain_id(), 111);
+        assert_eq!(state.expect("state should exist").chain_id(), 111);
 
         // Should not find non-existent chain
         let state = record.sender_key_state_for_chain_id(333);
@@ -687,10 +705,13 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        let serialized = record.serialize().unwrap();
-        let deserialized = SenderKeyRecord::deserialize(&serialized).unwrap();
+        let serialized = record.serialize().expect("serialization should succeed");
+        let deserialized =
+            SenderKeyRecord::deserialize(&serialized).expect("deserialization should succeed");
 
-        let state = deserialized.sender_key_state().unwrap();
+        let state = deserialized
+            .sender_key_state()
+            .expect("sender key state should exist");
         assert_eq!(state.chain_id(), 12345);
         assert!(state.sender_chain_key().is_some());
     }

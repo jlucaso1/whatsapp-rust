@@ -29,6 +29,11 @@ impl Client {
     /// Helper method to spawn a task that sends a retry receipt for a failed decryption.
     /// This is used when sessions are not found or invalid to request the sender to resend
     /// the message with a PreKeySignalMessage to re-establish the session.
+    ///
+    /// Additionally spawns a PDO (Peer Data Operation) request to our primary phone as a
+    /// backup recovery mechanism. The phone can share the already-decrypted message content
+    /// with us, which is useful when the sender's retry doesn't work (e.g., they send msg
+    /// instead of pkmsg).
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, error_context: &str) {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
@@ -42,6 +47,9 @@ impl Client {
                 );
             }
         });
+
+        // Also spawn a PDO request to our primary phone as a backup recovery mechanism
+        self.spawn_pdo_request(info);
     }
 
     pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
@@ -419,23 +427,73 @@ impl Client {
                                 }
                             }
                             Err(retry_err) => {
-                                log::error!(
-                                    "Decryption failed even after clearing untrusted identity for {}: {:?}",
-                                    address,
+                                // Handle DuplicatedMessage in retry path: This commonly happens during reconnection
+                                // when the same message is redelivered by the server after we already processed it.
+                                // The first attempt triggered UntrustedIdentity, we cleared the session, but meanwhile
+                                // another message from the same sender re-established the session and consumed the counter.
+                                // This is benign - the message was already successfully processed.
+                                if let SignalProtocolError::DuplicatedMessage(chain, counter) =
                                     retry_err
-                                );
-                                // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
-                                self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                                    crate::types::events::UndecryptableMessage {
-                                        info: info.clone(),
-                                        is_unavailable: false,
-                                        unavailable_type:
-                                            crate::types::events::UnavailableType::Unknown,
-                                        decrypt_fail_mode:
-                                            crate::types::events::DecryptFailMode::Show,
-                                    },
-                                ));
-                                dispatched_undecryptable = true;
+                                {
+                                    log::debug!(
+                                        "Message from {} was already processed (chain {}, counter {}) - detected during untrusted identity retry. This is normal during reconnection.",
+                                        address,
+                                        chain,
+                                        counter
+                                    );
+                                    any_duplicate = true;
+                                } else if matches!(retry_err, SignalProtocolError::InvalidPreKeyId)
+                                {
+                                    // InvalidPreKeyId after identity change means the sender is using
+                                    // an old prekey that we no longer have. This typically happens when:
+                                    // 1. The sender reinstalled WhatsApp and cached our old prekey bundle
+                                    // 2. The prekey they're using has been consumed or rotated out
+                                    //
+                                    // Solution: Send a retry receipt with a fresh prekey so the sender
+                                    // can establish a new session and resend the message.
+                                    log::warn!(
+                                        "Decryption failed for {} due to InvalidPreKeyId after identity change. \
+                                         The sender is using an old prekey we no longer have. \
+                                         Sending retry receipt with fresh keys.",
+                                        address
+                                    );
+
+                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                                        crate::types::events::UndecryptableMessage {
+                                            info: info.clone(),
+                                            is_unavailable: false,
+                                            unavailable_type:
+                                                crate::types::events::UnavailableType::Unknown,
+                                            decrypt_fail_mode:
+                                                crate::types::events::DecryptFailMode::Show,
+                                        },
+                                    ));
+                                    dispatched_undecryptable = true;
+
+                                    // Send retry receipt so the sender fetches our new prekey bundle
+                                    self.spawn_retry_receipt(
+                                        info,
+                                        "InvalidPreKeyId after identity change",
+                                    );
+                                } else {
+                                    log::error!(
+                                        "Decryption failed even after clearing untrusted identity for {}: {:?}",
+                                        address,
+                                        retry_err
+                                    );
+                                    // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
+                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                                        crate::types::events::UndecryptableMessage {
+                                            info: info.clone(),
+                                            is_unavailable: false,
+                                            unavailable_type:
+                                                crate::types::events::UnavailableType::Unknown,
+                                            decrypt_fail_mode:
+                                                crate::types::events::DecryptFailMode::Show,
+                                        },
+                                    ));
+                                    dispatched_undecryptable = true;
+                                }
                             }
                         }
                         continue;
@@ -594,6 +652,8 @@ impl Client {
                             log::error!("Failed to send retry receipt (batch): {:?}", e);
                         }
                     });
+                    // Also spawn PDO request as backup recovery mechanism
+                    self.spawn_pdo_request(info);
                 }
                 Err(e) => {
                     log::error!(
@@ -658,6 +718,14 @@ impl Client {
                         && let Some(keys) = &protocol_msg.app_state_sync_key_share
                     {
                         self.handle_app_state_sync_key_share(keys).await;
+                    }
+
+                    // Handle PDO (Peer Data Operation) responses from our primary phone
+                    if let Some(protocol_msg) = &original_msg.protocol_message
+                        && let Some(pdo_response) =
+                            &protocol_msg.peer_data_operation_request_response_message
+                    {
+                        self.handle_pdo_response(pdo_response, info).await;
                     }
 
                     // Take ownership of history_sync_notification to avoid cloning large inline payload
@@ -939,7 +1007,7 @@ mod tests {
     use crate::store::persistence_manager::PersistenceManager;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::jid::{Jid, SERVER_JID};
 
     fn mock_transport() -> Arc<dyn crate::transport::TransportFactory> {
         Arc::new(crate::transport::mock::MockTransportFactory::new())
@@ -1636,7 +1704,7 @@ mod tests {
         // Verify all queries use phone numbers, not LID JIDs
         for jid in &jids_to_query {
             assert_eq!(
-                jid.server, "s.whatsapp.net",
+                jid.server, SERVER_JID,
                 "Device query should use phone number, got: {}",
                 jid
             );
@@ -1692,7 +1760,7 @@ mod tests {
         // Both should end up as phone numbers
         assert_eq!(jids_to_query.len(), 2);
         for jid in &jids_to_query {
-            assert_eq!(jid.server, "s.whatsapp.net");
+            assert_eq!(jid.server, SERVER_JID);
         }
 
         println!("✅ Mixed LID and phone number participants handled correctly");
@@ -1726,7 +1794,7 @@ mod tests {
 
         // Verify we're checking using the phone number
         assert_eq!(own_jid_to_check.user, "559984726662");
-        assert_eq!(own_jid_to_check.server, "s.whatsapp.net");
+        assert_eq!(own_jid_to_check.server, SERVER_JID);
 
         println!("✅ Own JID check correctly uses phone number in LID mode");
     }
