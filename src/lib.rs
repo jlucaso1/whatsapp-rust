@@ -21,6 +21,7 @@ pub mod store;
 pub mod transport;
 pub mod upload;
 
+pub mod pdo;
 pub mod prekeys;
 pub mod receipt;
 pub mod retry;

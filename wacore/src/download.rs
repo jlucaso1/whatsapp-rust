@@ -1,4 +1,4 @@
-use crate::libsignal::crypto::{CryptographicMac, aes_256_cbc_decrypt};
+use crate::libsignal::crypto::{CryptographicMac, aes_256_cbc_decrypt_into};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -285,7 +285,10 @@ impl DownloadUtils {
     }
 
     pub fn decrypt_cbc(cipher_key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
-        aes_256_cbc_decrypt(ciphertext, cipher_key, iv).map_err(|e| anyhow!(e.to_string()))
+        let mut output = Vec::new();
+        aes_256_cbc_decrypt_into(ciphertext, cipher_key, iv, &mut output)
+            .map_err(|e| anyhow!(e.to_string()))?;
+        Ok(output)
     }
 
     pub fn verify_and_decrypt(
@@ -314,6 +317,9 @@ impl DownloadUtils {
             return Err(anyhow!("Invalid MAC signature"));
         }
 
-        aes_256_cbc_decrypt(ciphertext, &cipher_key, &iv).map_err(|e| anyhow!(e.to_string()))
+        let mut output = Vec::new();
+        aes_256_cbc_decrypt_into(ciphertext, &cipher_key, &iv, &mut output)
+            .map_err(|e| anyhow!(e.to_string()))?;
+        Ok(output)
     }
 }

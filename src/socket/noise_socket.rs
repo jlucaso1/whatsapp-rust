@@ -2,7 +2,10 @@ use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use wacore::aes_gcm::{Aes256Gcm, aead::Aead};
+use wacore::aes_gcm::{
+    Aes256Gcm,
+    aead::{Aead, AeadInPlace},
+};
 use wacore::handshake::utils::generate_iv;
 
 const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
@@ -30,72 +33,89 @@ impl NoiseSocket {
     /// returns a slice view of the ciphertext.
     pub fn encrypt_into<'a>(&self, plaintext: &[u8], out: &'a mut Vec<u8>) -> Result<&'a [u8]> {
         out.clear();
+        out.extend_from_slice(plaintext);
         let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
         let iv = generate_iv(counter);
-        let ciphertext = self
-            .write_key
-            .encrypt(iv.as_ref().into(), plaintext)
+        self.write_key
+            .encrypt_in_place(iv.as_ref().into(), b"", out)
             .map_err(|e| SocketError::Crypto(e.to_string()))?;
-        out.extend_from_slice(&ciphertext);
         Ok(out.as_slice())
     }
 
     pub async fn encrypt_and_send(
         &self,
-        plaintext_buf: Vec<u8>,
+        mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError> {
-        let (ciphertext_result, mut plaintext_buf) =
-            if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-                // Encrypt inline for small messages
-                let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
-                let iv = generate_iv(counter);
-                let res = self
-                    .write_key
-                    .encrypt(iv.as_ref().into(), &plaintext_buf[..]);
-                (res, plaintext_buf)
-            } else {
-                // Offload larger messages to a blocking thread
-                let write_key = self.write_key.clone();
-                let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+        // For small messages, encrypt in-place in out_buf to avoid allocation
+        if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
+            // Copy plaintext to out_buf and encrypt in-place
+            out_buf.clear();
+            out_buf.extend_from_slice(&plaintext_buf);
+            plaintext_buf.clear();
 
-                let plaintext_arc = Arc::new(plaintext_buf);
-                let plaintext_arc_for_task = plaintext_arc.clone();
-
-                let spawn_result = tokio::task::spawn_blocking(move || {
-                    let iv = generate_iv(counter);
-                    write_key.encrypt(iv.as_ref().into(), &plaintext_arc_for_task[..])
-                })
-                .await;
-
-                let p_buf = Arc::try_unwrap(plaintext_arc).unwrap_or_else(|arc| (*arc).clone());
-
-                match spawn_result {
-                    Ok(res) => (res, p_buf),
-                    Err(join_err) => {
-                        return Err(EncryptSendError::join(join_err, p_buf, out_buf));
-                    }
-                }
-            };
-
-        let ciphertext = match ciphertext_result {
-            Ok(c) => c,
-            Err(e) => {
+            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+            let iv = generate_iv(counter);
+            if let Err(e) = self
+                .write_key
+                .encrypt_in_place(iv.as_ref().into(), b"", &mut out_buf)
+            {
                 return Err(EncryptSendError::crypto(
                     anyhow::anyhow!(e.to_string()),
                     plaintext_buf,
                     out_buf,
                 ));
             }
-        };
 
-        // Clear plaintext and reuse out_buf for framing to avoid allocation
-        plaintext_buf.clear();
+            // Frame the ciphertext - we need a temporary copy since encode_frame_into
+            // clears the output buffer
+            let ciphertext_len = out_buf.len();
+            plaintext_buf.extend_from_slice(&out_buf);
+            out_buf.clear();
+            if let Err(e) = crate::framing::encode_frame_into(
+                &plaintext_buf[..ciphertext_len],
+                None,
+                &mut out_buf,
+            ) {
+                plaintext_buf.clear();
+                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+            }
+            plaintext_buf.clear();
+        } else {
+            // Offload larger messages to a blocking thread
+            let write_key = self.write_key.clone();
+            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
 
-        // Use encode_frame_into to write directly into out_buf (zero-allocation framing)
-        out_buf.clear();
-        if let Err(e) = crate::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
-            return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+            let plaintext_arc = Arc::new(plaintext_buf);
+            let plaintext_arc_for_task = plaintext_arc.clone();
+
+            let spawn_result = tokio::task::spawn_blocking(move || {
+                let iv = generate_iv(counter);
+                write_key.encrypt(iv.as_ref().into(), &plaintext_arc_for_task[..])
+            })
+            .await;
+
+            plaintext_buf = Arc::try_unwrap(plaintext_arc).unwrap_or_else(|arc| (*arc).clone());
+
+            let ciphertext = match spawn_result {
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    return Err(EncryptSendError::crypto(
+                        anyhow::anyhow!(e.to_string()),
+                        plaintext_buf,
+                        out_buf,
+                    ));
+                }
+                Err(join_err) => {
+                    return Err(EncryptSendError::join(join_err, plaintext_buf, out_buf));
+                }
+            };
+
+            plaintext_buf.clear();
+            out_buf.clear();
+            if let Err(e) = crate::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
+                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+            }
         }
 
         if let Err(e) = self.transport.send(&out_buf).await {

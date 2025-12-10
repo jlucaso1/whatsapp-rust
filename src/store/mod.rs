@@ -1,6 +1,5 @@
 pub mod commands;
 pub mod error;
-pub mod generic;
 pub mod persistence_manager;
 pub mod signal;
 pub mod signal_adapter;

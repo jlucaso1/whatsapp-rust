@@ -38,9 +38,10 @@ impl Client {
 
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(enc.file_enc_sha256);
         let mms_type = media_type.mms_type();
+        let scheme = "https";
         let url = format!(
-            "https://{}/mms/{}/{}?auth={}&token={}",
-            host.hostname, mms_type, token, media_conn.auth, token
+            "{}://{}/mms/{}/{}?auth={}&token={}",
+            scheme, host.hostname, mms_type, token, media_conn.auth, token
         );
 
         let request = HttpRequest::post(url)

@@ -75,14 +75,6 @@ whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
 
-[[example]]
-name = "multi_account"
-path = "examples/multi_account.rs"
-
-[[example]]
-name = "listen_only"
-path = "examples/listen_only.rs"
-
 [profile.release]
 opt-level = "z"
 debug = false
