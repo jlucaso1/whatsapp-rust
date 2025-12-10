@@ -92,12 +92,22 @@ async fn handle_ib_impl(client: Arc<Client>, node: &NodeRef<'_>) {
                         notifications,
                         receipts,
                     }));
+
+
+                let mut preview = client.offline_preview.lock().await;
+                preview.expected_count = total as u32;
+                preview.received_count = 0;
+                preview.total_received = 0;
+
+                client.request_offline_batch(client.offline_batch_size).await;
             }
             "offline" => {
                 let mut attrs = child.attr_parser();
                 let count = attrs.optional_u64("count").unwrap_or(0) as i32;
 
                 info!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
+                
+                client.send_offline_batch().await.unwrap();
                 client
                     .core
                     .event_bus
