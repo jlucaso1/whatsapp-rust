@@ -260,7 +260,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         }
     };
 
-    let ptext = decrypt_message_with_record(
+    let decrypt_result = decrypt_message_with_record(
         remote_address,
         &mut session_record,
         ciphertext.message(),
@@ -283,7 +283,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         pre_key_store.remove_pre_key(pre_key_id).await?;
     }
 
-    Ok(ptext)
+    Ok(decrypt_result.plaintext)
 }
 
 pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
@@ -298,7 +298,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
         .await?
         .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
 
-    let ptext = decrypt_message_with_record(
+    let decrypt_result = decrypt_message_with_record(
         remote_address,
         &mut session_record,
         ciphertext,
@@ -306,7 +306,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
         csprng,
     )?;
 
-    // Why are we performing this check after decryption instead of before?
+    // Get the identity key from the (now current) session state
     let their_identity_key = session_record
         .session_state()
         .expect("successfully decrypted; must have a current state")
@@ -314,29 +314,49 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
         .expect("successfully decrypted; must have a remote identity key")
         .expect("successfully decrypted; must have a remote identity key");
 
-    if !identity_store
-        .is_trusted_identity(remote_address, &their_identity_key, Direction::Receiving)
-        .await?
-    {
-        log::warn!(
-            "Identity key {} is not trusted for remote address {}",
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
+    // Handle identity trust based on whether we used the current or a previous session.
+    //
+    // For current session: Check if the identity is trusted, and save it if so.
+    // For previous session: Skip the trust check and save the identity directly.
+    //
+    // When we successfully decrypt with a previous (archived) session, we already had
+    // a valid session with that identity - it was trusted when the session was established.
+    // The previous session gets promoted to current via `promote_old_session`, so we need
+    // to save its identity to avoid UntrustedIdentity errors on subsequent messages.
+    // This handles out-of-order message delivery after an identity change gracefully.
+    if decrypt_result.used_previous_session {
+        log::debug!(
+            "Saving identity for {} from previous session (skipping trust check)",
             remote_address,
         );
-        return Err(SignalProtocolError::UntrustedIdentity(
-            remote_address.clone(),
-        ));
-    }
+        identity_store
+            .save_identity(remote_address, &their_identity_key)
+            .await?;
+    } else {
+        if !identity_store
+            .is_trusted_identity(remote_address, &their_identity_key, Direction::Receiving)
+            .await?
+        {
+            log::warn!(
+                "Identity key {} is not trusted for remote address {}",
+                hex::encode(their_identity_key.public_key().public_key_bytes()),
+                remote_address,
+            );
+            return Err(SignalProtocolError::UntrustedIdentity(
+                remote_address.clone(),
+            ));
+        }
 
-    identity_store
-        .save_identity(remote_address, &their_identity_key)
-        .await?;
+        identity_store
+            .save_identity(remote_address, &their_identity_key)
+            .await?;
+    }
 
     session_store
         .store_session(remote_address, &session_record)
         .await?;
 
-    Ok(ptext)
+    Ok(decrypt_result.plaintext)
 }
 
 fn create_decryption_failure_log(
@@ -430,13 +450,22 @@ fn create_decryption_failure_log(
     Ok(lines.join("\n"))
 }
 
+/// Result of decrypting a message, including whether a previous session was used.
+struct DecryptionResult {
+    plaintext: Vec<u8>,
+    /// True if the message was decrypted using a previous (archived) session state
+    /// rather than the current session. When true, the identity check should be
+    /// skipped since we already had a valid session with that identity.
+    used_previous_session: bool,
+}
+
 fn decrypt_message_with_record<R: Rng + CryptoRng>(
     remote_address: &ProtocolAddress,
     record: &mut SessionRecord,
     ciphertext: &SignalMessage,
     original_message_type: CiphertextMessageType,
     csprng: &mut R,
-) -> Result<Vec<u8>> {
+) -> Result<DecryptionResult> {
     debug_assert!(matches!(
         original_message_type,
         CiphertextMessageType::Whisper | CiphertextMessageType::PreKey
@@ -482,10 +511,13 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                         .expect("successful decrypt always has a valid base key"),
                 );
                 record.set_session_state(current_state); // update the state
-                return Ok(ptext);
+                return Ok(DecryptionResult {
+                    plaintext: ptext,
+                    used_previous_session: false,
+                });
             }
-            Err(SignalProtocolError::DuplicatedMessage(_, _)) => {
-                return result;
+            Err(SignalProtocolError::DuplicatedMessage(chain, counter)) => {
+                return Err(SignalProtocolError::DuplicatedMessage(chain, counter));
             }
             Err(e) => {
                 log_decryption_failure(&current_state, &e);
@@ -549,8 +581,8 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                 updated_session = Some((ptext, idx, previous));
                 break;
             }
-            Err(SignalProtocolError::DuplicatedMessage(_, _)) => {
-                return result;
+            Err(SignalProtocolError::DuplicatedMessage(chain, counter)) => {
+                return Err(SignalProtocolError::DuplicatedMessage(chain, counter));
             }
             Err(e) => {
                 log_decryption_failure(&previous, &e);
@@ -561,7 +593,10 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
     if let Some((ptext, idx, updated_session)) = updated_session {
         record.promote_old_session(idx, updated_session);
-        Ok(ptext)
+        Ok(DecryptionResult {
+            plaintext: ptext,
+            used_previous_session: true,
+        })
     } else {
         let previous_state_count = || record.previous_session_states().len();
 
