@@ -1022,14 +1022,19 @@ impl SqliteStore {
                     .get()
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-                let results: Vec<String> = sessions::table
-                    .select(sessions::address)
-                    .filter(sessions::address.eq_any(&addresses_owned))
-                    .filter(sessions::device_id.eq(device_id))
-                    .load(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                let mut out = Vec::new();
+                // Chunk queries so the total bind parameters stay well below SQLite's ~999 limit.
+                for chunk in addresses_owned.chunks(900) {
+                    let mut results: Vec<String> = sessions::table
+                        .select(sessions::address)
+                        .filter(sessions::address.eq_any(chunk))
+                        .filter(sessions::device_id.eq(device_id))
+                        .load(&mut conn)
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                    out.append(&mut results);
+                }
 
-                Ok(results)
+                Ok(out)
             })
             .await?;
 
