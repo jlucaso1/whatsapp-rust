@@ -110,6 +110,13 @@ impl<W: Write> Encoder<W> {
     }
 
     fn write_string(&mut self, s: &str) -> Result<()> {
+        // Empty strings must be encoded as BINARY_8 + 0
+        if s.is_empty() {
+            self.write_u8(token::BINARY_8)?;
+            self.write_u8(0)?;
+            return Ok(());
+        }
+
         if let Some(token) = token::index_of_single_token(s) {
             self.write_u8(token)?;
         } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
@@ -549,5 +556,60 @@ mod tests {
         // One more than PACKED_MAX should NOT be packed
         let over_max = "0".repeat(token::PACKED_MAX as usize + 1);
         assert!(!Encoder::<Vec<u8>>::validate_nibble(&over_max));
+    }
+
+    /// Test empty string encoding - should be BINARY_8 + 0, not just 0
+    #[test]
+    fn test_empty_string_encoding() -> TestResult {
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_string("")?;
+
+        // According to WhatsApp web protocol:
+        // Empty string should be encoded as BINARY_8 (252) + 0
+        // NOT as token 0 (LIST_EMPTY)
+        println!("Empty string encoding: {:?}", &buffer[1..]);
+        assert_eq!(
+            buffer.len(),
+            3,
+            "Empty string should encode to 2 bytes (plus leading 0)"
+        );
+        assert_eq!(
+            buffer[1],
+            token::BINARY_8,
+            "First byte should be BINARY_8 (252)"
+        );
+        assert_eq!(buffer[2], 0, "Second byte should be 0 (length)");
+        Ok(())
+    }
+
+    /// Test encode/decode round-trip for empty string in node attributes
+    #[test]
+    fn test_empty_string_roundtrip() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let mut attrs = indexmap::IndexMap::new();
+        attrs.insert("key".to_string(), "".to_string()); // Empty value
+        attrs.insert("".to_string(), "value".to_string()); // Empty key
+
+        let node = Node::new("test", attrs, Some(NodeContent::String("".to_string())));
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+
+        assert_eq!(decoded.tag, "test");
+        assert_eq!(decoded.attrs.get("key"), Some(&"".to_string()));
+        assert_eq!(decoded.attrs.get(""), Some(&"value".to_string()));
+
+        // Empty strings are encoded as BINARY_8 + 0, which decodes as empty bytes
+        match &decoded.content {
+            Some(NodeContent::Bytes(b)) => assert!(b.is_empty(), "Content should be empty bytes"),
+            other => panic!("Expected empty bytes, got {:?}", other),
+        }
+        Ok(())
     }
 }
