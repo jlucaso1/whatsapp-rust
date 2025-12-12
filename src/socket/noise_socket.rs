@@ -36,19 +36,6 @@ impl NoiseSocket {
         }
     }
 
-    /// Encrypts `plaintext` into the provided `out` buffer (which is cleared first) and
-    /// returns a slice view of the ciphertext.
-    pub fn encrypt_into<'a>(&self, plaintext: &[u8], out: &'a mut Vec<u8>) -> Result<&'a [u8]> {
-        out.clear();
-        out.extend_from_slice(plaintext);
-        let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
-        let iv = generate_iv(counter);
-        self.write_key
-            .encrypt_in_place(iv.as_ref().into(), b"", out)
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
-        Ok(out.as_slice())
-    }
-
     pub async fn encrypt_and_send(
         &self,
         mut plaintext_buf: Vec<u8>,

@@ -1010,11 +1010,11 @@ impl SqliteStore {
             return Ok(HashSet::new());
         }
 
-        let addresses_to_query: Vec<String> = Vec::new();
+        let addresses_to_query: Vec<String> = addresses.to_vec();
 
         // Query DB for addresses not in cache
         let pool = self.pool.clone();
-        let addresses_owned = addresses_to_query.clone();
+        let addresses_owned = addresses_to_query;
 
         let db_results: Vec<String> = self
             .with_semaphore(move || -> Result<Vec<String>> {
