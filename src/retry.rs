@@ -56,20 +56,17 @@ impl Client {
             });
         });
 
-        let original_msg_arc = match self
+        // Take and deserialize the message from cache (lightweight - only deserialize on retry)
+        let original_msg = match self
             .take_recent_message(receipt.source.chat.clone(), message_id.clone())
             .await
         {
-            Ok(Some(msg)) => msg,
-            Ok(None) => {
+            Some(msg) => msg,
+            None => {
                 log::debug!(
                     "Ignoring retry for message {message_id}: already handled or not found in cache."
                 );
                 return Ok(());
-            }
-            Err(e) => {
-                log::warn!("Failed to retrieve recent message for retry {message_id}: {e}");
-                return Ok(()); // Continue without the original message if retrieval failed
             }
         };
 
@@ -139,8 +136,8 @@ impl Client {
 
             self.send_message_impl(
                 receipt.source.chat.clone(),
-                Arc::clone(&original_msg_arc),
-                Some(message_id.clone()), // Pass Some(message_id)
+                &original_msg,
+                Some(message_id.clone()),
                 false,
                 true,
                 None,
@@ -149,8 +146,8 @@ impl Client {
         } else {
             self.send_message_impl(
                 receipt.source.chat.clone(),
-                Arc::clone(&original_msg_arc),
-                Some(message_id), // Pass Some(message_id)
+                &original_msg,
+                Some(message_id),
                 false,
                 true,
                 None,
@@ -317,32 +314,20 @@ mod tests {
             ..Default::default()
         };
 
-        // Insert via the public API
+        // Insert via the new async API
         client
-            .add_recent_message(chat.clone(), msg_id.clone(), Arc::new(msg.clone()))
-            .await
-            .expect("Failed to add recent message");
-
-        // Wait for the manager task to process reliably in tests
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            .add_recent_message(chat.clone(), msg_id.clone(), &msg)
+            .await;
 
         // First take should return and remove it from cache
-        let taken_result = client
+        let taken = client
             .take_recent_message(chat.clone(), msg_id.clone())
             .await;
-        match taken_result {
-            Ok(taken) => {
-                assert!(taken.is_some());
-                assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
-            }
-            Err(e) => panic!("Failed to take recent message: {}", e),
-        }
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
 
         // Second take should return None
-        let taken_again_result = client.take_recent_message(chat, msg_id).await;
-        match taken_again_result {
-            Ok(taken_again) => assert!(taken_again.is_none()),
-            Err(e) => panic!("Failed to take recent message: {}", e),
-        }
+        let taken_again = client.take_recent_message(chat, msg_id).await;
+        assert!(taken_again.is_none());
     }
 }

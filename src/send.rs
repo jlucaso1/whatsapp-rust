@@ -1,7 +1,6 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use anyhow::anyhow;
-use std::sync::Arc;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
@@ -15,33 +14,27 @@ impl Client {
         message: wa::Message,
     ) -> Result<String, anyhow::Error> {
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(
-            to,
-            Arc::new(message),
-            Some(request_id.clone()),
-            false,
-            false,
-            None,
-        )
-        .await?;
+        self.send_message_impl(to, &message, Some(request_id.clone()), false, false, None)
+            .await?;
         Ok(request_id)
     }
 
     pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
-        message: Arc<wa::Message>,
+        message: &wa::Message,
         request_id_override: Option<String>,
         peer: bool,
         force_key_distribution: bool,
         edit: Option<crate::types::message::EditAttribute>,
     ) -> Result<(), anyhow::Error> {
-        let chat_mutex = self
-            .chat_locks
-            .entry(to.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone();
-        let _chat_guard = chat_mutex.lock().await;
+        let session_mutex = self
+            .session_locks
+            .get_with(to.clone(), async {
+                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+            })
+            .await;
+        let _session_guard = session_mutex.lock().await;
 
         let request_id = match request_id_override {
             Some(id) => id,
@@ -56,7 +49,7 @@ impl Client {
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
                 to,
-                message.as_ref(),
+                message,
                 request_id,
             )
             .await?
@@ -74,8 +67,8 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
             let account_info = device_snapshot.account.clone();
 
-            let _ = self
-                .add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
+            // Store serialized message bytes for retry (lightweight)
+            self.add_recent_message(to.clone(), request_id.clone(), message)
                 .await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -185,7 +178,7 @@ impl Client {
                 &own_lid,
                 account_info.as_ref(),
                 to.clone(),
-                message.as_ref(),
+                message,
                 request_id.clone(),
                 force_skdm,
                 skdm_target_devices.clone(),
@@ -260,7 +253,7 @@ impl Client {
                             &own_lid,
                             account_info.as_ref(),
                             to,
-                            message.as_ref(),
+                            message,
                             request_id,
                             true, // Force distribution on retry
                             None, // Distribute to all devices
@@ -273,8 +266,8 @@ impl Client {
                 }
             }
         } else {
-            let _ = self
-                .add_recent_message(to.clone(), request_id.clone(), Arc::clone(&message))
+            // Store serialized message bytes for retry (lightweight)
+            self.add_recent_message(to.clone(), request_id.clone(), message)
                 .await;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -301,7 +294,7 @@ impl Client {
                 &own_jid,
                 account_info.as_ref(),
                 to,
-                message.as_ref(),
+                message,
                 request_id,
                 edit,
             )

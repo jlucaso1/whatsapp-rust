@@ -3,8 +3,8 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::warn;
 use std::sync::Arc;
-use wacore::xml::DisplayableNodeRef;
-use wacore_binary::node::NodeRef;
+use wacore::xml::DisplayableNode;
+use wacore_binary::node::Node;
 
 /// Handler for `<iq>` (Info/Query) stanzas.
 ///
@@ -28,9 +28,9 @@ impl StanzaHandler for IqHandler {
         "iq"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
-        if !client.handle_iq_ref(node).await {
-            warn!(target: "Client", "Received unhandled IQ: {}", DisplayableNodeRef(node));
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        if !client.handle_iq(&node).await {
+            warn!(target: "Client", "Received unhandled IQ: {}", DisplayableNode(&node));
         }
         true
     }

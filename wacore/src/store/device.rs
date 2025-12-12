@@ -117,6 +117,10 @@ pub struct Device {
     pub app_version_last_fetched_ms: i64,
     #[serde(skip)]
     pub device_props: wa::DeviceProps,
+    /// Edge routing info received from server, used for optimized reconnection.
+    /// When present, this should be sent as a pre-intro before the Noise handshake.
+    #[serde(default)]
+    pub edge_routing_info: Option<Vec<u8>>,
 }
 
 impl Default for Device {
@@ -164,6 +168,7 @@ impl Device {
             app_version_tertiary: 1023868176,
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
+            edge_routing_info: None,
         }
     }
 

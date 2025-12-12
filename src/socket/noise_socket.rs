@@ -2,13 +2,14 @@ use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::sync::Mutex;
 use wacore::aes_gcm::{
     Aes256Gcm,
     aead::{Aead, AeadInPlace},
 };
 use wacore::handshake::utils::generate_iv;
 
-const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
+const INLINE_ENCRYPT_THRESHOLD: usize = 128 * 1024;
 
 pub struct NoiseSocket {
     transport: Arc<dyn Transport>,
@@ -16,6 +17,11 @@ pub struct NoiseSocket {
     read_key: Arc<Aes256Gcm>,
     write_counter: Arc<AtomicU32>,
     read_counter: Arc<AtomicU32>,
+    /// Mutex to ensure frames are sent in counter order.
+    /// Without this, concurrent calls to encrypt_and_send could result in
+    /// frames being sent out of order relative to their counter values,
+    /// causing decryption failures on the server.
+    send_mutex: Mutex<()>,
 }
 
 impl NoiseSocket {
@@ -26,6 +32,7 @@ impl NoiseSocket {
             read_key: Arc::new(read_key),
             write_counter: Arc::new(AtomicU32::new(0)),
             read_counter: Arc::new(AtomicU32::new(0)),
+            send_mutex: Mutex::new(()),
         }
     }
 
@@ -47,6 +54,10 @@ impl NoiseSocket {
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError> {
+        // Acquire send lock to ensure frames are sent in counter order.
+        // This prevents out-of-order delivery when multiple tasks call this concurrently.
+        let _send_guard = self.send_mutex.lock().await;
+
         // For small messages, encrypt in-place in out_buf to avoid allocation
         if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
             // Copy plaintext to out_buf and encrypt in-place

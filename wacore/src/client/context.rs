@@ -4,6 +4,20 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use wacore_binary::jid::Jid;
 
+fn build_pn_to_lid_map(lid_to_pn_map: &HashMap<String, Jid>) -> HashMap<String, Jid> {
+    lid_to_pn_map
+        .iter()
+        .map(|(lid_user, phone_jid)| {
+            let lid_jid = Jid {
+                user: lid_user.clone(),
+                server: "lid".to_string(),
+                ..Default::default()
+            };
+            (phone_jid.user.clone(), lid_jid)
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct GroupInfo {
     pub participants: Vec<Jid>,
@@ -12,6 +26,9 @@ pub struct GroupInfo {
     /// corresponding phone-number JID. This is used for device queries since
     /// LID usync requests may not work reliably.
     lid_to_pn_map: HashMap<String, Jid>,
+    /// Reverse mapping: phone number (user part) to LID JID.
+    /// This is used to convert device JIDs back to LID format after device resolution.
+    pn_to_lid_map: HashMap<String, Jid>,
 }
 
 impl GroupInfo {
@@ -25,6 +42,7 @@ impl GroupInfo {
             participants,
             addressing_mode,
             lid_to_pn_map: HashMap::new(),
+            pn_to_lid_map: HashMap::new(),
         }
     }
 
@@ -34,15 +52,19 @@ impl GroupInfo {
         addressing_mode: AddressingMode,
         lid_to_pn_map: HashMap<String, Jid>,
     ) -> Self {
+        let pn_to_lid_map = build_pn_to_lid_map(&lid_to_pn_map);
+
         Self {
             participants,
             addressing_mode,
             lid_to_pn_map,
+            pn_to_lid_map,
         }
     }
 
     /// Replace the current LID-to-phone mapping.
     pub fn set_lid_to_pn_map(&mut self, lid_to_pn_map: HashMap<String, Jid>) {
+        self.pn_to_lid_map = build_pn_to_lid_map(&lid_to_pn_map);
         self.lid_to_pn_map = lid_to_pn_map;
     }
 
@@ -54,6 +76,28 @@ impl GroupInfo {
     /// Look up the mapped phone-number JID for a given LID user identifier.
     pub fn phone_jid_for_lid_user(&self, lid_user: &str) -> Option<&Jid> {
         self.lid_to_pn_map.get(lid_user)
+    }
+
+    /// Look up the mapped LID JID for a given phone number (user part).
+    pub fn lid_jid_for_phone_user(&self, phone_user: &str) -> Option<&Jid> {
+        self.pn_to_lid_map.get(phone_user)
+    }
+
+    /// Convert a phone-based device JID to a LID-based device JID using the mapping.
+    /// If no mapping exists, returns the original JID unchanged.
+    pub fn phone_device_jid_to_lid(&self, phone_device_jid: &Jid) -> Jid {
+        if phone_device_jid.server == "s.whatsapp.net"
+            && let Some(lid_base) = self.lid_jid_for_phone_user(&phone_device_jid.user)
+        {
+            return Jid {
+                user: lid_base.user.clone(),
+                server: "lid".to_string(),
+                device: phone_device_jid.device,
+                agent: phone_device_jid.agent,
+                integrator: phone_device_jid.integrator,
+            };
+        }
+        phone_device_jid.clone()
     }
 }
 
@@ -72,4 +116,15 @@ pub trait SendContextResolver: Send + Sync {
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error>;
 
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error>;
+
+    /// Get the LID (Linked ID) for a phone number, if known.
+    /// This is used to find existing sessions that were established under a LID address
+    /// when sending to a phone number address.
+    ///
+    /// Returns None if no LID mapping is known for this phone number.
+    async fn get_lid_for_phone(&self, phone_user: &str) -> Option<String> {
+        // Default implementation returns None - subclasses can override
+        let _ = phone_user;
+        None
+    }
 }

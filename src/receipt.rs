@@ -7,17 +7,11 @@ use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt as _;
 
-impl Client {
-    pub(crate) async fn handle_receipt_ref(
-        self: &Arc<Self>,
-        node: &wacore_binary::node::NodeRef<'_>,
-    ) {
-        // Process directly with NodeRef
-        self.handle_receipt(node).await;
-    }
+use wacore_binary::node::Node;
 
-    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
-        let mut attrs = node.attr_parser();
+impl Client {
+    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
+        let mut attrs = node.attrs();
         let from = attrs.jid("from");
         let id = attrs.string("id");
         let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
@@ -52,8 +46,8 @@ impl Client {
 
         if receipt_type == ReceiptType::Retry {
             let client_clone = Arc::clone(self);
-            // Only allocate owned node for the spawned task
-            let node_clone = node.to_owned();
+            // Arc clone is cheap - just reference count increment
+            let node_clone = Arc::clone(&node);
             tokio::spawn(async move {
                 if let Err(e) = client_clone
                     .handle_retry_receipt(&receipt, &node_clone)

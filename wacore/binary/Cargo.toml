@@ -22,7 +22,7 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 
 [build-dependencies]
 phf_codegen = "0.13.1"
-serde = { version = "1.0", default-features = false, features = ["derive", "alloc"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 serde_json = "1.0"
 
 [dev-dependencies]

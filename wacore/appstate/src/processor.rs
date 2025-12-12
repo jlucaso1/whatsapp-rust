@@ -151,6 +151,14 @@ where
     F: FnMut(&[u8]) -> Result<ExpandedAppStateKeys, AppStateError>,
     G: FnMut(&[u8]) -> Result<Option<Vec<u8>>, AppStateError>,
 {
+    // Capture original state before modification - needed for MAC validation logic
+    // If original state was empty (version=0, hash all zeros), we cannot validate
+    // snapshotMac because we don't have the baseline state the patch was built against.
+    // This matches WhatsApp Web behavior which throws a retryable error in this case.
+    let original_version = state.version;
+    let original_hash_is_empty = state.hash == [0u8; 128];
+    let had_no_prior_state = original_version == 0 && original_hash_is_empty;
+
     state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
 
     // Update hash state - the closure handles finding previous values
@@ -176,7 +184,7 @@ where
     // Validate MACs if requested
     if validate_macs && let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref()) {
         let keys = get_keys(key_id)?;
-        validate_patch_macs(patch, state, &keys, collection_name)?;
+        validate_patch_macs(patch, state, &keys, collection_name, had_no_prior_state)?;
     }
 
     // Decode all mutations and collect MACs in a single pass
@@ -225,12 +233,34 @@ where
 /// Validate the snapshot and patch MACs for a patch.
 ///
 /// This is a pure function that validates the MACs without any I/O.
+///
+/// # Arguments
+/// * `patch` - The patch to validate
+/// * `state` - The hash state AFTER applying the patch mutations
+/// * `keys` - The expanded app state keys for MAC computation
+/// * `collection_name` - The collection name
+/// * `had_no_prior_state` - If true, skip ALL MAC validation. This should be true
+///   when processing patches without a prior local state (e.g., first sync without snapshot).
+///   WhatsApp Web handles this case by throwing a retryable error ("empty lthash"), but we
+///   can safely skip validation and process the mutations for usability. The state will be
+///   corrected on the next proper sync with a snapshot.
 pub fn validate_patch_macs(
     patch: &wa::SyncdPatch,
     state: &HashState,
     keys: &ExpandedAppStateKeys,
     collection_name: &str,
+    had_no_prior_state: bool,
 ) -> Result<(), AppStateError> {
+    // Skip ALL MAC validation if we had no prior state.
+    // When we receive patches without a snapshot for a never-synced collection,
+    // WhatsApp Web throws a retryable "empty lthash" error. We can't properly validate
+    // either the snapshotMac (computed from wrong baseline) or the patchMac (which
+    // includes the snapshotMac). Instead, we process the mutations and rely on
+    // future syncs with snapshots to correct the state.
+    if had_no_prior_state {
+        return Ok(());
+    }
+
     if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
         let computed_snap = state.generate_snapshot_mac(collection_name, &keys.snapshot_mac);
         if computed_snap != *snap_mac {

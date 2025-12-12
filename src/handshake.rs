@@ -22,6 +22,27 @@ pub enum HandshakeError {
 
 type Result<T> = std::result::Result<T, HandshakeError>;
 
+/// Builds the edge routing pre-intro header if routing info is available.
+/// Format: ED\0\1 (4 bytes) + length (3 bytes big-endian) + routing_data
+/// Based on WhatsApp Web JS: l.write("ED", 0, 1); l.writeUint8(len >> 16); l.writeUint16(len & 65535);
+fn build_edge_routing_preintro(routing_info: &[u8]) -> Vec<u8> {
+    let len = routing_info.len();
+    assert!(len <= 0xFF_FFFF, "Routing info exceeds 24-bit length limit");
+    let mut preintro = Vec::with_capacity(7 + len);
+    // ED header with version bytes (4 bytes total)
+    preintro.push(b'E');
+    preintro.push(b'D');
+    preintro.push(0);
+    preintro.push(1);
+    // Length as 3 bytes big-endian (high byte, then 2 low bytes)
+    preintro.push((len >> 16) as u8);
+    preintro.push((len >> 8) as u8);
+    preintro.push(len as u8);
+    // Routing data
+    preintro.extend_from_slice(routing_info);
+    preintro
+}
+
 pub async fn do_handshake(
     device: &crate::store::Device,
     transport: Arc<dyn Transport>,
@@ -33,8 +54,21 @@ pub async fn do_handshake(
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
 
-    // First message includes the WA connection header
-    let header = wacore_binary::consts::WA_CONN_HEADER;
+    // Build the connection header, optionally with edge routing pre-intro
+    let header: Vec<u8> = if let Some(ref routing_info) = device.core.edge_routing_info {
+        debug!(
+            target: "Client",
+            "Sending edge routing pre-intro ({} bytes) for optimized reconnection",
+            routing_info.len()
+        );
+        let mut header = build_edge_routing_preintro(routing_info);
+        header.extend_from_slice(&wacore_binary::consts::WA_CONN_HEADER);
+        header
+    } else {
+        wacore_binary::consts::WA_CONN_HEADER.to_vec()
+    };
+
+    // First message includes the WA connection header (with optional edge routing)
     let framed = crate::framing::encode_frame(&client_hello_bytes, Some(&header))
         .map_err(HandshakeError::Transport)?;
     transport.send(&framed).await?;

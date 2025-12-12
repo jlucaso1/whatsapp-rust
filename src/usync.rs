@@ -45,6 +45,21 @@ impl Client {
             let resp_node = self.send_iq(iq).await?;
             let fetched_devices = wacore::usync::parse_get_user_devices_response(&resp_node)?;
 
+            // Extract and persist LID mappings from the response
+            let lid_mappings = wacore::usync::parse_lid_mappings_from_response(&resp_node);
+            for mapping in lid_mappings {
+                self.add_lid_pn_mapping(
+                    &mapping.lid,
+                    &mapping.phone_number,
+                    crate::lid_pn_cache::LearningSource::Usync,
+                )
+                .await;
+                debug!(
+                    "Learned LID mapping from usync: {} -> {}",
+                    mapping.phone_number, mapping.lid
+                );
+            }
+
             // 3. Update the cache with the newly fetched data
             let mut devices_by_user = HashMap::new();
             for device in fetched_devices.iter() {

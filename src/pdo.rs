@@ -143,10 +143,7 @@ impl Client {
 
         // Send the message to our primary phone (device 0)
         // Use peer category for PDO messages
-        match self
-            .send_peer_message(primary_phone_jid, Arc::new(msg))
-            .await
-        {
+        match self.send_peer_message(primary_phone_jid, &msg).await {
             Ok(_) => {
                 debug!("PDO request sent successfully for message {}", info.id);
                 Ok(())
@@ -168,7 +165,7 @@ impl Client {
     async fn send_peer_message(
         self: &Arc<Self>,
         to: Jid,
-        msg: Arc<wa::Message>,
+        msg: &wa::Message,
     ) -> Result<String, anyhow::Error> {
         let msg_id = self.generate_message_id().await;
 
