@@ -60,9 +60,9 @@ diesel::table! {
     lid_pn_mapping (lid, device_id) {
         lid -> Text,
         phone_number -> Text,
-        created_at -> Integer,
+        created_at -> BigInt,
         learning_source -> Text,
-        updated_at -> Integer,
+        updated_at -> BigInt,
         device_id -> Integer,
     }
 }

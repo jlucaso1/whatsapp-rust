@@ -3,7 +3,7 @@ use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use chrono::DateTime;
-use log::warn;
+use log::{debug, warn};
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
@@ -90,16 +90,22 @@ impl Client {
                 if let Some(alt_jid) = alt
                     && alt_jid.server == pn_server
                 {
-                    self.add_lid_pn_mapping(
-                        &sender.user,
-                        &alt_jid.user,
-                        crate::lid_pn_cache::LearningSource::PeerLidMessage,
-                    )
-                    .await;
-                    log::debug!(
+                    if let Err(err) = self
+                        .add_lid_pn_mapping(
+                            &sender.user,
+                            &alt_jid.user,
+                            crate::lid_pn_cache::LearningSource::PeerLidMessage,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to persist LID-to-PN mapping {} -> {}: {err}",
+                            sender.user, alt_jid.user
+                        );
+                    }
+                    debug!(
                         "Cached LID-to-PN mapping: {} -> {}",
-                        sender.user,
-                        alt_jid.user
+                        sender.user, alt_jid.user
                     );
                 }
                 sender.clone()
@@ -111,16 +117,22 @@ impl Client {
                 if let Some(alt_jid) = alt
                     && alt_jid.server == lid_server
                 {
-                    self.add_lid_pn_mapping(
-                        &alt_jid.user,
-                        &sender.user,
-                        crate::lid_pn_cache::LearningSource::PeerPnMessage,
-                    )
-                    .await;
-                    log::debug!(
+                    if let Err(err) = self
+                        .add_lid_pn_mapping(
+                            &alt_jid.user,
+                            &sender.user,
+                            crate::lid_pn_cache::LearningSource::PeerPnMessage,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to persist PN-to-LID mapping {} -> {}: {err}",
+                            sender.user, alt_jid.user
+                        );
+                    }
+                    debug!(
                         "Cached PN-to-LID mapping: {} -> {}",
-                        sender.user,
-                        alt_jid.user
+                        sender.user, alt_jid.user
                     );
 
                     // Use the LID from the message attribute for session lookup

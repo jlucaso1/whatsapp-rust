@@ -7,15 +7,15 @@ use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::warn;
 use prost::Message;
+use std::sync::Arc;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::processor::AppStateMutationMAC;
 use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
+use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::{self, *};
 use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
-
-use wacore::store::Device as CoreDevice;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -41,30 +41,11 @@ type DeviceRow = (
     Option<Vec<u8>>, // edge_routing_info
 );
 
-use moka::future::Cache;
-use std::sync::Arc;
-use std::time::Duration;
-
-/// Cache key for identity/session lookups: (address, device_id)
-type CacheKey = (String, i32);
-
 #[derive(Clone)]
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
     /// Semaphore to limit concurrent DB operations to prevent lock contention
     pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
-    /// In-memory cache for identity keys to reduce DB queries
-    /// Key: (address, device_id), Value: Option<identity_key_bytes>
-    identity_cache: Cache<CacheKey, Option<Vec<u8>>>,
-    /// In-memory cache for session records to reduce DB queries
-    /// Key: (address, device_id), Value: Option<session_bytes>
-    session_cache: Cache<CacheKey, Option<Vec<u8>>>,
-    /// In-memory cache to track existence of a session record without storing the bytes.
-    /// Key: (address, device_id), Value: ()
-    ///
-    /// This is used by batch existence checks (e.g., group message optimization) to avoid
-    /// inserting placeholder bytes into `session_cache`.
-    session_existence_cache: Cache<CacheKey, ()>,
 }
 
 /// Connection customizer that applies PRAGMAs to each new connection
@@ -136,29 +117,9 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        // Build caches for identity and session lookups
-        // These are the hottest paths during message sending (Signal protocol lookups)
-        let identity_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
-            .max_capacity(100_000) // Max 100k entries to reduce churn under load
-            .build();
-
-        let session_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
-            .max_capacity(100_000) // Max 100k entries to reduce churn under load
-            .build();
-
-        let session_existence_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
-            .max_capacity(100_000) // Max 100k entries to reduce churn under load
-            .build();
-
         Ok(Self {
             pool,
             db_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // Match pool max_size
-            identity_cache,
-            session_cache,
-            session_existence_cache,
         })
     }
 
@@ -832,13 +793,9 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let db_semaphore = self.db_semaphore.clone();
         let address_owned = address.to_string();
-        let cache_key = (address.to_string(), device_id);
 
         // Update cache first to keep the hot path off disk
         let key_vec = key.to_vec();
-        self.identity_cache
-            .insert(cache_key, Some(key_vec.clone()))
-            .await;
 
         // Persist in the background; we do not await the blocking work
         tokio::spawn(async move {
@@ -884,7 +841,6 @@ impl SqliteStore {
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
         let address_owned = address.to_string();
-        let cache_key = (address.to_string(), device_id);
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
@@ -902,9 +858,6 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        // Invalidate cache
-        self.identity_cache.invalidate(&cache_key).await;
-
         Ok(())
     }
 
@@ -913,13 +866,6 @@ impl SqliteStore {
         address: &str,
         device_id: i32,
     ) -> Result<Option<Vec<u8>>> {
-        let cache_key = (address.to_string(), device_id);
-
-        // Check cache first
-        if let Some(cached) = self.identity_cache.get(&cache_key).await {
-            return Ok(cached);
-        }
-
         // Cache miss - query database
         let pool = self.pool.clone();
         let address = address.to_string();
@@ -939,9 +885,6 @@ impl SqliteStore {
             })
             .await?;
 
-        // Store in cache (even if None, to avoid repeated lookups for non-existent keys)
-        self.identity_cache.insert(cache_key, result.clone()).await;
-
         Ok(result)
     }
 
@@ -950,21 +893,9 @@ impl SqliteStore {
         address: &str,
         device_id: i32,
     ) -> Result<Option<Vec<u8>>> {
-        let cache_key = (address.to_string(), device_id);
-
-        // Check bytes cache first. This cache must only contain real session bytes (Some)
-        // or a negative lookup (None). It must never contain placeholder bytes.
-        if let Some(cached) = self.session_cache.get(&cache_key).await {
-            return Ok(cached);
-        }
-
-        // We may have learned existence via a batch existence check. This does not contain the
-        // bytes themselves; it only influences whether a DB fetch is likely to succeed.
-        let _known_to_exist = self.session_existence_cache.get(&cache_key).await.is_some();
-
         // Cache miss - query database
         let pool = self.pool.clone();
-        let address_for_query = cache_key.0.clone();
+        let address_for_query = address.to_string();
         let result = self
             .with_semaphore(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
@@ -981,18 +912,6 @@ impl SqliteStore {
             })
             .await?;
 
-        // Store in cache (even if None, to avoid repeated lookups)
-        self.session_cache
-            .insert(cache_key.clone(), result.clone())
-            .await;
-
-        // Keep existence cache consistent with DB result.
-        if result.is_some() {
-            self.session_existence_cache.insert(cache_key, ()).await;
-        } else {
-            self.session_existence_cache.invalidate(&cache_key).await;
-        }
-
         Ok(result)
     }
 
@@ -1006,17 +925,6 @@ impl SqliteStore {
         let db_semaphore = self.db_semaphore.clone();
         let address_owned = address.to_string();
         let session_vec = session.to_vec();
-        let cache_key = (address.to_string(), device_id);
-
-        // Update cache immediately to keep ratchet hot path in-memory
-        self.session_cache
-            .insert(cache_key, Some(session_vec.clone()))
-            .await;
-
-        // Record existence alongside bytes.
-        self.session_existence_cache
-            .insert((address.to_string(), device_id), ())
-            .await;
 
         // Persist in the background so we do not block on the blocking pool per message
         tokio::spawn(async move {
@@ -1062,7 +970,6 @@ impl SqliteStore {
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
         let address_owned = address.to_string();
-        let cache_key = (address.to_string(), device_id);
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
@@ -1079,10 +986,6 @@ impl SqliteStore {
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        // Invalidate cache
-        self.session_cache.invalidate(&cache_key).await;
-        self.session_existence_cache.invalidate(&cache_key).await;
 
         Ok(())
     }
@@ -1107,29 +1010,7 @@ impl SqliteStore {
             return Ok(HashSet::new());
         }
 
-        // First, check caches for all addresses
-        let mut cached_hits: HashSet<String> = HashSet::new();
-        let mut addresses_to_query: Vec<String> = Vec::new();
-
-        for addr in addresses {
-            let cache_key = (addr.clone(), device_id);
-            if let Some(cached) = self.session_cache.get(&cache_key).await {
-                if cached.is_some() {
-                    cached_hits.insert(addr.clone());
-                }
-                // Even if cached as None, we don't need to query DB
-            } else if self.session_existence_cache.get(&cache_key).await.is_some() {
-                // Existence known, bytes are not cached.
-                cached_hits.insert(addr.clone());
-            } else {
-                addresses_to_query.push(addr.clone());
-            }
-        }
-
-        // If all were in cache, return early
-        if addresses_to_query.is_empty() {
-            return Ok(cached_hits);
-        }
+        let addresses_to_query: Vec<String> = Vec::new();
 
         // Query DB for addresses not in cache
         let pool = self.pool.clone();
@@ -1155,27 +1036,7 @@ impl SqliteStore {
         // Convert DB results to HashSet and update cache
         let db_hits: HashSet<String> = db_results.into_iter().collect();
 
-        // Update caches for queried addresses
-        for addr in &addresses_to_query {
-            let cache_key = (addr.clone(), device_id);
-            if db_hits.contains(addr) {
-                // Mark existence without polluting the bytes cache.
-                self.session_existence_cache.insert(cache_key, ()).await;
-            } else {
-                // Cache negative result
-                self.session_cache.insert(cache_key, None).await;
-                // Ensure existence cache doesn't lie.
-                self.session_existence_cache
-                    .invalidate(&(addr.clone(), device_id))
-                    .await;
-            }
-        }
-
-        // Combine cached hits with DB hits
-        let mut all_hits = cached_hits;
-        all_hits.extend(db_hits);
-
-        Ok(all_hits)
+        Ok(db_hits)
     }
 
     pub async fn put_sender_key_for_device(
@@ -2070,28 +1931,30 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let result: Option<(String, String, i32, String)> = lid_pn_mapping::table
+            let result: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
                     lid_pn_mapping::phone_number,
                     lid_pn_mapping::created_at,
                     lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
                 ))
                 .filter(lid_pn_mapping::lid.eq(&lid))
                 .filter(lid_pn_mapping::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(
-                result.map(|(lid, phone_number, created_at, learning_source)| {
+            Ok(result.map(
+                |(lid, phone_number, created_at, learning_source, updated_at)| {
                     traits::LidPnMappingEntry {
                         lid,
                         phone_number,
-                        created_at: created_at as i64,
+                        created_at,
+                        updated_at,
                         learning_source,
                     }
-                }),
-            )
+                },
+            ))
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
@@ -2109,29 +1972,31 @@ impl SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             // Get the most recent mapping for this phone number (by created_at DESC)
-            let result: Option<(String, String, i32, String)> = lid_pn_mapping::table
+            let result: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
                     lid_pn_mapping::phone_number,
                     lid_pn_mapping::created_at,
                     lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
                 ))
                 .filter(lid_pn_mapping::phone_number.eq(&phone))
                 .filter(lid_pn_mapping::device_id.eq(device_id))
-                .order(lid_pn_mapping::created_at.desc())
+                .order(lid_pn_mapping::updated_at.desc())
                 .first(&mut conn)
                 .optional()
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(
-                result.map(|(lid, phone_number, created_at, learning_source)| {
+            Ok(result.map(
+                |(lid, phone_number, created_at, learning_source, updated_at)| {
                     traits::LidPnMappingEntry {
                         lid,
                         phone_number,
-                        created_at: created_at as i64,
+                        created_at,
+                        updated_at,
                         learning_source,
                     }
-                }),
-            )
+                },
+            ))
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
@@ -2145,12 +2010,15 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let lid = entry.lid.clone();
         let phone_number = entry.phone_number.clone();
-        let created_at = entry.created_at as i32;
+        let created_at = entry.created_at;
         let learning_source = entry.learning_source.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32;
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
+        .unwrap_or(i64::MAX);
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
@@ -2191,12 +2059,13 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let results: Vec<(String, String, i32, String)> = lid_pn_mapping::table
+            let results: Vec<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
                     lid_pn_mapping::phone_number,
                     lid_pn_mapping::created_at,
                     lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
                 ))
                 .filter(lid_pn_mapping::device_id.eq(device_id))
                 .load(&mut conn)
@@ -2204,11 +2073,14 @@ impl SqliteStore {
             Ok(results
                 .into_iter()
                 .map(
-                    |(lid, phone_number, created_at, learning_source)| traits::LidPnMappingEntry {
-                        lid,
-                        phone_number,
-                        created_at: created_at as i64,
-                        learning_source,
+                    |(lid, phone_number, created_at, learning_source, updated_at)| {
+                        traits::LidPnMappingEntry {
+                            lid,
+                            phone_number,
+                            created_at,
+                            updated_at,
+                            learning_source,
+                        }
                     },
                 )
                 .collect())

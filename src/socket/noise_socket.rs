@@ -9,7 +9,7 @@ use wacore::aes_gcm::{
 };
 use wacore::handshake::utils::generate_iv;
 
-const INLINE_ENCRYPT_THRESHOLD: usize = 128 * 1024;
+const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
 pub struct NoiseSocket {
     transport: Arc<dyn Transport>,

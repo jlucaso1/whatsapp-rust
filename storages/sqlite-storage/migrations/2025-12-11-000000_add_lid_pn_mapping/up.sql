@@ -4,9 +4,9 @@
 CREATE TABLE lid_pn_mapping (
     lid TEXT NOT NULL,                      -- LID user part (e.g., "100000012345678")
     phone_number TEXT NOT NULL,             -- Phone number user part (e.g., "559980000001")
-    created_at INTEGER NOT NULL,            -- Unix timestamp when mapping was first learned
+    created_at BIGINT NOT NULL,            -- Unix timestamp when mapping was first learned
     learning_source TEXT NOT NULL,          -- Source of the mapping (usync, peer_pn_message, etc.)
-    updated_at INTEGER NOT NULL,            -- Unix timestamp of last update
+    updated_at BIGINT NOT NULL,            -- Unix timestamp of last update
     device_id INTEGER NOT NULL,             -- Device ID for multi-account support
     PRIMARY KEY (lid, device_id),
     FOREIGN KEY(device_id) REFERENCES device(id) ON DELETE CASCADE

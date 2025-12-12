@@ -22,7 +22,6 @@ libsqlite3-sys = { version = "0.35.0", default-features = false, features = [
     "bundled",
 ] }
 log = "0.4.29"
-moka = { version = "0.12", features = ["future"] }
 prost = { version = "0.14.1", default-features = false }
 tokio = { version = "1.47.1", features = ["sync", "rt"] }
 

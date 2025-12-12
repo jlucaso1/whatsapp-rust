@@ -92,6 +92,8 @@ pub struct LidPnMappingEntry {
     pub phone_number: String,
     /// Unix timestamp when the mapping was first learned
     pub created_at: i64,
+    /// Unix timestamp when the mapping was last updated (drives "most recent" by phone)
+    pub updated_at: i64,
     /// The source from which this mapping was learned (e.g., "usync", "peer_pn_message")
     pub learning_source: String,
 }

@@ -227,13 +227,20 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             // we can find the existing LID-based session instead of creating a new PN-based one.
             // This is critical for self-messaging to work correctly.
             if !jid.user.is_empty() && !lid.user.is_empty() {
-                client
+                if let Err(err) = client
                     .add_lid_pn_mapping(&lid.user, &jid.user, LearningSource::Pairing)
-                    .await;
-                info!(
-                    "Added own LID-PN mapping to cache: {} <-> {}",
-                    lid.user, jid.user
-                );
+                    .await
+                {
+                    warn!(
+                        "Failed to persist own LID-PN mapping {} <-> {}: {err}",
+                        lid.user, jid.user
+                    );
+                } else {
+                    info!(
+                        "Added own LID-PN mapping to cache: {} <-> {}",
+                        lid.user, jid.user
+                    );
+                }
             }
 
             if !business_name.is_empty() {

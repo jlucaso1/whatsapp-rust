@@ -3,7 +3,7 @@ mod context_impl;
 use crate::handshake;
 use crate::lid_pn_cache::{LearningSource, LidPnCache, LidPnEntry};
 use crate::pair;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use indexmap::IndexMap;
 use moka::future::Cache;
@@ -302,7 +302,7 @@ impl Client {
         lid: &str,
         phone_number: &str,
         source: LearningSource,
-    ) {
+    ) -> Result<()> {
         use wacore::store::traits::LidPnMappingEntry;
 
         // Add to in-memory cache
@@ -315,14 +315,15 @@ impl Client {
             lid: entry.lid,
             phone_number: entry.phone_number,
             created_at: entry.created_at,
+            updated_at: entry.created_at,
             learning_source: entry.learning_source.as_str().to_string(),
         };
 
-        tokio::spawn(async move {
-            if let Err(e) = backend.put_lid_pn_mapping(&storage_entry).await {
-                warn!("Failed to persist LID-PN mapping: {e}");
-            }
-        });
+        backend
+            .put_lid_pn_mapping(&storage_entry)
+            .await
+            .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
+        Ok(())
     }
 
     pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
@@ -2085,7 +2086,7 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_basic_operations() {
         let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new("file:memdb_lid_cache_basic?mode=memory&cache=shared")
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
@@ -2110,7 +2111,8 @@ mod tests {
         // Insert a phone->LID mapping using add_lid_pn_mapping
         client
             .add_lid_pn_mapping(lid, phone, LearningSource::Usync)
-            .await;
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
 
         // Verify we can retrieve it (phone -> LID lookup)
         let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
@@ -2149,9 +2151,11 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_timestamp_resolution() {
         let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
+            crate::store::SqliteStore::new(
+                "file:memdb_lid_cache_timestamp?mode=memory&cache=shared",
+            )
+            .await
+            .expect("Failed to create in-memory backend for test"),
         );
         let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
         let (client, _rx) = Client::new(
@@ -2169,7 +2173,8 @@ mod tests {
         // Insert initial mapping
         client
             .add_lid_pn_mapping(lid_old, phone, LearningSource::Usync)
-            .await;
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
 
         assert_eq!(
             client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
@@ -2183,7 +2188,8 @@ mod tests {
         // Add new mapping with newer timestamp
         client
             .add_lid_pn_mapping(lid_new, phone, LearningSource::PeerPnMessage)
-            .await;
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
 
         assert_eq!(
             client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
@@ -2216,7 +2222,7 @@ mod tests {
         use wacore::client::context::SendContextResolver;
 
         let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
+            crate::store::SqliteStore::new("file:memdb_get_lid_for_phone?mode=memory&cache=shared")
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
@@ -2241,7 +2247,8 @@ mod tests {
         // Cache the mapping using add_lid_pn_mapping
         client
             .add_lid_pn_mapping(lid, phone, LearningSource::Usync)
-            .await;
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
 
         // Now it should return the LID
         let result = client.get_lid_for_phone(phone).await;
