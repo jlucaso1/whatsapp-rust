@@ -58,13 +58,13 @@ impl Client {
                 {
                     warn!(
                         "Failed to persist LID {} -> {} from usync: {err}",
-                        mapping.phone_number, mapping.lid,
+                        mapping.lid, mapping.phone_number,
                     );
                     continue;
                 }
                 debug!(
                     "Learned LID mapping from usync: {} -> {}",
-                    mapping.phone_number, mapping.lid
+                    mapping.lid, mapping.phone_number
                 );
             }
 

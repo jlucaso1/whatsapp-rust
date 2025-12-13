@@ -2043,7 +2043,7 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            // Get the most recent mapping for this phone number (by created_at DESC)
+            // Get the most recent mapping for this phone number (by updated_at DESC)
             let result: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
@@ -2109,7 +2109,6 @@ impl SqliteStore {
                 .do_update()
                 .set((
                     lid_pn_mapping::phone_number.eq(&phone_number),
-                    lid_pn_mapping::created_at.eq(created_at),
                     lid_pn_mapping::learning_source.eq(&learning_source),
                     lid_pn_mapping::updated_at.eq(now),
                 ))

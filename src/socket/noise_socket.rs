@@ -183,10 +183,13 @@ impl NoiseSocket {
         };
 
         // Send job to the sender task. If channel is closed, sender task has stopped.
-        if self.send_job_tx.send(job).await.is_err() {
-            // We can't recover the buffers since they were moved into the job.
-            // Create new empty buffers for the error.
-            return Err(EncryptSendError::channel_closed(Vec::new(), Vec::new()));
+        if let Err(send_err) = self.send_job_tx.send(job).await {
+            // Recover the buffers from the failed send job so caller can reuse them
+            let job = send_err.0;
+            return Err(EncryptSendError::channel_closed(
+                job.plaintext_buf,
+                job.out_buf,
+            ));
         }
 
         // Wait for the sender task to process our job and return the result
@@ -274,30 +277,67 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_sends_maintain_order() {
+        use async_trait::async_trait;
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::sync::Mutex;
 
-        // Create a mock transport that tracks send order
-        let send_order = Arc::new(AtomicUsize::new(0));
-        let transport = Arc::new(crate::transport::mock::MockTransport);
+        // Create a mock transport that records the order of sends by decrypting
+        // the first byte (which contains the task index)
+        struct RecordingTransport {
+            recorded_order: Arc<Mutex<Vec<u8>>>,
+            read_key: Aes256Gcm,
+            counter: std::sync::atomic::AtomicU32,
+        }
 
+        #[async_trait]
+        impl crate::transport::Transport for RecordingTransport {
+            async fn send(&self, data: &[u8]) -> std::result::Result<(), anyhow::Error> {
+                // Decrypt the data to extract the index (first byte of plaintext)
+                if data.len() > 16 {
+                    // Skip the noise frame header (3 bytes for length)
+                    let ciphertext = &data[3..];
+                    let counter = self
+                        .counter
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let iv = super::generate_iv(counter);
+
+                    if let Ok(plaintext) = self.read_key.decrypt(iv.as_ref().into(), ciphertext)
+                        && !plaintext.is_empty()
+                    {
+                        let index = plaintext[0];
+                        let mut order = self.recorded_order.lock().await;
+                        order.push(index);
+                    }
+                }
+                Ok(())
+            }
+
+            async fn disconnect(&self) {}
+        }
+
+        let recorded_order = Arc::new(Mutex::new(Vec::new()));
         let key = [0u8; 32];
         let write_key = Aes256Gcm::new_from_slice(&key).unwrap();
         let read_key = Aes256Gcm::new_from_slice(&key).unwrap();
 
+        let transport = Arc::new(RecordingTransport {
+            recorded_order: recorded_order.clone(),
+            read_key: Aes256Gcm::new_from_slice(&key).unwrap(),
+            counter: std::sync::atomic::AtomicU32::new(0),
+        });
+
         let socket = Arc::new(NoiseSocket::new(transport, write_key, read_key));
 
-        // Spawn multiple concurrent sends
+        // Spawn multiple concurrent sends with their indices
         let mut handles = Vec::new();
         for i in 0..10 {
             let socket = socket.clone();
-            let send_order = send_order.clone();
             handles.push(tokio::spawn(async move {
-                let plaintext = vec![i as u8; 100];
+                // Use index as the first byte of plaintext to identify this send
+                let mut plaintext = vec![i as u8];
+                plaintext.extend_from_slice(&[0u8; 99]);
                 let out_buf = Vec::with_capacity(256);
-                let result = socket.encrypt_and_send(plaintext, out_buf).await;
-                send_order.fetch_add(1, Ordering::SeqCst);
-                result
+                socket.encrypt_and_send(plaintext, out_buf).await
             }));
         }
 
@@ -307,7 +347,9 @@ mod tests {
             assert!(result.is_ok(), "All sends should succeed");
         }
 
-        // Verify all sends completed
-        assert_eq!(send_order.load(Ordering::SeqCst), 10);
+        // Verify all sends completed in FIFO order (0, 1, 2, ..., 9)
+        let order = recorded_order.lock().await;
+        let expected: Vec<u8> = (0..10).collect();
+        assert_eq!(*order, expected, "Sends should maintain FIFO order");
     }
 }

@@ -469,8 +469,13 @@ impl Client {
                             address
                         );
 
-                        let device_arc = self.persistence_manager.get_device_arc().await;
-                        let device = device_arc.read().await;
+                        // Extract backend handle and address while holding the lock,
+                        // then drop the lock before the async I/O to avoid lock contention.
+                        let backend = {
+                            let device_arc = self.persistence_manager.get_device_arc().await;
+                            let device = device_arc.read().await;
+                            Arc::clone(&device.backend)
+                        };
 
                         // Delete the old, untrusted identity using the backend.
                         // Use the full protocol address string (including device ID) as the key.
@@ -478,13 +483,11 @@ impl Client {
                         // archived (not deleted) when the new PreKeySignalMessage is processed,
                         // allowing decryption of any in-flight messages encrypted with the old session.
                         let address_str = address.to_string();
-                        if let Err(err) = device.backend.delete_identity(&address_str).await {
+                        if let Err(err) = backend.delete_identity(&address_str).await {
                             log::warn!("Failed to delete old identity for {}: {:?}", address, err);
                         } else {
                             log::info!("Successfully cleared old identity for {}", address);
                         }
-
-                        drop(device);
 
                         // Re-attempt decryption with the new identity
                         log::info!(
