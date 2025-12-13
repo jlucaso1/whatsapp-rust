@@ -174,6 +174,7 @@ pub const BROADCAST_SERVER: &str = "broadcast";
 pub const HIDDEN_USER_SERVER: &str = "lid";
 pub const NEWSLETTER_SERVER: &str = "newsletter";
 pub const HOSTED_SERVER: &str = "hosted";
+pub const HOSTED_LID_SERVER: &str = "hosted.lid";
 pub const MESSENGER_SERVER: &str = "msgr";
 pub const INTEROP_SERVER: &str = "interop";
 pub const BOT_SERVER: &str = "bot";
@@ -248,6 +249,13 @@ pub trait JidExt {
             && self.device() == 0
             && (self.user().starts_with("1313555") || self.user().starts_with("131655500")))
             || self.server() == BOT_SERVER
+    }
+
+    /// Returns true if this is a hosted/Cloud API device.
+    /// Hosted devices have device ID 99 or use @hosted/@hosted.lid server.
+    /// These devices should be excluded from group message fanout.
+    fn is_hosted(&self) -> bool {
+        self.device() == 99 || self.server() == HOSTED_SERVER || self.server() == HOSTED_LID_SERVER
     }
 
     fn is_empty(&self) -> bool {
@@ -480,7 +488,8 @@ impl FromStr for Jid {
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.user.is_empty() {
-            write!(f, "@{}", self.server)
+            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
+            write!(f, "{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
 
@@ -513,7 +522,8 @@ impl fmt::Display for Jid {
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.user.is_empty() {
-            write!(f, "@{}", self.server)
+            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
+            write!(f, "{}", self.server)
         } else {
             write!(f, "{}", self.user)?;
 
@@ -646,18 +656,9 @@ mod tests {
         );
         assert_jid_roundtrip("123-456@g.us", "123-456", "g.us", 0, 0);
 
-        // Server-only JID: parsing "s.whatsapp.net" should display as "@s.whatsapp.net"
-        assert_jid_parse_and_display(
-            "s.whatsapp.net",
-            "",
-            "s.whatsapp.net",
-            0,
-            0,
-            "@s.whatsapp.net",
-        );
-
-        // Server-only JID with @ prefix: parsing "@s.whatsapp.net" should also work (roundtrip)
-        assert_jid_roundtrip("@s.whatsapp.net", "", "s.whatsapp.net", 0, 0);
+        // Server-only JID: parsing "s.whatsapp.net" should display as "s.whatsapp.net" (no @ prefix)
+        // This matches WhatsApp Web behavior where server-only JIDs don't have @ prefix
+        assert_jid_roundtrip("s.whatsapp.net", "", "s.whatsapp.net", 0, 0);
 
         // LID JID cases (critical for the bug)
         assert_jid_roundtrip("12345.6789@lid", "12345.6789", "lid", 0, 0);
@@ -742,5 +743,175 @@ mod tests {
         // Jid::from_str("2") should not be possible due to type constraints,
         // but if it were, it should fail. The string must contain '@'.
         assert!(Jid::from_str("2").is_err());
+    }
+
+    /// Tests for HOSTED device detection (`is_hosted()` method).
+    ///
+    /// # Context: What are HOSTED devices?
+    ///
+    /// HOSTED devices (also known as Cloud API or Meta Business API devices) are
+    /// WhatsApp Business accounts that use Meta's server-side infrastructure instead
+    /// of traditional end-to-end encryption with Signal protocol.
+    ///
+    /// ## Key characteristics:
+    /// - Device ID is always 99 (`:99`)
+    /// - Server is `@hosted` (phone-based) or `@hosted.lid` (LID-based)
+    /// - They do NOT use Signal protocol prekeys
+    /// - They should be EXCLUDED from group message fanout
+    /// - They CAN receive 1:1 messages (but prekey fetch will fail, causing graceful skip)
+    ///
+    /// ## Why exclude from groups?
+    /// WhatsApp Web explicitly filters hosted devices from group SKDM (Sender Key
+    /// Distribution Message) distribution. From WhatsApp Web JS (`getFanOutList`):
+    /// ```javascript
+    /// var isHosted = e.id === 99 || e.isHosted === true;
+    /// var includeInFanout = !isHosted || isOneToOneChat;
+    /// ```
+    ///
+    /// ## JID formats:
+    /// - Phone-based: `5511999887766:99@hosted`
+    /// - LID-based: `100000012345678:99@hosted.lid`
+    /// - Regular device with ID 99: `5511999887766:99@s.whatsapp.net` (also hosted!)
+    #[test]
+    fn test_is_hosted_device_detection() {
+        // === HOSTED DEVICES (should return true) ===
+
+        // Case 1: Device ID 99 on regular server (Cloud API business account)
+        // This is the most common case - a business using Meta's Cloud API
+        let cloud_api_device: Jid = "5511999887766:99@s.whatsapp.net".parse().unwrap();
+        assert!(
+            cloud_api_device.is_hosted(),
+            "Device ID 99 on s.whatsapp.net should be detected as hosted (Cloud API)"
+        );
+
+        // Case 2: Device ID 99 on LID server
+        let cloud_api_lid: Jid = "100000012345678:99@lid".parse().unwrap();
+        assert!(
+            cloud_api_lid.is_hosted(),
+            "Device ID 99 on lid server should be detected as hosted"
+        );
+
+        // Case 3: Explicit @hosted server (phone-based hosted JID)
+        let hosted_server: Jid = "5511999887766:99@hosted".parse().unwrap();
+        assert!(
+            hosted_server.is_hosted(),
+            "JID with @hosted server should be detected as hosted"
+        );
+
+        // Case 4: Explicit @hosted.lid server (LID-based hosted JID)
+        let hosted_lid_server: Jid = "100000012345678:99@hosted.lid".parse().unwrap();
+        assert!(
+            hosted_lid_server.is_hosted(),
+            "JID with @hosted.lid server should be detected as hosted"
+        );
+
+        // Case 5: @hosted server with different device ID (edge case)
+        // Even with device ID != 99, if server is @hosted, it's a hosted device
+        let hosted_server_other_device: Jid = "5511999887766:0@hosted".parse().unwrap();
+        assert!(
+            hosted_server_other_device.is_hosted(),
+            "JID with @hosted server should be hosted regardless of device ID"
+        );
+
+        // === NON-HOSTED DEVICES (should return false) ===
+
+        // Case 6: Regular phone device (primary phone, device 0)
+        let regular_phone: Jid = "5511999887766:0@s.whatsapp.net".parse().unwrap();
+        assert!(
+            !regular_phone.is_hosted(),
+            "Regular phone device (ID 0) should NOT be hosted"
+        );
+
+        // Case 7: Companion device (WhatsApp Web, device 33+)
+        let companion_device: Jid = "5511999887766:33@s.whatsapp.net".parse().unwrap();
+        assert!(
+            !companion_device.is_hosted(),
+            "Companion device (ID 33) should NOT be hosted"
+        );
+
+        // Case 8: Regular LID device
+        let regular_lid: Jid = "100000012345678:0@lid".parse().unwrap();
+        assert!(
+            !regular_lid.is_hosted(),
+            "Regular LID device should NOT be hosted"
+        );
+
+        // Case 9: LID companion device
+        let lid_companion: Jid = "100000012345678:33@lid".parse().unwrap();
+        assert!(
+            !lid_companion.is_hosted(),
+            "LID companion device (ID 33) should NOT be hosted"
+        );
+
+        // Case 10: Group JID (not a device at all)
+        let group_jid: Jid = "120363012345678@g.us".parse().unwrap();
+        assert!(
+            !group_jid.is_hosted(),
+            "Group JID should NOT be detected as hosted"
+        );
+
+        // Case 11: User JID without device
+        let user_jid: Jid = "5511999887766@s.whatsapp.net".parse().unwrap();
+        assert!(
+            !user_jid.is_hosted(),
+            "User JID without device should NOT be hosted"
+        );
+
+        // Case 12: Bot device
+        let bot_jid: Jid = "13136555001:0@s.whatsapp.net".parse().unwrap();
+        assert!(
+            !bot_jid.is_hosted(),
+            "Bot JID should NOT be detected as hosted (different mechanism)"
+        );
+    }
+
+    /// Tests that document the filtering behavior for group messages.
+    ///
+    /// # Why this matters:
+    /// When sending a group message, we distribute Sender Key Distribution Messages
+    /// (SKDM) to all participant devices. However, HOSTED devices:
+    /// 1. Don't use Signal protocol, so they can't process SKDM
+    /// 2. WhatsApp Web explicitly excludes them from group fanout
+    /// 3. Including them would cause unnecessary prekey fetch failures
+    ///
+    /// This test documents the expected behavior when filtering device lists.
+    #[test]
+    fn test_hosted_device_filtering_for_groups() {
+        // Simulate a group with mixed device types
+        let devices: Vec<Jid> = vec![
+            // Regular devices that SHOULD receive SKDM
+            "5511999887766:0@s.whatsapp.net".parse().unwrap(), // Phone
+            "5511999887766:33@s.whatsapp.net".parse().unwrap(), // WhatsApp Web
+            "5521988776655:0@s.whatsapp.net".parse().unwrap(), // Another user's phone
+            "100000012345678:0@lid".parse().unwrap(),          // LID device
+            "100000012345678:33@lid".parse().unwrap(),         // LID companion
+            // HOSTED devices that should be EXCLUDED from group SKDM
+            "5531977665544:99@s.whatsapp.net".parse().unwrap(), // Cloud API business
+            "100000087654321:99@lid".parse().unwrap(),          // Cloud API on LID
+            "5541966554433:99@hosted".parse().unwrap(),         // Explicit hosted
+        ];
+
+        // Filter out hosted devices (this is what prepare_group_stanza does)
+        let filtered: Vec<&Jid> = devices.iter().filter(|jid| !jid.is_hosted()).collect();
+
+        // Verify correct filtering
+        assert_eq!(
+            filtered.len(),
+            5,
+            "Should have 5 non-hosted devices after filtering"
+        );
+
+        // All filtered devices should NOT be hosted
+        for jid in &filtered {
+            assert!(
+                !jid.is_hosted(),
+                "Filtered list should not contain hosted devices: {}",
+                jid
+            );
+        }
+
+        // Count how many hosted devices were filtered out
+        let hosted_count = devices.iter().filter(|jid| jid.is_hosted()).count();
+        assert_eq!(hosted_count, 3, "Should have filtered out 3 hosted devices");
     }
 }

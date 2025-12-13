@@ -34,5 +34,6 @@ pub mod presence;
 pub mod usync;
 
 pub mod bot;
+pub mod lid_pn_cache;
 pub mod sync_task;
 pub mod version;

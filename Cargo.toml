@@ -33,6 +33,7 @@ wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
 
 [features]
+danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
 default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]

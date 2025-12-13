@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::NodeRef;
+use wacore_binary::node::Node;
 
 /// Handler for `<success>` stanzas.
 ///
@@ -22,8 +22,8 @@ impl StanzaHandler for SuccessHandler {
         "success"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
-        client.handle_success_ref(node).await;
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        client.handle_success(&node).await;
         true
     }
 }
@@ -46,8 +46,8 @@ impl StanzaHandler for FailureHandler {
         "failure"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
-        client.handle_connect_failure_ref(node).await;
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        client.handle_connect_failure(&node).await;
         true
     }
 }
@@ -70,8 +70,8 @@ impl StanzaHandler for StreamErrorHandler {
         "stream:error"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
-        client.handle_stream_error_ref(node).await;
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        client.handle_stream_error(&node).await;
         true
     }
 }
@@ -94,10 +94,12 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: &NodeRef<'_>, _cancelled: &mut bool) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
         // Delegate to the client to check if any task is waiting for this ack.
         // The client will resolve pending response waiters if the ID matches.
-        client.handle_ack_response_ref(node).await;
+        // Try to unwrap Arc or clone Node if there are other references
+        let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());
+        client.handle_ack_response(owned_node).await;
         // We return `true` because this handler's purpose is to consume all <ack> stanzas.
         true
     }

@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
 use log::{error, info, warn};
 use prost::Message;
@@ -7,8 +8,8 @@ use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent, NodeContentRef, NodeRef};
+use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::node::{Node, NodeContent};
 use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
@@ -22,22 +23,23 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     PairUtils::make_qr_data(&device_state, ref_str)
 }
 
-pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
+pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
+    // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
     if node
-        .get_attr("from")
-        .map(|s| s.as_ref())
+        .attrs
+        .get("from")
+        .map(|s| s.as_str())
         .unwrap_or_default()
-        != "@s.whatsapp.net"
+        != SERVER_JID
     {
         return false;
     }
 
     if let Some(children) = node.children() {
         for child in children {
-            let handled = match child.tag.as_ref() {
+            let handled = match child.tag.as_str() {
                 "pair-device" => {
-                    // PairUtils::build_ack_node needs an owned Node
-                    if let Some(ack_node) = PairUtils::build_ack_node(&node.to_owned())
+                    if let Some(ack_node) = PairUtils::build_ack_node(node)
                         && let Err(e) = client.send_node(ack_node).await
                     {
                         warn!("Failed to send acknowledgement: {e:?}");
@@ -53,8 +55,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                     };
 
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContentRef::Bytes(bytes)) = grandchild.content.as_deref()
-                            && let Ok(r) = String::from_utf8(bytes.as_ref().to_vec())
+                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
+                            && let Ok(r) = String::from_utf8(bytes.clone())
                         {
                             codes.push(PairUtils::make_qr_data(&device_state, r));
                         }
@@ -103,8 +105,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                     true
                 }
                 "pair-success" => {
-                    // Convert to owned for handle_pair_success as it needs to access deeply nested data
-                    handle_pair_success(client, &node.to_owned(), &child.to_owned()).await;
+                    handle_pair_success(client, node, child).await;
                     true
                 }
                 _ => false,
@@ -221,6 +222,26 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                     lid.clone(),
                 )))
                 .await;
+
+            // Add the own LID-PN mapping to the cache so that when sending DMs to self,
+            // we can find the existing LID-based session instead of creating a new PN-based one.
+            // This is critical for self-messaging to work correctly.
+            if !jid.user.is_empty() && !lid.user.is_empty() {
+                if let Err(err) = client
+                    .add_lid_pn_mapping(&lid.user, &jid.user, LearningSource::Pairing)
+                    .await
+                {
+                    warn!(
+                        "Failed to persist own LID-PN mapping {} <-> {}: {err}",
+                        lid.user, jid.user
+                    );
+                } else {
+                    info!(
+                        "Added own LID-PN mapping to cache: {} <-> {}",
+                        lid.user, jid.user
+                    );
+                }
+            }
 
             if !business_name.is_empty() {
                 info!("✅ Setting push_name during pairing: '{}'", &business_name);

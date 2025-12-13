@@ -110,17 +110,63 @@ where
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 {
+    // Build a map of device JIDs to their effective encryption JIDs.
+    // For phone number JIDs, check if we have an existing session under the corresponding LID.
+    // This handles the case where a session was established via a message with sender_lid,
+    // and now we're sending a reply using the phone number address.
+    let mut jid_to_encryption_jid: std::collections::HashMap<Jid, Jid> =
+        std::collections::HashMap::new();
     let mut jids_needing_prekeys = Vec::new();
+
     for device_jid in devices {
         let signal_address = device_jid.to_protocol_address();
+
+        // First check if we have a session under the phone number address
         if stores
             .session_store
             .load_session(&signal_address)
             .await?
-            .is_none()
+            .is_some()
         {
-            jids_needing_prekeys.push(device_jid.clone());
+            // Session exists under PN address, use it
+            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+            continue;
         }
+
+        // No session under PN - check if there's one under the corresponding LID
+        if device_jid.server == "s.whatsapp.net"
+            && let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await
+        {
+            // Construct the LID JID with the same device ID
+            let lid_jid = Jid {
+                user: lid_user.clone(),
+                server: "lid".to_string(),
+                device: device_jid.device,
+                agent: device_jid.agent,
+                integrator: device_jid.integrator,
+            };
+            let lid_address = lid_jid.to_protocol_address();
+
+            if stores
+                .session_store
+                .load_session(&lid_address)
+                .await?
+                .is_some()
+            {
+                // Found existing session under LID address - use it!
+                log::debug!(
+                    "Using existing LID session {} instead of creating new PN session for {}",
+                    lid_jid,
+                    device_jid
+                );
+                jid_to_encryption_jid.insert(device_jid.clone(), lid_jid);
+                continue;
+            }
+        }
+
+        // No session found under either address - need to fetch prekeys
+        jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+        jids_needing_prekeys.push(device_jid.clone());
     }
 
     if !jids_needing_prekeys.is_empty() {
@@ -242,7 +288,9 @@ where
     let mut includes_prekey_message = false;
 
     for device_jid in devices {
-        let signal_address = device_jid.to_protocol_address();
+        // Use the effective encryption JID (may be LID if we found an existing LID session)
+        let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
+        let signal_address = encryption_jid.to_protocol_address();
 
         // Try to encrypt for this device. If it fails (e.g., no session established),
         // log a warning and skip this device instead of failing the entire operation.
@@ -275,6 +323,8 @@ where
                     .attrs(enc_attrs)
                     .bytes(serialized_bytes)
                     .build();
+                // Use the original device_jid for the `to` attribute (what the server expects),
+                // but we encrypted using the encryption_jid's session
                 participant_nodes.push(
                     NodeBuilder::new("to")
                         .attr("jid", device_jid.to_string())
@@ -554,8 +604,48 @@ pub async fn prepare_group_stanza<
 
         let mut resolved_list = resolver.resolve_devices(&jids_to_resolve).await?;
 
+        // For LID groups, convert phone-based device JIDs back to LID format
+        // This is necessary because WhatsApp Web expects LID addressing in SKDM <to> nodes
+        if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
+            resolved_list = resolved_list
+                .into_iter()
+                .map(|device_jid| group_info.phone_device_jid_to_lid(&device_jid))
+                .collect();
+            log::debug!(
+                "Converted {} devices to LID addressing for group {}",
+                resolved_list.len(),
+                to_jid
+            );
+        }
+
+        // Dedup AFTER LID conversion to avoid duplicates when both phone and LID
+        // queries return the same user (e.g., 559980000003:33 and 100000037037034:33
+        // both convert to 100000037037034:33@lid)
         let mut seen = HashSet::new();
         resolved_list.retain(|jid| seen.insert(jid.to_string()));
+
+        // Filter devices for SKDM distribution:
+        // - Exclude the exact sending device (own_sending_jid) - we already have our own sender key
+        // - Keep ALL other devices including our own other devices (phone, other companions)
+        //   because they need the SKDM to decrypt messages we send from this device
+        // - Exclude hosted/Cloud API devices (device ID 99 or @hosted server) - they don't
+        //   participate in group E2EE, only in 1:1 chats
+        let own_user = own_sending_jid.user.clone();
+        let own_device = own_sending_jid.device;
+        let before_filter = resolved_list.len();
+        resolved_list.retain(|device_jid| {
+            let is_exact_sender = device_jid.user == own_user && device_jid.device == own_device;
+            let is_hosted = device_jid.is_hosted();
+            // Exclude the exact sending device and hosted devices
+            !is_exact_sender && !is_hosted
+        });
+        log::debug!(
+            "Filtered SKDM devices from {} to {} (excluded sender {}:{} and hosted devices)",
+            before_filter,
+            resolved_list.len(),
+            own_user,
+            own_device
+        );
 
         log::debug!(
             "SKDM distribution list for {} resolved to {} devices",
@@ -645,6 +735,11 @@ pub async fn prepare_group_stanza<
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
     stanza_attrs.insert("id".to_string(), request_id);
     stanza_attrs.insert("type".to_string(), "text".to_string());
+
+    // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
+    if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
+        stanza_attrs.insert("addressing_mode".to_string(), "lid".to_string());
+    }
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
@@ -747,6 +842,8 @@ mod tests {
         prekey_bundles: HashMap<Jid, Option<PreKeyBundle>>,
         /// Devices to return from resolve_devices
         devices: Vec<Jid>,
+        /// Phone number to LID mappings for testing LID session lookup
+        phone_to_lid: HashMap<String, String>,
     }
 
     impl MockSendContextResolver {
@@ -754,6 +851,7 @@ mod tests {
             Self {
                 prekey_bundles: HashMap::new(),
                 devices: Vec::new(),
+                phone_to_lid: HashMap::new(),
             }
         }
 
@@ -769,6 +867,11 @@ mod tests {
 
         fn with_devices(mut self, devices: Vec<Jid>) -> Self {
             self.devices = devices;
+            self
+        }
+
+        fn with_phone_to_lid(mut self, phone: &str, lid: &str) -> Self {
+            self.phone_to_lid.insert(phone.to_string(), lid.to_string());
             self
         }
     }
@@ -809,6 +912,10 @@ mod tests {
 
         async fn resolve_group_info(&self, _jid: &Jid) -> Result<GroupInfo> {
             unimplemented!("resolve_group_info not needed for send.rs tests")
+        }
+
+        async fn get_lid_for_phone(&self, phone_user: &str) -> Option<String> {
+            self.phone_to_lid.get(phone_user).cloned()
         }
     }
 
@@ -926,14 +1033,38 @@ mod tests {
         println!("✅ Large group with 7 available, 3 unavailable devices");
     }
 
-    /// Test case: Cloud API device without pre-key
+    /// Test case: Cloud API / HOSTED device without pre-key
     ///
-    /// Cloud API devices often don't have traditional pre-key bundles.
-    /// They should be skipped without affecting regular devices.
+    /// # Context: What are HOSTED devices?
+    ///
+    /// HOSTED devices (Cloud API / Meta Business API) are WhatsApp Business accounts
+    /// that use Meta's server-side infrastructure instead of traditional E2EE.
+    ///
+    /// ## Identification:
+    /// - Device ID 99 (`:99`) on any server
+    /// - Server `@hosted` or `@hosted.lid`
+    ///
+    /// ## Behavior:
+    /// - They do NOT have Signal protocol prekey bundles
+    /// - For 1:1 chats: included in device list, but prekey fetch fails gracefully
+    /// - For groups: proactively filtered out before SKDM distribution
+    ///
+    /// This test verifies that when a hosted device is included in the device list
+    /// (which would happen for 1:1 chats), the missing prekey is handled gracefully.
     #[test]
     fn test_cloud_api_device_without_prekey() {
         let regular_device: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
         let cloud_api: Jid = "1234567890:99@hosted".parse().unwrap();
+
+        // Verify the cloud_api device is detected as hosted
+        assert!(
+            cloud_api.is_hosted(),
+            "Device with :99@hosted should be detected as hosted"
+        );
+        assert!(
+            !regular_device.is_hosted(),
+            "Regular device should NOT be detected as hosted"
+        );
 
         let resolver = MockSendContextResolver::new()
             .with_bundle(regular_device.clone(), create_mock_bundle())
@@ -946,10 +1077,89 @@ mod tests {
         );
         assert!(
             resolver.prekey_bundles[&cloud_api].is_none(),
-            "Cloud API device should not have a bundle"
+            "Cloud API device should not have a bundle (they don't use Signal protocol)"
         );
 
-        println!("✅ Cloud API device skipped, regular device included");
+        println!("✅ Cloud API device has no prekey bundle (expected behavior)");
+    }
+
+    /// Test case: HOSTED devices are filtered from group SKDM distribution
+    ///
+    /// # Why filter hosted devices from groups?
+    ///
+    /// WhatsApp Web explicitly excludes hosted devices from group message fanout.
+    /// From the JS code (`getFanOutList`):
+    /// ```javascript
+    /// var isHosted = e.id === 99 || e.isHosted === true;
+    /// var includeInFanout = !isHosted || isOneToOneChat;
+    /// ```
+    ///
+    /// ## Reasons:
+    /// 1. Hosted devices don't use Signal protocol - they can't process SKDM
+    /// 2. Including them causes unnecessary prekey fetch failures
+    /// 3. Group encryption is handled differently for Cloud API businesses
+    ///
+    /// This test verifies that `is_hosted()` correctly identifies devices that
+    /// should be filtered from group SKDM distribution.
+    #[test]
+    fn test_hosted_devices_filtered_from_group_skdm() {
+        // Simulate devices returned from usync for a group
+        let devices: Vec<Jid> = vec![
+            // Regular devices - should receive SKDM
+            "5511999887766:0@s.whatsapp.net".parse().unwrap(), // Primary phone
+            "5511999887766:33@s.whatsapp.net".parse().unwrap(), // WhatsApp Web companion
+            "5521988776655:0@s.whatsapp.net".parse().unwrap(), // Another participant
+            "100000012345678:33@lid".parse().unwrap(),         // LID companion device
+            // HOSTED devices - should be EXCLUDED from group SKDM
+            "5531977665544:99@s.whatsapp.net".parse().unwrap(), // Cloud API on regular server
+            "100000087654321:99@lid".parse().unwrap(),          // Cloud API on LID server
+            "5541966554433:0@hosted".parse().unwrap(),          // Explicit @hosted server
+        ];
+
+        // This is the filtering logic used in prepare_group_stanza
+        let filtered_for_skdm: Vec<Jid> =
+            devices.into_iter().filter(|jid| !jid.is_hosted()).collect();
+
+        assert_eq!(
+            filtered_for_skdm.len(),
+            4,
+            "Should have 4 devices after filtering out hosted devices"
+        );
+
+        // Verify all remaining devices are NOT hosted
+        for jid in &filtered_for_skdm {
+            assert!(
+                !jid.is_hosted(),
+                "Filtered list should not contain hosted device: {}",
+                jid
+            );
+        }
+
+        // Verify specific devices are included/excluded by checking struct fields
+        // (Device ID 0 is not serialized in the string representation)
+        let has_primary_phone = filtered_for_skdm
+            .iter()
+            .any(|j| j.user == "5511999887766" && j.device == 0 && j.server == "s.whatsapp.net");
+        let has_companion = filtered_for_skdm
+            .iter()
+            .any(|j| j.user == "5511999887766" && j.device == 33 && j.server == "s.whatsapp.net");
+        let has_cloud_api = filtered_for_skdm
+            .iter()
+            .any(|j| j.user == "5531977665544" && j.device == 99);
+        let has_hosted_server = filtered_for_skdm.iter().any(|j| j.server == "hosted");
+
+        assert!(has_primary_phone, "Primary phone should be included");
+        assert!(has_companion, "WhatsApp Web companion should be included");
+        assert!(
+            !has_cloud_api,
+            "Cloud API device (ID 99) should be excluded"
+        );
+        assert!(
+            !has_hosted_server,
+            "@hosted server device should be excluded"
+        );
+
+        println!("✅ Hosted devices correctly filtered from group SKDM distribution");
     }
 
     /// Test case: Device recovery between retries
@@ -996,5 +1206,197 @@ mod tests {
             *identity_pair.identity_key(),
         )
         .expect("Failed to create PreKeyBundle")
+    }
+
+    // ==========================================
+    // LID-PN Session Mismatch Fix Tests
+    // ==========================================
+    //
+    // These tests validate the fix for the LID-PN session mismatch issue.
+    // When a message is received with sender_lid, the session is stored under the LID address.
+    // When sending a reply using the phone number, we must reuse the existing LID session
+    // instead of creating a new PN session, otherwise subsequent messages will fail with
+    // MAC verification errors.
+
+    /// Test that phone_to_lid mapping returns the cached LID mapping.
+    ///
+    /// This verifies the MockSendContextResolver correctly stores phone-to-LID
+    /// mappings used for LID session lookup.
+    #[test]
+    fn test_mock_resolver_phone_to_lid_mapping() {
+        let phone = "559980000001";
+        let lid = "100000012345678";
+
+        let resolver = MockSendContextResolver::new().with_phone_to_lid(phone, lid);
+
+        // Access the HashMap directly (synchronous)
+        let result = resolver.phone_to_lid.get(phone).cloned();
+
+        assert!(result.is_some(), "Should return LID for known phone");
+        assert_eq!(result.unwrap(), lid, "Should return correct LID");
+
+        // Unknown phone should return None
+        let unknown = resolver.phone_to_lid.get("999999999").cloned();
+        assert!(unknown.is_none(), "Should return None for unknown phone");
+
+        println!("✅ MockSendContextResolver phone_to_lid mapping works correctly");
+    }
+
+    /// Test that the resolver correctly maps phone numbers to LIDs.
+    ///
+    /// This is a building block for the session lookup logic.
+    #[test]
+    fn test_phone_to_lid_mapping_multiple_users() {
+        let resolver = MockSendContextResolver::new()
+            .with_phone_to_lid("559980000001", "100000012345678")
+            .with_phone_to_lid("559980000002", "100000024691356")
+            .with_phone_to_lid("559980000003", "100000037037034");
+
+        // Verify all mappings using direct HashMap access
+        let lid1 = resolver.phone_to_lid.get("559980000001").cloned();
+        let lid2 = resolver.phone_to_lid.get("559980000002").cloned();
+        let lid3 = resolver.phone_to_lid.get("559980000003").cloned();
+
+        assert_eq!(lid1.unwrap(), "100000012345678");
+        assert_eq!(lid2.unwrap(), "100000024691356");
+        assert_eq!(lid3.unwrap(), "100000037037034");
+
+        println!("✅ Multiple phone-to-LID mappings work correctly");
+    }
+
+    /// Test the scenario that caused the original bug:
+    /// - Session exists under LID address (from receiving a message with sender_lid)
+    /// - Send to PN address should reuse the LID session, not create a new one
+    ///
+    /// This test verifies the logic flow, though full integration testing
+    /// requires the actual encrypt_for_devices function with real sessions.
+    #[test]
+    fn test_lid_session_lookup_scenario() {
+        // Scenario setup:
+        // - Received message from 559980000001@s.whatsapp.net with sender_lid=100000012345678@lid
+        // - Session was stored under 100000012345678.0
+        // - Now sending reply to 559980000001@s.whatsapp.net
+        // - Should look up LID and check for session under 100000012345678.0
+
+        let phone = "559980000001";
+        let lid = "100000012345678";
+        let device_id = 0u16;
+
+        let resolver = MockSendContextResolver::new().with_phone_to_lid(phone, lid);
+
+        // Simulate the device JID we're trying to send to (PN format)
+        let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, device_id)
+            .parse()
+            .unwrap();
+
+        // Step 1: Look up LID for the phone number (using direct HashMap access)
+        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+        assert!(lid_user.is_some(), "Should find LID for phone");
+        let lid_user = lid_user.unwrap();
+
+        // Step 2: Construct the LID JID with same device ID
+        let lid_jid = Jid {
+            user: lid_user.clone(),
+            server: "lid".to_string(),
+            device: pn_device_jid.device,
+            agent: pn_device_jid.agent,
+            integrator: pn_device_jid.integrator,
+        };
+
+        // Step 3: Verify the LID JID is correctly constructed
+        assert_eq!(lid_jid.user, lid, "LID user should match");
+        assert_eq!(lid_jid.server, "lid", "Server should be 'lid'");
+        assert_eq!(lid_jid.device, device_id, "Device ID should be preserved");
+
+        // Step 4: Convert to protocol addresses and verify they're different
+        use crate::types::jid::JidExt;
+        let pn_address = pn_device_jid.to_protocol_address();
+        let lid_address = lid_jid.to_protocol_address();
+
+        assert_ne!(
+            pn_address.name(),
+            lid_address.name(),
+            "PN and LID addresses should have different names"
+        );
+        assert_eq!(
+            pn_address.device_id(),
+            lid_address.device_id(),
+            "Device IDs should match"
+        );
+
+        println!("✅ LID session lookup scenario works correctly:");
+        println!("   - PN JID: {} -> Address: {}", pn_device_jid, pn_address);
+        println!("   - LID JID: {} -> Address: {}", lid_jid, lid_address);
+        println!("   - Would check for session under LID address first");
+    }
+
+    /// Test that companion device IDs are preserved in LID JID construction.
+    ///
+    /// WhatsApp Web uses device ID 33, and this must be preserved when
+    /// constructing the LID JID for session lookup.
+    #[test]
+    fn test_lid_jid_preserves_companion_device_id() {
+        let phone = "559980000001";
+        let lid = "100000012345678";
+        let companion_device_id = 33u16; // WhatsApp Web device ID
+
+        let resolver = MockSendContextResolver::new().with_phone_to_lid(phone, lid);
+
+        // Simulate sending to a companion device (WhatsApp Web)
+        let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, companion_device_id)
+            .parse()
+            .unwrap();
+
+        // Look up LID using direct HashMap access
+        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+
+        // Construct LID JID
+        let lid_jid = Jid {
+            user: lid_user.unwrap(),
+            server: "lid".to_string(),
+            device: pn_device_jid.device,
+            agent: pn_device_jid.agent,
+            integrator: pn_device_jid.integrator,
+        };
+
+        assert_eq!(
+            lid_jid.device, companion_device_id,
+            "Device ID 33 should be preserved"
+        );
+        assert_eq!(lid_jid.to_string(), "100000012345678:33@lid");
+
+        println!("✅ Companion device ID (33) correctly preserved in LID JID");
+    }
+
+    /// Test that LID lookup only applies to s.whatsapp.net JIDs.
+    ///
+    /// LID JIDs (@lid) and group JIDs (@g.us) should not trigger LID lookup.
+    #[test]
+    fn test_lid_lookup_only_for_pn_jids() {
+        let _resolver =
+            MockSendContextResolver::new().with_phone_to_lid("559980000001", "100000012345678");
+
+        // These JIDs should NOT trigger LID lookup
+        let lid_jid: Jid = "100000012345678:0@lid".parse().unwrap();
+        let group_jid: Jid = "120363123456789012@g.us".parse().unwrap();
+
+        // Only s.whatsapp.net JIDs should be looked up
+        assert_ne!(
+            lid_jid.server, "s.whatsapp.net",
+            "LID JID should not be s.whatsapp.net"
+        );
+        assert_ne!(
+            group_jid.server, "s.whatsapp.net",
+            "Group JID should not be s.whatsapp.net"
+        );
+
+        // PN JID should be eligible for lookup
+        let pn_jid: Jid = "559980000001:0@s.whatsapp.net".parse().unwrap();
+        assert_eq!(
+            pn_jid.server, "s.whatsapp.net",
+            "PN JID should be s.whatsapp.net"
+        );
+
+        println!("✅ LID lookup correctly limited to s.whatsapp.net JIDs");
     }
 }

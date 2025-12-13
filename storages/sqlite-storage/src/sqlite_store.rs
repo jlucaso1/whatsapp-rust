@@ -5,16 +5,17 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+use log::warn;
 use prost::Message;
+use std::sync::Arc;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::processor::AppStateMutationMAC;
 use wacore::libsignal;
 use wacore::libsignal::protocol::{Direction, KeyPair, PrivateKey, PublicKey};
-use wacore::store::error::{Result, StoreError};
-use wacore::store::traits::*;
-use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
-
 use wacore::store::Device as CoreDevice;
+use wacore::store::error::{Result, StoreError};
+use wacore::store::traits::{self, *};
+use waproto::whatsapp::{self as wa, PreKeyRecordStructure, SignedPreKeyRecordStructure};
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -37,6 +38,7 @@ type DeviceRow = (
     i32,             // app_version_secondary
     i64,             // app_version_tertiary
     i64,             // app_version_last_fetched_ms
+    Option<Vec<u8>>, // edge_routing_info
 );
 
 #[derive(Clone)]
@@ -45,8 +47,6 @@ pub struct SqliteStore {
     /// Semaphore to limit concurrent DB operations to prevent lock contention
     pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
 }
-
-use std::sync::Arc;
 
 /// Connection customizer that applies PRAGMAs to each new connection
 #[derive(Debug, Clone, Copy)]
@@ -62,7 +62,7 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         // Apply per-connection PRAGMAs when connection is first created
         // busy_timeout and synchronous are per-connection settings
         // Propagate errors so that misconfigured connections are rejected
-        diesel::sql_query("PRAGMA busy_timeout = 15000;")
+        diesel::sql_query("PRAGMA busy_timeout = 30000;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
         diesel::sql_query("PRAGMA synchronous = NORMAL;")
@@ -74,6 +74,10 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         diesel::sql_query("PRAGMA temp_store = memory;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
+        // Foreign key constraints are disabled by default in SQLite and are per-connection.
+        diesel::sql_query("PRAGMA foreign_keys = ON;")
+            .execute(conn)
+            .map_err(diesel::r2d2::Error::QueryError)?;
         Ok(())
     }
 }
@@ -82,9 +86,11 @@ impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
 
+        let pool_size = 64;
+
         // Build pool with connection customizer that applies PRAGMAs to each new connection
         let pool = Pool::builder()
-            .max_size(4) // Limit concurrent connections to reduce memory and lock contention
+            .max_size(pool_size) // Limit concurrent connections to reduce memory and lock contention
             .connection_customizer(Box::new(ConnectionOptions))
             .build(manager)
             .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -113,7 +119,7 @@ impl SqliteStore {
 
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // Match pool max_size
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(64)), // Increased to reduce contention during high load
         })
     }
 
@@ -222,6 +228,7 @@ impl SqliteStore {
         let app_version_secondary = device_data.app_version_secondary as i32;
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
+        let edge_routing_info = device_data.edge_routing_info.clone();
         let new_lid = device_data
             .lid
             .as_ref()
@@ -264,6 +271,7 @@ impl SqliteStore {
                     device::app_version_secondary.eq(app_version_secondary),
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                    device::edge_routing_info.eq(edge_routing_info.clone()),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -283,6 +291,7 @@ impl SqliteStore {
                     device::app_version_secondary.eq(app_version_secondary),
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                    device::edge_routing_info.eq(edge_routing_info),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -318,6 +327,7 @@ impl SqliteStore {
         let app_version_secondary = device_data.app_version_secondary as i32;
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
+        let edge_routing_info = device_data.edge_routing_info.clone();
         let new_lid = device_data
             .lid
             .as_ref()
@@ -352,6 +362,7 @@ impl SqliteStore {
                     device::app_version_secondary.eq(app_version_secondary),
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                    device::edge_routing_info.eq(edge_routing_info.clone()),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -371,6 +382,7 @@ impl SqliteStore {
                     device::app_version_secondary.eq(app_version_secondary),
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                    device::edge_routing_info.eq(edge_routing_info),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -415,6 +427,7 @@ impl SqliteStore {
             app_version_secondary,
             app_version_tertiary,
             app_version_last_fetched_ms,
+            edge_routing_info,
         )) = row
         {
             let id = if !pn_str.is_empty() {
@@ -479,6 +492,7 @@ impl SqliteStore {
                     use wacore::store::device::DEVICE_PROPS;
                     DEVICE_PROPS.clone()
                 },
+                edge_routing_info,
             }))
         } else {
             Ok(None)
@@ -536,6 +550,7 @@ impl SqliteStore {
                     device::app_version_secondary.eq(new_device.app_version_secondary as i32),
                     device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
                     device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
+                    device::edge_routing_info.eq(None::<Vec<u8>>),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -706,6 +721,7 @@ impl SqliteStore {
             app_version_secondary,
             app_version_tertiary,
             app_version_last_fetched_ms,
+            edge_routing_info,
         )) = row
         {
             // Same parsing logic as load_device_data
@@ -760,6 +776,7 @@ impl SqliteStore {
                     use wacore::store::device::DEVICE_PROPS;
                     DEVICE_PROPS.clone()
                 },
+                edge_routing_info,
             }))
         } else {
             Ok(None)
@@ -774,37 +791,84 @@ impl SqliteStore {
         device_id: i32,
     ) -> Result<()> {
         let pool = self.pool.clone();
-        let address = address.to_string();
-        self.with_semaphore(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(identities::table)
-                .values((
-                    identities::address.eq(address),
-                    identities::key.eq(&key[..]),
-                    identities::device_id.eq(device_id),
-                ))
-                .on_conflict((identities::address, identities::device_id))
-                .do_update()
-                .set(identities::key.eq(&key[..]))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
+        let db_semaphore = self.db_semaphore.clone();
+        let address_owned = address.to_string();
+        let key_vec = key.to_vec();
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let address_clone = address_owned.clone();
+            let key_clone = key_vec.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::insert_into(identities::table)
+                    .values((
+                        identities::address.eq(address_clone),
+                        identities::key.eq(&key_clone[..]),
+                        identities::device_id.eq(device_id),
+                    ))
+                    .on_conflict((identities::address, identities::device_id))
+                    .do_update()
+                    .set(identities::key.eq(&key_clone[..]))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("locked") || error_msg.contains("busy"))
+                        && attempt < MAX_RETRIES
+                    {
+                        let delay_ms = 10 * 2u64.pow(attempt);
+                        warn!(
+                            "Identity write failed (attempt {}/{}): {}. Retrying in {}ms...",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            error_msg,
+                            delay_ms
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "Identity write failed after {} attempts",
+            MAX_RETRIES + 1
+        )))
     }
 
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
-        let address = address.to_string();
+        let address_owned = address.to_string();
+
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             diesel::delete(
                 identities::table
-                    .filter(identities::address.eq(address))
+                    .filter(identities::address.eq(address_owned))
                     .filter(identities::device_id.eq(device_id)),
             )
             .execute(&mut conn)
@@ -813,6 +877,7 @@ impl SqliteStore {
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
+
         Ok(())
     }
 
@@ -821,22 +886,26 @@ impl SqliteStore {
         address: &str,
         device_id: i32,
     ) -> Result<Option<Vec<u8>>> {
+        // Cache miss - query database
         let pool = self.pool.clone();
         let address = address.to_string();
-        self.with_semaphore(move || -> Result<Option<Vec<u8>>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let res: Option<Vec<u8>> = identities::table
-                .select(identities::key)
-                .filter(identities::address.eq(address))
-                .filter(identities::device_id.eq(device_id))
-                .first(&mut conn)
-                .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(res)
-        })
-        .await
+        let result = self
+            .with_semaphore(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = identities::table
+                    .select(identities::key)
+                    .filter(identities::address.eq(address))
+                    .filter(identities::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await?;
+
+        Ok(result)
     }
 
     pub async fn get_session_for_device(
@@ -844,22 +913,44 @@ impl SqliteStore {
         address: &str,
         device_id: i32,
     ) -> Result<Option<Vec<u8>>> {
+        // Cache miss - query database
         let pool = self.pool.clone();
-        let address = address.to_string();
-        self.with_semaphore(move || -> Result<Option<Vec<u8>>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let res: Option<Vec<u8>> = sessions::table
-                .select(sessions::record)
-                .filter(sessions::address.eq(address))
-                .filter(sessions::device_id.eq(device_id))
-                .first(&mut conn)
-                .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(res)
-        })
-        .await
+        let address_for_query = address.to_string();
+        let result = self
+            .with_semaphore(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = sessions::table
+                    .select(sessions::record)
+                    .filter(sessions::address.eq(address_for_query.clone()))
+                    .filter(sessions::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                if res.is_some() {
+                    log::debug!(
+                        "[SESSION-DEBUG] Found session for {}:{}",
+                        address_for_query,
+                        device_id
+                    );
+                } else {
+                    // This is NORMAL during concurrent message processing:
+                    // Multiple messages arrive before the first PreKey message creates the session.
+                    // The session lock in process_session_enc_batch ensures only one task creates it.
+                    // Other tasks will retry and find the newly created session.
+                    log::debug!(
+                        "[SESSION-DEBUG] NO session found for {}:{} (normal during session creation)",
+                        address_for_query,
+                        device_id
+                    );
+                }
+                Ok(res)
+            })
+            .await?;
+
+        Ok(result)
     }
 
     pub async fn put_session_for_device(
@@ -869,38 +960,91 @@ impl SqliteStore {
         device_id: i32,
     ) -> Result<()> {
         let pool = self.pool.clone();
-        let address = address.to_string();
-        let session = session.to_vec();
-        self.with_semaphore(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(sessions::table)
-                .values((
-                    sessions::address.eq(address),
-                    sessions::record.eq(&session),
-                    sessions::device_id.eq(device_id),
-                ))
-                .on_conflict((sessions::address, sessions::device_id))
-                .do_update()
-                .set(sessions::record.eq(&session))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
+        let db_semaphore = self.db_semaphore.clone();
+        let address_owned = address.to_string();
+        let session_vec = session.to_vec();
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let address_clone = address_owned.clone();
+            let session_clone = session_vec.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::insert_into(sessions::table)
+                    .values((
+                        sessions::address.eq(address_clone),
+                        sessions::record.eq(&session_clone),
+                        sessions::device_id.eq(device_id),
+                    ))
+                    .on_conflict((sessions::address, sessions::device_id))
+                    .do_update()
+                    .set(sessions::record.eq(&session_clone))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => {
+                    log::debug!(
+                        "[SESSION-DEBUG] Saved session for {}:{}",
+                        address_owned,
+                        device_id
+                    );
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("locked") || error_msg.contains("busy"))
+                        && attempt < MAX_RETRIES
+                    {
+                        let delay_ms = 10 * 2u64.pow(attempt);
+                        warn!(
+                            "Session write failed (attempt {}/{}): {}. Retrying in {}ms...",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            error_msg,
+                            delay_ms
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "Session write failed after {} attempts",
+            MAX_RETRIES + 1
+        )))
     }
 
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
-        let address = address.to_string();
+        let address_owned = address.to_string();
+
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             diesel::delete(
                 sessions::table
-                    .filter(sessions::address.eq(address))
+                    .filter(sessions::address.eq(address_owned))
                     .filter(sessions::device_id.eq(device_id)),
             )
             .execute(&mut conn)
@@ -909,6 +1053,7 @@ impl SqliteStore {
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
+
         Ok(())
     }
 
@@ -917,6 +1062,53 @@ impl SqliteStore {
             .get_session_for_device(address, device_id)
             .await?
             .is_some())
+    }
+
+    /// Batch check which addresses have sessions (for group message optimization).
+    /// Returns a HashSet of addresses that have existing sessions.
+    pub async fn get_addresses_with_sessions(
+        &self,
+        addresses: &[String],
+        device_id: i32,
+    ) -> Result<std::collections::HashSet<String>> {
+        use std::collections::HashSet;
+
+        if addresses.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let addresses_to_query: Vec<String> = addresses.to_vec();
+
+        // Query DB for addresses not in cache
+        let pool = self.pool.clone();
+        let addresses_owned = addresses_to_query;
+
+        let db_results: Vec<String> = self
+            .with_semaphore(move || -> Result<Vec<String>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                let mut out = Vec::new();
+                // Chunk queries so the total bind parameters stay well below SQLite's ~999 limit.
+                for chunk in addresses_owned.chunks(900) {
+                    let mut results: Vec<String> = sessions::table
+                        .select(sessions::address)
+                        .filter(sessions::address.eq_any(chunk))
+                        .filter(sessions::device_id.eq(device_id))
+                        .load(&mut conn)
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                    out.append(&mut results);
+                }
+
+                Ok(out)
+            })
+            .await?;
+
+        // Convert DB results to HashSet and update cache
+        let db_hits: HashSet<String> = db_results.into_iter().collect();
+
+        Ok(db_hits)
     }
 
     pub async fn put_sender_key_for_device(
@@ -1796,5 +1988,225 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
         Ok(())
+    }
+
+    // ---- LID-PN Mapping helpers ----
+
+    pub async fn get_lid_pn_mapping_by_lid_for_device(
+        &self,
+        lid: &str,
+        device_id: i32,
+    ) -> Result<Option<traits::LidPnMappingEntry>> {
+        let pool = self.pool.clone();
+        let lid = lid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<traits::LidPnMappingEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let result: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
+                .select((
+                    lid_pn_mapping::lid,
+                    lid_pn_mapping::phone_number,
+                    lid_pn_mapping::created_at,
+                    lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
+                ))
+                .filter(lid_pn_mapping::lid.eq(&lid))
+                .filter(lid_pn_mapping::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result.map(
+                |(lid, phone_number, created_at, learning_source, updated_at)| {
+                    traits::LidPnMappingEntry {
+                        lid,
+                        phone_number,
+                        created_at,
+                        updated_at,
+                        learning_source,
+                    }
+                },
+            ))
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    pub async fn get_lid_pn_mapping_by_phone_for_device(
+        &self,
+        phone: &str,
+        device_id: i32,
+    ) -> Result<Option<traits::LidPnMappingEntry>> {
+        let pool = self.pool.clone();
+        let phone = phone.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<traits::LidPnMappingEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            // Get the most recent mapping for this phone number (by updated_at DESC)
+            let result: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
+                .select((
+                    lid_pn_mapping::lid,
+                    lid_pn_mapping::phone_number,
+                    lid_pn_mapping::created_at,
+                    lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
+                ))
+                .filter(lid_pn_mapping::phone_number.eq(&phone))
+                .filter(lid_pn_mapping::device_id.eq(device_id))
+                .order(lid_pn_mapping::updated_at.desc())
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result.map(
+                |(lid, phone_number, created_at, learning_source, updated_at)| {
+                    traits::LidPnMappingEntry {
+                        lid,
+                        phone_number,
+                        created_at,
+                        updated_at,
+                        learning_source,
+                    }
+                },
+            ))
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    pub async fn put_lid_pn_mapping_for_device(
+        &self,
+        entry: &traits::LidPnMappingEntry,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let lid = entry.lid.clone();
+        let phone_number = entry.phone_number.clone();
+        let created_at = entry.created_at;
+        let learning_source = entry.learning_source.clone();
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
+        .unwrap_or(i64::MAX);
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(lid_pn_mapping::table)
+                .values((
+                    lid_pn_mapping::lid.eq(&lid),
+                    lid_pn_mapping::phone_number.eq(&phone_number),
+                    lid_pn_mapping::created_at.eq(created_at),
+                    lid_pn_mapping::learning_source.eq(&learning_source),
+                    lid_pn_mapping::updated_at.eq(now),
+                    lid_pn_mapping::device_id.eq(device_id),
+                ))
+                .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
+                .do_update()
+                .set((
+                    lid_pn_mapping::phone_number.eq(&phone_number),
+                    lid_pn_mapping::learning_source.eq(&learning_source),
+                    lid_pn_mapping::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    pub async fn get_all_lid_pn_mappings_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Vec<traits::LidPnMappingEntry>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<traits::LidPnMappingEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let results: Vec<(String, String, i64, String, i64)> = lid_pn_mapping::table
+                .select((
+                    lid_pn_mapping::lid,
+                    lid_pn_mapping::phone_number,
+                    lid_pn_mapping::created_at,
+                    lid_pn_mapping::learning_source,
+                    lid_pn_mapping::updated_at,
+                ))
+                .filter(lid_pn_mapping::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(results
+                .into_iter()
+                .map(
+                    |(lid, phone_number, created_at, learning_source, updated_at)| {
+                        traits::LidPnMappingEntry {
+                            lid,
+                            phone_number,
+                            created_at,
+                            updated_at,
+                            learning_source,
+                        }
+                    },
+                )
+                .collect())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    pub async fn delete_lid_pn_mapping_for_device(&self, lid: &str, device_id: i32) -> Result<()> {
+        let pool = self.pool.clone();
+        let lid = lid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                lid_pn_mapping::table
+                    .filter(lid_pn_mapping::lid.eq(&lid))
+                    .filter(lid_pn_mapping::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LidPnMappingStore for SqliteStore {
+    async fn get_lid_pn_mapping_by_lid(
+        &self,
+        lid: &str,
+    ) -> Result<Option<traits::LidPnMappingEntry>> {
+        self.get_lid_pn_mapping_by_lid_for_device(lid, 1).await
+    }
+
+    async fn get_lid_pn_mapping_by_phone(
+        &self,
+        phone: &str,
+    ) -> Result<Option<traits::LidPnMappingEntry>> {
+        self.get_lid_pn_mapping_by_phone_for_device(phone, 1).await
+    }
+
+    async fn put_lid_pn_mapping(&self, entry: &traits::LidPnMappingEntry) -> Result<()> {
+        self.put_lid_pn_mapping_for_device(entry, 1).await
+    }
+
+    async fn get_all_lid_pn_mappings(&self) -> Result<Vec<traits::LidPnMappingEntry>> {
+        self.get_all_lid_pn_mappings_for_device(1).await
+    }
+
+    async fn delete_lid_pn_mapping(&self, lid: &str) -> Result<()> {
+        self.delete_lid_pn_mapping_for_device(lid, 1).await
     }
 }

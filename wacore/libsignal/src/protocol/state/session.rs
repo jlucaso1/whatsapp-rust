@@ -224,13 +224,13 @@ impl SessionState {
         results
     }
 
-    pub fn get_receiver_chain(
+    /// Returns the index of the receiver chain for the given sender, without cloning.
+    /// This is more efficient than get_receiver_chain when you only need the index.
+    fn get_receiver_chain_index(
         &self,
         sender: &PublicKey,
-    ) -> Result<Option<(session_structure::Chain, usize)>, InvalidSessionError> {
+    ) -> Result<Option<usize>, InvalidSessionError> {
         for (idx, chain) in self.session.receiver_chains.iter().enumerate() {
-            // If we compared bytes directly it would be faster, but may miss non-canonical points.
-            // It's unclear if supporting such points is desirable.
             let key_bytes = chain
                 .sender_ratchet_key
                 .as_ref()
@@ -239,36 +239,47 @@ impl SessionState {
                 .map_err(|_| InvalidSessionError("invalid receiver chain ratchet key"))?;
 
             if &chain_ratchet_key == sender {
-                return Ok(Some((chain.clone(), idx)));
+                return Ok(Some(idx));
             }
         }
 
         Ok(None)
     }
 
+    pub fn get_receiver_chain(
+        &self,
+        sender: &PublicKey,
+    ) -> Result<Option<(session_structure::Chain, usize)>, InvalidSessionError> {
+        if let Some(idx) = self.get_receiver_chain_index(sender)? {
+            Ok(Some((self.session.receiver_chains[idx].clone(), idx)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_receiver_chain_key(
         &self,
         sender: &PublicKey,
     ) -> Result<Option<ChainKey>, InvalidSessionError> {
-        match self.get_receiver_chain(sender)? {
-            None => Ok(None),
-            Some((chain, _)) => match chain.chain_key {
-                None => Err(InvalidSessionError("missing receiver chain key")),
-                Some(c) => {
-                    let key_bytes = c
-                        .key
-                        .as_ref()
-                        .ok_or(InvalidSessionError("missing receiver chain key bytes"))?;
-                    let chain_key_bytes = key_bytes[..]
-                        .try_into()
-                        .map_err(|_| InvalidSessionError("invalid receiver chain key"))?;
-                    let index = c
-                        .index
-                        .ok_or(InvalidSessionError("missing receiver chain key index"))?;
-                    Ok(Some(ChainKey::new(chain_key_bytes, index)))
-                }
-            },
-        }
+        let Some(idx) = self.get_receiver_chain_index(sender)? else {
+            return Ok(None);
+        };
+        let chain = &self.session.receiver_chains[idx];
+        let chain_key = chain
+            .chain_key
+            .as_ref()
+            .ok_or(InvalidSessionError("missing receiver chain key"))?;
+        let key_bytes = chain_key
+            .key
+            .as_ref()
+            .ok_or(InvalidSessionError("missing receiver chain key bytes"))?;
+        let chain_key_bytes = key_bytes[..]
+            .try_into()
+            .map_err(|_| InvalidSessionError("invalid receiver chain key"))?;
+        let index = chain_key
+            .index
+            .ok_or(InvalidSessionError("missing receiver chain key index"))?;
+        Ok(Some(ChainKey::new(chain_key_bytes, index)))
     }
 
     pub fn add_receiver_chain(&mut self, sender: &PublicKey, chain_key: &ChainKey) {
@@ -382,27 +393,30 @@ impl SessionState {
         sender: &PublicKey,
         counter: u32,
     ) -> Result<Option<MessageKeyGenerator>, InvalidSessionError> {
-        if let Some(mut chain_and_index) = self.get_receiver_chain(sender)? {
-            let mut message_key_idx = None;
-            for (i, m) in chain_and_index.0.message_keys.iter().enumerate() {
-                let idx = m
-                    .index
-                    .ok_or(InvalidSessionError("missing message key index"))?;
-                if idx == counter {
-                    message_key_idx = Some(i);
-                    break;
-                }
-            }
+        let Some(chain_idx) = self.get_receiver_chain_index(sender)? else {
+            return Ok(None);
+        };
 
-            if let Some(position) = message_key_idx {
-                let message_key = chain_and_index.0.message_keys.remove(position);
-                let keys =
-                    MessageKeyGenerator::from_pb(message_key).map_err(InvalidSessionError)?;
-
-                // Update with message key removed
-                self.session.receiver_chains[chain_and_index.1] = chain_and_index.0;
-                return Ok(Some(keys));
+        // Find the message key index without cloning
+        let chain = &self.session.receiver_chains[chain_idx];
+        let mut message_key_position = None;
+        for (i, m) in chain.message_keys.iter().enumerate() {
+            let idx = m
+                .index
+                .ok_or(InvalidSessionError("missing message key index"))?;
+            if idx == counter {
+                message_key_position = Some(i);
+                break;
             }
+        }
+
+        if let Some(position) = message_key_position {
+            // Only now do we mutate - remove the message key directly
+            let message_key = self.session.receiver_chains[chain_idx]
+                .message_keys
+                .remove(position);
+            let keys = MessageKeyGenerator::from_pb(message_key).map_err(InvalidSessionError)?;
+            return Ok(Some(keys));
         }
 
         Ok(None)
@@ -413,17 +427,16 @@ impl SessionState {
         sender: &PublicKey,
         message_keys: MessageKeyGenerator,
     ) -> Result<(), InvalidSessionError> {
-        let chain_and_index = self
-            .get_receiver_chain(sender)?
+        let chain_idx = self
+            .get_receiver_chain_index(sender)?
             .expect("called set_message_keys for a non-existent chain");
-        let mut updated_chain = chain_and_index.0;
-        updated_chain.message_keys.insert(0, message_keys.into_pb());
 
-        if updated_chain.message_keys.len() > consts::MAX_MESSAGE_KEYS {
-            updated_chain.message_keys.pop();
+        let chain = &mut self.session.receiver_chains[chain_idx];
+        chain.message_keys.insert(0, message_keys.into_pb());
+
+        if chain.message_keys.len() > consts::MAX_MESSAGE_KEYS {
+            chain.message_keys.pop();
         }
-
-        self.session.receiver_chains[chain_and_index.1] = updated_chain;
 
         Ok(())
     }
@@ -433,16 +446,15 @@ impl SessionState {
         sender: &PublicKey,
         chain_key: &ChainKey,
     ) -> Result<(), InvalidSessionError> {
-        let chain_and_index = self
-            .get_receiver_chain(sender)?
+        let chain_idx = self
+            .get_receiver_chain_index(sender)?
             .expect("called set_receiver_chain_key for a non-existent chain");
-        let mut updated_chain = chain_and_index.0;
-        updated_chain.chain_key = Some(session_structure::chain::ChainKey {
-            index: Some(chain_key.index()),
-            key: Some(chain_key.key().to_vec()),
-        });
 
-        self.session.receiver_chains[chain_and_index.1] = updated_chain;
+        self.session.receiver_chains[chain_idx].chain_key =
+            Some(session_structure::chain::ChainKey {
+                index: Some(chain_key.index()),
+                key: Some(chain_key.key().to_vec()),
+            });
 
         Ok(())
     }

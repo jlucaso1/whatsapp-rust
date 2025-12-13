@@ -1,8 +1,6 @@
 use crate::store::Device;
 use async_trait::async_trait;
-use moka::future::Cache;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
@@ -16,17 +14,9 @@ use wacore::libsignal::store::{
     PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
 
-/// Default cache capacity for sessions (covers typical large group scenarios)
-const SESSION_CACHE_CAPACITY: u64 = 5_000;
-/// Time-to-live for cached sessions (1 hour)
-const SESSION_CACHE_TTL_SECS: u64 = 3600;
-
 #[derive(Clone)]
 struct SharedDevice {
     device: Arc<RwLock<Device>>,
-    /// In-memory cache for session records to reduce database I/O.
-    /// Key: Protocol address string, Value: Serialized session bytes
-    session_cache: Cache<String, Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -52,16 +42,7 @@ pub struct SignalProtocolStoreAdapter {
 
 impl SignalProtocolStoreAdapter {
     pub fn new(device: Arc<RwLock<Device>>) -> Self {
-        // Build a session cache with LRU eviction and TTL
-        let session_cache: Cache<String, Vec<u8>> = Cache::builder()
-            .max_capacity(SESSION_CACHE_CAPACITY)
-            .time_to_live(Duration::from_secs(SESSION_CACHE_TTL_SECS))
-            .build();
-
-        let shared = SharedDevice {
-            device,
-            session_cache,
-        };
+        let shared = SharedDevice { device };
         Self {
             session_store: SessionAdapter(shared.clone()),
             identity_store: IdentityAdapter(shared.clone()),
@@ -69,43 +50,6 @@ impl SignalProtocolStoreAdapter {
             signed_pre_key_store: SignedPreKeyAdapter(shared.clone()),
             sender_key_store: SenderKeyAdapter(shared),
         }
-    }
-
-    /// Creates a new adapter with a custom session cache capacity.
-    /// Useful for scenarios with very large groups or many concurrent chats.
-    pub fn with_cache_capacity(device: Arc<RwLock<Device>>, capacity: u64) -> Self {
-        let session_cache: Cache<String, Vec<u8>> = Cache::builder()
-            .max_capacity(capacity)
-            .time_to_live(Duration::from_secs(SESSION_CACHE_TTL_SECS))
-            .build();
-
-        let shared = SharedDevice {
-            device,
-            session_cache,
-        };
-        Self {
-            session_store: SessionAdapter(shared.clone()),
-            identity_store: IdentityAdapter(shared.clone()),
-            pre_key_store: PreKeyAdapter(shared.clone()),
-            signed_pre_key_store: SignedPreKeyAdapter(shared.clone()),
-            sender_key_store: SenderKeyAdapter(shared),
-        }
-    }
-
-    /// Invalidates a specific session from the cache.
-    /// Call this when you know a session has been modified externally.
-    pub async fn invalidate_session(&self, address: &ProtocolAddress) {
-        self.session_store
-            .0
-            .session_cache
-            .invalidate(&address.to_string())
-            .await;
-    }
-
-    /// Clears the entire session cache.
-    /// Useful when reconnecting or when session state may be stale.
-    pub fn clear_session_cache(&self) {
-        self.session_store.0.session_cache.invalidate_all();
     }
 }
 
@@ -117,12 +61,6 @@ impl SessionStore for SessionAdapter {
     ) -> Result<Option<SessionRecord>, SignalProtocolError> {
         let addr_str = address.to_string();
 
-        // 1. Check cache first (fast path)
-        if let Some(cached_bytes) = self.0.session_cache.get(&addr_str).await {
-            return Ok(Some(SessionRecord::deserialize(&cached_bytes)?));
-        }
-
-        // 2. Cache miss - load from database
         let device = self.0.device.read().await;
         match device
             .backend
@@ -130,13 +68,7 @@ impl SessionStore for SessionAdapter {
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
         {
-            Some(data) => {
-                // 3. Attempt deserialization first - only cache if successful
-                let record = SessionRecord::deserialize(&data)?;
-                // 4. Populate cache with validated data
-                self.0.session_cache.insert(addr_str, data).await;
-                Ok(Some(record))
-            }
+            Some(data) => Ok(Some(SessionRecord::deserialize(&data)?)),
             None => Ok(None),
         }
     }
@@ -149,16 +81,12 @@ impl SessionStore for SessionAdapter {
         let addr_str = address.to_string();
         let record_bytes = record.serialize()?;
 
-        // 1. Update the database
         let device = self.0.device.read().await;
         device
             .backend
             .put_session(&addr_str, &record_bytes)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?;
-
-        // 2. Update the cache with the new session data
-        self.0.session_cache.insert(addr_str, record_bytes).await;
 
         Ok(())
     }

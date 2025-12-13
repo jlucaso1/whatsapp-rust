@@ -517,6 +517,40 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl wacore::store::traits::LidPnMappingStore for MockBackend {
+        async fn get_lid_pn_mapping_by_lid(
+            &self,
+            _lid: &str,
+        ) -> StoreResult<Option<wacore::store::traits::LidPnMappingEntry>> {
+            Ok(None)
+        }
+
+        async fn get_lid_pn_mapping_by_phone(
+            &self,
+            _phone: &str,
+        ) -> StoreResult<Option<wacore::store::traits::LidPnMappingEntry>> {
+            Ok(None)
+        }
+
+        async fn put_lid_pn_mapping(
+            &self,
+            _entry: &wacore::store::traits::LidPnMappingEntry,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn get_all_lid_pn_mappings(
+            &self,
+        ) -> StoreResult<Vec<wacore::store::traits::LidPnMappingEntry>> {
+            Ok(vec![])
+        }
+
+        async fn delete_lid_pn_mapping(&self, _lid: &str) -> StoreResult<()> {
+            Ok(())
+        }
+    }
+
     fn create_encrypted_mutation(
         op: wa::syncd_mutation::SyncdOperation,
         index_mac: &[u8],

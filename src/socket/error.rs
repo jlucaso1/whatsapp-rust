@@ -25,6 +25,8 @@ pub enum EncryptSendErrorKind {
     Transport,
     #[error("tokio join error")]
     Join,
+    #[error("sender channel closed")]
+    ChannelClosed,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +83,15 @@ impl EncryptSendError {
         Self {
             kind: EncryptSendErrorKind::Join,
             source: source.into(),
+            plaintext_buf,
+            out_buf,
+        }
+    }
+
+    pub fn channel_closed(plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> Self {
+        Self {
+            kind: EncryptSendErrorKind::ChannelClosed,
+            source: anyhow::anyhow!("sender task channel closed unexpectedly"),
             plaintext_buf,
             out_buf,
         }

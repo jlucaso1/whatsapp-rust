@@ -12,11 +12,103 @@ use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
+use tokio_websockets::{ClientBuilder, Connector, MaybeTlsStream, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory};
 
 /// Ensures the rustls crypto provider is only installed once
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
+
+/// Creates a TLS connector based on feature flags
+fn create_tls_connector() -> Connector {
+    // Install rustls crypto provider (only once)
+    CRYPTO_PROVIDER_INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+
+    #[cfg(feature = "danger-skip-tls-verify")]
+    {
+        use std::sync::Arc as StdArc;
+        use tokio_rustls::TlsConnector;
+
+        warn!("TLS certificate verification is DISABLED - this is insecure!");
+
+        // Create a custom verifier that accepts any certificate
+        #[derive(Debug)]
+        struct NoVerifier;
+
+        impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &rustls::pki_types::CertificateDer<'_>,
+                _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+                _server_name: &rustls::pki_types::ServerName<'_>,
+                _ocsp_response: &[u8],
+                _now: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _message: &[u8],
+                _cert: &rustls::pki_types::CertificateDer<'_>,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _message: &[u8],
+                _cert: &rustls::pki_types::CertificateDer<'_>,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                vec![
+                    rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                    rustls::SignatureScheme::RSA_PKCS1_SHA384,
+                    rustls::SignatureScheme::RSA_PKCS1_SHA512,
+                    rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                    rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                    rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+                    rustls::SignatureScheme::RSA_PSS_SHA256,
+                    rustls::SignatureScheme::RSA_PSS_SHA384,
+                    rustls::SignatureScheme::RSA_PSS_SHA512,
+                    rustls::SignatureScheme::ED25519,
+                ]
+            }
+        }
+
+        let config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(StdArc::new(NoVerifier))
+            .with_no_client_auth();
+
+        let tls_connector = TlsConnector::from(StdArc::new(config));
+        Connector::Rustls(tls_connector)
+    }
+
+    #[cfg(not(feature = "danger-skip-tls-verify"))]
+    {
+        use std::sync::Arc as StdArc;
+        use tokio_rustls::TlsConnector;
+
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
+        let tls_connector = TlsConnector::from(StdArc::new(config));
+        Connector::Rustls(tls_connector)
+    }
+}
 
 type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<RawWs, Message>;
@@ -98,10 +190,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error> {
-        // Install rustls crypto provider (only once)
-        CRYPTO_PROVIDER_INIT.call_once(|| {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-        });
+        let connector = create_tls_connector();
 
         info!("Dialing {URL}");
         let uri: http::Uri = URL
@@ -109,6 +198,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
             .map_err(|e| anyhow::anyhow!("Failed to parse URL: {}", e))?;
 
         let (client, _response) = ClientBuilder::from_uri(uri)
+            .connector(&connector)
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {}", e))?;
@@ -116,7 +206,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
         let (sink, stream) = client.split();
 
         // Create event channel
-        let (event_tx, event_rx) = mpsc::channel(100);
+        let (event_tx, event_rx) = mpsc::channel(10000);
 
         // Create transport - just a simple byte pipe
         let transport = Arc::new(TokioWebSocketTransport::new(sink));

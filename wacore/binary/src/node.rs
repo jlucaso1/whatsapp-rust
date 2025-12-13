@@ -22,6 +22,19 @@ pub enum NodeContentRef<'a> {
     Nodes(Box<NodeVec<'a>>),
 }
 
+impl NodeContent {
+    /// Convert an owned NodeContent to a borrowed NodeContentRef.
+    pub fn as_content_ref(&self) -> NodeContentRef<'_> {
+        match self {
+            NodeContent::Bytes(b) => NodeContentRef::Bytes(Cow::Borrowed(b)),
+            NodeContent::String(s) => NodeContentRef::String(Cow::Borrowed(s)),
+            NodeContent::Nodes(nodes) => {
+                NodeContentRef::Nodes(Box::new(nodes.iter().map(|n| n.as_node_ref()).collect()))
+            }
+        }
+    }
+}
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Node {
@@ -43,6 +56,20 @@ impl Node {
             tag: tag.to_string(),
             attrs,
             content,
+        }
+    }
+
+    /// Convert an owned Node to a borrowed NodeRef.
+    /// The returned NodeRef borrows from self.
+    pub fn as_node_ref(&self) -> NodeRef<'_> {
+        NodeRef {
+            tag: Cow::Borrowed(&self.tag),
+            attrs: self
+                .attrs
+                .iter()
+                .map(|(k, v)| (Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())))
+                .collect(),
+            content: self.content.as_ref().map(|c| Box::new(c.as_content_ref())),
         }
     }
 

@@ -1,13 +1,14 @@
 mod context_impl;
 
 use crate::handshake;
+use crate::lid_pn_cache::{LearningSource, LidPnCache, LidPnEntry};
 use crate::pair;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use indexmap::IndexMap;
 use moka::future::Cache;
 use tokio::sync::watch;
-use wacore::xml::{DisplayableNode, DisplayableNodeRef};
+use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
 use wacore_binary::node::Node;
@@ -19,20 +20,18 @@ use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
 use crate::types::presence::Presence;
 
-// keep single DashMap import above
-
 use log::{debug, error, info, warn};
 
 use rand::RngCore;
 use scopeguard;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
 use tokio::time::{Duration, sleep};
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
@@ -59,39 +58,11 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// Key for looking up recent messages for retry functionality.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecentMessageKey {
     pub to: Jid,
     pub id: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RecentMessageManagerHandle(pub mpsc::Sender<RecentMessageCommand>);
-
-impl RecentMessageManagerHandle {
-    pub(crate) async fn send_insert(
-        &self,
-        key: RecentMessageKey,
-        msg: Arc<wa::Message>,
-    ) -> Result<(), mpsc::error::SendError<RecentMessageCommand>> {
-        self.0.send(RecentMessageCommand::Insert(key, msg)).await
-    }
-}
-
-#[derive(Debug)]
-pub enum RecentMessageCommand {
-    Insert(RecentMessageKey, Arc<wa::Message>),
-    Take(RecentMessageKey, oneshot::Sender<Option<Arc<wa::Message>>>),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RecentMessageError {
-    #[error("Manager task unavailable - channel send failed")]
-    ManagerUnavailable,
-    #[error("Manager task did not respond within timeout")]
-    ResponseTimeout,
-    #[error("Manager task panicked or was dropped")]
-    TaskDropped,
 }
 
 pub struct Client {
@@ -116,14 +87,42 @@ pub struct Client {
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
 
-    pub(crate) chat_locks: Arc<DashMap<Jid, Arc<tokio::sync::Mutex<()>>>>,
+    /// Per-device session locks for Signal protocol operations.
+    /// Prevents race conditions when multiple messages from the same sender
+    /// are processed concurrently across different chats.
+    /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0")
+    /// to match the SignalProtocolStoreAdapter's internal locking.
+    pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+
+    /// Per-chat message queues for sequential message processing.
+    /// Prevents race conditions where a later message is processed before
+    /// the PreKey message that establishes the Signal session.
+    pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
+
+    /// Cache for LID to Phone Number mappings (bidirectional).
+    /// When we receive a message with sender_lid/sender_pn attributes, we store the mapping here.
+    /// This allows us to reuse existing LID-based sessions when sending replies.
+    /// The cache is backed by persistent storage and warmed up on client initialization.
+    pub(crate) lid_pn_cache: Arc<LidPnCache>,
+
+    /// Per-chat mutex for serializing message enqueue operations.
+    /// This ensures messages are enqueued in the order they arrive,
+    /// preventing race conditions during queue initialization.
+    pub(crate) message_enqueue_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+
     pub group_cache: OnceCell<Cache<Jid, GroupInfo>>,
     pub device_cache: OnceCell<Cache<Jid, Vec<Jid>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
 
-    pub(crate) recent_msg_tx: OnceCell<RecentMessageManagerHandle>,
+    /// Connection generation counter - incremented on each new connection.
+    /// Used to detect stale post-login tasks from previous connections.
+    pub(crate) connection_generation: Arc<AtomicU64>,
+
+    /// Cache for recent messages (serialized bytes) for retry functionality.
+    /// Uses moka cache with TTL and max capacity for automatic eviction.
+    pub(crate) recent_messages: Cache<RecentMessageKey, Vec<u8>>,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
@@ -137,6 +136,12 @@ pub struct Client {
     pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
+
+    /// Notifier for when offline sync (ib offline stanza) is received.
+    /// WhatsApp Web waits for this before sending passive tasks (prekey upload, active IQ, presence).
+    pub(crate) offline_sync_notifier: Arc<Notify>,
+    /// Flag indicating offline sync has completed (received ib offline stanza).
+    pub(crate) offline_sync_completed: Arc<AtomicBool>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 
@@ -194,7 +199,20 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
-            chat_locks: Arc::new(DashMap::new()),
+
+            session_locks: Cache::builder()
+                .time_to_live(Duration::from_secs(300)) // 5 minute TTL
+                .max_capacity(10_000) // Limit to 10k concurrent sessions
+                .build(),
+            message_queues: Cache::builder()
+                .time_to_live(Duration::from_secs(300)) // Idle queues expire after 5 mins
+                .max_capacity(10_000) // Limit to 10k concurrent chats
+                .build(),
+            lid_pn_cache: Arc::new(LidPnCache::new()),
+            message_enqueue_locks: Cache::builder()
+                .time_to_live(Duration::from_secs(300))
+                .max_capacity(10_000)
+                .build(),
             group_cache: OnceCell::new(),
             device_cache: OnceCell::new(),
             retried_group_messages: Cache::builder()
@@ -203,8 +221,15 @@ impl Client {
                 .build(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
+            connection_generation: Arc::new(AtomicU64::new(0)),
 
-            recent_msg_tx: OnceCell::new(),
+            // Recent messages cache for retry functionality
+            // TTL of 5 minutes (retries don't happen after that)
+            // Max 1000 messages to bound memory usage
+            recent_messages: Cache::builder()
+                .time_to_live(Duration::from_secs(300))
+                .max_capacity(1_000)
+                .build(),
 
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
@@ -218,6 +243,8 @@ impl Client {
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
+            offline_sync_notifier: Arc::new(Notify::new()),
+            offline_sync_completed: Arc::new(AtomicBool::new(false)),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
@@ -230,50 +257,115 @@ impl Client {
         };
 
         let arc = Arc::new(this);
+
+        // Warm up the LID-PN cache from persistent storage
+        let warm_up_arc = arc.clone();
+        tokio::spawn(async move {
+            if let Err(e) = warm_up_arc.warm_up_lid_pn_cache().await {
+                warn!("Failed to warm up LID-PN cache: {e}");
+            }
+        });
+
         (arc, rx)
     }
 
-    async fn get_recent_msg_manager(&self) -> &RecentMessageManagerHandle {
-        self.recent_msg_tx
-            .get_or_init(|| async {
-                info!("Initializing RecentMessageManager task for the first time.");
-                let (recent_tx, mut recent_rx) = mpsc::channel(256);
-                let recent_handle = RecentMessageManagerHandle(recent_tx);
+    /// Warm up the LID-PN cache from persistent storage.
+    /// This is called during client initialization to populate the in-memory cache
+    /// with previously learned LID-PN mappings.
+    async fn warm_up_lid_pn_cache(&self) -> Result<(), anyhow::Error> {
+        let backend = self.persistence_manager.backend();
+        let entries = backend.get_all_lid_pn_mappings().await?;
 
-                let map_inner = Arc::new(Mutex::new(HashMap::with_capacity(256)));
-                let list_inner = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
-                let map_clone = map_inner.clone();
-                let list_clone = list_inner.clone();
+        if entries.is_empty() {
+            debug!("LID-PN cache warm-up: no entries found in storage");
+            return Ok(());
+        }
 
-                tokio::spawn(async move {
-                    while let Some(cmd) = recent_rx.recv().await {
-                        match cmd {
-                            RecentMessageCommand::Insert(key, msg) => {
-                                let mut map = map_clone.lock().await;
-                                let mut list = list_clone.lock().await;
-                                map.insert(key.clone(), msg);
-                                list.retain(|k| k != &key);
-                                list.push_back(key);
-                                while list.len() > 256 {
-                                    if let Some(old_key) = list.pop_front() {
-                                        map.remove(&old_key);
-                                    }
-                                }
-                            }
-                            RecentMessageCommand::Take(key, responder) => {
-                                let mut map = map_clone.lock().await;
-                                let mut list = list_clone.lock().await;
-                                let msg = map.remove(&key);
-                                list.retain(|k| k != &key);
-                                let _ = responder.send(msg);
-                            }
-                        }
-                    }
-                });
-
-                recent_handle
+        let cache_entries: Vec<LidPnEntry> = entries
+            .into_iter()
+            .map(|e| {
+                LidPnEntry::with_timestamp(
+                    e.lid,
+                    e.phone_number,
+                    e.created_at,
+                    LearningSource::parse(&e.learning_source),
+                )
             })
+            .collect();
+
+        self.lid_pn_cache.warm_up(cache_entries).await;
+        Ok(())
+    }
+
+    /// Add a LID-PN mapping to both the in-memory cache and persistent storage.
+    /// This is called when we learn about a mapping from messages, usync, etc.
+    pub(crate) async fn add_lid_pn_mapping(
+        &self,
+        lid: &str,
+        phone_number: &str,
+        source: LearningSource,
+    ) -> Result<()> {
+        use wacore::store::traits::LidPnMappingEntry;
+
+        // Add to in-memory cache
+        let entry = LidPnEntry::new(lid.to_string(), phone_number.to_string(), source);
+        self.lid_pn_cache.add(entry.clone()).await;
+
+        // Persist to storage in background (don't block message processing)
+        let backend = self.persistence_manager.backend();
+        let storage_entry = LidPnMappingEntry {
+            lid: entry.lid,
+            phone_number: entry.phone_number,
+            created_at: entry.created_at,
+            updated_at: entry.created_at,
+            learning_source: entry.learning_source.as_str().to_string(),
+        };
+
+        backend
+            .put_lid_pn_mapping(&storage_entry)
             .await
+            .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
+        Ok(())
+    }
+
+    /// Resolve the encryption JID for a given target JID.
+    /// This uses the same logic as the receiving path to ensure consistent
+    /// lock keys between sending and receiving.
+    ///
+    /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
+    /// This ensures that sending and receiving use the same session lock.
+    pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        if target.server == lid_server {
+            // Already a LID - use it directly
+            target.clone()
+        } else if target.server == pn_server {
+            // PN JID - check if we have a LID mapping
+            if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
+                let lid_jid = Jid {
+                    user: lid_user.clone(),
+                    server: lid_server.to_string(),
+                    device: target.device,
+                    agent: target.agent,
+                    integrator: target.integrator,
+                };
+                log::debug!(
+                    "[SEND-LOCK] Resolved {} to LID {} for session lock",
+                    target,
+                    lid_jid
+                );
+                lid_jid
+            } else {
+                // No LID mapping - use PN as-is
+                log::debug!("[SEND-LOCK] No LID mapping for {}, using PN", target);
+                target.clone()
+            }
+        } else {
+            // Other server type - use as-is
+            target.clone()
+        }
     }
 
     pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
@@ -368,8 +460,16 @@ impl Client {
             }
 
             if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
+                info!("Auto-reconnect disabled, shutting down.");
                 self.is_running.store(false, Ordering::Relaxed);
                 break;
+            }
+
+            // If this was an expected disconnect (e.g., 515 after pairing), reconnect immediately
+            if self.expected_disconnect.load(Ordering::Relaxed) {
+                self.auto_reconnect_errors.store(0, Ordering::Relaxed);
+                info!("Expected disconnect (e.g., 515), reconnecting immediately...");
+                continue;
             }
 
             let error_count = self.auto_reconnect_errors.fetch_add(1, Ordering::SeqCst);
@@ -380,13 +480,7 @@ impl Client {
                 delay,
                 error_count + 1
             );
-            tokio::select! {
-                _ = sleep(delay) => {},
-                _ = self.shutdown_notifier.notified() => {
-                    self.is_running.store(false, Ordering::Relaxed);
-                    break;
-                }
-            }
+            sleep(delay).await;
         }
         info!("Client run loop has shut down.");
     }
@@ -403,6 +497,12 @@ impl Client {
         if self.is_connected() {
             return Err(ClientError::AlreadyConnected.into());
         }
+
+        // Reset login state for new connection attempt. This ensures that
+        // handle_success will properly process the <success> stanza even if
+        // a previous connection's post-login task bailed out early.
+        self.is_logged_in.store(false, Ordering::Relaxed);
+        self.offline_sync_completed.store(false, Ordering::Relaxed);
 
         let version_future = crate::version::resolve_and_update_version(
             &self.persistence_manager,
@@ -453,6 +553,8 @@ impl Client {
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
         self.retried_group_messages.invalidate_all();
+        // Reset offline sync state for next connection
+        self.offline_sync_completed.store(false, Ordering::Relaxed);
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
@@ -471,7 +573,7 @@ impl Client {
             tokio::select! {
                     biased;
                     _ = self.shutdown_notifier.notified() => {
-                        info!(target: "Client", "Shutdown signaled. Exiting message loop.");
+                        info!(target: "Client", "Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
                     event_opt = transport_events.recv() => {
@@ -481,8 +583,34 @@ impl Client {
                                 frame_decoder.feed(&data);
 
                                 // Process all complete frames
+                                // Note: Frame decryption must be sequential (noise protocol counter),
+                                // but we spawn node processing concurrently after decryption
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
-                                    self.process_encrypted_frame(&encrypted_frame).await;
+                                    // Decrypt the frame synchronously (required for noise counter ordering)
+                                    if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
+                                        // Handle critical nodes synchronously to avoid race conditions.
+                                        // <success> must be processed inline to ensure is_logged_in state
+                                        // is set before checking expected_disconnect or spawning other tasks.
+                                        let is_critical = matches!(node.tag.as_str(), "success" | "failure" | "stream:error");
+
+                                        if is_critical {
+                                            // Process critical nodes inline
+                                            self.process_decrypted_node(node).await;
+                                        } else {
+                                            // Spawn non-critical node processing as a separate task
+                                            // to allow concurrent handling (Signal protocol work, etc.)
+                                            let client = self.clone();
+                                            tokio::spawn(async move {
+                                                client.process_decrypted_node(node).await;
+                                            });
+                                        }
+                                    }
+
+                                    // Check if we should exit after processing (e.g., after 515 stream error)
+                                    if self.expected_disconnect.load(Ordering::Relaxed) {
+                                        info!(target: "Client", "Expected disconnect signaled during frame processing. Exiting message loop.");
+                                        return Ok(());
+                                    }
                                 }
                             },
                             Some(crate::transport::TransportEvent::Disconnected) | None => {
@@ -506,74 +634,47 @@ impl Client {
         }
     }
 
-    pub(crate) async fn take_recent_message(
-        &self,
-        to: Jid,
-        id: String,
-    ) -> Result<Option<Arc<wa::Message>>, RecentMessageError> {
+    /// Take a recent message from the cache (removes it).
+    /// Returns the deserialized message if found, None otherwise.
+    pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
+        use prost::Message;
         let key = RecentMessageKey { to, id };
-        let (oneshot_tx, oneshot_rx) = oneshot::channel();
-
-        let manager = self.get_recent_msg_manager().await;
-        // Use a timeout to prevent hanging if the task is unresponsive
-        if manager
-            .0
-            .send(RecentMessageCommand::Take(key, oneshot_tx))
+        self.recent_messages
+            .remove(&key)
             .await
-            .is_err()
-        {
-            return Err(RecentMessageError::ManagerUnavailable);
-        }
-
-        // Wait for response with timeout
-        match tokio::time::timeout(Duration::from_secs(5), oneshot_rx).await {
-            Ok(Ok(msg)) => Ok(msg),
-            Ok(Err(_)) => Err(RecentMessageError::TaskDropped),
-            Err(_) => Err(RecentMessageError::ResponseTimeout),
-        }
+            .and_then(|bytes| wa::Message::decode(bytes.as_slice()).ok())
     }
 
-    pub(crate) async fn add_recent_message(
-        &self,
-        to: Jid,
-        id: String,
-        msg: Arc<wa::Message>,
-    ) -> Result<(), RecentMessageError> {
+    /// Store a recent message in the cache (serialized as bytes).
+    /// This is lightweight - only stores the protobuf bytes, not Arc<Message>.
+    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
+        use prost::Message;
         let key = RecentMessageKey { to, id };
-        let manager = self.get_recent_msg_manager().await;
-        manager
-            .send_insert(key, msg)
-            .await
-            .map_err(|_| RecentMessageError::ManagerUnavailable)
+        // Serialize message to bytes - much lighter than storing Arc<Message>
+        let bytes = msg.encode_to_vec();
+        self.recent_messages.insert(key, bytes).await;
     }
 
-    pub(crate) async fn process_encrypted_frame(self: &Arc<Self>, encrypted_frame: &bytes::Bytes) {
+    /// Decrypt a frame and return the parsed node.
+    /// This must be called sequentially due to noise protocol counter requirements.
+    pub(crate) async fn decrypt_frame(
+        self: &Arc<Self>,
+        encrypted_frame: &bytes::Bytes,
+    ) -> Option<wacore_binary::node::Node> {
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
             Some(s) => s,
             None => {
                 log::error!("Cannot process frame: not connected (no noise socket)");
-                return;
+                return None;
             }
         };
 
-        let encrypted_frame_clone = encrypted_frame.clone();
-        let decrypted_payload_result =
-            tokio::task::spawn_blocking(move || noise_socket.decrypt_frame(&encrypted_frame_clone))
-                .await;
-
-        let decrypted_payload = match decrypted_payload_result {
-            Ok(Ok(p)) => p,
-            Ok(Err(e)) => {
-                log::error!(target: "Client", "Failed to decrypt frame: {e}");
-                return;
-            }
+        let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
+            Ok(p) => p,
             Err(e) => {
-                log::error!(
-                    target: "Client",
-                    "Failed to decrypt frame (spawn_blocking join error): {e}"
-                );
-                return;
+                log::error!(target: "Client", "Failed to decrypt frame: {e}");
+                return None;
             }
         };
 
@@ -581,91 +682,103 @@ impl Client {
             Ok(data) => data,
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
-                return;
+                return None;
             }
         };
 
         match wacore_binary::marshal::unmarshal_ref(unpacked_data_cow.as_ref()) {
-            Ok(node_ref) => {
-                // Pass NodeRef directly to process_node to avoid allocation
-                self.process_node(&node_ref).await;
+            Ok(node_ref) => Some(node_ref.to_owned()),
+            Err(e) => {
+                log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}");
+                None
             }
-            Err(e) => log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}"),
-        };
+        }
     }
 
-    pub(crate) async fn process_node(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
-        use wacore::xml::DisplayableNodeRef;
+    /// Process an already-decrypted node.
+    /// This can be spawned concurrently since it doesn't depend on noise protocol state.
+    /// The node is wrapped in Arc to avoid cloning when passing through handlers.
+    pub(crate) async fn process_decrypted_node(self: &Arc<Self>, node: wacore_binary::node::Node) {
+        // Wrap in Arc once - all handlers will share this same allocation
+        let node_arc = Arc::new(node);
+        self.process_node(node_arc).await;
+    }
 
-        if node.tag.as_ref() == "iq"
+    /// Process a node wrapped in Arc. Handlers receive the Arc and can share/store it cheaply.
+    pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<Node>) {
+        use wacore::xml::DisplayableNode;
+
+        if node.tag.as_str() == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
-            let name = collection_node.attr_parser().string("name");
+            let name = collection_node.attrs().string("name");
             info!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            info!(target: "Client/Recv","{}", DisplayableNodeRef(node));
+            info!(target: "Client/Recv","{}", DisplayableNode(&node));
         }
 
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
         let mut cancelled = false;
 
-        if node.tag.as_ref() == "xmlstreamend" {
+        if node.tag.as_str() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!(target: "Client", "Received <xmlstreamend/>, expected disconnect.");
             } else {
                 warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
             }
-            self.shutdown_notifier.notify_one();
+            self.shutdown_notifier.notify_waiters();
             return;
         }
 
-        if node.tag.as_ref() == "iq" {
-            let id_opt = node.get_attr("id");
+        if node.tag.as_str() == "iq" {
+            let id_opt = node.attrs.get("id");
             if let Some(id) = id_opt {
-                let has_waiter = self.response_waiters.lock().await.contains_key(id.as_ref());
-                if has_waiter && self.handle_iq_response(node).await {
+                let has_waiter = self.response_waiters.lock().await.contains_key(id.as_str());
+                if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
                     return;
                 }
             }
         }
 
         // Dispatch to appropriate handler using the router
+        // Clone Arc (cheap - just reference count) not the Node itself
         if !self
             .stanza_router
-            .dispatch(self.clone(), node, &mut cancelled)
+            .dispatch(self.clone(), Arc::clone(&node), &mut cancelled)
             .await
         {
-            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNodeRef(node));
+            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(&node));
         }
 
         // Send the deferred ACK if applicable and not cancelled by handler
-        if self.should_ack_ref(node) && !cancelled {
-            self.maybe_deferred_ack_ref(node).await;
+        if self.should_ack(&node) && !cancelled {
+            self.maybe_deferred_ack(node).await;
         }
     }
 
-    /// Determine if a NodeRef should be acknowledged with <ack/>.
-    fn should_ack_ref(&self, node: &wacore_binary::node::NodeRef<'_>) -> bool {
+    /// Determine if a Node should be acknowledged with <ack/>.
+    fn should_ack(&self, node: &Node) -> bool {
         matches!(
-            node.tag.as_ref(),
+            node.tag.as_str(),
             "message" | "receipt" | "notification" | "call"
-        ) && node.get_attr("id").is_some()
-            && node.get_attr("from").is_some()
+        ) && node.attrs.contains_key("id")
+            && node.attrs.contains_key("from")
     }
 
-    /// Possibly send a deferred ack from a NodeRef: either immediately or via spawned task.
+    /// Possibly send a deferred ack: either immediately or via spawned task.
     /// Handlers can cancel by setting `cancelled` to true.
-    async fn maybe_deferred_ack_ref(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
+    /// Uses Arc<Node> to avoid cloning when spawning the async task.
+    async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<Node>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for_ref(node).await {
+            if let Err(e) = self.send_ack_for(&node).await {
                 warn!(target: "Client", "Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
-            let node_clone = node.to_owned();
+            // Node is already in Arc - just clone the Arc (cheap), not the Node
             tokio::spawn(async move {
-                if let Err(e) = this.send_ack_for(&node_clone).await {
+                if let Err(e) = this.send_ack_for(&node).await {
                     warn!(target: "Client", "Failed to send ack: {e:?}");
                 }
             });
@@ -690,43 +803,6 @@ impl Client {
         };
         let mut attrs = IndexMap::new();
         attrs.insert("class".to_string(), node.tag.clone());
-        attrs.insert("id".to_string(), id);
-        attrs.insert("to".to_string(), from);
-        if let Some(p) = participant {
-            attrs.insert("participant".to_string(), p);
-        }
-        if let Some(t) = typ {
-            attrs.insert("type".to_string(), t);
-        }
-        let ack = Node {
-            tag: "ack".to_string(),
-            attrs,
-            content: None,
-        };
-        self.send_node(ack).await
-    }
-
-    /// Build and send an <ack/> node corresponding to the given NodeRef stanza.
-    async fn send_ack_for_ref(
-        &self,
-        node: &wacore_binary::node::NodeRef<'_>,
-    ) -> Result<(), ClientError> {
-        let id = match node.get_attr("id") {
-            Some(v) => v.to_string(),
-            None => return Ok(()),
-        };
-        let from = match node.get_attr("from") {
-            Some(v) => v.to_string(),
-            None => return Ok(()),
-        };
-        let participant = node.get_attr("participant").map(|v| v.to_string());
-        let typ = if node.tag.as_ref() != "message" {
-            node.get_attr("type").map(|v| v.to_string())
-        } else {
-            None
-        };
-        let mut attrs = IndexMap::new();
-        attrs.insert("class".to_string(), node.tag.to_string());
         attrs.insert("id".to_string(), id);
         attrs.insert("to".to_string(), from);
         if let Some(p) = participant {
@@ -817,15 +893,14 @@ impl Client {
 
         debug!(target: "Client", "Fetching blocklist...");
 
+        // WhatsApp Web sends an empty IQ without child nodes
         let iq = InfoQuery {
             namespace: "blocklist",
             query_type: InfoQueryType::Get,
             to: server_jid(),
             target: None,
             id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
-                NodeBuilder::new("blocklist").build(),
-            ])),
+            content: None,
             timeout: None,
         };
 
@@ -871,20 +946,34 @@ impl Client {
         self.send_iq(iq).await.map(|_| ())
     }
 
-    pub(crate) async fn handle_success_ref(
-        self: &Arc<Self>,
-        node: &wacore_binary::node::NodeRef<'_>,
-    ) {
-        self.handle_success(node).await;
-    }
+    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::Node) {
+        // Skip processing if an expected disconnect is pending (e.g., 515 received).
+        // This prevents race conditions where a spawned success handler runs after
+        // cleanup_connection_state has already reset is_logged_in.
+        if self.expected_disconnect.load(Ordering::Relaxed) {
+            debug!(target: "Client", "Ignoring <success> stanza: expected disconnect pending");
+            return;
+        }
 
-    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::NodeRef<'_>) {
-        info!("Successfully authenticated with WhatsApp servers!");
-        self.is_logged_in.store(true, Ordering::Relaxed);
+        // Guard against multiple <success> stanzas (WhatsApp may send more than one during
+        // routing/reconnection). Only process the first one per connection.
+        if self.is_logged_in.swap(true, Ordering::SeqCst) {
+            debug!(target: "Client", "Ignoring duplicate <success> stanza (already logged in)");
+            return;
+        }
+
+        // Increment connection generation to invalidate any stale post-login tasks
+        // from previous connections (e.g., during 515 reconnect cycles).
+        let current_generation = self.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        info!(
+            "Successfully authenticated with WhatsApp servers! (gen={})",
+            current_generation
+        );
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
-        if let Some(lid_str) = node.get_attr("lid") {
+        if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<Jid>() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
@@ -901,8 +990,20 @@ impl Client {
         }
 
         let client_clone = self.clone();
+        let task_generation = current_generation;
         tokio::spawn(async move {
-            info!(target: "Client", "Starting post-login initialization sequence...");
+            // Macro to check if this task is still valid (connection hasn't been replaced)
+            macro_rules! check_generation {
+                () => {
+                    if client_clone.connection_generation.load(Ordering::SeqCst) != task_generation
+                    {
+                        debug!("Post-login task cancelled: connection generation changed");
+                        return;
+                    }
+                };
+            }
+
+            info!(target: "Client", "Starting post-login initialization sequence (gen={})...", task_generation);
 
             let mut force_initial_sync = false;
             let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
@@ -919,16 +1020,89 @@ impl Client {
                 force_initial_sync = true;
             }
 
-            if let Err(e) = client_clone.upload_pre_keys().await {
-                warn!("Failed to upload pre-keys during startup: {e:?}");
+            // Check connection before network operations.
+            // During pairing, a 515 disconnect happens quickly after success,
+            // so the socket may already be gone.
+            if !client_clone.is_connected() {
+                debug!(
+                    "Skipping post-login init: connection closed (likely pairing phase reconnect)"
+                );
+                return;
             }
 
+            // === Send active IQ first ===
+            // The server sends <ib><offline count="X"/></ib> AFTER we exit passive mode.
+            // This matches WhatsApp Web's behavior: sendPassiveModeProtocol("active") first,
+            // then wait for offlineDeliveryEnd.
+            check_generation!();
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect active IQ: {e:?}");
             }
 
+            // === Wait for offline sync to complete ===
+            // The server sends <ib><offline count="X"/></ib> after we exit passive mode.
+            // Use a timeout to handle cases where the server doesn't send offline ib
+            // (e.g., during initial pairing or if there are no offline messages).
+            const OFFLINE_SYNC_TIMEOUT_SECS: u64 = 5;
+
+            if !client_clone.offline_sync_completed.load(Ordering::Relaxed) {
+                info!(target: "Client", "Waiting for offline sync to complete (up to {}s)...", OFFLINE_SYNC_TIMEOUT_SECS);
+                let wait_result = tokio::time::timeout(
+                    Duration::from_secs(OFFLINE_SYNC_TIMEOUT_SECS),
+                    client_clone.offline_sync_notifier.notified(),
+                )
+                .await;
+
+                // Check if connection was replaced while waiting
+                check_generation!();
+
+                if wait_result.is_err() {
+                    info!(target: "Client", "Offline sync wait timed out, proceeding with passive tasks");
+                } else {
+                    info!(target: "Client", "Offline sync completed, proceeding with passive tasks");
+                }
+            }
+
+            // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
+            // These tasks run after offline delivery ends.
+
+            check_generation!();
+            if let Err(e) = client_clone.upload_pre_keys().await {
+                warn!("Failed to upload pre-keys during startup: {e:?}");
+            }
+
+            // Re-check connection and generation before sending presence
+            check_generation!();
+            if !client_clone.is_connected() {
+                debug!("Skipping presence: connection closed");
+                return;
+            }
+
+            // Send presence (like WhatsApp Web's sendPresenceAvailable after passive tasks)
+            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+                warn!("Failed to send initial presence: {e:?}");
+            } else {
+                info!("Initial presence sent successfully.");
+            }
+
+            // === End of Passive Tasks ===
+
+            check_generation!();
+
+            // Background initialization queries (can run in parallel, non-blocking)
             let bg_client = client_clone.clone();
+            let bg_generation = task_generation;
             tokio::spawn(async move {
+                // Check connection and generation before starting background queries
+                if bg_client.connection_generation.load(Ordering::SeqCst) != bg_generation {
+                    debug!("Skipping background init queries: connection generation changed");
+                    return;
+                }
+                if !bg_client.is_connected() {
+                    debug!("Skipping background init queries: connection closed");
+                    return;
+                }
+
                 info!(
                     target: "Client",
                     "Sending background initialization queries (Props, Blocklist, Privacy, Digest)..."
@@ -956,16 +1130,12 @@ impl Client {
                 }
             });
 
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
-                error!("Failed to send initial presence: {e:?}");
-            } else {
-                info!("Initial presence sent successfully.");
-            }
-
             client_clone
                 .core
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
+
+            check_generation!();
 
             let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
             if flag_set || force_initial_sync {
@@ -987,9 +1157,13 @@ impl Client {
                         client_clone.initial_keys_synced_notifier.notified(),
                     )
                     .await;
+
+                    // Check if connection was replaced while waiting
+                    check_generation!();
                 }
 
                 let sync_client = client_clone.clone();
+                let sync_generation = task_generation;
                 tokio::spawn(async move {
                     let names = [
                         WAPatchName::CriticalBlock,
@@ -1000,6 +1174,14 @@ impl Client {
                     ];
 
                     for name in names {
+                        // Check generation before each sync to avoid racing with new connections
+                        if sync_client.connection_generation.load(Ordering::SeqCst)
+                            != sync_generation
+                        {
+                            debug!("App state sync cancelled: connection generation changed");
+                            return;
+                        }
+
                         if let Err(e) = sync_client.fetch_app_state_with_retry(name).await {
                             warn!("Failed to full sync app state {:?}: {e}", name);
                         }
@@ -1029,11 +1211,6 @@ impl Client {
             return true;
         }
         false
-    }
-
-    /// Wrapper for `handle_ack_response` that accepts a `NodeRef`.
-    pub(crate) async fn handle_ack_response_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
-        let _ = self.handle_ack_response(node.to_owned()).await;
     }
 
     async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
@@ -1225,7 +1402,7 @@ impl Client {
         if let Err(e) = self
             .send_message_impl(
                 own_jid,
-                Arc::new(msg),
+                &msg,
                 Some(self.generate_message_id().await),
                 true,
                 false,
@@ -1366,30 +1543,31 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
     }
 
-    pub(crate) async fn handle_stream_error_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
-        self.handle_stream_error(node).await;
-    }
-
-    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::NodeRef<'_>) {
+    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::Node) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
-        let mut attrs = node.attr_parser();
+        let mut attrs = node.attrs();
         let code = attrs.optional_string("code").unwrap_or("");
         let conflict_type = node
             .get_optional_child("conflict")
-            .map(|n| {
-                n.attr_parser()
-                    .optional_string("type")
-                    .unwrap_or("")
-                    .to_string()
-            })
+            .map(|n| n.attrs().optional_string("type").unwrap_or("").to_string())
             .unwrap_or_default();
 
         match (code, conflict_type.as_str()) {
             ("515", _) => {
                 // 515 is expected during registration/pairing phase - server closes stream after pairing
-                debug!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
+                info!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
                 self.expect_disconnect().await;
+                // Proactively disconnect transport since server may not close the connection
+                // Clone the transport Arc before spawning to avoid holding the lock
+                let transport_opt = self.transport.lock().await.clone();
+                if let Some(transport) = transport_opt {
+                    // Spawn disconnect in background so we don't block the message loop
+                    tokio::spawn(async move {
+                        info!(target: "Client", "Disconnecting transport after 515");
+                        transport.disconnect().await;
+                    });
+                }
             }
             ("401", "device_removed") | (_, "replaced") => {
                 info!(target: "Client", "Got stream error indicating client was removed or replaced. Logging out.");
@@ -1410,29 +1588,26 @@ impl Client {
                 info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
             }
             _ => {
-                error!(target: "Client", "Unknown stream error: {}", DisplayableNodeRef(node));
+                error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
                 self.expect_disconnect().await;
                 self.core.event_bus.dispatch(&Event::StreamError(
                     crate::types::events::StreamError {
                         code: code.to_string(),
-                        raw: Some(node.to_owned()),
+                        raw: Some(node.clone()),
                     },
                 ));
             }
         }
 
-        self.shutdown_notifier.notify_one();
+        info!(target: "Client", "Notifying shutdown from stream error handler");
+        self.shutdown_notifier.notify_waiters();
     }
 
-    pub(crate) async fn handle_connect_failure_ref(&self, node: &wacore_binary::node::NodeRef<'_>) {
-        self.handle_connect_failure(node).await;
-    }
-
-    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::NodeRef<'_>) {
+    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::Node) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.shutdown_notifier.notify_one();
+        self.shutdown_notifier.notify_waiters();
 
-        let mut attrs = node.attr_parser();
+        let mut attrs = node.attrs();
         let reason_code = attrs.optional_u64("reason").unwrap_or(0) as i32;
         let reason = ConnectFailureReason::from(reason_code);
 
@@ -1457,7 +1632,7 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNodeRef(node));
+            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::TemporaryBan(
                 crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
@@ -1470,26 +1645,23 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNodeRef(node));
+            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
                     message: attrs.optional_string("message").unwrap_or("").to_string(),
-                    raw: Some(node.to_owned()),
+                    raw: Some(node.clone()),
                 },
             ));
         }
     }
 
-    pub(crate) async fn handle_iq_ref(
-        self: &Arc<Self>,
-        node: &wacore_binary::node::NodeRef<'_>,
-    ) -> bool {
-        if let Some("get") = node.attr_parser().optional_string("type")
-            && let Some(_ping_node) = node.get_optional_child("ping")
+    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
+        if let Some("get") = node.attrs.get("type").map(|s| s.as_str())
+            && node.get_optional_child("ping").is_some()
         {
             info!(target: "Client", "Received ping, sending pong.");
-            let mut parser = node.attr_parser();
+            let mut parser = node.attrs();
             let from_jid = parser.jid("from");
             let id = parser.string("id");
             let pong = NodeBuilder::new("iq")
@@ -1505,7 +1677,7 @@ impl Client {
             return true;
         }
 
-        // Pass NodeRef directly to pair handling
+        // Pass Node directly to pair handling
         if pair::handle_iq(self, node).await {
             return true;
         }
@@ -1567,7 +1739,7 @@ impl Client {
 
         self.send_message_impl(
             to,
-            Arc::new(edit_container_message),
+            &edit_container_message,
             Some(original_id.clone()),
             false,
             false,
@@ -1727,6 +1899,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
     use wacore_binary::jid::SERVER_JID;
 
     // Mock HTTP client for tests
@@ -1765,35 +1938,34 @@ mod tests {
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
-        // Create NodeRef directly for testing
-        use std::borrow::Cow;
-        use wacore_binary::node::{NodeContentRef, NodeRef};
+        use indexmap::IndexMap;
+        use wacore_binary::node::{Node, NodeContent};
 
-        let receipt_node_ref = NodeRef::new(
-            Cow::Borrowed("receipt"),
-            vec![
-                (Cow::Borrowed("from"), Cow::Borrowed("@s.whatsapp.net")),
-                (Cow::Borrowed("id"), Cow::Borrowed("RCPT-1")),
-            ],
-            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        let mut receipt_attrs = IndexMap::new();
+        receipt_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
+        receipt_attrs.insert("id".to_string(), "RCPT-1".to_string());
+        let receipt_node = Node::new(
+            "receipt",
+            receipt_attrs,
+            Some(NodeContent::String("test".to_string())),
         );
 
-        let notification_node_ref = NodeRef::new(
-            Cow::Borrowed("notification"),
-            vec![
-                (Cow::Borrowed("from"), Cow::Borrowed("@s.whatsapp.net")),
-                (Cow::Borrowed("id"), Cow::Borrowed("NOTIF-1")),
-            ],
-            Some(NodeContentRef::String(Cow::Borrowed("test"))),
+        let mut notification_attrs = IndexMap::new();
+        notification_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
+        notification_attrs.insert("id".to_string(), "NOTIF-1".to_string());
+        let notification_node = Node::new(
+            "notification",
+            notification_attrs,
+            Some(NodeContent::String("test".to_string())),
         );
 
         assert!(
-            client.should_ack_ref(&receipt_node_ref),
-            "should_ack_ref must still return TRUE for <receipt> stanzas."
+            client.should_ack(&receipt_node),
+            "should_ack must still return TRUE for <receipt> stanzas."
         );
         assert!(
-            client.should_ack_ref(&notification_node_ref),
-            "should_ack_ref must still return TRUE for <notification> stanzas."
+            client.should_ack(&notification_node),
+            "should_ack must still return TRUE for <notification> stanzas."
         );
 
         info!(
@@ -1945,6 +2117,195 @@ mod tests {
 
         info!(
             "✅ test_ack_without_matching_waiter passed: ACK without matching waiter handled gracefully"
+        );
+    }
+
+    /// Test that the lid_pn_cache correctly stores and retrieves LID mappings.
+    ///
+    /// This is critical for the LID-PN session mismatch fix. When we receive a message
+    /// with sender_lid, we cache the phone->LID mapping so that when sending replies,
+    /// we can reuse the existing LID session instead of creating a new PN session.
+    #[tokio::test]
+    async fn test_lid_pn_cache_basic_operations() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_lid_cache_basic?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Initially, the cache should be empty for a phone number
+        let phone = "559980000001";
+        let lid = "100000012345678";
+
+        assert!(
+            client.lid_pn_cache.get_current_lid(phone).await.is_none(),
+            "Cache should be empty initially"
+        );
+
+        // Insert a phone->LID mapping using add_lid_pn_mapping
+        client
+            .add_lid_pn_mapping(lid, phone, LearningSource::Usync)
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
+
+        // Verify we can retrieve it (phone -> LID lookup)
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert!(cached_lid.is_some(), "Cache should contain the mapping");
+        assert_eq!(
+            cached_lid.unwrap(),
+            lid,
+            "Cached LID should match what we inserted"
+        );
+
+        // Verify reverse lookup works (LID -> phone)
+        let cached_phone = client.lid_pn_cache.get_phone_number(lid).await;
+        assert!(cached_phone.is_some(), "Reverse lookup should work");
+        assert_eq!(
+            cached_phone.unwrap(),
+            phone,
+            "Cached phone should match what we inserted"
+        );
+
+        // Verify a different phone number returns None
+        assert!(
+            client
+                .lid_pn_cache
+                .get_current_lid("559980000002")
+                .await
+                .is_none(),
+            "Different phone number should not have a mapping"
+        );
+
+        info!("✅ test_lid_pn_cache_basic_operations passed: LID-PN cache works correctly");
+    }
+
+    /// Test that the lid_pn_cache respects timestamp-based conflict resolution.
+    ///
+    /// When a phone number has multiple LIDs, the most recent one should be returned.
+    #[tokio::test]
+    async fn test_lid_pn_cache_timestamp_resolution() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(
+                "file:memdb_lid_cache_timestamp?mode=memory&cache=shared",
+            )
+            .await
+            .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let phone = "559980000001";
+        let lid_old = "100000012345678";
+        let lid_new = "100000087654321";
+
+        // Insert initial mapping
+        client
+            .add_lid_pn_mapping(lid_old, phone, LearningSource::Usync)
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
+
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
+            lid_old,
+            "Initial LID should be stored"
+        );
+
+        // Small delay to ensure different timestamp
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Add new mapping with newer timestamp
+        client
+            .add_lid_pn_mapping(lid_new, phone, LearningSource::PeerPnMessage)
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
+
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
+            lid_new,
+            "Newer LID should be returned for phone lookup"
+        );
+
+        // Both LIDs should still resolve to the same phone
+        assert_eq!(
+            client.lid_pn_cache.get_phone_number(lid_old).await.unwrap(),
+            phone,
+            "Old LID should still map to phone"
+        );
+        assert_eq!(
+            client.lid_pn_cache.get_phone_number(lid_new).await.unwrap(),
+            phone,
+            "New LID should also map to phone"
+        );
+
+        info!(
+            "✅ test_lid_pn_cache_timestamp_resolution passed: Timestamp-based resolution works correctly"
+        );
+    }
+
+    /// Test that get_lid_for_phone (from SendContextResolver) returns the cached value.
+    ///
+    /// This is the method used by wacore::send to look up LID mappings when encrypting.
+    #[tokio::test]
+    async fn test_get_lid_for_phone_via_send_context_resolver() {
+        use wacore::client::context::SendContextResolver;
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_get_lid_for_phone?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let phone = "559980000001";
+        let lid = "100000012345678";
+
+        // Before caching, should return None
+        assert!(
+            client.get_lid_for_phone(phone).await.is_none(),
+            "get_lid_for_phone should return None before caching"
+        );
+
+        // Cache the mapping using add_lid_pn_mapping
+        client
+            .add_lid_pn_mapping(lid, phone, LearningSource::Usync)
+            .await
+            .expect("Failed to persist LID-PN mapping in tests");
+
+        // Now it should return the LID
+        let result = client.get_lid_for_phone(phone).await;
+        assert!(
+            result.is_some(),
+            "get_lid_for_phone should return Some after caching"
+        );
+        assert_eq!(
+            result.unwrap(),
+            lid,
+            "get_lid_for_phone should return the cached LID"
+        );
+
+        info!(
+            "✅ test_get_lid_for_phone_via_send_context_resolver passed: SendContextResolver correctly returns cached LID"
         );
     }
 }

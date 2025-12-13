@@ -32,7 +32,8 @@ fn test_jid_parsing_and_serialization() {
     let server_jid = Jid::from_str(server_jid_str).unwrap();
     assert!(server_jid.user.is_empty());
     assert_eq!(server_jid.server, SERVER_JID);
-    assert_eq!(server_jid.to_string(), format!("@{}", SERVER_JID));
+    // Server-only JIDs should NOT have @ prefix (matches WhatsApp Web behavior)
+    assert_eq!(server_jid.to_string(), SERVER_JID);
 }
 
 #[test]
@@ -122,18 +123,24 @@ fn test_lid_jid_with_dot_in_user_part() {
     // Assert the server is correct.
     assert_eq!(lid_jid.server, "lid", "LID server part is incorrect");
 
-    // CRITICAL: Test that to_protocol_address doesn't add an unwanted _1 suffix
-    // The bug manifests when creating the ProtocolAddress, resulting in "236395184570386.1_1"
+    // CRITICAL: Test that to_protocol_address matches WhatsApp Web's format
+    // WhatsApp Web uses: {user}[:device]@{server}.0
+    // The device is encoded in the name, and device_id is always 0
     use wacore::types::jid::JidExt as CoreJidExt;
     let protocol_addr = lid_jid.to_protocol_address();
     assert_eq!(
         protocol_addr.name(),
-        "236395184570386.1",
-        "ProtocolAddress should not have agent suffix for LID with dot in user part"
+        "236395184570386.1:75@lid",
+        "ProtocolAddress name should match WhatsApp Web's SignalAddress format"
     );
     assert_eq!(
         u32::from(protocol_addr.device_id()),
-        75,
-        "ProtocolAddress device_id is incorrect"
+        0,
+        "ProtocolAddress device_id should always be 0 (device encoded in name)"
+    );
+    assert_eq!(
+        protocol_addr.to_string(),
+        "236395184570386.1:75@lid.0",
+        "ProtocolAddress.to_string() should match WhatsApp Web's createSignalLikeAddress format"
     );
 }

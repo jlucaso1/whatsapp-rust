@@ -3,7 +3,7 @@ use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use chrono::DateTime;
-use log::warn;
+use log::{debug, warn};
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
@@ -61,8 +61,23 @@ impl Client {
             }
         };
 
-        // Determine the JID to use for end-to-end decryption. Prefer phone-number alt JIDs
-        // for LID senders, but never "upgrade" a PN sender to a LID.
+        // Determine the JID to use for end-to-end decryption.
+        //
+        // CRITICAL: WhatsApp Web ALWAYS uses LID-based addresses for Signal sessions when
+        // a LID mapping is known. This is implemented in WAWebSignalAddress.toString():
+        //
+        //   var n = o("WAWebWidFactory").asUserWidOrThrow(this.wid);
+        //   var a = !n.isLid() && n.isUser();  // true if PN
+        //   var i = a ? o("WAWebApiContact").getCurrentLid(n) : n;  // Get LID if PN
+        //   if (i == null) {
+        //     return [this.wid.user, t, "@c.us"].join("");  // No LID, use PN
+        //   } else {
+        //     return [i.user, t, "@lid"].join("");  // Use LID
+        //   }
+        //
+        // This means sessions are stored under the LID address, not the PN address.
+        // When we receive a PN-addressed message, we must look up the session using
+        // the LID address (if a LID mapping is known) to match WhatsApp Web's behavior.
         let sender_encryption_jid = {
             let sender = &info.source.sender;
             let alt = info.source.sender_alt.as_ref();
@@ -70,39 +85,94 @@ impl Client {
             let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
 
             if sender.server == lid_server {
-                if let Some(alt_jid) = alt {
-                    if alt_jid.server == pn_server {
-                        alt_jid.clone()
-                    } else {
-                        // Alt is another LID variant; stick with the original LID sender.
-                        sender.clone()
-                    }
-                } else if info.source.is_from_me {
-                    // Self-sent LID message without PN alt — try to fall back to our PN identity.
-                    if let Some(own_pn) = self.get_pn().await {
-                        log::debug!(
-                            "Self-sent message from LID {}, using own phone number {}:{} for decryption",
-                            sender,
-                            own_pn.user,
-                            sender.device
+                // Sender is already LID - use it directly for session lookup.
+                // Also cache the LID-to-PN mapping if PN alt is available.
+                if let Some(alt_jid) = alt
+                    && alt_jid.server == pn_server
+                {
+                    if let Err(err) = self
+                        .add_lid_pn_mapping(
+                            &sender.user,
+                            &alt_jid.user,
+                            crate::lid_pn_cache::LearningSource::PeerLidMessage,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to persist LID-to-PN mapping {} -> {}: {err}",
+                            sender.user, alt_jid.user
                         );
-                        Jid {
-                            user: own_pn.user,
-                            server: own_pn.server,
-                            agent: own_pn.agent,
-                            device: sender.device,
-                            integrator: own_pn.integrator,
-                        }
-                    } else {
-                        log::warn!("Self-sent message from LID but own phone number not available");
-                        sender.clone()
                     }
+                    debug!(
+                        "Cached LID-to-PN mapping: {} -> {}",
+                        sender.user, alt_jid.user
+                    );
+                }
+                sender.clone()
+            } else if sender.server == pn_server {
+                // Sender is PN - check if we have a LID mapping.
+                // WhatsApp Web uses LID for sessions when available.
+
+                // First, cache/update the mapping if sender_lid attribute is present
+                if let Some(alt_jid) = alt
+                    && alt_jid.server == lid_server
+                {
+                    if let Err(err) = self
+                        .add_lid_pn_mapping(
+                            &alt_jid.user,
+                            &sender.user,
+                            crate::lid_pn_cache::LearningSource::PeerPnMessage,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to persist PN-to-LID mapping {} -> {}: {err}",
+                            sender.user, alt_jid.user
+                        );
+                    }
+                    debug!(
+                        "Cached PN-to-LID mapping: {} -> {}",
+                        sender.user, alt_jid.user
+                    );
+
+                    // Use the LID from the message attribute for session lookup
+                    let lid_jid = Jid {
+                        user: alt_jid.user.clone(),
+                        server: lid_server.to_string(),
+                        device: sender.device,
+                        agent: sender.agent,
+                        integrator: sender.integrator,
+                    };
+                    log::debug!(
+                        "Using LID {} for session lookup (sender was PN {})",
+                        lid_jid,
+                        sender
+                    );
+                    lid_jid
+                } else if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&sender.user).await
+                {
+                    // No sender_lid attribute, but we have a cached LID mapping
+                    let lid_jid = Jid {
+                        user: lid_user.clone(),
+                        server: lid_server.to_string(),
+                        device: sender.device,
+                        agent: sender.agent,
+                        integrator: sender.integrator,
+                    };
+                    log::debug!(
+                        "Using cached LID {} for session lookup (sender was PN {})",
+                        lid_jid,
+                        sender
+                    );
+                    lid_jid
                 } else {
-                    // No PN alt provided and not self-sent. Keep the original LID sender.
+                    // No LID mapping known - use PN address
+                    log::debug!("No LID mapping for {}, using PN for session lookup", sender);
                     sender.clone()
                 }
             } else {
-                // Sender already uses PN (or another stable server). Never upgrade to LID.
+                // Other server type (bot, hosted, group, broadcast, etc.) - use as-is
+                // Note: Group senders will be handled specially below (skipped for session processing)
                 sender.clone()
             }
         };
@@ -177,14 +247,30 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
+
+        // Skip session processing for group senders (@c.us, @g.us, @broadcast)
+        // Groups don't use 1:1 Signal Protocol sessions
+        let is_group_sender = sender_encryption_jid.server.contains(".us")
+            || sender_encryption_jid.server.contains("broadcast");
+
         let (
             session_decrypted_successfully,
             session_had_duplicates,
             session_dispatched_undecryptable,
-        ) = self
-            .clone()
-            .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
-            .await;
+        ) = if !is_group_sender && !session_enc_nodes.is_empty() {
+            self.clone()
+                .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
+                .await
+        } else {
+            if is_group_sender && !session_enc_nodes.is_empty() {
+                log::debug!(
+                    "Skipping {} session messages from group sender {}",
+                    session_enc_nodes.len(),
+                    sender_encryption_jid
+                );
+            }
+            (false, false, false)
+        };
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",
@@ -278,6 +364,20 @@ impl Client {
             return (false, false, false);
         }
 
+        // Acquire a per-sender session lock to prevent race conditions when
+        // multiple messages from the same sender are processed concurrently.
+        // Use the full Signal protocol address string as the lock key so it matches
+        // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
+        let signal_addr_str = sender_encryption_jid.to_protocol_address().to_string();
+
+        let session_mutex = self
+            .session_locks
+            .get_with(signal_addr_str.clone(), async {
+                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+            })
+            .await;
+        let _session_guard = session_mutex.lock().await;
+
         let mut adapter =
             SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
         let rng = rand::rngs::OsRng;
@@ -359,32 +459,35 @@ impl Client {
                     }
                     // Handle UntrustedIdentity: This happens when a user re-installs WhatsApp or changes devices.
                     // The Signal Protocol's security policy rejects messages from new identity keys by default.
-                    // We handle this by clearing the old identity and session, then retrying the decryption.
+                    // We handle this by clearing the old identity (to trust the new one), then retrying decryption.
+                    // IMPORTANT: We do NOT delete the session! When the PreKeySignalMessage is processed,
+                    // libsignal's `promote_state` will archive the old session as a "previous state".
+                    // This allows us to decrypt any in-flight messages that were encrypted with the old session.
                     if let SignalProtocolError::UntrustedIdentity(ref address) = e {
                         log::warn!(
-                            "Received message from untrusted identity: {}. This typically means the sender re-installed WhatsApp or changed their device. Clearing old identity and session to allow new identity key.",
+                            "Received message from untrusted identity: {}. This typically means the sender re-installed WhatsApp or changed their device. Clearing old identity to trust new key (keeping session for in-flight messages).",
                             address
                         );
 
-                        let device_arc = self.persistence_manager.get_device_arc().await;
-                        let device = device_arc.read().await;
+                        // Extract backend handle and address while holding the lock,
+                        // then drop the lock before the async I/O to avoid lock contention.
+                        let backend = {
+                            let device_arc = self.persistence_manager.get_device_arc().await;
+                            let device = device_arc.read().await;
+                            Arc::clone(&device.backend)
+                        };
 
-                        // Delete the old, untrusted identity and session using the backend.
+                        // Delete the old, untrusted identity using the backend.
                         // Use the full protocol address string (including device ID) as the key.
+                        // NOTE: We intentionally do NOT delete the session here. The session will be
+                        // archived (not deleted) when the new PreKeySignalMessage is processed,
+                        // allowing decryption of any in-flight messages encrypted with the old session.
                         let address_str = address.to_string();
-                        if let Err(err) = device.backend.delete_identity(&address_str).await {
+                        if let Err(err) = backend.delete_identity(&address_str).await {
                             log::warn!("Failed to delete old identity for {}: {:?}", address, err);
                         } else {
                             log::info!("Successfully cleared old identity for {}", address);
                         }
-
-                        if let Err(err) = device.backend.delete_session(&address_str).await {
-                            log::warn!("Failed to delete old session for {}: {:?}", address, err);
-                        } else {
-                            log::info!("Successfully cleared old session for {}", address);
-                        }
-
-                        drop(device);
 
                         // Re-attempt decryption with the new identity
                         log::info!(
@@ -493,6 +596,13 @@ impl Client {
                                         },
                                     ));
                                     dispatched_undecryptable = true;
+
+                                    // Send retry receipt so the sender resends with a PreKeySignalMessage
+                                    // to establish a new session with the new identity
+                                    self.spawn_retry_receipt(
+                                        info,
+                                        "UntrustedIdentity retry failed",
+                                    );
                                 }
                             }
                         }
@@ -826,11 +936,17 @@ impl Client {
             }
         } else {
             // DM from someone else
-            // For LID senders, look for sender_pn attribute to get their phone number
+            // Look for alternate JID attribute based on sender type:
+            // - For LID senders: look for sender_pn to get their phone number
+            // - For PN senders: look for sender_lid to get their LID
+            // This is needed because sessions may be stored under either format
+            // depending on how the session was originally established.
             let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
+                // Sender is LID, look for their phone number
                 attrs.optional_jid("sender_pn")
             } else {
-                None
+                // Sender is phone number, look for their LID
+                attrs.optional_jid("sender_lid")
             };
 
             crate::types::message::MessageSource {
@@ -1549,35 +1665,60 @@ mod tests {
         assert_eq!(lid4.agent, 0);
     }
 
-    /// Test that protocol address generation from LID JIDs is consistent
+    /// Test that protocol address generation from LID JIDs matches WhatsApp Web format
     ///
-    /// Critical: The protocol address must not add unwanted suffixes for LID addresses
-    /// with dots in the user portion, which was causing sender key lookup failures.
+    /// WhatsApp Web uses: {user}[:device]@{server}.0
+    /// - The device is encoded in the name
+    /// - device_id is always 0
     #[test]
     fn test_lid_protocol_address_consistency() {
         use wacore::types::jid::JidExt as CoreJidExt;
         use wacore_binary::jid::Jid;
 
+        // Format: (jid_str, expected_name, expected_device_id, expected_to_string)
         let test_cases = vec![
-            ("236395184570386.1:75@lid", "236395184570386.1", 75),
-            ("987654321000000.2:42@lid", "987654321000000.2", 42),
-            ("111.222.333:10@lid", "111.222.333", 10),
+            (
+                "236395184570386.1:75@lid",
+                "236395184570386.1:75@lid",
+                0,
+                "236395184570386.1:75@lid.0",
+            ),
+            (
+                "987654321000000.2:42@lid",
+                "987654321000000.2:42@lid",
+                0,
+                "987654321000000.2:42@lid.0",
+            ),
+            (
+                "111.222.333:10@lid",
+                "111.222.333:10@lid",
+                0,
+                "111.222.333:10@lid.0",
+            ),
+            // No device - should not include :0
+            ("123456789@lid", "123456789@lid", 0, "123456789@lid.0"),
         ];
 
-        for (jid_str, expected_name, expected_device) in test_cases {
+        for (jid_str, expected_name, expected_device_id, expected_to_string) in test_cases {
             let lid_jid: Jid = jid_str.parse().unwrap();
             let protocol_addr = lid_jid.to_protocol_address();
 
             assert_eq!(
                 protocol_addr.name(),
                 expected_name,
-                "Protocol address name should match user portion exactly for {}",
+                "Protocol address name should match WhatsApp Web's SignalAddress format for {}",
                 jid_str
             );
             assert_eq!(
                 u32::from(protocol_addr.device_id()),
-                expected_device,
-                "Protocol address device should match for {}",
+                expected_device_id,
+                "Protocol address device_id should always be 0 for {}",
+                jid_str
+            );
+            assert_eq!(
+                protocol_addr.to_string(),
+                expected_to_string,
+                "Protocol address to_string() should match createSignalLikeAddress format for {}",
                 jid_str
             );
         }
@@ -1974,7 +2115,7 @@ mod tests {
     ///
     /// Scenario:
     /// - User re-installs WhatsApp or switches devices
-    /// - Their device generates a new identity key  
+    /// - Their device generates a new identity key
     /// - The bot still has the old identity key stored
     /// - When a message arrives, Signal Protocol rejects it as "UntrustedIdentity"
     /// - The bot should catch this error, clear the old identity using the FULL protocol address (with device ID), and retry
@@ -2408,5 +2549,581 @@ mod tests {
         println!("   - is_from_me correctly detected: true");
         println!("   - sender_alt correctly NOT set");
         println!("   - Decryption will use own PN via is_from_me fallback path");
+    }
+
+    /// Test that receiving a DM with sender_lid populates the lid_pn_cache.
+    ///
+    /// This is the key behavior for the LID-PN session mismatch fix:
+    /// When we receive a message from a phone number with sender_lid attribute,
+    /// we cache the phone->LID mapping so that when sending replies, we can
+    /// reuse the existing LID session instead of creating a new PN session.
+    ///
+    /// Flow being tested:
+    /// 1. Receive message from 559980000001@s.whatsapp.net with sender_lid=100000012345678@lid
+    /// 2. Cache should be populated with: 559980000001 -> 100000012345678
+    /// 3. When sending reply to 559980000001, we can look up the LID and use existing session
+    #[tokio::test]
+    async fn test_lid_pn_cache_populated_on_message_with_sender_lid() {
+        // Setup client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_lid_cache_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let phone = "559980000001";
+        let lid = "100000012345678";
+
+        // Verify cache is empty initially
+        assert!(
+            client.lid_pn_cache.get_current_lid(phone).await.is_none(),
+            "Cache should be empty before receiving message"
+        );
+
+        // Create a DM message node with sender_lid attribute
+        // This simulates receiving a message from WhatsApp Web
+        let dm_node = NodeBuilder::new("message")
+            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("sender_lid", format!("{}@lid", lid))
+            .attr("id", "TEST123456789")
+            .attr("t", "1765482972")
+            .attr("type", "text")
+            .children([NodeBuilder::new("enc")
+                .attr("type", "pkmsg")
+                .attr("v", "2")
+                .bytes(vec![0u8; 100]) // Dummy encrypted content
+                .build()])
+            .build();
+
+        // Call handle_encrypted_message - this will fail to decrypt (no real session)
+        // but it should still populate the cache before attempting decryption
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(dm_node))
+            .await;
+
+        // Verify the cache was populated
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert!(
+            cached_lid.is_some(),
+            "Cache should be populated after receiving message with sender_lid"
+        );
+        assert_eq!(
+            cached_lid.unwrap(),
+            lid,
+            "Cached LID should match the sender_lid from the message"
+        );
+
+        println!("✅ test_lid_pn_cache_populated_on_message_with_sender_lid passed:");
+        println!(
+            "   - Received DM from {}@s.whatsapp.net with sender_lid={}@lid",
+            phone, lid
+        );
+        println!("   - Cache correctly populated: {} -> {}", phone, lid);
+    }
+
+    /// Test that messages without sender_lid do NOT populate the cache.
+    ///
+    /// This ensures we don't accidentally cache incorrect mappings.
+    #[tokio::test]
+    async fn test_lid_pn_cache_not_populated_without_sender_lid() {
+        // Setup client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_no_lid_cache_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let phone = "559980000001";
+
+        // Create a DM message node WITHOUT sender_lid attribute
+        let dm_node = NodeBuilder::new("message")
+            .attr("from", format!("{}@s.whatsapp.net", phone))
+            // Note: NO sender_lid attribute
+            .attr("id", "TEST123456789")
+            .attr("t", "1765482972")
+            .attr("type", "text")
+            .children([NodeBuilder::new("enc")
+                .attr("type", "pkmsg")
+                .attr("v", "2")
+                .bytes(vec![0u8; 100])
+                .build()])
+            .build();
+
+        // Call handle_encrypted_message
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(dm_node))
+            .await;
+
+        // Verify the cache was NOT populated
+        assert!(
+            client.lid_pn_cache.get_current_lid(phone).await.is_none(),
+            "Cache should NOT be populated for messages without sender_lid"
+        );
+
+        println!("✅ test_lid_pn_cache_not_populated_without_sender_lid passed:");
+        println!("   - Received DM without sender_lid attribute");
+        println!("   - Cache correctly remains empty");
+    }
+
+    /// Test that messages from LID senders with participant_pn DO populate the cache.
+    ///
+    /// When the sender is a LID (e.g., in LID-mode groups), and participant_pn
+    /// contains their phone number, we SHOULD cache this mapping because:
+    /// 1. The cache is bidirectional - we need both LID->PN and PN->LID
+    /// 2. This enables sending to users we've only seen as LID senders
+    #[tokio::test]
+    async fn test_lid_pn_cache_populated_for_lid_sender_with_participant_pn() {
+        // Setup client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_lid_sender_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let lid = "100000012345678";
+        let phone = "559980000001";
+
+        // Create a message from a LID sender with participant_pn attribute
+        // This happens in LID-mode groups (addressing_mode="lid")
+        let group_node = NodeBuilder::new("message")
+            .attr("from", "120363123456789012@g.us") // Group chat
+            .attr("participant", format!("{}@lid", lid)) // Sender is LID
+            .attr("participant_pn", format!("{}@s.whatsapp.net", phone)) // Their phone number
+            .attr("addressing_mode", "lid") // Required for participant_pn to be parsed
+            .attr("id", "TEST123456789")
+            .attr("t", "1765482972")
+            .attr("type", "text")
+            .children([NodeBuilder::new("enc")
+                .attr("type", "skmsg")
+                .attr("v", "2")
+                .bytes(vec![0u8; 100])
+                .build()])
+            .build();
+
+        // Call handle_encrypted_message
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(group_node))
+            .await;
+
+        // Verify the cache WAS populated (bidirectional cache)
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert!(
+            cached_lid.is_some(),
+            "Cache should be populated for LID senders with participant_pn"
+        );
+        assert_eq!(
+            cached_lid.unwrap(),
+            lid,
+            "Cached LID should match the sender's LID"
+        );
+
+        // Also verify we can look up the phone number from the LID
+        let cached_pn = client.lid_pn_cache.get_phone_number(lid).await;
+        assert!(cached_pn.is_some(), "Reverse lookup (LID->PN) should work");
+        assert_eq!(
+            cached_pn.unwrap(),
+            phone,
+            "Cached phone number should match"
+        );
+
+        println!("✅ test_lid_pn_cache_populated_for_lid_sender_with_participant_pn passed:");
+        println!("   - Received message from LID sender with participant_pn");
+        println!("   - Cache correctly populated with bidirectional mapping");
+    }
+
+    /// Test that multiple messages from the same sender update the cache correctly.
+    ///
+    /// This ensures the cache handles repeated messages gracefully.
+    #[tokio::test]
+    async fn test_lid_pn_cache_handles_repeated_messages() {
+        // Setup client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_repeated_msg_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let phone = "559980000001";
+        let lid = "100000012345678";
+
+        // Send multiple messages from the same sender
+        for i in 0..3 {
+            let dm_node = NodeBuilder::new("message")
+                .attr("from", format!("{}@s.whatsapp.net", phone))
+                .attr("sender_lid", format!("{}@lid", lid))
+                .attr("id", format!("TEST{}", i))
+                .attr("t", "1765482972")
+                .attr("type", "text")
+                .children([NodeBuilder::new("enc")
+                    .attr("type", "pkmsg")
+                    .attr("v", "2")
+                    .bytes(vec![0u8; 100])
+                    .build()])
+                .build();
+
+            client
+                .clone()
+                .handle_encrypted_message(Arc::new(dm_node))
+                .await;
+        }
+
+        // Verify the cache still has the correct mapping
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert!(cached_lid.is_some(), "Cache should contain the mapping");
+        assert_eq!(
+            cached_lid.unwrap(),
+            lid,
+            "Cached LID should be correct after multiple messages"
+        );
+
+        println!("✅ test_lid_pn_cache_handles_repeated_messages passed:");
+        println!("   - Received 3 messages from same sender");
+        println!("   - Cache correctly maintains the mapping");
+    }
+
+    /// Test that PN-addressed messages use LID for session lookup when LID mapping is known.
+    ///
+    /// This test verifies the fix for the MAC verification failure bug:
+    /// WhatsApp Web's SignalAddress.toString() ALWAYS converts PN addresses to LID
+    /// when a LID mapping is known. The Rust client must do the same to ensure
+    /// session keys match between clients.
+    ///
+    /// Bug scenario:
+    /// 1. WhatsApp Web Client A sends a group message to our Rust client
+    /// 2. Rust client creates session under PN address (559980000001@c.us.0)
+    /// 3. Rust client sends group response, creates session under LID (100000012345678@lid.0)
+    /// 4. Client A sends DM to Rust client from PN address
+    /// 5. Rust client tries to decrypt using PN address but session is under LID
+    /// 6. MAC verification fails because wrong session is used
+    ///
+    /// Fix: When receiving a PN-addressed message, if we have a LID mapping,
+    /// use the LID address for session lookup (matching WhatsApp Web behavior).
+    #[tokio::test]
+    async fn test_pn_message_uses_lid_for_session_lookup_when_mapping_known() {
+        use crate::lid_pn_cache::LidPnEntry;
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::types::jid::JidExt;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_pn_to_lid_session_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let lid = "100000012345678";
+        let phone = "559980000001";
+
+        // Pre-populate the LID-PN cache (simulating a previous group message)
+        let entry = LidPnEntry::new(
+            lid.to_string(),
+            phone.to_string(),
+            crate::lid_pn_cache::LearningSource::PeerLidMessage,
+        );
+        client.lid_pn_cache.add(entry).await;
+
+        // Verify the cache has the mapping
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert_eq!(
+            cached_lid,
+            Some(lid.to_string()),
+            "Cache should have the LID-PN mapping"
+        );
+
+        // Test scenario: Parse a PN-addressed DM message (with sender_lid attribute)
+        let dm_node_with_sender_lid = wacore_binary::builder::NodeBuilder::new("message")
+            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("sender_lid", format!("{}@lid", lid))
+            .attr("id", "test_dm_with_lid")
+            .attr("t", "1765494882")
+            .attr("type", "text")
+            .build();
+
+        let info = client
+            .parse_message_info(&dm_node_with_sender_lid)
+            .await
+            .unwrap();
+
+        // Verify sender is PN but sender_alt is LID
+        assert_eq!(info.source.sender.user, phone);
+        assert_eq!(info.source.sender.server, "s.whatsapp.net");
+        assert!(info.source.sender_alt.is_some());
+        assert_eq!(info.source.sender_alt.as_ref().unwrap().user, lid);
+        assert_eq!(info.source.sender_alt.as_ref().unwrap().server, "lid");
+
+        // Now simulate what handle_encrypted_message does: determine encryption JID
+        // We can't easily call handle_encrypted_message, so we'll test the logic directly
+        let sender = &info.source.sender;
+        let alt = info.source.sender_alt.as_ref();
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        // Apply the same logic as in handle_encrypted_message
+        let sender_encryption_jid = if sender.server == lid_server {
+            sender.clone()
+        } else if sender.server == pn_server {
+            if let Some(alt_jid) = alt
+                && alt_jid.server == lid_server
+            {
+                // Use the LID from the message attribute
+                Jid {
+                    user: alt_jid.user.clone(),
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
+                // Use the cached LID
+                Jid {
+                    user: lid_user,
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else {
+                sender.clone()
+            }
+        } else {
+            sender.clone()
+        };
+
+        // Verify the encryption JID uses the LID, not the PN
+        assert_eq!(
+            sender_encryption_jid.user, lid,
+            "Encryption JID should use LID user"
+        );
+        assert_eq!(
+            sender_encryption_jid.server, "lid",
+            "Encryption JID should use LID server"
+        );
+
+        // Verify the protocol address format
+        let protocol_address = sender_encryption_jid.to_protocol_address();
+        assert_eq!(
+            protocol_address.to_string(),
+            format!("{}@lid.0", lid),
+            "Protocol address should be in LID format"
+        );
+
+        println!("✅ test_pn_message_uses_lid_for_session_lookup_when_mapping_known passed:");
+        println!("   - PN message with sender_lid attribute correctly uses LID for session lookup");
+        println!("   - Protocol address: {}", protocol_address);
+    }
+
+    /// Test that PN-addressed messages use cached LID even without sender_lid attribute.
+    ///
+    /// This tests the fallback path where the message doesn't have a sender_lid
+    /// attribute but we have a previously cached LID mapping.
+    #[tokio::test]
+    async fn test_pn_message_uses_cached_lid_without_sender_lid_attribute() {
+        use crate::lid_pn_cache::LidPnEntry;
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::types::jid::JidExt;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_cached_lid_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let lid = "100000012345678";
+        let phone = "559980000001";
+
+        // Pre-populate the LID-PN cache
+        let entry = LidPnEntry::new(
+            lid.to_string(),
+            phone.to_string(),
+            crate::lid_pn_cache::LearningSource::PeerLidMessage,
+        );
+        client.lid_pn_cache.add(entry).await;
+
+        // Parse a PN-addressed DM message WITHOUT sender_lid attribute
+        let dm_node_without_sender_lid = wacore_binary::builder::NodeBuilder::new("message")
+            .attr("from", format!("{}@s.whatsapp.net", phone))
+            // Note: No sender_lid attribute!
+            .attr("id", "test_dm_no_lid")
+            .attr("t", "1765494882")
+            .attr("type", "text")
+            .build();
+
+        let info = client
+            .parse_message_info(&dm_node_without_sender_lid)
+            .await
+            .unwrap();
+
+        // Verify sender is PN and NO sender_alt (since there's no sender_lid attribute)
+        assert_eq!(info.source.sender.user, phone);
+        assert_eq!(info.source.sender.server, "s.whatsapp.net");
+        assert!(
+            info.source.sender_alt.is_none(),
+            "Should have no sender_alt without sender_lid attribute"
+        );
+
+        // Apply the encryption JID logic (fallback to cached LID)
+        let sender = &info.source.sender;
+        let alt = info.source.sender_alt.as_ref();
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        let sender_encryption_jid = if sender.server == lid_server {
+            sender.clone()
+        } else if sender.server == pn_server {
+            if let Some(alt_jid) = alt
+                && alt_jid.server == lid_server
+            {
+                Jid {
+                    user: alt_jid.user.clone(),
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
+                // This is the path we're testing - fallback to cached LID
+                Jid {
+                    user: lid_user,
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else {
+                sender.clone()
+            }
+        } else {
+            sender.clone()
+        };
+
+        // Verify the encryption JID uses the cached LID
+        assert_eq!(
+            sender_encryption_jid.user, lid,
+            "Encryption JID should use cached LID user"
+        );
+        assert_eq!(
+            sender_encryption_jid.server, "lid",
+            "Encryption JID should use LID server"
+        );
+
+        let protocol_address = sender_encryption_jid.to_protocol_address();
+        assert_eq!(
+            protocol_address.to_string(),
+            format!("{}@lid.0", lid),
+            "Protocol address should be in LID format from cached mapping"
+        );
+
+        println!("✅ test_pn_message_uses_cached_lid_without_sender_lid_attribute passed:");
+        println!("   - PN message without sender_lid attribute uses cached LID for session lookup");
+        println!("   - Protocol address: {}", protocol_address);
+    }
+
+    /// Test that PN-addressed messages use PN when no LID mapping is known.
+    ///
+    /// When there's no LID mapping available, we should fall back to using
+    /// the PN address for session lookup.
+    #[tokio::test]
+    async fn test_pn_message_uses_pn_when_no_lid_mapping() {
+        use crate::store::SqliteStore;
+        use std::sync::Arc;
+        use wacore::types::jid::JidExt;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_no_lid_mapping_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let phone = "559980000001";
+
+        // Don't populate the cache - simulate first-time contact
+
+        // Parse a PN-addressed DM message without sender_lid
+        let dm_node = wacore_binary::builder::NodeBuilder::new("message")
+            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("id", "test_dm_no_mapping")
+            .attr("t", "1765494882")
+            .attr("type", "text")
+            .build();
+
+        let info = client.parse_message_info(&dm_node).await.unwrap();
+
+        // Verify no cached LID
+        let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
+        assert!(cached_lid.is_none(), "Should have no cached LID mapping");
+
+        // Apply the encryption JID logic
+        let sender = &info.source.sender;
+        let alt = info.source.sender_alt.as_ref();
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        let sender_encryption_jid = if sender.server == lid_server {
+            sender.clone()
+        } else if sender.server == pn_server {
+            if let Some(alt_jid) = alt
+                && alt_jid.server == lid_server
+            {
+                Jid {
+                    user: alt_jid.user.clone(),
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
+                Jid {
+                    user: lid_user,
+                    server: lid_server.to_string(),
+                    device: sender.device,
+                    agent: sender.agent,
+                    integrator: sender.integrator,
+                }
+            } else {
+                // This is the path we're testing - no LID mapping, use PN
+                sender.clone()
+            }
+        } else {
+            sender.clone()
+        };
+
+        // Verify the encryption JID uses the PN (no LID available)
+        assert_eq!(
+            sender_encryption_jid.user, phone,
+            "Encryption JID should use PN user when no LID mapping"
+        );
+        assert_eq!(
+            sender_encryption_jid.server, "s.whatsapp.net",
+            "Encryption JID should use PN server when no LID mapping"
+        );
+
+        let protocol_address = sender_encryption_jid.to_protocol_address();
+        assert_eq!(
+            protocol_address.to_string(),
+            format!("{}@c.us.0", phone),
+            "Protocol address should be in PN format when no LID mapping"
+        );
+
+        println!("✅ test_pn_message_uses_pn_when_no_lid_mapping passed:");
+        println!("   - PN message without LID mapping uses PN for session lookup");
+        println!("   - Protocol address: {}", protocol_address);
     }
 }

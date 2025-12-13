@@ -44,6 +44,7 @@ diesel::table! {
         app_version_secondary -> Integer,
         app_version_tertiary -> BigInt,
         app_version_last_fetched_ms -> BigInt,
+        edge_routing_info -> Nullable<Binary>,
     }
 }
 
@@ -51,6 +52,17 @@ diesel::table! {
     identities (address, device_id) {
         address -> Text,
         key -> Binary,
+        device_id -> Integer,
+    }
+}
+
+diesel::table! {
+    lid_pn_mapping (lid, device_id) {
+        lid -> Text,
+        phone_number -> Text,
+        created_at -> BigInt,
+        learning_source -> Text,
+        updated_at -> BigInt,
         device_id -> Integer,
     }
 }
@@ -103,6 +115,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     app_state_versions,
     device,
     identities,
+    lid_pn_mapping,
     prekeys,
     sender_keys,
     sessions,

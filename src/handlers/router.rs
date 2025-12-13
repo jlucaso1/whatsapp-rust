@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
-use wacore_binary::node::NodeRef;
+use wacore_binary::node::Node;
 
 /// Central router for dispatching XML stanzas to their appropriate handlers.
 ///
@@ -40,7 +40,7 @@ impl StanzaRouter {
     ///
     /// # Arguments
     /// * `client` - Arc reference to the client instance
-    /// * `node` - The XML node reference to dispatch (zero-copy)
+    /// * `node` - Arc-wrapped owned Node (avoids cloning)
     ///
     /// # Returns
     /// Returns `true` if a handler was found and successfully processed the node,
@@ -49,10 +49,10 @@ impl StanzaRouter {
     pub async fn dispatch(
         &self,
         client: Arc<Client>,
-        node: &NodeRef<'_>,
+        node: Arc<Node>,
         cancelled: &mut bool,
     ) -> bool {
-        if let Some(handler) = self.handlers.get(node.tag.as_ref()) {
+        if let Some(handler) = self.handlers.get(node.tag.as_str()) {
             handler.handle(client, node, cancelled).await
         } else {
             false
@@ -74,8 +74,9 @@ impl Default for StanzaRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
     use std::sync::Arc;
-    use wacore_binary::node::NodeRef;
+    use wacore_binary::node::{Node, NodeContent};
 
     #[derive(Debug)]
     struct MockHandler {
@@ -105,7 +106,7 @@ mod tests {
         async fn handle(
             &self,
             _client: Arc<crate::client::Client>,
-            _node: &NodeRef<'_>,
+            _node: Arc<Node>,
             _cancelled: &mut bool,
         ) -> bool {
             self.handled
@@ -153,21 +154,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_router_dispatch_found() {
-        use std::borrow::Cow;
-        use wacore_binary::node::{NodeContentRef, NodeRef};
-
         let mut router = StanzaRouter::new();
         let handler = Arc::new(MockHandler::new("test"));
         let handler_ref = handler.clone();
 
         router.register(handler);
 
-        // Create a NodeRef directly
-        let node_ref = NodeRef::new(
-            Cow::Borrowed("test"),
-            vec![(Cow::Borrowed("id"), Cow::Borrowed("test-id"))],
-            Some(NodeContentRef::String(Cow::Borrowed("test"))),
-        );
+        // Create owned Node wrapped in Arc
+        let mut attrs = IndexMap::new();
+        attrs.insert("id".to_string(), "test-id".to_string());
+        let node = Arc::new(Node::new(
+            "test",
+            attrs,
+            Some(NodeContent::String("test".to_string())),
+        ));
 
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
@@ -181,7 +181,7 @@ mod tests {
             crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
 
         let mut cancelled = false;
-        let result = router.dispatch(client, &node_ref, &mut cancelled).await;
+        let result = router.dispatch(client, node, &mut cancelled).await;
 
         assert!(result);
         assert!(handler_ref.was_handled());
@@ -189,17 +189,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_router_dispatch_not_found() {
-        use std::borrow::Cow;
-        use wacore_binary::node::{NodeContentRef, NodeRef};
-
         let router = StanzaRouter::new();
 
-        // Create a NodeRef directly
-        let node_ref = NodeRef::new(
-            Cow::Borrowed("unknown"),
-            vec![(Cow::Borrowed("id"), Cow::Borrowed("test-id"))],
-            Some(NodeContentRef::String(Cow::Borrowed("test"))),
-        );
+        // Create owned Node wrapped in Arc
+        let mut attrs = IndexMap::new();
+        attrs.insert("id".to_string(), "test-id".to_string());
+        let node = Arc::new(Node::new(
+            "unknown",
+            attrs,
+            Some(NodeContent::String("test".to_string())),
+        ));
 
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
@@ -213,7 +212,7 @@ mod tests {
             crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
 
         let mut cancelled = false;
-        let result = router.dispatch(client, &node_ref, &mut cancelled).await;
+        let result = router.dispatch(client, node, &mut cancelled).await;
 
         assert!(!result);
     }

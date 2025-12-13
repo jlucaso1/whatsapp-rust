@@ -83,6 +83,40 @@ pub trait SenderKeyDistributionStore: Send + Sync {
     async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
 }
 
+/// Entry representing a LID to Phone Number mapping
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LidPnMappingEntry {
+    /// The LID user part (e.g., "100000012345678")
+    pub lid: String,
+    /// The phone number user part (e.g., "559980000001")
+    pub phone_number: String,
+    /// Unix timestamp when the mapping was first learned
+    pub created_at: i64,
+    /// Unix timestamp when the mapping was last updated (drives "most recent" by phone)
+    pub updated_at: i64,
+    /// The source from which this mapping was learned (e.g., "usync", "peer_pn_message")
+    pub learning_source: String,
+}
+
+/// Trait for LID to Phone Number mapping persistence
+#[async_trait]
+pub trait LidPnMappingStore: Send + Sync {
+    /// Get a mapping by LID
+    async fn get_lid_pn_mapping_by_lid(&self, lid: &str) -> Result<Option<LidPnMappingEntry>>;
+
+    /// Get a mapping by phone number (returns the most recent LID for that phone)
+    async fn get_lid_pn_mapping_by_phone(&self, phone: &str) -> Result<Option<LidPnMappingEntry>>;
+
+    /// Store or update a LID-PN mapping
+    async fn put_lid_pn_mapping(&self, entry: &LidPnMappingEntry) -> Result<()>;
+
+    /// Get all LID-PN mappings (for cache warm-up)
+    async fn get_all_lid_pn_mappings(&self) -> Result<Vec<LidPnMappingEntry>>;
+
+    /// Delete a mapping by LID
+    async fn delete_lid_pn_mapping(&self, lid: &str) -> Result<()>;
+}
+
 /// Trait for device data persistence operations
 #[async_trait]
 pub trait DevicePersistence: Send + Sync {
@@ -121,6 +155,7 @@ pub trait Backend:
     + crate::libsignal::store::SignedPreKeyStore
     + SenderKeyStoreHelper
     + SenderKeyDistributionStore
+    + LidPnMappingStore
     + DevicePersistence
     + Send
     + Sync
@@ -136,6 +171,7 @@ impl<T> Backend for T where
         + crate::libsignal::store::SignedPreKeyStore
         + SenderKeyStoreHelper
         + SenderKeyDistributionStore
+        + LidPnMappingStore
         + DevicePersistence
         + Send
         + Sync

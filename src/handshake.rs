@@ -1,12 +1,13 @@
 use crate::socket::NoiseSocket;
 use crate::transport::{Transport, TransportEvent};
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
 use wacore::handshake::{HandshakeState, utils::HandshakeError as CoreHandshakeError};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_EDGE_ROUTING_LEN: usize = 0xFF_FFFF;
 
 #[derive(Debug, Error)]
 pub enum HandshakeError {
@@ -18,9 +19,35 @@ pub enum HandshakeError {
     Timeout,
     #[error("Unexpected event during handshake: {0}")]
     UnexpectedEvent(String),
+    #[error("Edge routing info too large")]
+    RoutingInfoTooLarge,
 }
 
 type Result<T> = std::result::Result<T, HandshakeError>;
+
+/// Builds the edge routing pre-intro header if routing info is available.
+/// Format: ED\0\1 (4 bytes) + length (3 bytes big-endian) + routing_data
+/// Based on WhatsApp Web JS: l.write("ED", 0, 1); l.writeUint8(len >> 16); l.writeUint16(len & 65535);
+fn build_edge_routing_preintro(routing_info: &[u8]) -> Result<Vec<u8>> {
+    let len = routing_info.len();
+    if len > MAX_EDGE_ROUTING_LEN {
+        return Err(HandshakeError::RoutingInfoTooLarge);
+    }
+
+    let mut preintro = Vec::with_capacity(7 + len);
+    // ED header with version bytes (4 bytes total)
+    preintro.push(b'E');
+    preintro.push(b'D');
+    preintro.push(0);
+    preintro.push(1);
+    // Length as 3 bytes big-endian (high byte, then 2 low bytes)
+    preintro.push((len >> 16) as u8);
+    preintro.push((len >> 8) as u8);
+    preintro.push(len as u8);
+    // Routing data
+    preintro.extend_from_slice(routing_info);
+    Ok(preintro)
+}
 
 pub async fn do_handshake(
     device: &crate::store::Device,
@@ -33,8 +60,43 @@ pub async fn do_handshake(
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
 
-    // First message includes the WA connection header
-    let header = wacore_binary::consts::WA_CONN_HEADER;
+    // Build the connection header, optionally with edge routing pre-intro
+    let header: Vec<u8> = if let Some(ref routing_info) = device.core.edge_routing_info {
+        if routing_info.len() > MAX_EDGE_ROUTING_LEN {
+            warn!(
+                target: "Client",
+                "Edge routing info ({} bytes) exceeds the {}-byte limit; falling back to WA_CONN_HEADER",
+                routing_info.len(),
+                MAX_EDGE_ROUTING_LEN
+            );
+            wacore_binary::consts::WA_CONN_HEADER.to_vec()
+        } else {
+            match build_edge_routing_preintro(routing_info) {
+                Ok(mut header) => {
+                    debug!(
+                        target: "Client",
+                        "Sending edge routing pre-intro ({} bytes) for optimized reconnection",
+                        routing_info.len()
+                    );
+                    header.extend_from_slice(&wacore_binary::consts::WA_CONN_HEADER);
+                    header
+                }
+                Err(HandshakeError::RoutingInfoTooLarge) => {
+                    warn!(
+                        target: "Client",
+                        "Routing info unexpectedly exceeds {} bytes; skipping pre-intro",
+                        MAX_EDGE_ROUTING_LEN
+                    );
+                    wacore_binary::consts::WA_CONN_HEADER.to_vec()
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    } else {
+        wacore_binary::consts::WA_CONN_HEADER.to_vec()
+    };
+
+    // First message includes the WA connection header (with optional edge routing)
     let framed = crate::framing::encode_frame(&client_hello_bytes, Some(&header))
         .map_err(HandshakeError::Transport)?;
     transport.send(&framed).await?;

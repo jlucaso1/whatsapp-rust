@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use log::debug;
+use log::{debug, warn};
 use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 use wacore_binary::node::NodeContent;
@@ -44,6 +44,29 @@ impl Client {
             };
             let resp_node = self.send_iq(iq).await?;
             let fetched_devices = wacore::usync::parse_get_user_devices_response(&resp_node)?;
+
+            // Extract and persist LID mappings from the response
+            let lid_mappings = wacore::usync::parse_lid_mappings_from_response(&resp_node);
+            for mapping in lid_mappings {
+                if let Err(err) = self
+                    .add_lid_pn_mapping(
+                        &mapping.lid,
+                        &mapping.phone_number,
+                        crate::lid_pn_cache::LearningSource::Usync,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to persist LID {} -> {} from usync: {err}",
+                        mapping.lid, mapping.phone_number,
+                    );
+                    continue;
+                }
+                debug!(
+                    "Learned LID mapping from usync: {} -> {}",
+                    mapping.lid, mapping.phone_number
+                );
+            }
 
             // 3. Update the cache with the newly fetched data
             let mut devices_by_user = HashMap::new();

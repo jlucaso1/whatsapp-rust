@@ -1126,9 +1126,9 @@ dependencies = [
 
 [[package]]
 name = "libz-rs-sys"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b484ba8d4f775eeca644c452a56650e544bf7e617f1d170fe7298122ead5222"
+checksum = "15413ef615ad868d4d65dce091cb233b229419c7c0c4bcaa746c0901c49ff39c"
 dependencies = [
  "zlib-rs",
 ]
@@ -2144,7 +2144,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
- "webpki-roots",
 ]
 
 [[package]]
@@ -2228,7 +2227,7 @@ dependencies = [
  "serde_json",
  "ureq-proto",
  "utf-8",
- "webpki-roots",
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]
@@ -2495,6 +2494,15 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.4",
+]
+
+[[package]]
+name = "webpki-roots"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2878ef029c47c6e8cf779119f20fcf52bde7ad42a731b2a304bc221df17571e"
@@ -2543,6 +2551,7 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "libsqlite3-sys",
+ "log",
  "prost",
  "tokio",
  "wacore",
@@ -2561,8 +2570,10 @@ dependencies = [
  "log",
  "rustls",
  "tokio",
+ "tokio-rustls",
  "tokio-websockets",
  "wacore",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2971,6 +2982,6 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36134c44663532e6519d7a6dfdbbe06f6f8192bde8ae9ed076e9b213f0e31df7"
+checksum = "51f936044d677be1a1168fae1d03b583a285a5dd9d8cbf7b24c23aa1fc775235"
