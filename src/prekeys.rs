@@ -95,7 +95,14 @@ impl Client {
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let device_store = self.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
+
+        // Clone the backend Arc and drop the guard early to reduce lock contention.
+        // This allows other tasks to access the device while we perform potentially
+        // long-running backend operations (loops with many iterations).
+        let backend = {
+            let device_guard = device_store.read().await;
+            device_guard.backend.clone()
+        };
 
         // Step 1: Try to get existing unuploaded keys from storage
         let mut keys_to_upload = Vec::new();
@@ -109,7 +116,7 @@ impl Client {
                 break;
             }
 
-            if let Ok(Some(_record)) = device_guard.backend.load_prekey(id).await {
+            if let Ok(Some(_record)) = backend.load_prekey(id).await {
                 // Check if this key was already uploaded by seeing if it exists on server
                 // For simplicity, assume unuploaded keys have a specific pattern or we track separately
                 // For now, we'll use existing keys if available but generate new ones with sequential IDs
@@ -122,12 +129,7 @@ impl Client {
 
         // Find the highest existing pre-key ID to start from
         for id in 1..=16777215u32 {
-            if device_guard
-                .backend
-                .contains_prekey(id)
-                .await
-                .unwrap_or(false)
-            {
+            if backend.contains_prekey(id).await.unwrap_or(false) {
                 highest_existing_id = id;
             } else {
                 break; // Found first gap
@@ -201,7 +203,7 @@ impl Client {
         // Step 5: Store the new pre-keys using existing backend interface
         for (id, record) in keys_to_upload {
             // Mark as uploaded since the IQ was successful
-            if let Err(e) = device_guard.backend.store_prekey(id, record, true).await {
+            if let Err(e) = backend.store_prekey(id, record, true).await {
                 log::warn!("Failed to store prekey id {}: {:?}", id, e);
             }
         }

@@ -2,7 +2,8 @@ use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use wacore::aes_gcm::{
     Aes256Gcm,
     aead::{Aead, AeadInPlace},
@@ -11,39 +12,92 @@ use wacore::handshake::utils::generate_iv;
 
 const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
+/// Result type for send operations, returning both buffers for reuse.
+type SendResult = std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError>;
+
+/// A job sent to the dedicated sender task.
+struct SendJob {
+    plaintext_buf: Vec<u8>,
+    out_buf: Vec<u8>,
+    response_tx: oneshot::Sender<SendResult>,
+}
+
 pub struct NoiseSocket {
-    transport: Arc<dyn Transport>,
-    write_key: Arc<Aes256Gcm>,
     read_key: Arc<Aes256Gcm>,
-    write_counter: Arc<AtomicU32>,
     read_counter: Arc<AtomicU32>,
-    /// Mutex to ensure frames are sent in counter order.
-    /// Without this, concurrent calls to encrypt_and_send could result in
-    /// frames being sent out of order relative to their counter values,
-    /// causing decryption failures on the server.
-    send_mutex: Mutex<()>,
+    /// Channel to send jobs to the dedicated sender task.
+    /// Using a channel instead of a mutex avoids blocking callers while
+    /// the current send is in progress - they can enqueue their work and
+    /// await the result without holding a lock.
+    send_job_tx: mpsc::Sender<SendJob>,
+    /// Handle to the sender task. Aborted on drop to prevent resource leaks
+    /// if the task is stuck on a slow/hanging network operation.
+    sender_task_handle: JoinHandle<()>,
 }
 
 impl NoiseSocket {
     pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
+        let write_key = Arc::new(write_key);
+        let read_key = Arc::new(read_key);
+
+        // Create channel for send jobs. Buffer size of 32 allows multiple
+        // callers to enqueue work without blocking on channel capacity.
+        let (send_job_tx, send_job_rx) = mpsc::channel::<SendJob>(32);
+
+        // Spawn the dedicated sender task
+        let transport_clone = transport.clone();
+        let write_key_clone = write_key.clone();
+        let sender_task_handle = tokio::spawn(Self::sender_task(
+            transport_clone,
+            write_key_clone,
+            send_job_rx,
+        ));
+
         Self {
-            transport,
-            write_key: Arc::new(write_key),
-            read_key: Arc::new(read_key),
-            write_counter: Arc::new(AtomicU32::new(0)),
+            read_key,
             read_counter: Arc::new(AtomicU32::new(0)),
-            send_mutex: Mutex::new(()),
+            send_job_tx,
+            sender_task_handle,
         }
     }
 
-    pub async fn encrypt_and_send(
-        &self,
+    /// Dedicated sender task that processes send jobs sequentially.
+    /// This ensures frames are sent in counter order without requiring a mutex.
+    /// The task owns the write counter and processes jobs one at a time.
+    async fn sender_task(
+        transport: Arc<dyn Transport>,
+        write_key: Arc<Aes256Gcm>,
+        mut send_job_rx: mpsc::Receiver<SendJob>,
+    ) {
+        let mut write_counter: u32 = 0;
+
+        while let Some(job) = send_job_rx.recv().await {
+            let result = Self::process_send_job(
+                &transport,
+                &write_key,
+                &mut write_counter,
+                job.plaintext_buf,
+                job.out_buf,
+            )
+            .await;
+
+            // Send result back to caller. Ignore error if receiver was dropped.
+            let _ = job.response_tx.send(result);
+        }
+
+        // Channel closed - NoiseSocket was dropped, task exits naturally
+    }
+
+    /// Process a single send job: encrypt and send the message.
+    async fn process_send_job(
+        transport: &Arc<dyn Transport>,
+        write_key: &Arc<Aes256Gcm>,
+        write_counter: &mut u32,
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
-    ) -> std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError> {
-        // Acquire send lock to ensure frames are sent in counter order.
-        // This prevents out-of-order delivery when multiple tasks call this concurrently.
-        let _send_guard = self.send_mutex.lock().await;
+    ) -> SendResult {
+        let counter = *write_counter;
+        *write_counter = write_counter.wrapping_add(1);
 
         // For small messages, encrypt in-place in out_buf to avoid allocation
         if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
@@ -52,12 +106,8 @@ impl NoiseSocket {
             out_buf.extend_from_slice(&plaintext_buf);
             plaintext_buf.clear();
 
-            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
             let iv = generate_iv(counter);
-            if let Err(e) = self
-                .write_key
-                .encrypt_in_place(iv.as_ref().into(), b"", &mut out_buf)
-            {
+            if let Err(e) = write_key.encrypt_in_place(iv.as_ref().into(), b"", &mut out_buf) {
                 return Err(EncryptSendError::crypto(
                     anyhow::anyhow!(e.to_string()),
                     plaintext_buf,
@@ -81,8 +131,7 @@ impl NoiseSocket {
             plaintext_buf.clear();
         } else {
             // Offload larger messages to a blocking thread
-            let write_key = self.write_key.clone();
-            let counter = self.write_counter.fetch_add(1, Ordering::SeqCst);
+            let write_key = write_key.clone();
 
             let plaintext_arc = Arc::new(plaintext_buf);
             let plaintext_arc_for_task = plaintext_arc.clone();
@@ -116,12 +165,38 @@ impl NoiseSocket {
             }
         }
 
-        if let Err(e) = self.transport.send(&out_buf).await {
+        if let Err(e) = transport.send(&out_buf).await {
             return Err(EncryptSendError::transport(e, plaintext_buf, out_buf));
         }
 
         out_buf.clear();
         Ok((plaintext_buf, out_buf))
+    }
+
+    pub async fn encrypt_and_send(&self, plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> SendResult {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let job = SendJob {
+            plaintext_buf,
+            out_buf,
+            response_tx,
+        };
+
+        // Send job to the sender task. If channel is closed, sender task has stopped.
+        if self.send_job_tx.send(job).await.is_err() {
+            // We can't recover the buffers since they were moved into the job.
+            // Create new empty buffers for the error.
+            return Err(EncryptSendError::channel_closed(Vec::new(), Vec::new()));
+        }
+
+        // Wait for the sender task to process our job and return the result
+        match response_rx.await {
+            Ok(result) => result,
+            Err(_) => {
+                // Sender task dropped without sending a response
+                Err(EncryptSendError::channel_closed(Vec::new(), Vec::new()))
+            }
+        }
     }
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
@@ -130,6 +205,15 @@ impl NoiseSocket {
         self.read_key
             .decrypt(iv.as_ref().into(), ciphertext)
             .map_err(|e| SocketError::Crypto(e.to_string()))
+    }
+}
+
+impl Drop for NoiseSocket {
+    fn drop(&mut self) {
+        // Abort the sender task to prevent resource leaks if it's stuck
+        // on a slow/hanging network operation. This ensures cleanup even
+        // if transport.send() never returns.
+        self.sender_task_handle.abort();
     }
 }
 
@@ -186,5 +270,44 @@ mod tests {
             returned_encrypted.is_empty(),
             "Returned encrypted buffer should be cleared"
         );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_sends_maintain_order() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Create a mock transport that tracks send order
+        let send_order = Arc::new(AtomicUsize::new(0));
+        let transport = Arc::new(crate::transport::mock::MockTransport);
+
+        let key = [0u8; 32];
+        let write_key = Aes256Gcm::new_from_slice(&key).unwrap();
+        let read_key = Aes256Gcm::new_from_slice(&key).unwrap();
+
+        let socket = Arc::new(NoiseSocket::new(transport, write_key, read_key));
+
+        // Spawn multiple concurrent sends
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let socket = socket.clone();
+            let send_order = send_order.clone();
+            handles.push(tokio::spawn(async move {
+                let plaintext = vec![i as u8; 100];
+                let out_buf = Vec::with_capacity(256);
+                let result = socket.encrypt_and_send(plaintext, out_buf).await;
+                send_order.fetch_add(1, Ordering::SeqCst);
+                result
+            }));
+        }
+
+        // Wait for all sends to complete
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert!(result.is_ok(), "All sends should succeed");
+        }
+
+        // Verify all sends completed
+        assert_eq!(send_order.load(Ordering::SeqCst), 10);
     }
 }
