@@ -28,9 +28,18 @@ impl Client {
         force_key_distribution: bool,
         edit: Option<crate::types::message::EditAttribute>,
     ) -> Result<(), anyhow::Error> {
+        // Resolve the encryption JID to ensure we use the same lock key as the receiving path.
+        // If a LID mapping exists for this PN, we'll use the LID for locking to match
+        // how incoming messages are handled.
+        let encryption_jid = self.resolve_encryption_jid(&to).await;
+
+        // Use the full Signal protocol address string as the lock key so it matches
+        // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
+        let signal_addr_str = encryption_jid.to_protocol_address().to_string();
+
         let session_mutex = self
             .session_locks
-            .get_with(to.clone(), async {
+            .get_with(signal_addr_str.clone(), async {
                 std::sync::Arc::new(tokio::sync::Mutex::new(()))
             })
             .await;
@@ -41,7 +50,8 @@ impl Client {
             None => self.generate_message_id().await,
         };
 
-        let stanza_to_send: wacore_binary::Node = if peer {
+        let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
+            // Peer messages are only valid for individual users, not groups
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 

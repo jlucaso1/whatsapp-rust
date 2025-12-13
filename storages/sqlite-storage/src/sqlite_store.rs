@@ -62,7 +62,7 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         // Apply per-connection PRAGMAs when connection is first created
         // busy_timeout and synchronous are per-connection settings
         // Propagate errors so that misconfigured connections are rejected
-        diesel::sql_query("PRAGMA busy_timeout = 15000;")
+        diesel::sql_query("PRAGMA busy_timeout = 30000;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
         diesel::sql_query("PRAGMA synchronous = NORMAL;")
@@ -119,7 +119,7 @@ impl SqliteStore {
 
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // Match pool max_size
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(16)), // Increased to reduce contention during high load
         })
     }
 
@@ -793,49 +793,69 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let db_semaphore = self.db_semaphore.clone();
         let address_owned = address.to_string();
-
-        // Update cache first to keep the hot path off disk
         let key_vec = key.to_vec();
 
-        // Persist in the background; we do not await the blocking work
-        tokio::spawn(async move {
-            let permit = match db_semaphore.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(err) => {
-                    warn!("sqlite identity write semaphore closed: {}", err);
-                    return;
-                }
-            };
+        const MAX_RETRIES: u32 = 5;
 
-            let write_res = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let address_clone = address_owned.clone();
+            let key_clone = key_vec.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
                     .get()
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
                 diesel::insert_into(identities::table)
                     .values((
-                        identities::address.eq(address_owned),
-                        identities::key.eq(&key_vec[..]),
+                        identities::address.eq(address_clone),
+                        identities::key.eq(&key_clone[..]),
                         identities::device_id.eq(device_id),
                     ))
                     .on_conflict((identities::address, identities::device_id))
                     .do_update()
-                    .set(identities::key.eq(&key_vec[..]))
+                    .set(identities::key.eq(&key_clone[..]))
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
                 Ok(())
             })
             .await;
 
-            match write_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => warn!("sqlite identity write failed: {}", err),
-                Err(err) => warn!("sqlite identity join error: {}", err),
-            }
-
             drop(permit);
-        });
 
-        Ok(())
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("locked") || error_msg.contains("busy"))
+                        && attempt < MAX_RETRIES
+                    {
+                        let delay_ms = 10 * 2u64.pow(attempt);
+                        warn!(
+                            "Identity write failed (attempt {}/{}): {}. Retrying in {}ms...",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            error_msg,
+                            delay_ms
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "Identity write failed after {} attempts",
+            MAX_RETRIES + 1
+        )))
     }
 
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -903,11 +923,25 @@ impl SqliteStore {
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
                 let res: Option<Vec<u8>> = sessions::table
                     .select(sessions::record)
-                    .filter(sessions::address.eq(address_for_query))
+                    .filter(sessions::address.eq(address_for_query.clone()))
                     .filter(sessions::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                if res.is_some() {
+                    log::debug!(
+                        "[SESSION-DEBUG] Found session for {}:{}",
+                        address_for_query,
+                        device_id
+                    );
+                } else {
+                    log::warn!(
+                        "[SESSION-DEBUG] NO session found for {}:{}",
+                        address_for_query,
+                        device_id
+                    );
+                }
                 Ok(res)
             })
             .await?;
@@ -926,45 +960,74 @@ impl SqliteStore {
         let address_owned = address.to_string();
         let session_vec = session.to_vec();
 
-        // Persist in the background so we do not block on the blocking pool per message
-        tokio::spawn(async move {
-            let permit = match db_semaphore.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(err) => {
-                    warn!("sqlite session write semaphore closed: {}", err);
-                    return;
-                }
-            };
+        const MAX_RETRIES: u32 = 5;
 
-            let write_res = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let address_clone = address_owned.clone();
+            let session_clone = session_vec.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
                     .get()
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
                 diesel::insert_into(sessions::table)
                     .values((
-                        sessions::address.eq(address_owned),
-                        sessions::record.eq(&session_vec),
+                        sessions::address.eq(address_clone),
+                        sessions::record.eq(&session_clone),
                         sessions::device_id.eq(device_id),
                     ))
                     .on_conflict((sessions::address, sessions::device_id))
                     .do_update()
-                    .set(sessions::record.eq(&session_vec))
+                    .set(sessions::record.eq(&session_clone))
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
                 Ok(())
             })
             .await;
 
-            match write_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => warn!("sqlite session write failed: {}", err),
-                Err(err) => warn!("sqlite session join error: {}", err),
-            }
-
             drop(permit);
-        });
 
-        Ok(())
+            match result {
+                Ok(Ok(())) => {
+                    log::debug!(
+                        "[SESSION-DEBUG] Saved session for {}:{}",
+                        address_owned,
+                        device_id
+                    );
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    let error_msg = e.to_string();
+                    if (error_msg.contains("locked") || error_msg.contains("busy"))
+                        && attempt < MAX_RETRIES
+                    {
+                        let delay_ms = 10 * 2u64.pow(attempt);
+                        warn!(
+                            "Session write failed (attempt {}/{}): {}. Retrying in {}ms...",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            error_msg,
+                            delay_ms
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "Session write failed after {} attempts",
+            MAX_RETRIES + 1
+        )))
     }
 
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {

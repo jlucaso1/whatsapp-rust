@@ -90,7 +90,9 @@ pub struct Client {
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
-    pub(crate) session_locks: Cache<Jid, Arc<tokio::sync::Mutex<()>>>,
+    /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0")
+    /// to match the SignalProtocolStoreAdapter's internal locking.
+    pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
 
     /// Per-chat message queues for sequential message processing.
     /// Prevents race conditions where a later message is processed before
@@ -324,6 +326,46 @@ impl Client {
             .await
             .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
         Ok(())
+    }
+
+    /// Resolve the encryption JID for a given target JID.
+    /// This uses the same logic as the receiving path to ensure consistent
+    /// lock keys between sending and receiving.
+    ///
+    /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
+    /// This ensures that sending and receiving use the same session lock.
+    pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        if target.server == lid_server {
+            // Already a LID - use it directly
+            target.clone()
+        } else if target.server == pn_server {
+            // PN JID - check if we have a LID mapping
+            if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
+                let lid_jid = Jid {
+                    user: lid_user.clone(),
+                    server: lid_server.to_string(),
+                    device: target.device,
+                    agent: target.agent,
+                    integrator: target.integrator,
+                };
+                log::debug!(
+                    "[SEND-LOCK] Resolved {} to LID {} for session lock",
+                    target,
+                    lid_jid
+                );
+                lid_jid
+            } else {
+                // No LID mapping - use PN as-is
+                log::debug!("[SEND-LOCK] No LID mapping for {}, using PN", target);
+                target.clone()
+            }
+        } else {
+            // Other server type - use as-is
+            target.clone()
+        }
     }
 
     pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {

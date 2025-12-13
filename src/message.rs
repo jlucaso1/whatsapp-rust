@@ -349,9 +349,13 @@ impl Client {
 
         // Acquire a per-sender session lock to prevent race conditions when
         // multiple messages from the same sender are processed concurrently.
+        // Use the full Signal protocol address string as the lock key so it matches
+        // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
+        let signal_addr_str = sender_encryption_jid.to_protocol_address().to_string();
+
         let session_mutex = self
             .session_locks
-            .get_with(sender_encryption_jid.clone(), async {
+            .get_with(signal_addr_str.clone(), async {
                 std::sync::Arc::new(tokio::sync::Mutex::new(()))
             })
             .await;
