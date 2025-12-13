@@ -171,7 +171,8 @@ impl Client {
                     sender.clone()
                 }
             } else {
-                // Other server type (e.g., bot, hosted) - use as-is
+                // Other server type (bot, hosted, group, broadcast, etc.) - use as-is
+                // Note: Group senders will be handled specially below (skipped for session processing)
                 sender.clone()
             }
         };
@@ -246,14 +247,30 @@ impl Client {
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
         );
+
+        // Skip session processing for group senders (@c.us, @g.us, @broadcast)
+        // Groups don't use 1:1 Signal Protocol sessions
+        let is_group_sender = sender_encryption_jid.server.contains(".us")
+            || sender_encryption_jid.server.contains("broadcast");
+
         let (
             session_decrypted_successfully,
             session_had_duplicates,
             session_dispatched_undecryptable,
-        ) = self
-            .clone()
-            .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
-            .await;
+        ) = if !is_group_sender && !session_enc_nodes.is_empty() {
+            self.clone()
+                .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
+                .await
+        } else {
+            if is_group_sender && !session_enc_nodes.is_empty() {
+                log::debug!(
+                    "Skipping {} session messages from group sender {}",
+                    session_enc_nodes.len(),
+                    sender_encryption_jid
+                );
+            }
+            (false, false, false)
+        };
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",

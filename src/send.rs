@@ -28,23 +28,7 @@ impl Client {
         force_key_distribution: bool,
         edit: Option<crate::types::message::EditAttribute>,
     ) -> Result<(), anyhow::Error> {
-        // Resolve the encryption JID to ensure we use the same lock key as the receiving path.
-        // If a LID mapping exists for this PN, we'll use the LID for locking to match
-        // how incoming messages are handled.
-        let encryption_jid = self.resolve_encryption_jid(&to).await;
-
-        // Use the full Signal protocol address string as the lock key so it matches
-        // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
-        let signal_addr_str = encryption_jid.to_protocol_address().to_string();
-
-        let session_mutex = self
-            .session_locks
-            .get_with(signal_addr_str.clone(), async {
-                std::sync::Arc::new(tokio::sync::Mutex::new(()))
-            })
-            .await;
-        let _session_guard = session_mutex.lock().await;
-
+        // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
             Some(id) => id,
             None => self.generate_message_id().await,
@@ -52,6 +36,19 @@ impl Client {
 
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
             // Peer messages are only valid for individual users, not groups
+            // Resolve encryption JID and acquire lock ONLY for encryption
+            let encryption_jid = self.resolve_encryption_jid(&to).await;
+            let signal_addr_str = encryption_jid.to_protocol_address().to_string();
+
+            let session_mutex = self
+                .session_locks
+                .get_with(signal_addr_str.clone(), async {
+                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                })
+                .await;
+            let _session_guard = session_mutex.lock().await;
+
+            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -63,7 +60,13 @@ impl Client {
                 request_id,
             )
             .await?
+            // Lock released here automatically
         } else if to.is_group() {
+            // Group messages: No client-level lock needed.
+            // Each participant device is encrypted separately with its own per-device lock
+            // inside prepare_group_stanza, so we don't need to serialize entire group sends.
+
+            // Preparation work (no lock needed)
             let mut group_info = self.query_group_info(&to).await?;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -180,6 +183,7 @@ impl Client {
                 .map(|devices: &Vec<Jid>| devices.iter().map(|d: &Jid| d.to_string()).collect())
                 .unwrap_or_default();
 
+            // Encryption happens here (per-device locking handled internally)
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
@@ -276,6 +280,11 @@ impl Client {
                 }
             }
         } else {
+            // Direct message: Acquire lock only during encryption
+            // Resolve encryption JID and prepare lock acquisition
+            let encryption_jid = self.resolve_encryption_jid(&to).await;
+            let signal_addr_str = encryption_jid.to_protocol_address().to_string();
+
             // Store serialized message bytes for retry (lightweight)
             self.add_recent_message(to.clone(), request_id.clone(), message)
                 .await;
@@ -287,6 +296,16 @@ impl Client {
                 .ok_or_else(|| anyhow!("Not logged in"))?;
             let account_info = device_snapshot.account.clone();
 
+            // Acquire lock only for encryption
+            let session_mutex = self
+                .session_locks
+                .get_with(signal_addr_str.clone(), async {
+                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                })
+                .await;
+            let _session_guard = session_mutex.lock().await;
+
+            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -309,7 +328,9 @@ impl Client {
                 edit,
             )
             .await?
+            // Lock released here automatically
         };
+        // Network send happens with NO lock held
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
     }
 }

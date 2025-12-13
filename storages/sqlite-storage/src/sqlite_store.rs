@@ -86,7 +86,7 @@ impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
 
-        let pool_size = 32;
+        let pool_size = 64;
 
         // Build pool with connection customizer that applies PRAGMAs to each new connection
         let pool = Pool::builder()
@@ -119,7 +119,7 @@ impl SqliteStore {
 
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(16)), // Increased to reduce contention during high load
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(64)), // Increased to reduce contention during high load
         })
     }
 
@@ -936,8 +936,12 @@ impl SqliteStore {
                         device_id
                     );
                 } else {
-                    log::warn!(
-                        "[SESSION-DEBUG] NO session found for {}:{}",
+                    // This is NORMAL during concurrent message processing:
+                    // Multiple messages arrive before the first PreKey message creates the session.
+                    // The session lock in process_session_enc_batch ensures only one task creates it.
+                    // Other tasks will retry and find the newly created session.
+                    log::debug!(
+                        "[SESSION-DEBUG] NO session found for {}:{} (normal during session creation)",
                         address_for_query,
                         device_id
                     );
