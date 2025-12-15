@@ -310,6 +310,39 @@ impl Jid {
         }
     }
 
+    /// Returns true if this is a Phone Number based JID (s.whatsapp.net)
+    #[inline]
+    pub fn is_pn(&self) -> bool {
+        self.server == DEFAULT_USER_SERVER
+    }
+
+    /// Returns true if this is a LID based JID
+    #[inline]
+    pub fn is_lid(&self) -> bool {
+        self.server == HIDDEN_USER_SERVER
+    }
+
+    /// Returns the user part without the device ID suffix (e.g., "123:4" -> "123")
+    #[inline]
+    pub fn user_base(&self) -> &str {
+        if let Some((base, _)) = self.user.split_once(':') {
+            base
+        } else {
+            &self.user
+        }
+    }
+
+    /// Helper to construct a specific device JID from this one
+    pub fn with_device(&self, device_id: u16) -> Self {
+        Self {
+            user: self.user.clone(),
+            server: self.server.clone(),
+            agent: self.agent,
+            device: device_id,
+            integrator: self.integrator,
+        }
+    }
+
     pub fn actual_agent(&self) -> u8 {
         match self.server.as_str() {
             DEFAULT_USER_SERVER => 0,
