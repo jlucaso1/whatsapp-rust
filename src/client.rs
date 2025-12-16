@@ -1853,6 +1853,28 @@ impl Client {
         snapshot.lid.clone()
     }
 
+    /// Get the phone number for a given LID from the LID-PN cache.
+    ///
+    /// This looks up the mapping in the in-memory cache. The mapping is populated
+    /// from messages, usync responses, and other sources during normal operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `lid` - The LID user part (e.g., "100000012345678") or full LID JID
+    ///
+    /// # Returns
+    ///
+    /// The phone number user part if a mapping exists, None otherwise.
+    pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String> {
+        // Handle both full JID (e.g., "100000012345678@lid") and user part only
+        let lid_user = if lid.contains('@') {
+            lid.split('@').next().unwrap_or(lid)
+        } else {
+            lid
+        };
+        self.lid_pn_cache.get_phone_number(lid_user).await
+    }
+
     pub(crate) async fn send_protocol_receipt(
         &self,
         id: String,

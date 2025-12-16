@@ -33,6 +33,9 @@ pub mod history_sync;
 pub mod presence;
 pub mod usync;
 
+pub mod contact;
+pub use contact::{ContactInfo, IsOnWhatsAppResult, ProfilePicture, UserInfo};
+
 pub mod bot;
 pub mod lid_pn_cache;
 pub mod sync_task;
