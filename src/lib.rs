@@ -38,5 +38,8 @@ pub use contact::{ContactInfo, IsOnWhatsAppResult, ProfilePicture, UserInfo};
 
 pub mod bot;
 pub mod lid_pn_cache;
+pub mod spam_report;
 pub mod sync_task;
 pub mod version;
+
+pub use spam_report::{SpamFlow, SpamReportRequest, SpamReportResult};
