@@ -12,6 +12,7 @@ pub mod net;
 pub mod pair;
 pub mod prekeys;
 pub mod proto_helpers;
+pub mod reporting_token;
 pub mod request;
 pub mod runtime;
 pub mod send;

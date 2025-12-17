@@ -6,6 +6,9 @@ use crate::libsignal::protocol::{
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
+use crate::reporting_token::{
+    build_reporting_node, generate_reporting_token, prepare_message_with_context,
+};
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
@@ -362,12 +365,22 @@ pub async fn prepare_dm_stanza<
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
-    let recipient_plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    // Generate reporting token for the message (if supported message type)
+    let reporting_result = generate_reporting_token(message, &request_id, own_jid, &to_jid, None);
+
+    // Prepare message with MessageContextInfo containing the message secret
+    let message_for_encryption = if let Some(ref result) = reporting_result {
+        prepare_message_with_context(message, &result.message_secret)
+    } else {
+        message.clone()
+    };
+
+    let recipient_plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
-            message: Some(Box::new(message.clone())),
+            message: Some(Box::new(message_for_encryption.clone())),
             phash: Some("".to_string()),
         })),
         ..Default::default()
@@ -439,6 +452,11 @@ pub async fn prepare_dm_stanza<
                 .bytes(device_identity_bytes)
                 .build(),
         );
+    }
+
+    // Add reporting token node if we generated one
+    if let Some(ref result) = reporting_result {
+        message_content_nodes.push(build_reporting_node(result));
     }
 
     let mut stanza_attrs = Attrs::new();
@@ -525,6 +543,17 @@ pub async fn prepare_group_stanza<
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
+    };
+
+    // Generate reporting token for the message (if supported message type)
+    let reporting_result =
+        generate_reporting_token(message, &request_id, &own_sending_jid, &to_jid, None);
+
+    // Prepare message with MessageContextInfo containing the message secret
+    let message_for_encryption = if let Some(ref result) = reporting_result {
+        prepare_message_with_context(message, &result.message_secret)
+    } else {
+        message.clone()
     };
 
     let own_base_jid = own_sending_jid.to_non_ad();
@@ -704,7 +733,7 @@ pub async fn prepare_group_stanza<
         }
     }
 
-    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
@@ -748,6 +777,11 @@ pub async fn prepare_group_stanza<
     }
 
     message_children.push(content_node);
+
+    // Add reporting token node if we generated one
+    if let Some(ref result) = reporting_result {
+        message_children.push(build_reporting_node(result));
+    }
 
     // Add phash if we distributed keys in this message
     if let Some(devices) = &resolved_devices_for_phash {
