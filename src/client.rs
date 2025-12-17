@@ -18,7 +18,6 @@ use crate::jid_utils::server_jid;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
-use crate::types::presence::Presence;
 
 use log::{debug, error, info, warn};
 
@@ -888,25 +887,6 @@ impl Client {
         self.send_iq(iq).await.map(|_| ())
     }
 
-    pub async fn fetch_blocklist(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
-
-        debug!(target: "Client", "Fetching blocklist...");
-
-        // WhatsApp Web sends an empty IQ without child nodes
-        let iq = InfoQuery {
-            namespace: "blocklist",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: None,
-            timeout: None,
-        };
-
-        self.send_iq(iq).await.map(|_| ())
-    }
-
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
         use crate::request::{InfoQuery, InfoQueryType};
 
@@ -1079,7 +1059,7 @@ impl Client {
             }
 
             // Send presence (like WhatsApp Web's sendPresenceAvailable after passive tasks)
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+            if let Err(e) = client_clone.presence().set_available().await {
                 warn!("Failed to send initial presence: {e:?}");
             } else {
                 info!("Initial presence sent successfully.");
@@ -1109,7 +1089,8 @@ impl Client {
                 );
 
                 let props_fut = bg_client.fetch_props();
-                let blocklist_fut = bg_client.fetch_blocklist();
+                let binding = bg_client.blocking();
+                let blocklist_fut = binding.get_blocklist();
                 let privacy_fut = bg_client.fetch_privacy_settings();
                 let digest_fut = bg_client.send_digest_key_bundle();
 
@@ -1830,7 +1811,7 @@ impl Client {
 
         let client_clone = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+            if let Err(e) = client_clone.presence().set_available().await {
                 log::warn!("Failed to send presence after push name update: {:?}", e);
             } else {
                 log::info!("Sent presence after push name update.");

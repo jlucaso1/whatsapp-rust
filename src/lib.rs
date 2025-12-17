@@ -27,14 +27,15 @@ pub mod receipt;
 pub mod retry;
 
 pub mod appstate_sync;
-pub mod groups;
-pub use groups::{GroupMetadata, GroupParticipant};
 pub mod history_sync;
-pub mod presence;
 pub mod usync;
 
-pub mod contact;
-pub use contact::{ContactInfo, IsOnWhatsAppResult, ProfilePicture, UserInfo};
+pub mod features;
+pub use features::{
+    Blocking, BlocklistEntry, ChatStateType, Chatstate, ContactInfo, Contacts, GroupMetadata,
+    GroupParticipant, Groups, IsOnWhatsAppResult, Presence, PresenceStatus, ProfilePicture,
+    UserInfo,
+};
 
 pub mod bot;
 pub mod lid_pn_cache;
