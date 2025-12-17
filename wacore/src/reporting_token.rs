@@ -7,7 +7,7 @@
 //!
 //! 1. **Message Secret**: A 32-byte random value stored in MessageContextInfo
 //! 2. **Reporting Token Key**: Derived using HKDF from the message secret
-//! 3. **Reporting Token Content**: Hash of the message content (varies by type)
+//! 3. **Reporting Token Content**: Random bytes matching the message content length (privacy-preserving)
 //! 4. **Reporting Token**: HMAC-SHA256 of the content, truncated to 16 bytes
 
 use anyhow::{Result, anyhow};
@@ -31,9 +31,9 @@ pub const REPORTING_TOKEN_KEY_SIZE: usize = 32;
 /// Size of the final reporting token in bytes
 pub const REPORTING_TOKEN_SIZE: usize = 16;
 
-/// UseCaseSecretModificationType for report token derivation
-/// This is the constant used in HKDF info construction
-const USE_CASE_REPORT_TOKEN: u8 = 4;
+/// UseCaseSecretModificationType for report token derivation.
+/// This string is appended to the HKDF info as per WhatsApp Web implementation.
+const USE_CASE_REPORT_TOKEN: &str = "Report Token";
 
 /// Generate a random message secret (32 bytes)
 pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
@@ -44,13 +44,14 @@ pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
 
 /// Build the HKDF info bytes for reporting token key derivation.
 ///
-/// The info is constructed as: stanza_id || sender_jid || remote_jid || use_case_type
+/// The info is constructed as: stanza_id || sender_jid || remote_jid || "Report Token"
+/// This matches WhatsApp Web's Binary.build(stanzaId, senderJid, remoteJid, REPORT_TOKEN)
 fn build_hkdf_info(stanza_id: &str, sender_jid: &str, remote_jid: &str) -> Vec<u8> {
     let mut info = Vec::new();
     info.extend_from_slice(stanza_id.as_bytes());
     info.extend_from_slice(sender_jid.as_bytes());
     info.extend_from_slice(remote_jid.as_bytes());
-    info.push(USE_CASE_REPORT_TOKEN);
+    info.extend_from_slice(USE_CASE_REPORT_TOKEN.as_bytes());
     info
 }
 
@@ -90,25 +91,23 @@ pub fn derive_reporting_token_key(
 
 /// Generate reporting token content based on message type.
 ///
-/// For text messages: SHA256 hash of the conversation text
-/// For media messages: SHA256 hash of (enc_file_hash || caption)
+/// This generates random bytes matching the content length for privacy.
+/// The actual content is never sent to servers - only random bytes of the same length.
+/// This matches WhatsApp Web's privacy-preserving implementation.
+///
+/// For text messages: random bytes of same length as text
+/// For media messages: random bytes of same length as (enc_file_hash || caption)
 pub fn generate_reporting_token_content(message: &wa::Message) -> Option<Vec<u8>> {
-    use sha2::Digest;
-
     // Check for conversation (text) message
     if let Some(ref conversation) = message.conversation {
-        let mut hasher = Sha256::new();
-        hasher.update(conversation.as_bytes());
-        return Some(hasher.finalize().to_vec());
+        return Some(generate_random_bytes(conversation.len()));
     }
 
     // Check for extended text message
     if let Some(ref ext_text) = message.extended_text_message
         && let Some(ref text) = ext_text.text
     {
-        let mut hasher = Sha256::new();
-        hasher.update(text.as_bytes());
-        return Some(hasher.finalize().to_vec());
+        return Some(generate_random_bytes(text.len()));
     }
 
     // Check for image message
@@ -149,24 +148,29 @@ pub fn generate_reporting_token_content(message: &wa::Message) -> Option<Vec<u8>
     None
 }
 
+/// Generate random bytes of a specific length for privacy-preserving token content.
+fn generate_random_bytes(len: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let mut bytes = vec![0u8; len];
+    rng.fill(&mut bytes[..]);
+    bytes
+}
+
 /// Generate token content for media messages.
 ///
-/// Content = SHA256(enc_file_hash || caption)
+/// Generates random bytes of length (enc_file_hash.len() + caption.len())
+/// This is privacy-preserving - actual content is never revealed.
 fn generate_media_token_content(
     enc_file_hash: Option<&[u8]>,
     caption: Option<&str>,
 ) -> Option<Vec<u8>> {
-    use sha2::Digest;
-
     let enc_hash = enc_file_hash?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(enc_hash);
-    if let Some(cap) = caption {
-        hasher.update(cap.as_bytes());
-    }
+    let caption_len = caption.map(|c| c.len()).unwrap_or(0);
+    let total_len = enc_hash.len() + caption_len;
 
-    Some(hasher.finalize().to_vec())
+    Some(generate_random_bytes(total_len))
 }
 
 /// Calculate the final reporting token.
@@ -350,18 +354,22 @@ mod tests {
         assert!(content.is_some());
 
         let content = content.unwrap();
-        assert_eq!(content.len(), 32); // SHA256 output
+        // Content length matches text length (privacy-preserving random bytes)
+        assert_eq!(content.len(), "Hello, World!".len());
 
-        // Verify determinism
+        // Content should be random (different each time)
         let content2 = generate_reporting_token_content(&message).unwrap();
-        assert_eq!(content, content2);
+        assert_eq!(content2.len(), "Hello, World!".len());
+        // Note: contents are random, so they should be different (very high probability)
+        assert_ne!(content, content2);
     }
 
     #[test]
     fn test_generate_reporting_token_content_extended_text() {
+        let text = "Extended text message";
         let message = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
-                text: Some("Extended text message".to_string()),
+                text: Some(text.to_string()),
                 ..Default::default()
             })),
             ..Default::default()
@@ -369,7 +377,8 @@ mod tests {
 
         let content = generate_reporting_token_content(&message);
         assert!(content.is_some());
-        assert_eq!(content.unwrap().len(), 32);
+        // Content length matches text length
+        assert_eq!(content.unwrap().len(), text.len());
     }
 
     #[test]
