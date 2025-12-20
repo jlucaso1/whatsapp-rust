@@ -57,4 +57,4 @@ jobs:
             --adapter rust_iai_callgrind \
             --github-actions "$GITHUB_TOKEN" \
             --err \
-            "cargo bench --package wacore-binary --bench binary_benchmark"
+            "cargo bench --workspace"
