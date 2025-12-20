@@ -77,7 +77,7 @@ pub struct Client {
 
     pub(crate) transport: Arc<Mutex<Option<Arc<dyn crate::transport::Transport>>>>,
     pub(crate) transport_events:
-        Arc<Mutex<Option<mpsc::Receiver<crate::transport::TransportEvent>>>>,
+        Arc<Mutex<Option<async_channel::Receiver<crate::transport::TransportEvent>>>>,
     pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
@@ -560,7 +560,7 @@ impl Client {
         info!(target: "Client", "Starting message processing loop...");
 
         let mut rx_guard = self.transport_events.lock().await;
-        let mut transport_events = rx_guard
+        let transport_events = rx_guard
             .take()
             .ok_or_else(|| anyhow::anyhow!("Cannot start message loop: not connected"))?;
         drop(rx_guard);
@@ -575,9 +575,9 @@ impl Client {
                         info!(target: "Client", "Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
-                    event_opt = transport_events.recv() => {
-                        match event_opt {
-                            Some(crate::transport::TransportEvent::DataReceived(data)) => {
+                    event_result = transport_events.recv() => {
+                        match event_result {
+                            Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
 
@@ -612,7 +612,7 @@ impl Client {
                                     }
                                 }
                             },
-                            Some(crate::transport::TransportEvent::Disconnected) | None => {
+                            Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
@@ -623,7 +623,7 @@ impl Client {
                                     return Ok(());
                                 }
                             }
-                            Some(crate::transport::TransportEvent::Connected) => {
+                            Ok(crate::transport::TransportEvent::Connected) => {
                                 // Already handled during handshake, but could be useful for logging
                                 debug!("Transport connected event received");
                             }

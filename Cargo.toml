@@ -44,6 +44,7 @@ tokio-native = ["tokio/rt-multi-thread"]
 [dependencies]
 
 anyhow = { version = "1.0", default-features = false }
+async-channel = "2.5.0"
 async-trait = "0.1.88"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.5", default-features = false }

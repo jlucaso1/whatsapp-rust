@@ -14,6 +14,7 @@ danger-skip-tls-verify = []
 
 [dependencies]
 anyhow = { version = "1.0", default-features = false }
+async-channel = "2.5.0"
 async-trait = "0.1.88"
 bytes = { version = "1.5", default-features = false }
 futures-util = { version = "0.3.31", default-features = false, features = [

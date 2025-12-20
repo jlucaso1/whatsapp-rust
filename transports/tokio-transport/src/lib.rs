@@ -11,7 +11,6 @@ use log::{debug, error, info, trace, warn};
 use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use tokio_websockets::{ClientBuilder, Connector, MaybeTlsStream, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory};
 
@@ -189,7 +188,7 @@ impl Default for TokioWebSocketTransportFactory {
 impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
-    ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error> {
+    ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
         let connector = create_tls_connector();
 
         info!("Dialing {URL}");
@@ -206,7 +205,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
         let (sink, stream) = client.split();
 
         // Create event channel
-        let (event_tx, event_rx) = mpsc::channel(10000);
+        let (event_tx, event_rx) = async_channel::bounded(10000);
 
         // Create transport - just a simple byte pipe
         let transport = Arc::new(TokioWebSocketTransport::new(sink));
@@ -224,7 +223,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
 
 /// Reads from the WebSocket and forwards raw data to the event channel.
 /// No framing logic here - just passes bytes through.
-async fn read_pump(mut stream: WsStream, event_tx: mpsc::Sender<TransportEvent>) {
+async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<TransportEvent>) {
     loop {
         match stream.next().await {
             Some(Ok(msg)) => {

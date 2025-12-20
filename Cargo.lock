@@ -95,6 +95,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
+name = "async-channel"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2"
+dependencies = [
+ "concurrent-queue",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-lock"
 version = "3.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2364,6 +2376,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
+ "async-channel",
  "async-trait",
  "base64",
  "bytes",
@@ -2384,7 +2397,6 @@ dependencies = [
  "serde-big-array",
  "sha2",
  "thiserror 2.0.17",
- "tokio",
  "wacore-appstate",
  "wacore-binary",
  "wacore-libsignal",
@@ -2569,6 +2581,7 @@ name = "whatsapp-rust"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-trait",
  "base64",
  "bytes",
@@ -2617,6 +2630,7 @@ name = "whatsapp-rust-tokio-transport"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-trait",
  "bytes",
  "futures-util",

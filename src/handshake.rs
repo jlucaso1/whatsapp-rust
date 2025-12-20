@@ -30,7 +30,7 @@ type Result<T> = std::result::Result<T, HandshakeError>;
 pub async fn do_handshake(
     device: &crate::store::Device,
     transport: Arc<dyn Transport>,
-    transport_events: &mut tokio::sync::mpsc::Receiver<TransportEvent>,
+    transport_events: &mut async_channel::Receiver<TransportEvent>,
 ) -> Result<Arc<NoiseSocket>> {
     let mut handshake_state = HandshakeState::new(&device.core)?;
     let mut frame_decoder = wacore::framing::FrameDecoder::new();
@@ -81,7 +81,7 @@ pub async fn do_handshake(
     // Wait for server response frame
     let resp_frame = loop {
         match timeout(NOISE_HANDSHAKE_RESPONSE_TIMEOUT, transport_events.recv()).await {
-            Ok(Some(TransportEvent::DataReceived(data))) => {
+            Ok(Ok(TransportEvent::DataReceived(data))) => {
                 // Feed data into decoder
                 frame_decoder.feed(&data);
 
@@ -92,16 +92,16 @@ pub async fn do_handshake(
                 // If no complete frame yet, continue waiting for more data
                 continue;
             }
-            Ok(Some(TransportEvent::Connected)) => {
+            Ok(Ok(TransportEvent::Connected)) => {
                 // Ignore Connected event, we're already connected
                 continue;
             }
-            Ok(Some(TransportEvent::Disconnected)) => {
+            Ok(Ok(TransportEvent::Disconnected)) => {
                 return Err(HandshakeError::UnexpectedEvent(
                     "Disconnected during handshake".to_string(),
                 ));
             }
-            Ok(None) => return Err(HandshakeError::Timeout),
+            Ok(Err(_)) => return Err(HandshakeError::Timeout), // Channel closed
             Err(_) => return Err(HandshakeError::Timeout),
         }
     };

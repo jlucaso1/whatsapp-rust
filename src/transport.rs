@@ -12,7 +12,6 @@ pub mod mock {
     use super::*;
     use async_trait::async_trait;
     use std::sync::Arc;
-    use tokio::sync::mpsc;
 
     /// A mock transport that does nothing, for testing purposes
     pub struct MockTransport;
@@ -40,8 +39,9 @@ pub mod mock {
     impl TransportFactory for MockTransportFactory {
         async fn create_transport(
             &self,
-        ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error> {
-            let (_tx, rx) = mpsc::channel(1);
+        ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error>
+        {
+            let (_tx, rx) = async_channel::bounded(1);
             Ok((Arc::new(MockTransport), rx))
         }
     }
