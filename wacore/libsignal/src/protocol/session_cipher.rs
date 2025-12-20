@@ -680,11 +680,6 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
 
     let message_keys = message_key_gen.generate_keys();
 
-    log::debug!(
-        "{remote_address} derived message_keys: mac_key={}",
-        hex::encode(message_keys.mac_key())
-    );
-
     let their_identity_key =
         state
             .remote_identity_key()?
@@ -743,7 +738,6 @@ fn get_or_create_chain_key<R: Rng + CryptoRng>(
     csprng: &mut R,
 ) -> Result<ChainKey> {
     if let Some(chain) = state.get_receiver_chain_key(their_ephemeral)? {
-        log::debug!("{remote_address} has existing receiver chain.");
         return Ok(chain);
     }
 
@@ -751,21 +745,7 @@ fn get_or_create_chain_key<R: Rng + CryptoRng>(
 
     let root_key = state.root_key()?;
     let our_ephemeral = state.sender_ratchet_private_key()?;
-
-    log::debug!(
-        "{remote_address} ratchet step: root_key={}, our_ephemeral_pub={}, their_ephemeral={}",
-        hex::encode(root_key.key()),
-        hex::encode(our_ephemeral.public_key()?.public_key_bytes()),
-        hex::encode(their_ephemeral.public_key_bytes())
-    );
-
     let receiver_chain = root_key.create_chain(their_ephemeral, &our_ephemeral)?;
-
-    log::debug!(
-        "{remote_address} derived receiver chain: new_root_key={}, chain_key_index={}",
-        hex::encode(receiver_chain.0.key()),
-        receiver_chain.1.index()
-    );
     let our_new_ephemeral = KeyPair::generate(csprng);
     let sender_chain = receiver_chain
         .0
@@ -799,10 +779,7 @@ fn get_or_create_message_key(
     if chain_index > counter {
         return match state.get_message_keys(their_ephemeral, counter)? {
             Some(keys) => Ok(keys),
-            None => {
-                log::debug!("{remote_address} Duplicate message for counter: {counter}");
-                Err(SignalProtocolError::DuplicatedMessage(chain_index, counter))
-            }
+            None => Err(SignalProtocolError::DuplicatedMessage(chain_index, counter)),
         };
     }
 

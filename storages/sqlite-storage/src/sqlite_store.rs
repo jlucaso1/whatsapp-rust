@@ -929,23 +929,6 @@ impl SqliteStore {
                     .optional()
                     .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                if res.is_some() {
-                    log::debug!(
-                        "[SESSION-DEBUG] Found session for {}:{}",
-                        address_for_query,
-                        device_id
-                    );
-                } else {
-                    // This is NORMAL during concurrent message processing:
-                    // Multiple messages arrive before the first PreKey message creates the session.
-                    // The session lock in process_session_enc_batch ensures only one task creates it.
-                    // Other tasks will retry and find the newly created session.
-                    log::debug!(
-                        "[SESSION-DEBUG] NO session found for {}:{} (normal during session creation)",
-                        address_for_query,
-                        device_id
-                    );
-                }
                 Ok(res)
             })
             .await?;
@@ -999,11 +982,6 @@ impl SqliteStore {
 
             match result {
                 Ok(Ok(())) => {
-                    log::debug!(
-                        "[SESSION-DEBUG] Saved session for {}:{}",
-                        address_owned,
-                        device_id
-                    );
                     return Ok(());
                 }
                 Ok(Err(e)) => {
