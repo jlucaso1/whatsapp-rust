@@ -14,7 +14,7 @@ aes-gcm = { version = "0.10.2", features = [
     "alloc",
 ], default-features = false }
 anyhow = { version = "1.0", default-features = false }
-async-channel = "2.5.0"
+async-channel = { version = "2.5.0", default-features = false }
 async-trait = "0.1.88"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.5", default-features = false }
