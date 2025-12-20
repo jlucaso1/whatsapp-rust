@@ -86,7 +86,7 @@ impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
 
-        let pool_size = 64;
+        let pool_size = 2;
 
         // Build pool with connection customizer that applies PRAGMAs to each new connection
         let pool = Pool::builder()
@@ -119,7 +119,7 @@ impl SqliteStore {
 
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(64)), // Increased to reduce contention during high load
+            db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)), // Single permit fully serializes DB operations, eliminating SQLite lock contention
         })
     }
 
