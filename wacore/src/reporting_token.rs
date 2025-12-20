@@ -1361,9 +1361,9 @@ mod tests {
         let prepared = prepare_message_with_context(&original, &secret);
 
         let ctx = prepared.message_context_info.as_ref().unwrap();
-        // New fields added
         assert_eq!(ctx.message_secret.as_ref().unwrap(), &secret.to_vec());
         assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
+        assert_eq!(ctx.device_list_metadata_version, Some(42));
     }
 
     #[test]
