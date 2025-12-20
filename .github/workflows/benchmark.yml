@@ -12,7 +12,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  PROTOC_VERSION: '3.25.3'
+  PROTOC_VERSION: "3.25.3"
 
 jobs:
   benchmark:
@@ -30,6 +30,12 @@ jobs:
       - name: Install Valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install iai-callgrind-runner
+        run: cargo binstall --no-confirm iai-callgrind-runner@0.16.1
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -38,13 +44,17 @@ jobs:
       - uses: bencherdev/bencher@main
 
       - name: Run Iai-Callgrind benchmarks
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bencher run \
             --project whatsapp-rust \
-            --token '${{ secrets.BENCHER_API_TOKEN }}' \
-            --branch '${{ github.head_ref || github.ref_name }}' \
+            --token "$BENCHER_API_TOKEN" \
+            --branch "$BRANCH_NAME" \
             --testbed ubuntu-latest \
             --adapter rust_iai_callgrind \
-            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            --github-actions "$GITHUB_TOKEN" \
             --err \
             "cargo bench --package wacore-binary --bench binary_benchmark"

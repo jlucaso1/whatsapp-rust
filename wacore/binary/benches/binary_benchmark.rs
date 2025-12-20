@@ -1,8 +1,8 @@
-use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use iai_callgrind::{
-    library_benchmark, library_benchmark_group, main, Callgrind, FlamegraphConfig,
-    LibraryBenchmarkConfig,
+    Callgrind, FlamegraphConfig, LibraryBenchmarkConfig, library_benchmark,
+    library_benchmark_group, main,
 };
 use std::hint::black_box;
 use std::io::Write;
