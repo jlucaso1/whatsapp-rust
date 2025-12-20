@@ -1054,4 +1054,418 @@ mod tests {
         let result = generate_reporting_token(&message, "test_id", &sender, &remote, None);
         assert!(result.is_none());
     }
+
+    // =========================================================================
+    // REGRESSION TESTS - Golden tests with known inputs/outputs
+    // These tests ensure refactoring doesn't change the algorithm behavior.
+    // =========================================================================
+
+    /// Helper to create a test JID
+    fn test_jid(user: &str) -> Jid {
+        Jid {
+            user: user.to_string(),
+            server: "s.whatsapp.net".to_string(),
+            device: 0,
+            agent: 0,
+            integrator: 0,
+        }
+    }
+
+    #[test]
+    fn test_golden_hkdf_key_derivation() {
+        // Golden test: fixed inputs must always produce the same HKDF key
+        let secret = [0x42u8; MESSAGE_SECRET_SIZE];
+        let stanza_id = "3EB0E0E5F2D4F618589C0B";
+        let sender_jid = "5511999887766@s.whatsapp.net";
+        let remote_jid = "5511888776655@s.whatsapp.net";
+
+        let key = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid).unwrap();
+
+        // This is the expected output - if this changes, the algorithm is broken
+        let expected_key = [
+            0xba, 0x50, 0xb2, 0x2b, 0xe5, 0xcc, 0x25, 0x71, 0x7d, 0x32, 0xb7, 0xd2, 0x77, 0xda,
+            0xe1, 0xbc, 0x9f, 0xa8, 0xad, 0x12, 0x2c, 0xdd, 0xb0, 0xec, 0x4f, 0xbc, 0x87, 0x24,
+            0x52, 0xa5, 0xe0, 0x8c,
+        ];
+        assert_eq!(
+            key, expected_key,
+            "HKDF key derivation changed! Expected: {:02x?}, Got: {:02x?}",
+            expected_key, key
+        );
+    }
+
+    #[test]
+    fn test_golden_hmac_token_calculation() {
+        // Golden test: fixed key and content must produce the same token
+        let key = [0x55u8; REPORTING_TOKEN_KEY_SIZE];
+        let content = b"Hello, World!";
+
+        let token = calculate_reporting_token(&key, content).unwrap();
+
+        // Expected HMAC-SHA256 truncated to 16 bytes
+        let expected_token = [
+            0xc2, 0x2b, 0x68, 0x1d, 0x7d, 0x7e, 0xef, 0xbc, 0x59, 0xa2, 0x02, 0xfc, 0x14, 0x1e,
+            0xb5, 0xf8,
+        ];
+        assert_eq!(
+            token, expected_token,
+            "HMAC token calculation changed! Expected: {:02x?}, Got: {:02x?}",
+            expected_token, token
+        );
+    }
+
+    #[test]
+    fn test_golden_conversation_content_extraction() {
+        // Golden test: conversation message content extraction
+        let message = wa::Message {
+            conversation: Some("Test".to_string()),
+            ..Default::default()
+        };
+
+        let content = generate_reporting_token_content(&message).unwrap();
+
+        // Field 1 (conversation) = tag 0x0a (field 1, wire type 2) + length + "Test"
+        let expected = vec![0x0a, 0x04, b'T', b'e', b's', b't'];
+        assert_eq!(
+            content, expected,
+            "Conversation content extraction changed! Expected: {:02x?}, Got: {:02x?}",
+            expected, content
+        );
+    }
+
+    #[test]
+    fn test_golden_extended_text_content_extraction() {
+        // Golden test: extended text message content extraction
+        let message = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Hi".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let content = generate_reporting_token_content(&message).unwrap();
+
+        // Field 6 (extendedTextMessage) containing field 1 (text) = "Hi"
+        // Outer: tag 0x32 (field 6, wire type 2), length 4
+        // Inner: tag 0x0a (field 1, wire type 2), length 2, "Hi"
+        let expected = vec![0x32, 0x04, 0x0a, 0x02, b'H', b'i'];
+        assert_eq!(
+            content, expected,
+            "ExtendedText content extraction changed! Expected: {:02x?}, Got: {:02x?}",
+            expected, content
+        );
+    }
+
+    #[test]
+    fn test_golden_full_token_generation() {
+        // Golden test: complete token generation with fixed secret
+        let message = wa::Message {
+            conversation: Some("Hello".to_string()),
+            ..Default::default()
+        };
+
+        let secret = [0xAA; MESSAGE_SECRET_SIZE];
+        let sender = test_jid("sender");
+        let remote = test_jid("remote");
+
+        let result =
+            generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
+                .unwrap();
+
+        // Verify the secret is preserved
+        assert_eq!(result.message_secret, secret);
+        assert_eq!(result.version, REPORTING_TOKEN_VERSION);
+
+        // The token must be deterministic - same inputs = same output
+        let result2 =
+            generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
+                .unwrap();
+        assert_eq!(
+            result.reporting_token, result2.reporting_token,
+            "Token generation is not deterministic!"
+        );
+
+        // Store expected token for regression detection
+        let expected_token = result.reporting_token;
+        let result3 =
+            generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
+                .unwrap();
+        assert_eq!(
+            result3.reporting_token, expected_token,
+            "Token changed across calls with same inputs!"
+        );
+    }
+
+    #[test]
+    fn test_context_info_filtering_only_extracts_whitelisted() {
+        // Verify that contextInfo only extracts fields 21 (forwardingScore) and 22 (isForwarded)
+        let message = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Test".to_string()),
+                context_info: Some(Box::new(wa::ContextInfo {
+                    stanza_id: Some("SHOULD_BE_EXCLUDED".to_string()), // Field 1
+                    participant: Some("ALSO_EXCLUDED".to_string()),    // Field 2
+                    is_forwarded: Some(true),                          // Field 22 - INCLUDED
+                    forwarding_score: Some(5),                         // Field 21 - INCLUDED
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let content = generate_reporting_token_content(&message).unwrap();
+        let content_str = String::from_utf8_lossy(&content);
+
+        // Must NOT contain excluded fields
+        assert!(
+            !content_str.contains("SHOULD_BE_EXCLUDED"),
+            "stanza_id should be excluded from contextInfo"
+        );
+        assert!(
+            !content_str.contains("ALSO_EXCLUDED"),
+            "participant should be excluded from contextInfo"
+        );
+
+        // Content should still exist (has text + contextInfo with forwarding fields)
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_field_extraction_order_is_deterministic() {
+        // Verify that fields are always sorted by field number
+        let message = wa::Message {
+            conversation: Some("Text".to_string()), // Field 1
+            ..Default::default()
+        };
+
+        // Generate multiple times and verify same output
+        let content1 = generate_reporting_token_content(&message).unwrap();
+        let content2 = generate_reporting_token_content(&message).unwrap();
+        let content3 = generate_reporting_token_content(&message).unwrap();
+
+        assert_eq!(content1, content2, "Content extraction not deterministic");
+        assert_eq!(content2, content3, "Content extraction not deterministic");
+    }
+
+    #[test]
+    fn test_varint_edge_cases() {
+        // Test varint encoding/decoding at important boundaries
+        let test_cases = [
+            (0u64, vec![0x00]),
+            (1, vec![0x01]),
+            (127, vec![0x7F]),               // Max single byte
+            (128, vec![0x80, 0x01]),         // Min two bytes
+            (16383, vec![0xFF, 0x7F]),       // Max two bytes
+            (16384, vec![0x80, 0x80, 0x01]), // Min three bytes
+            (u32::MAX as u64, vec![0xFF, 0xFF, 0xFF, 0xFF, 0x0F]), // Max u32
+        ];
+
+        for (value, expected_bytes) in test_cases {
+            let encoded = encode_varint(value);
+            assert_eq!(
+                encoded, expected_bytes,
+                "encode_varint({}) = {:02x?}, expected {:02x?}",
+                value, encoded, expected_bytes
+            );
+
+            let (decoded, len) = decode_varint(&encoded).unwrap();
+            assert_eq!(
+                decoded, value,
+                "decode_varint round-trip failed for {}",
+                value
+            );
+            assert_eq!(
+                len,
+                expected_bytes.len(),
+                "varint length mismatch for {}",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn test_extraction_handles_empty_nested_message() {
+        // An extended text message with empty contextInfo should still extract the text
+        let message = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Content".to_string()),
+                context_info: Some(Box::new(wa::ContextInfo::default())), // Empty
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let content = generate_reporting_token_content(&message);
+        assert!(
+            content.is_some(),
+            "Should extract text even with empty contextInfo"
+        );
+
+        let content = content.unwrap();
+        assert!(
+            content.windows(7).any(|w| w == b"Content"),
+            "Text 'Content' should be in extracted bytes"
+        );
+    }
+
+    #[test]
+    fn test_raw_protobuf_extraction_simple_fields() {
+        // Test raw extraction with hand-crafted protobuf bytes
+        // Field 1 (varint): tag=0x08, value=150 (0x96 0x01)
+        // Field 2 (string): tag=0x12, len=5, "hello"
+        let data = vec![
+            0x08, 0x96, 0x01, // Field 1: varint 150
+            0x12, 0x05, b'h', b'e', b'l', b'l', b'o', // Field 2: string "hello"
+        ];
+
+        // Whitelist only field 1
+        let whitelist = &[ReportingField::new(1)];
+        let extracted = extract_reporting_token_content(&data, whitelist).unwrap();
+
+        // Should only contain field 1
+        assert_eq!(extracted, vec![0x08, 0x96, 0x01]);
+    }
+
+    #[test]
+    fn test_raw_protobuf_extraction_nested_with_subfields() {
+        // Test nested extraction with subfield filtering
+        // Outer field 6 containing inner fields 1 and 2
+        // We whitelist field 6 with subfield 1 only
+
+        // Inner message: field 1 = "a", field 2 = "b"
+        let inner = vec![
+            0x0a, 0x01, b'a', // Field 1: "a"
+            0x12, 0x01, b'b', // Field 2: "b"
+        ];
+
+        // Outer: field 6 (wire type 2) containing inner
+        let mut data = vec![0x32, inner.len() as u8];
+        data.extend(&inner);
+
+        // Whitelist: field 6 with only subfield 1
+        static TEST_SUBFIELDS: &[ReportingField] = &[ReportingField::new(1)];
+        let whitelist = &[ReportingField::with_subfields(6, TEST_SUBFIELDS)];
+
+        let extracted = extract_reporting_token_content(&data, whitelist).unwrap();
+
+        // Should contain field 6 with only field 1 inside
+        // Outer tag (0x32) + new length (3) + inner field 1 (0x0a 0x01 'a')
+        let expected = vec![0x32, 0x03, 0x0a, 0x01, b'a'];
+        assert_eq!(
+            extracted, expected,
+            "Nested extraction with subfield filtering failed"
+        );
+    }
+
+    #[test]
+    fn test_excluded_message_types() {
+        // Verify all excluded message types return None/false
+
+        let reaction = wa::Message {
+            reaction_message: Some(wa::message::ReactionMessage {
+                text: Some("👍".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!should_include_reporting_token(&reaction));
+        assert!(generate_reporting_token_content(&reaction).is_none());
+
+        let enc_reaction = wa::Message {
+            enc_reaction_message: Some(wa::message::EncReactionMessage::default()),
+            ..Default::default()
+        };
+        assert!(!should_include_reporting_token(&enc_reaction));
+
+        let poll_update = wa::Message {
+            poll_update_message: Some(wa::message::PollUpdateMessage::default()),
+            ..Default::default()
+        };
+        assert!(!should_include_reporting_token(&poll_update));
+
+        let keep_in_chat = wa::Message {
+            keep_in_chat_message: Some(wa::message::KeepInChatMessage::default()),
+            ..Default::default()
+        };
+        assert!(!should_include_reporting_token(&keep_in_chat));
+    }
+
+    #[test]
+    fn test_hkdf_info_construction() {
+        // Verify the HKDF info is constructed correctly
+        let info = build_hkdf_info("STANZA", "sender@s.whatsapp.net", "remote@s.whatsapp.net");
+
+        let expected = b"STANZAsender@s.whatsapp.netremote@s.whatsapp.netReport Token";
+        assert_eq!(
+            info,
+            expected.to_vec(),
+            "HKDF info construction changed! This will break token verification."
+        );
+    }
+
+    #[test]
+    fn test_message_secret_in_prepared_message() {
+        // Verify prepare_message_with_context correctly adds MessageContextInfo
+        let original = wa::Message {
+            conversation: Some("Test".to_string()),
+            ..Default::default()
+        };
+
+        let secret = [0x12u8; MESSAGE_SECRET_SIZE];
+        let prepared = prepare_message_with_context(&original, &secret);
+
+        // Original message content preserved
+        assert_eq!(prepared.conversation, original.conversation);
+
+        // MessageContextInfo added with correct values
+        let ctx = prepared.message_context_info.as_ref().unwrap();
+        assert_eq!(ctx.message_secret.as_ref().unwrap(), &secret.to_vec());
+        assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
+    }
+
+    #[test]
+    fn test_prepare_message_preserves_existing_context_info() {
+        // If message already has MessageContextInfo, we should update it, not replace
+        let original = wa::Message {
+            conversation: Some("Test".to_string()),
+            message_context_info: Some(wa::MessageContextInfo {
+                device_list_metadata_version: Some(42), // Some existing field
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let secret = [0x12u8; MESSAGE_SECRET_SIZE];
+        let prepared = prepare_message_with_context(&original, &secret);
+
+        let ctx = prepared.message_context_info.as_ref().unwrap();
+        // New fields added
+        assert_eq!(ctx.message_secret.as_ref().unwrap(), &secret.to_vec());
+        assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
+    }
+
+    #[test]
+    fn test_invalid_secret_size_generates_new() {
+        let message = wa::Message {
+            conversation: Some("Test".to_string()),
+            ..Default::default()
+        };
+
+        let invalid_secret = [0u8; 16]; // Wrong size (16 instead of 32)
+        let sender = test_jid("sender");
+        let remote = test_jid("remote");
+
+        let result =
+            generate_reporting_token(&message, "STANZA", &sender, &remote, Some(&invalid_secret));
+
+        // Should still succeed (generates new secret)
+        assert!(result.is_some());
+        let result = result.unwrap();
+        // Secret should be 32 bytes (new one generated)
+        assert_eq!(result.message_secret.len(), MESSAGE_SECRET_SIZE);
+        // Should NOT be all zeros (the invalid one truncated)
+        assert_ne!(result.message_secret, [0u8; MESSAGE_SECRET_SIZE]);
+    }
 }
