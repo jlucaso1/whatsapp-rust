@@ -31,7 +31,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y valgrind
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@v1.16.4
 
       - name: Install iai-callgrind-runner
         run: cargo binstall --no-confirm iai-callgrind-runner@0.16.1
@@ -39,9 +39,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          prefix-key: ${{ runner.os }}-cargo-bench
 
-      - uses: bencherdev/bencher@main
+      - uses: bencherdev/bencher@v0.5.9
 
       - name: Run Iai-Callgrind benchmarks
         env:

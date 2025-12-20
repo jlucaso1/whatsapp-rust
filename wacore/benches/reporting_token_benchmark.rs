@@ -57,7 +57,7 @@ fn setup_extended_message() -> wa::Message {
 #[bench::simple(setup = setup_simple_message)]
 #[bench::extended(setup = setup_extended_message)]
 fn bench_content_extraction(msg: wa::Message) {
-    black_box(generate_reporting_token_content(black_box(&msg)));
+    let _ = black_box(generate_reporting_token_content(&msg));
 }
 
 // Key derivation benchmark
@@ -69,10 +69,7 @@ fn bench_key_derivation() {
     let remote_jid = "5511888776655@s.whatsapp.net";
 
     let _ = black_box(derive_reporting_token_key(
-        black_box(&secret),
-        black_box(stanza_id),
-        black_box(sender_jid),
-        black_box(remote_jid),
+        &secret, stanza_id, sender_jid, remote_jid,
     ));
 }
 
@@ -82,10 +79,7 @@ fn bench_token_calculation() {
     let key = [0x55u8; REPORTING_TOKEN_KEY_SIZE];
     let content = b"Hello, World! This is test content for HMAC.";
 
-    let _ = black_box(calculate_reporting_token(
-        black_box(&key),
-        black_box(content),
-    ));
+    let _ = black_box(calculate_reporting_token(&key, content));
 }
 
 // Full token generation - setup data
@@ -118,11 +112,11 @@ fn setup_full_gen_extended() -> FullGenSetup {
 #[bench::simple(setup = setup_full_gen_simple)]
 #[bench::extended(setup = setup_full_gen_extended)]
 fn bench_full_token_generation(data: FullGenSetup) {
-    black_box(generate_reporting_token(
-        black_box(&data.msg),
-        black_box("STANZA123"),
-        black_box(&data.sender),
-        black_box(&data.remote),
+    let _ = black_box(generate_reporting_token(
+        &data.msg,
+        "STANZA123",
+        &data.sender,
+        &data.remote,
         Some(&data.secret),
     ));
 }
@@ -132,7 +126,7 @@ fn bench_full_token_generation(data: FullGenSetup) {
 #[bench::simple(setup = setup_simple_message)]
 #[bench::extended(setup = setup_extended_message)]
 fn bench_message_encoding(msg: wa::Message) -> Vec<u8> {
-    black_box(black_box(&msg).encode_to_vec())
+    black_box(msg.encode_to_vec())
 }
 
 library_benchmark_group!(
