@@ -67,26 +67,27 @@ fn bench_marshal_allocating() -> Vec<u8> {
 }
 
 #[library_benchmark]
-fn bench_marshal_reusing_buffer() {
+fn bench_marshal_reusing_buffer() -> Vec<u8> {
     let node = create_large_node();
     let mut buffer = Vec::with_capacity(4096);
     marshal_to(black_box(&node), &mut buffer).unwrap();
-    black_box(&buffer);
+    black_box(buffer)
 }
 
-// Unmarshal benchmarks - self-contained
+// Setup functions for unmarshal benchmarks - pre-compute marshaled data
 // Note: marshal() adds a flag byte at position 0, unmarshal_ref expects data without it
-#[library_benchmark]
-fn bench_unmarshal_small() {
-    let node = create_small_node();
-    let marshaled = marshal(&node).unwrap();
-    black_box(unmarshal_ref(black_box(&marshaled[1..])).unwrap());
+fn setup_small_marshaled() -> Vec<u8> {
+    marshal(&create_small_node()).unwrap()
+}
+
+fn setup_large_marshaled() -> Vec<u8> {
+    marshal(&create_large_node()).unwrap()
 }
 
 #[library_benchmark]
-fn bench_unmarshal_large() {
-    let node = create_large_node();
-    let marshaled = marshal(&node).unwrap();
+#[bench::small(setup = setup_small_marshaled)]
+#[bench::large(setup = setup_large_marshaled)]
+fn bench_unmarshal(marshaled: Vec<u8>) {
     black_box(unmarshal_ref(black_box(&marshaled[1..])).unwrap());
 }
 
@@ -110,11 +111,14 @@ fn bench_unpack_compressed() {
     black_box(unpack(black_box(&payload)).unwrap());
 }
 
-// Attribute parser benchmark - self-contained
+// Setup function for attr_parser benchmark - pre-compute marshaled data
+fn setup_attr_marshaled() -> Vec<u8> {
+    marshal(&create_attr_node()).unwrap()
+}
+
 #[library_benchmark]
-fn bench_attr_parser() {
-    let node = create_attr_node();
-    let marshaled = marshal(&node).unwrap();
+#[bench::attr_lookup(setup = setup_attr_marshaled)]
+fn bench_attr_parser(marshaled: Vec<u8>) {
     // Skip the flag byte at position 0
     let node_ref = unmarshal_ref(&marshaled[1..]).unwrap();
 
@@ -134,7 +138,7 @@ library_benchmark_group!(
 
 library_benchmark_group!(
     name = unmarshal_group;
-    benchmarks = bench_unmarshal_small, bench_unmarshal_large
+    benchmarks = bench_unmarshal
 );
 
 library_benchmark_group!(
