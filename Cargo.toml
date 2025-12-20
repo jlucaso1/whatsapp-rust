@@ -85,3 +85,10 @@ codegen-units = 1
 panic = "abort"
 strip = true
 incremental = false
+
+# Benchmark profile: optimized but without aggressive LTO that breaks iai-callgrind
+[profile.bench]
+inherits = "release"
+lto = "thin"
+debug = 1
+strip = false
