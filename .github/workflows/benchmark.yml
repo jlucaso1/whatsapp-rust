@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,5 +57,4 @@ jobs:
             --testbed ubuntu-latest \
             --adapter rust_iai_callgrind \
             --github-actions "$GITHUB_TOKEN" \
-            --err \
             "cargo bench --workspace"
