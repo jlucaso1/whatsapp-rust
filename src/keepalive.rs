@@ -6,8 +6,6 @@ use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use wacore_binary::builder::NodeBuilder;
-use wacore_binary::node::NodeContent;
 
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
 const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
@@ -28,7 +26,7 @@ impl Client {
             to: server_jid(),
             target: None,
             id: None,
-            content: Some(NodeContent::Nodes(vec![NodeBuilder::new("ping").build()])),
+            content: None,
             timeout: Some(KEEP_ALIVE_RESPONSE_DEADLINE),
         };
 
