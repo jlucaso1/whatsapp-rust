@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 /// An event produced by the transport layer.
 #[derive(Debug, Clone)]
@@ -33,7 +32,7 @@ pub trait TransportFactory: Send + Sync {
     /// Creates a new transport and returns it, along with a stream of events.
     async fn create_transport(
         &self,
-    ) -> Result<(Arc<dyn Transport>, mpsc::Receiver<TransportEvent>), anyhow::Error>;
+    ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error>;
 }
 
 /// A simple structure to represent an HTTP request

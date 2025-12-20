@@ -365,8 +365,9 @@ pub async fn prepare_dm_stanza<
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
 ) -> Result<Node> {
-    // Generate reporting token for the message (if supported message type)
-    let reporting_result = generate_reporting_token(message, &request_id, own_jid, &to_jid, None);
+    // Generate reporting token if the message type supports it
+    // For DMs, both sender_jid and remote_jid are the recipient (to_jid) per Baileys implementation
+    let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
     // Prepare message with MessageContextInfo containing the message secret
     let message_for_encryption = if let Some(ref result) = reporting_result {
@@ -545,9 +546,9 @@ pub async fn prepare_group_stanza<
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
     };
 
-    // Generate reporting token for the message (if supported message type)
-    let reporting_result =
-        generate_reporting_token(message, &request_id, &own_sending_jid, &to_jid, None);
+    // Generate reporting token if the message type supports it
+    // For groups, both sender_jid and remote_jid are the group JID (to_jid) per Baileys implementation
+    let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
     // Prepare message with MessageContextInfo containing the message secret
     let message_for_encryption = if let Some(ref result) = reporting_result {

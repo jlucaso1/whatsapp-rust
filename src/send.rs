@@ -67,7 +67,7 @@ impl Client {
             // inside prepare_group_stanza, so we don't need to serialize entire group sends.
 
             // Preparation work (no lock needed)
-            let mut group_info = self.query_group_info(&to).await?;
+            let mut group_info = self.groups().query_info(&to).await?;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot

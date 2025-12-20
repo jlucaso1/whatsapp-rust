@@ -120,7 +120,7 @@ impl NoiseSocket {
             let ciphertext_len = out_buf.len();
             plaintext_buf.extend_from_slice(&out_buf);
             out_buf.clear();
-            if let Err(e) = crate::framing::encode_frame_into(
+            if let Err(e) = wacore::framing::encode_frame_into(
                 &plaintext_buf[..ciphertext_len],
                 None,
                 &mut out_buf,
@@ -160,7 +160,7 @@ impl NoiseSocket {
 
             plaintext_buf.clear();
             out_buf.clear();
-            if let Err(e) = crate::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
+            if let Err(e) = wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
                 return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
             }
         }

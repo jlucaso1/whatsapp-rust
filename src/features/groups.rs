@@ -1,8 +1,10 @@
 use crate::client::Client;
+use crate::request::{InfoQuery, InfoQueryType};
 use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
+use wacore_binary::node::NodeContent;
 
 #[derive(Debug, Clone)]
 pub struct GroupMetadata {
@@ -19,19 +21,27 @@ pub struct GroupParticipant {
     pub is_admin: bool,
 }
 
-impl Client {
-    pub async fn query_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
-        if let Some(cached) = self.get_group_cache().await.get(jid).await {
+pub struct Groups<'a> {
+    client: &'a Client,
+}
+
+impl<'a> Groups<'a> {
+    pub(crate) fn new(client: &'a Client) -> Self {
+        Self { client }
+    }
+
+    pub async fn query_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
+        if let Some(cached) = self.client.get_group_cache().await.get(jid).await {
             return Ok(cached);
         }
 
-        use wacore_binary::node::NodeContent;
         let query_node = NodeBuilder::new("query")
             .attr("request", "interactive")
             .build();
-        let iq = crate::request::InfoQuery {
+
+        let iq = InfoQuery {
             namespace: "w:g2",
-            query_type: crate::request::InfoQueryType::Get,
+            query_type: InfoQueryType::Get,
             to: jid.clone(),
             content: Some(NodeContent::Nodes(vec![query_node])),
             id: None,
@@ -39,14 +49,14 @@ impl Client {
             timeout: None,
         };
 
-        let resp_node = self.send_iq(iq).await?;
+        let resp_node = self.client.send_iq(iq).await?;
 
         let group_node = resp_node
             .get_optional_child("group")
             .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
 
         let mut participants = Vec::new();
-        let mut lid_to_pn_map = std::collections::HashMap::new();
+        let mut lid_to_pn_map = HashMap::new();
 
         let addressing_mode_str = group_node
             .attrs()
@@ -72,7 +82,9 @@ impl Client {
         if !lid_to_pn_map.is_empty() {
             info.set_lid_to_pn_map(lid_to_pn_map);
         }
-        self.get_group_cache()
+
+        self.client
+            .get_group_cache()
             .await
             .insert(jid.clone(), info.clone())
             .await;
@@ -80,20 +92,16 @@ impl Client {
         Ok(info)
     }
 
-    pub async fn get_participating_groups(
-        &self,
-    ) -> Result<HashMap<String, GroupMetadata>, anyhow::Error> {
-        use wacore_binary::node::NodeContent;
-
+    pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, anyhow::Error> {
         let participants_node = NodeBuilder::new("participants").build();
         let description_node = NodeBuilder::new("description").build();
         let participating_node = NodeBuilder::new("participating")
             .children([participants_node, description_node])
             .build();
 
-        let iq = crate::request::InfoQuery {
+        let iq = InfoQuery {
             namespace: "w:g2",
-            query_type: crate::request::InfoQueryType::Get,
+            query_type: InfoQueryType::Get,
             to: "@g.us".parse().unwrap(),
             content: Some(NodeContent::Nodes(vec![participating_node])),
             id: None,
@@ -101,7 +109,7 @@ impl Client {
             timeout: None,
         };
 
-        let resp_node = self.send_iq(iq).await?;
+        let resp_node = self.client.send_iq(iq).await?;
 
         let mut result = HashMap::new();
 
@@ -169,15 +177,14 @@ impl Client {
         Ok(result)
     }
 
-    pub async fn query_group_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
-        use wacore_binary::node::NodeContent;
-
+    pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
         let query_node = NodeBuilder::new("query")
             .attr("request", "interactive")
             .build();
-        let iq = crate::request::InfoQuery {
+
+        let iq = InfoQuery {
             namespace: "w:g2",
-            query_type: crate::request::InfoQueryType::Get,
+            query_type: InfoQueryType::Get,
             to: jid.clone(),
             content: Some(NodeContent::Nodes(vec![query_node])),
             id: None,
@@ -185,7 +192,7 @@ impl Client {
             timeout: None,
         };
 
-        let resp_node = self.send_iq(iq).await?;
+        let resp_node = self.client.send_iq(iq).await?;
 
         let group_node = resp_node
             .get_optional_child("group")
@@ -226,5 +233,37 @@ impl Client {
             participants,
             addressing_mode,
         })
+    }
+}
+
+impl Client {
+    pub fn groups(&self) -> Groups<'_> {
+        Groups::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_metadata_struct() {
+        let jid: Jid = "123456789@g.us".parse().unwrap();
+        let participant_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+
+        let metadata = GroupMetadata {
+            id: jid.clone(),
+            subject: "Test Group".to_string(),
+            participants: vec![GroupParticipant {
+                jid: participant_jid,
+                phone_number: None,
+                is_admin: true,
+            }],
+            addressing_mode: crate::types::message::AddressingMode::Pn,
+        };
+
+        assert_eq!(metadata.subject, "Test Group");
+        assert_eq!(metadata.participants.len(), 1);
+        assert!(metadata.participants[0].is_admin);
     }
 }

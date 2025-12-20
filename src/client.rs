@@ -18,7 +18,6 @@ use crate::jid_utils::server_jid;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
-use crate::types::presence::Presence;
 
 use log::{debug, error, info, warn};
 
@@ -78,7 +77,7 @@ pub struct Client {
 
     pub(crate) transport: Arc<Mutex<Option<Arc<dyn crate::transport::Transport>>>>,
     pub(crate) transport_events:
-        Arc<Mutex<Option<mpsc::Receiver<crate::transport::TransportEvent>>>>,
+        Arc<Mutex<Option<async_channel::Receiver<crate::transport::TransportEvent>>>>,
     pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
@@ -561,13 +560,13 @@ impl Client {
         info!(target: "Client", "Starting message processing loop...");
 
         let mut rx_guard = self.transport_events.lock().await;
-        let mut transport_events = rx_guard
+        let transport_events = rx_guard
             .take()
             .ok_or_else(|| anyhow::anyhow!("Cannot start message loop: not connected"))?;
         drop(rx_guard);
 
         // Frame decoder to parse incoming data
-        let mut frame_decoder = crate::framing::FrameDecoder::new();
+        let mut frame_decoder = wacore::framing::FrameDecoder::new();
 
         loop {
             tokio::select! {
@@ -576,9 +575,9 @@ impl Client {
                         info!(target: "Client", "Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
-                    event_opt = transport_events.recv() => {
-                        match event_opt {
-                            Some(crate::transport::TransportEvent::DataReceived(data)) => {
+                    event_result = transport_events.recv() => {
+                        match event_result {
+                            Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
 
@@ -613,7 +612,7 @@ impl Client {
                                     }
                                 }
                             },
-                            Some(crate::transport::TransportEvent::Disconnected) | None => {
+                            Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
@@ -624,7 +623,7 @@ impl Client {
                                     return Ok(());
                                 }
                             }
-                            Some(crate::transport::TransportEvent::Connected) => {
+                            Ok(crate::transport::TransportEvent::Connected) => {
                                 // Already handled during handshake, but could be useful for logging
                                 debug!("Transport connected event received");
                             }
@@ -888,25 +887,6 @@ impl Client {
         self.send_iq(iq).await.map(|_| ())
     }
 
-    pub async fn fetch_blocklist(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
-
-        debug!(target: "Client", "Fetching blocklist...");
-
-        // WhatsApp Web sends an empty IQ without child nodes
-        let iq = InfoQuery {
-            namespace: "blocklist",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: None,
-            timeout: None,
-        };
-
-        self.send_iq(iq).await.map(|_| ())
-    }
-
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
         use crate::request::{InfoQuery, InfoQueryType};
 
@@ -1079,7 +1059,7 @@ impl Client {
             }
 
             // Send presence (like WhatsApp Web's sendPresenceAvailable after passive tasks)
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+            if let Err(e) = client_clone.presence().set_available().await {
                 warn!("Failed to send initial presence: {e:?}");
             } else {
                 info!("Initial presence sent successfully.");
@@ -1109,7 +1089,8 @@ impl Client {
                 );
 
                 let props_fut = bg_client.fetch_props();
-                let blocklist_fut = bg_client.fetch_blocklist();
+                let binding = bg_client.blocking();
+                let blocklist_fut = binding.get_blocklist();
                 let privacy_fut = bg_client.fetch_privacy_settings();
                 let digest_fut = bg_client.send_digest_key_bundle();
 
@@ -1830,7 +1811,7 @@ impl Client {
 
         let client_clone = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = client_clone.send_presence(Presence::Available).await {
+            if let Err(e) = client_clone.presence().set_available().await {
                 log::warn!("Failed to send presence after push name update: {:?}", e);
             } else {
                 log::info!("Sent presence after push name update.");
