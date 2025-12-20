@@ -79,16 +79,15 @@ impl ReportingField {
     }
 }
 
-// =============================================================================
-// FIELD WHITELIST DEFINITIONS
-// Based on Baileys reportingFields from PR #1906
-// =============================================================================
-
 /// ContextInfo subfields: only extract forwardingScore (21) and isForwarded (22)
 static CONTEXT_INFO_SUBFIELDS: &[ReportingField] = &[
     ReportingField::new(21), // forwardingScore
     ReportingField::new(22), // isForwarded
 ];
+
+/// FutureProofMessage wrapper: recursively extract inner message (field 1)
+/// Used by viewOnceMessage, docWithCaption, editedMessage, etc.
+static FUTURE_PROOF_SUBFIELDS: &[ReportingField] = &[ReportingField::message(1)];
 
 /// ImageMessage subfields (field 3)
 static IMAGE_MESSAGE_SUBFIELDS: &[ReportingField] = &[
@@ -210,63 +209,35 @@ static POLL_RESULT_SUBFIELDS: &[ReportingField] = &[
     ReportingField::with_subfields(3, CONTEXT_INFO_SUBFIELDS),       // contextInfo
 ];
 
-/// Complete whitelist of reporting fields matching Baileys reportingFields.
-/// Each entry corresponds to a message type field in wa.Message.
+/// Whitelist of message fields to extract for reporting token content.
 pub static REPORTING_FIELDS: &[ReportingField] = &[
-    // Field 1: conversation (simple string, extract whole field)
-    ReportingField::new(1),
-    // Field 3: imageMessage
-    ReportingField::with_subfields(3, IMAGE_MESSAGE_SUBFIELDS),
-    // Field 4: contactMessage
-    ReportingField::with_subfields(4, CONTACT_MESSAGE_SUBFIELDS),
-    // Field 5: locationMessage
-    ReportingField::with_subfields(5, LOCATION_MESSAGE_SUBFIELDS),
-    // Field 6: extendedTextMessage
-    ReportingField::with_subfields(6, EXTENDED_TEXT_MESSAGE_SUBFIELDS),
-    // Field 7: documentMessage
-    ReportingField::with_subfields(7, DOCUMENT_MESSAGE_SUBFIELDS),
-    // Field 8: audioMessage
-    ReportingField::with_subfields(8, AUDIO_MESSAGE_SUBFIELDS),
-    // Field 9: videoMessage
-    ReportingField::with_subfields(9, VIDEO_MESSAGE_SUBFIELDS),
-    // Field 12: protocolMessage
-    ReportingField::with_subfields(12, PROTOCOL_MESSAGE_SUBFIELDS),
-    // Field 18: liveLocationMessage
-    ReportingField::with_subfields(18, LIVE_LOCATION_MESSAGE_SUBFIELDS),
-    // Field 26: stickerMessage
-    ReportingField::with_subfields(26, STICKER_MESSAGE_SUBFIELDS),
-    // Field 28: groupInviteMessage
-    ReportingField::with_subfields(28, GROUP_INVITE_MESSAGE_SUBFIELDS),
-    // Field 37: viewOnceMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(37, &[ReportingField::message(1)]),
-    // Field 49: pollCreationMessage
-    ReportingField::with_subfields(49, POLL_CREATION_MESSAGE_SUBFIELDS),
-    // Field 53: docWithCaptionMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(53, &[ReportingField::message(1)]),
-    // Field 55: viewOnceMessageV2 (FutureProofMessage wrapper)
-    ReportingField::with_subfields(55, &[ReportingField::message(1)]),
-    // Field 58: editedMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(58, &[ReportingField::message(1)]),
-    // Field 59: viewOnceMessageV2Extension (FutureProofMessage wrapper)
-    ReportingField::with_subfields(59, &[ReportingField::message(1)]),
-    // Field 60: pollCreationMessageV2
-    ReportingField::with_subfields(60, POLL_CREATION_MESSAGE_SUBFIELDS),
-    // Field 64: pollCreationMessageV3
-    ReportingField::with_subfields(64, POLL_CREATION_MESSAGE_SUBFIELDS),
-    // Field 66: ptvMessage (same as videoMessage)
-    ReportingField::with_subfields(66, VIDEO_MESSAGE_SUBFIELDS),
-    // Field 74: lottieStickerMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(74, &[ReportingField::message(1)]),
-    // Field 87: statusMentionMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(87, &[ReportingField::message(1)]),
-    // Field 88: pollResultMessage
-    ReportingField::with_subfields(88, POLL_RESULT_SUBFIELDS),
-    // Field 92: groupStatusMentionMessage (FutureProofMessage wrapper)
-    ReportingField::with_subfields(92, &[ReportingField::message(1)]),
-    // Field 93: pollCreationMessageV4 (FutureProofMessage wrapper)
-    ReportingField::with_subfields(93, &[ReportingField::message(1)]),
-    // Field 94: unknown future message type (FutureProofMessage wrapper)
-    ReportingField::with_subfields(94, &[ReportingField::message(1)]),
+    ReportingField::new(1),                                        // conversation
+    ReportingField::with_subfields(3, IMAGE_MESSAGE_SUBFIELDS),    // imageMessage
+    ReportingField::with_subfields(4, CONTACT_MESSAGE_SUBFIELDS),  // contactMessage
+    ReportingField::with_subfields(5, LOCATION_MESSAGE_SUBFIELDS), // locationMessage
+    ReportingField::with_subfields(6, EXTENDED_TEXT_MESSAGE_SUBFIELDS), // extendedTextMessage
+    ReportingField::with_subfields(7, DOCUMENT_MESSAGE_SUBFIELDS), // documentMessage
+    ReportingField::with_subfields(8, AUDIO_MESSAGE_SUBFIELDS),    // audioMessage
+    ReportingField::with_subfields(9, VIDEO_MESSAGE_SUBFIELDS),    // videoMessage
+    ReportingField::with_subfields(12, PROTOCOL_MESSAGE_SUBFIELDS), // protocolMessage
+    ReportingField::with_subfields(18, LIVE_LOCATION_MESSAGE_SUBFIELDS), // liveLocationMessage
+    ReportingField::with_subfields(26, STICKER_MESSAGE_SUBFIELDS), // stickerMessage
+    ReportingField::with_subfields(28, GROUP_INVITE_MESSAGE_SUBFIELDS), // groupInviteMessage
+    ReportingField::with_subfields(37, FUTURE_PROOF_SUBFIELDS),    // viewOnceMessage
+    ReportingField::with_subfields(49, POLL_CREATION_MESSAGE_SUBFIELDS), // pollCreationMessage
+    ReportingField::with_subfields(53, FUTURE_PROOF_SUBFIELDS),    // docWithCaptionMessage
+    ReportingField::with_subfields(55, FUTURE_PROOF_SUBFIELDS),    // viewOnceMessageV2
+    ReportingField::with_subfields(58, FUTURE_PROOF_SUBFIELDS),    // editedMessage
+    ReportingField::with_subfields(59, FUTURE_PROOF_SUBFIELDS),    // viewOnceMessageV2Extension
+    ReportingField::with_subfields(60, POLL_CREATION_MESSAGE_SUBFIELDS), // pollCreationMessageV2
+    ReportingField::with_subfields(64, POLL_CREATION_MESSAGE_SUBFIELDS), // pollCreationMessageV3
+    ReportingField::with_subfields(66, VIDEO_MESSAGE_SUBFIELDS),   // ptvMessage
+    ReportingField::with_subfields(74, FUTURE_PROOF_SUBFIELDS),    // lottieStickerMessage
+    ReportingField::with_subfields(87, FUTURE_PROOF_SUBFIELDS),    // statusMentionMessage
+    ReportingField::with_subfields(88, POLL_RESULT_SUBFIELDS),     // pollResultMessage
+    ReportingField::with_subfields(92, FUTURE_PROOF_SUBFIELDS),    // groupStatusMentionMessage
+    ReportingField::with_subfields(93, FUTURE_PROOF_SUBFIELDS),    // pollCreationMessageV4
+    ReportingField::with_subfields(94, FUTURE_PROOF_SUBFIELDS),    // future message type
 ];
 
 /// Current reporting token version
@@ -339,10 +310,6 @@ pub fn derive_reporting_token_key(
     Ok(key)
 }
 
-// =============================================================================
-// PROTOBUF EXTRACTION FUNCTIONS
-// =============================================================================
-
 /// Decode a varint from a byte slice.
 /// Returns the decoded value and the number of bytes consumed.
 fn decode_varint(data: &[u8]) -> Option<(u64, usize)> {
@@ -362,21 +329,37 @@ fn decode_varint(data: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
-/// Encode a value as a varint.
-fn encode_varint(mut value: u64) -> Vec<u8> {
-    let mut result = Vec::new();
+/// Maximum bytes needed for a varint (u64 needs at most 10 bytes)
+const MAX_VARINT_LEN: usize = 10;
+
+/// Encode a varint to a fixed-size stack buffer, returns the number of bytes written.
+/// This avoids heap allocation in the hot path.
+#[inline]
+fn encode_varint_to_buf(mut value: u64, buf: &mut [u8; MAX_VARINT_LEN]) -> usize {
+    let mut i = 0;
     loop {
         let mut byte = (value & 0x7F) as u8;
         value >>= 7;
         if value != 0 {
             byte |= 0x80;
         }
-        result.push(byte);
+        buf[i] = byte;
+        i += 1;
         if value == 0 {
             break;
         }
     }
-    result
+    i
+}
+
+/// Encode a value as a varint (convenience wrapper that allocates).
+/// Used in tests for verification.
+#[cfg(test)]
+#[inline]
+fn encode_varint(value: u64) -> Vec<u8> {
+    let mut buf = [0u8; MAX_VARINT_LEN];
+    let len = encode_varint_to_buf(value, &mut buf);
+    buf[..len].to_vec()
 }
 
 /// Extract reporting token content from encoded protobuf message bytes.
@@ -394,7 +377,8 @@ pub fn extract_reporting_token_content(
     data: &[u8],
     whitelist: &[ReportingField],
 ) -> Option<Vec<u8>> {
-    let mut extracted: Vec<(u32, Vec<u8>)> = Vec::new();
+    // Pre-size: most messages have 1-3 fields
+    let mut extracted: Vec<(u32, Vec<u8>)> = Vec::with_capacity(4);
     let mut pos = 0;
 
     while pos < data.len() {
@@ -451,33 +435,44 @@ pub fn extract_reporting_token_content(
 
                 if let Some(entry) = entry {
                     if entry.is_message {
-                        // Recursive: extract using top-level whitelist
                         if let Some(nested) = extract_reporting_token_content(
                             &data[value_start..value_end],
                             REPORTING_FIELDS,
-                        ) {
-                            if !nested.is_empty() {
-                                let mut field_bytes = encode_varint(tag);
-                                field_bytes.extend(encode_varint(nested.len() as u64));
-                                field_bytes.extend(nested);
-                                extracted.push((field_number, field_bytes));
-                            }
+                        )
+                        .filter(|n| !n.is_empty())
+                        {
+                            let mut tag_buf = [0u8; MAX_VARINT_LEN];
+                            let tag_len = encode_varint_to_buf(tag, &mut tag_buf);
+                            let mut len_buf = [0u8; MAX_VARINT_LEN];
+                            let len_len = encode_varint_to_buf(nested.len() as u64, &mut len_buf);
+
+                            let mut field_bytes =
+                                Vec::with_capacity(tag_len + len_len + nested.len());
+                            field_bytes.extend_from_slice(&tag_buf[..tag_len]);
+                            field_bytes.extend_from_slice(&len_buf[..len_len]);
+                            field_bytes.extend(nested);
+                            extracted.push((field_number, field_bytes));
                         }
                     } else if let Some(subfields) = entry.subfields {
-                        // Extract specific subfields from nested message
                         if let Some(nested) = extract_reporting_token_content(
                             &data[value_start..value_end],
                             subfields,
-                        ) {
-                            if !nested.is_empty() {
-                                let mut field_bytes = encode_varint(tag);
-                                field_bytes.extend(encode_varint(nested.len() as u64));
-                                field_bytes.extend(nested);
-                                extracted.push((field_number, field_bytes));
-                            }
+                        )
+                        .filter(|n| !n.is_empty())
+                        {
+                            let mut tag_buf = [0u8; MAX_VARINT_LEN];
+                            let tag_len = encode_varint_to_buf(tag, &mut tag_buf);
+                            let mut len_buf = [0u8; MAX_VARINT_LEN];
+                            let len_len = encode_varint_to_buf(nested.len() as u64, &mut len_buf);
+
+                            let mut field_bytes =
+                                Vec::with_capacity(tag_len + len_len + nested.len());
+                            field_bytes.extend_from_slice(&tag_buf[..tag_len]);
+                            field_bytes.extend_from_slice(&len_buf[..len_len]);
+                            field_bytes.extend(nested);
+                            extracted.push((field_number, field_bytes));
                         }
                     } else {
-                        // Include whole field as-is
                         extracted.push((field_number, data[field_start..pos].to_vec()));
                     }
                 }
@@ -493,19 +488,18 @@ pub fn extract_reporting_token_content(
         return None;
     }
 
-    // Sort by field number for deterministic output
     extracted.sort_by_key(|(num, _)| *num);
 
-    // Concatenate all extracted bytes
-    Some(extracted.into_iter().flat_map(|(_, bytes)| bytes).collect())
+    let total_len: usize = extracted.iter().map(|(_, v)| v.len()).sum();
+    let mut result = Vec::with_capacity(total_len);
+    for (_, bytes) in extracted {
+        result.extend(bytes);
+    }
+    Some(result)
 }
 
 /// Check if reporting token should be included for this message type.
-///
-/// Certain message types (reactions, poll updates, etc.) should not include
-/// reporting tokens.
 pub fn should_include_reporting_token(message: &wa::Message) -> bool {
-    // Exclude certain message types that don't need reporting tokens
     message.reaction_message.is_none()
         && message.enc_reaction_message.is_none()
         && message.poll_update_message.is_none()
@@ -513,26 +507,11 @@ pub fn should_include_reporting_token(message: &wa::Message) -> bool {
 }
 
 /// Generate reporting token content by extracting whitelisted protobuf fields.
-///
-/// This function encodes the message to protobuf bytes and then extracts
-/// only the whitelisted fields, matching WhatsApp Web's implementation.
-///
-/// # Arguments
-/// * `message` - The WhatsApp message
-///
-/// # Returns
-/// Extracted protobuf bytes of whitelisted fields, or None if message type
-/// is excluded or no fields match the whitelist
 pub fn generate_reporting_token_content(message: &wa::Message) -> Option<Vec<u8>> {
-    // Check if this message type should have a reporting token
     if !should_include_reporting_token(message) {
         return None;
     }
-
-    // Encode message to protobuf bytes
     let message_bytes = message.encode_to_vec();
-
-    // Extract whitelisted fields
     extract_reporting_token_content(&message_bytes, REPORTING_FIELDS)
 }
 
@@ -566,22 +545,6 @@ pub struct ReportingTokenResult {
 }
 
 /// Generate a complete reporting token for a message.
-///
-/// This function:
-/// 1. Generates a random message secret (or uses provided one)
-/// 2. Derives the reporting token key
-/// 3. Generates the content hash based on message type
-/// 4. Calculates the final token
-///
-/// # Arguments
-/// * `message` - The WhatsApp message to generate token for
-/// * `stanza_id` - The message stanza ID
-/// * `sender_jid` - The sender's JID
-/// * `remote_jid` - The recipient's JID
-/// * `existing_secret` - Optional existing message secret (if already generated)
-///
-/// # Returns
-/// `Some(ReportingTokenResult)` if successful, `None` if the message type doesn't support tokens
 pub fn generate_reporting_token(
     message: &wa::Message,
     stanza_id: &str,
@@ -589,7 +552,6 @@ pub fn generate_reporting_token(
     remote_jid: &Jid,
     existing_secret: Option<&[u8]>,
 ) -> Option<ReportingTokenResult> {
-    // Generate or use existing message secret
     let message_secret: [u8; MESSAGE_SECRET_SIZE] = if let Some(secret) = existing_secret {
         if secret.len() != MESSAGE_SECRET_SIZE {
             log::warn!("Invalid existing secret size, generating new one");
@@ -604,33 +566,12 @@ pub fn generate_reporting_token(
     let sender_jid_str = sender_jid.to_string();
     let remote_jid_str = remote_jid.to_string();
 
-    log::debug!(
-        "[ReportingToken] stanza_id={}, sender_jid={}, remote_jid={}",
-        stanza_id,
-        sender_jid_str,
-        remote_jid_str
-    );
-
-    // Derive the reporting token key
     let key =
         derive_reporting_token_key(&message_secret, stanza_id, &sender_jid_str, &remote_jid_str)
             .ok()?;
 
-    log::debug!("[ReportingToken] HKDF key: {}", hex::encode(&key));
-
-    // Generate content hash based on message type
     let content = generate_reporting_token_content(message)?;
-
-    log::debug!(
-        "[ReportingToken] Content ({} bytes): {}",
-        content.len(),
-        hex::encode(&content)
-    );
-
-    // Calculate the token
     let token = calculate_reporting_token(&key, &content).ok()?;
-
-    log::debug!("[ReportingToken] Final token: {}", hex::encode(&token));
 
     Some(ReportingTokenResult {
         message_secret,
@@ -639,16 +580,7 @@ pub fn generate_reporting_token(
     })
 }
 
-/// Build the `<reporting>` XML node for a message stanza.
-///
-/// The node structure is:
-/// ```xml
-/// <reporting>
-///     <reporting_token v="2"><!-- 16 bytes --></reporting_token>
-/// </reporting>
-/// ```
-///
-/// Note: The token content is binary bytes, not a hex string.
+/// Build the `<reporting>` node for a message stanza.
 pub fn build_reporting_node(result: &ReportingTokenResult) -> Node {
     let token_node = NodeBuilder::new("reporting_token")
         .attrs([("v", result.version.to_string())])
@@ -659,21 +591,14 @@ pub fn build_reporting_node(result: &ReportingTokenResult) -> Node {
 }
 
 /// Prepare a message with MessageContextInfo containing the message secret.
-///
-/// This function creates a new message with MessageContextInfo populated
-/// with the message secret and reporting token version.
 pub fn prepare_message_with_context(
     message: &wa::Message,
     message_secret: &[u8; MESSAGE_SECRET_SIZE],
 ) -> wa::Message {
     let mut new_message = message.clone();
-
-    // Get or create MessageContextInfo
     let mut context_info = new_message.message_context_info.take().unwrap_or_default();
-
     context_info.message_secret = Some(message_secret.to_vec());
     context_info.reporting_token_version = Some(REPORTING_TOKEN_VERSION);
-
     new_message.message_context_info = Some(context_info);
     new_message
 }
@@ -1054,11 +979,6 @@ mod tests {
         let result = generate_reporting_token(&message, "test_id", &sender, &remote, None);
         assert!(result.is_none());
     }
-
-    // =========================================================================
-    // REGRESSION TESTS - Golden tests with known inputs/outputs
-    // These tests ensure refactoring doesn't change the algorithm behavior.
-    // =========================================================================
 
     /// Helper to create a test JID
     fn test_jid(user: &str) -> Jid {
