@@ -566,7 +566,7 @@ impl Client {
         drop(rx_guard);
 
         // Frame decoder to parse incoming data
-        let mut frame_decoder = crate::framing::FrameDecoder::new();
+        let mut frame_decoder = wacore::framing::FrameDecoder::new();
 
         loop {
             tokio::select! {
