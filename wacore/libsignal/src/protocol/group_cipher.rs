@@ -22,9 +22,11 @@ struct EncryptionBuffer {
 }
 
 impl EncryptionBuffer {
+    const INITIAL_CAPACITY: usize = 1024;
+
     fn new() -> Self {
         Self {
-            buffer: Vec::with_capacity(1024),
+            buffer: Vec::with_capacity(Self::INITIAL_CAPACITY),
         }
     }
     fn get_buffer(&mut self) -> &mut Vec<u8> {
@@ -77,7 +79,10 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
                 log::error!("outgoing sender key state corrupt for distribution");
                 SignalProtocolError::InvalidSenderKeySession
             })?;
-        Ok::<Vec<u8>, SignalProtocolError>(std::mem::take(buf))
+        let result = std::mem::take(buf);
+        // Restore buffer capacity for next use (take() leaves empty Vec with 0 capacity)
+        buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+        Ok::<Vec<u8>, SignalProtocolError>(result)
     })?;
 
     let signing_key = sender_key_state

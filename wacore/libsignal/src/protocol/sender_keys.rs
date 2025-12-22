@@ -42,13 +42,17 @@ impl SenderMessageKey {
             iteration,
             seed,
             iv: derived[0..16].try_into().expect("correct iv length"),
-            cipher_key: derived[16..48].try_into().expect("correct cipher_key length"),
+            cipher_key: derived[16..48]
+                .try_into()
+                .expect("correct cipher_key length"),
         }
     }
 
     pub(crate) fn from_protobuf(smk: sender_key_state_structure::SenderMessageKey) -> Self {
         let seed_vec = smk.seed.unwrap_or_default();
-        let seed: [u8; 32] = seed_vec.try_into().unwrap_or([0u8; 32]);
+        let seed: [u8; 32] = seed_vec
+            .try_into()
+            .expect("SenderMessageKey seed must be exactly 32 bytes");
         Self::new(smk.iteration.unwrap_or_default(), seed)
     }
 
@@ -146,9 +150,7 @@ impl SenderKeyState {
         let chain_key_arr: [u8; 32] = chain_key.try_into().expect("chain_key must be 32 bytes");
         let state = SenderKeyStateStructure {
             sender_key_id: Some(chain_id),
-            sender_chain_key: Some(
-                SenderChainKey::new(iteration, chain_key_arr).as_protobuf(),
-            ),
+            sender_chain_key: Some(SenderChainKey::new(iteration, chain_key_arr).as_protobuf()),
             sender_signing_key: Some(sender_key_state_structure::SenderSigningKey {
                 public: Some(signature_key.serialize().to_vec()),
                 private: signature_private_key.map(|k| k.serialize().to_vec()),
@@ -173,8 +175,12 @@ impl SenderKeyState {
 
     pub fn sender_chain_key(&self) -> Option<SenderChainKey> {
         let sender_chain = self.state.sender_chain_key.as_ref()?;
-        let seed_vec = sender_chain.seed.clone().unwrap_or_default();
-        let seed: [u8; 32] = seed_vec.try_into().ok()?;
+        let seed: [u8; 32] = sender_chain
+            .seed
+            .as_deref()
+            .unwrap_or_default()
+            .try_into()
+            .ok()?;
         Some(SenderChainKey::new(
             sender_chain.iteration.unwrap_or_default(),
             seed,

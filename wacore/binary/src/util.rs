@@ -13,7 +13,7 @@ pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>> {
     if (data_type & 2) > 0 {
         let mut decoder = ZlibDecoder::new(data);
         // Pre-allocate with estimated decompressed size (typically 4-8x compressed)
-        // Cap at 64KB to avoid excessive allocation for small inputs
+        // Min 256 bytes for small inputs, max 64KB to limit allocation for large inputs
         let estimated_size = (data.len() * 4).clamp(256, 64 * 1024);
         let mut decompressed = Vec::with_capacity(estimated_size);
         decoder

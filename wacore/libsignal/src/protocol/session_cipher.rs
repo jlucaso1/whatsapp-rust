@@ -98,13 +98,15 @@ pub async fn message_encrypt(
     let ctext = ENCRYPTION_BUFFER.with(|buffer| {
         let mut buf_wrapper = buffer.borrow_mut();
         let buf = buf_wrapper.get_buffer();
-        buf.clear();
         aes_256_cbc_encrypt_into(ptext, message_keys.cipher_key(), message_keys.iv(), buf)
             .map_err(|_| {
                 log::error!("session state corrupt for {remote_address}");
                 SignalProtocolError::InvalidSessionStructure("invalid sender chain message keys")
             })?;
-        Ok::<Vec<u8>, SignalProtocolError>(std::mem::take(buf))
+        let result = std::mem::take(buf);
+        // Restore buffer capacity for next use (take() leaves empty Vec with 0 capacity)
+        buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+        Ok::<Vec<u8>, SignalProtocolError>(result)
     })?;
 
     let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
@@ -709,7 +711,12 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
             message_keys.iv(),
             buf,
         ) {
-            Ok(()) => Ok(std::mem::take(buf)),
+            Ok(()) => {
+                let result = std::mem::take(buf);
+                // Restore buffer capacity for next use (take() leaves empty Vec with 0 capacity)
+                buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+                Ok(result)
+            }
             Err(DecryptionErrorCrypto::BadKeyOrIv) => {
                 log::warn!("{current_or_previous} session state corrupt for {remote_address}",);
                 Err(SignalProtocolError::InvalidSessionStructure(
