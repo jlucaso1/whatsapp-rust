@@ -10,7 +10,7 @@ description = "SQLite storage backend for whatsapp-rust"
 [dependencies]
 async-trait = "0.1.88"
 bincode = { version = "2.0.1", features = ["serde"] }
-diesel = { version = "2.2.12", default-features = false, features = [
+diesel = { version = "2.3.5", default-features = false, features = [
     "sqlite",
     "r2d2",
     "32-column-tables",
