@@ -324,7 +324,8 @@ mod tests {
 
         let iv = vec![0u8; 16];
         let mut ciphertext = Vec::new();
-        aes_256_cbc_encrypt_into(&plaintext, &keys.value_encryption, &iv, &mut ciphertext).unwrap();
+        aes_256_cbc_encrypt_into(&plaintext, &keys.value_encryption, &iv, &mut ciphertext)
+            .expect("test data should be valid");
 
         let mut value_with_iv = iv;
         value_with_iv.extend_from_slice(&ciphertext);
@@ -372,7 +373,8 @@ mod tests {
         let get_keys = |_: &[u8]| Ok(keys.clone());
 
         let mut state = HashState::default();
-        let result = process_snapshot(&snapshot, &mut state, get_keys, false, "regular").unwrap();
+        let result = process_snapshot(&snapshot, &mut state, get_keys, false, "regular")
+            .expect("test data should be valid");
 
         assert_eq!(result.state.version, 1);
         assert_eq!(result.mutations.len(), 1);
@@ -417,8 +419,8 @@ mod tests {
         let get_prev = |_: &[u8]| Ok(None);
 
         let mut state = HashState::default();
-        let result =
-            process_patch(&patch, &mut state, get_keys, get_prev, false, "regular").unwrap();
+        let result = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect("test data should be valid");
 
         assert_eq!(result.state.version, 2);
         assert_eq!(result.mutations.len(), 1);
@@ -444,10 +446,10 @@ mod tests {
         let initial_value_blob = initial_record
             .value
             .as_ref()
-            .unwrap()
+            .expect("test data should be valid")
             .blob
             .as_ref()
-            .unwrap();
+            .expect("test data should be valid");
         let initial_value_mac = initial_value_blob[initial_value_blob.len() - 32..].to_vec();
 
         // Process initial snapshot to get starting state
@@ -463,7 +465,8 @@ mod tests {
         let get_keys = |_: &[u8]| Ok(keys.clone());
         let mut snapshot_state = HashState::default();
         let snapshot_result =
-            process_snapshot(&snapshot, &mut snapshot_state, get_keys, false, "regular").unwrap();
+            process_snapshot(&snapshot, &mut snapshot_state, get_keys, false, "regular")
+                .expect("test data should be valid");
 
         // Create overwrite record
         let overwrite_record = create_encrypted_record(
@@ -505,7 +508,7 @@ mod tests {
             false,
             "regular",
         )
-        .unwrap();
+        .expect("test data should be valid");
 
         assert_eq!(result.state.version, 2);
         assert_eq!(result.mutations.len(), 1);
@@ -518,7 +521,11 @@ mod tests {
         );
 
         // Verify the hash was updated correctly (old value removed, new added)
-        let new_value_blob = overwrite_record.value.unwrap().blob.unwrap();
+        let new_value_blob = overwrite_record
+            .value
+            .expect("test data should be valid")
+            .blob
+            .expect("test data should be valid");
         let new_value_mac = new_value_blob[new_value_blob.len() - 32..].to_vec();
 
         let expected_hash = WAPATCH_INTEGRITY.subtract_then_add(

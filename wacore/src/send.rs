@@ -960,9 +960,15 @@ mod tests {
     /// we should skip them instead of failing the entire message.
     #[test]
     fn test_missing_prekey_bundle_skips_device() {
-        let device_with_bundle: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
-        let device_without_bundle: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
-        let cloud_api: Jid = "1234567890:99@hosted".parse().unwrap();
+        let device_with_bundle: Jid = "1234567890:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let device_without_bundle: Jid = "1234567890:1@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let cloud_api: Jid = "1234567890:99@hosted"
+            .parse()
+            .expect("test JID should be valid");
 
         let bundle = create_mock_bundle();
 
@@ -1007,9 +1013,15 @@ mod tests {
     /// If all devices are unavailable, the batch should still complete without panic.
     #[test]
     fn test_all_devices_missing_prekey_bundles() {
-        let device1: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
-        let device2: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
-        let device3: Jid = "9876543210:0@s.whatsapp.net".parse().unwrap();
+        let device1: Jid = "1234567890:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let device2: Jid = "1234567890:1@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let device3: Jid = "9876543210:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         let resolver = MockSendContextResolver::new()
             .with_missing_bundle(device1.clone())
@@ -1034,7 +1046,9 @@ mod tests {
         let mut all_devices = Vec::new();
 
         for i in 0..10 {
-            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i).parse().unwrap();
+            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i)
+                .parse()
+                .expect("test JID should be valid");
             all_devices.push(device_jid);
         }
 
@@ -1042,7 +1056,9 @@ mod tests {
 
         // Add bundles for devices 0-6, mark 7-9 as missing
         for i in 0..10 {
-            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i).parse().unwrap();
+            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i)
+                .parse()
+                .expect("test JID should be valid");
 
             if i < 7 {
                 resolver = resolver.with_bundle(device_jid, create_mock_bundle());
@@ -1088,8 +1104,12 @@ mod tests {
     /// (which would happen for 1:1 chats), the missing prekey is handled gracefully.
     #[test]
     fn test_cloud_api_device_without_prekey() {
-        let regular_device: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
-        let cloud_api: Jid = "1234567890:99@hosted".parse().unwrap();
+        let regular_device: Jid = "1234567890:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let cloud_api: Jid = "1234567890:99@hosted"
+            .parse()
+            .expect("test JID should be valid");
 
         // Verify the cloud_api device is detected as hosted
         assert!(
@@ -1141,14 +1161,28 @@ mod tests {
         // Simulate devices returned from usync for a group
         let devices: Vec<Jid> = vec![
             // Regular devices - should receive SKDM
-            "5511999887766:0@s.whatsapp.net".parse().unwrap(), // Primary phone
-            "5511999887766:33@s.whatsapp.net".parse().unwrap(), // WhatsApp Web companion
-            "5521988776655:0@s.whatsapp.net".parse().unwrap(), // Another participant
-            "100000012345678:33@lid".parse().unwrap(),         // LID companion device
+            "5511999887766:0@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Primary phone
+            "5511999887766:33@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // WhatsApp Web companion
+            "5521988776655:0@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Another participant
+            "100000012345678:33@lid"
+                .parse()
+                .expect("test JID should be valid"), // LID companion device
             // HOSTED devices - should be EXCLUDED from group SKDM
-            "5531977665544:99@s.whatsapp.net".parse().unwrap(), // Cloud API on regular server
-            "100000087654321:99@lid".parse().unwrap(),          // Cloud API on LID server
-            "5541966554433:0@hosted".parse().unwrap(),          // Explicit @hosted server
+            "5531977665544:99@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Cloud API on regular server
+            "100000087654321:99@lid"
+                .parse()
+                .expect("test JID should be valid"), // Cloud API on LID server
+            "5541966554433:0@hosted"
+                .parse()
+                .expect("test JID should be valid"), // Explicit @hosted server
         ];
 
         // This is the filtering logic used in prepare_group_stanza
@@ -1202,7 +1236,9 @@ mod tests {
     /// If a device was temporarily unavailable, a retry should succeed.
     #[test]
     fn test_device_recovery_between_requests() {
-        let device: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+        let device: Jid = "1234567890:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         // First attempt: device unavailable
         let resolver_first = MockSendContextResolver::new().with_missing_bundle(device.clone());
@@ -1268,7 +1304,11 @@ mod tests {
         let result = resolver.phone_to_lid.get(phone).cloned();
 
         assert!(result.is_some(), "Should return LID for known phone");
-        assert_eq!(result.unwrap(), lid, "Should return correct LID");
+        assert_eq!(
+            result.expect("known phone should return LID"),
+            lid,
+            "Should return correct LID"
+        );
 
         // Unknown phone should return None
         let unknown = resolver.phone_to_lid.get("999999999").cloned();
@@ -1292,9 +1332,18 @@ mod tests {
         let lid2 = resolver.phone_to_lid.get("559980000002").cloned();
         let lid3 = resolver.phone_to_lid.get("559980000003").cloned();
 
-        assert_eq!(lid1.unwrap(), "100000012345678");
-        assert_eq!(lid2.unwrap(), "100000024691356");
-        assert_eq!(lid3.unwrap(), "100000037037034");
+        assert_eq!(
+            lid1.expect("phone 1 should have LID mapping"),
+            "100000012345678"
+        );
+        assert_eq!(
+            lid2.expect("phone 2 should have LID mapping"),
+            "100000024691356"
+        );
+        assert_eq!(
+            lid3.expect("phone 3 should have LID mapping"),
+            "100000037037034"
+        );
 
         println!("✅ Multiple phone-to-LID mappings work correctly");
     }
@@ -1322,12 +1371,12 @@ mod tests {
         // Simulate the device JID we're trying to send to (PN format)
         let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, device_id)
             .parse()
-            .unwrap();
+            .expect("test PN device JID should be valid");
 
         // Step 1: Look up LID for the phone number (using direct HashMap access)
         let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
         assert!(lid_user.is_some(), "Should find LID for phone");
-        let lid_user = lid_user.unwrap();
+        let lid_user = lid_user.expect("phone should have LID mapping");
 
         // Step 2: Construct the LID JID with same device ID
         let lid_jid = Jid {
@@ -1380,14 +1429,14 @@ mod tests {
         // Simulate sending to a companion device (WhatsApp Web)
         let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, companion_device_id)
             .parse()
-            .unwrap();
+            .expect("test companion device JID should be valid");
 
         // Look up LID using direct HashMap access
         let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
 
         // Construct LID JID
         let lid_jid = Jid {
-            user: lid_user.unwrap(),
+            user: lid_user.expect("phone should have LID mapping for companion test"),
             server: "lid".to_string(),
             device: pn_device_jid.device,
             agent: pn_device_jid.agent,
@@ -1412,8 +1461,12 @@ mod tests {
             MockSendContextResolver::new().with_phone_to_lid("559980000001", "100000012345678");
 
         // These JIDs should NOT trigger LID lookup
-        let lid_jid: Jid = "100000012345678:0@lid".parse().unwrap();
-        let group_jid: Jid = "120363123456789012@g.us".parse().unwrap();
+        let lid_jid: Jid = "100000012345678:0@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let group_jid: Jid = "120363123456789012@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // Only s.whatsapp.net JIDs should be looked up
         assert_ne!(
@@ -1426,7 +1479,9 @@ mod tests {
         );
 
         // PN JID should be eligible for lookup
-        let pn_jid: Jid = "559980000001:0@s.whatsapp.net".parse().unwrap();
+        let pn_jid: Jid = "559980000001:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert_eq!(
             pn_jid.server, "s.whatsapp.net",
             "PN JID should be s.whatsapp.net"

@@ -33,7 +33,8 @@ mod tests {
     #[test]
     fn test_build_edge_routing_preintro_basic() {
         let routing_data = vec![0x01, 0x02, 0x03];
-        let preintro = build_edge_routing_preintro(&routing_data).unwrap();
+        let preintro = build_edge_routing_preintro(&routing_data)
+            .expect("valid routing data should build preintro");
 
         assert_eq!(&preintro[0..4], b"ED\x00\x01");
         assert_eq!(preintro[4], 0x00);
@@ -44,7 +45,8 @@ mod tests {
 
     #[test]
     fn test_build_edge_routing_preintro_empty() {
-        let preintro = build_edge_routing_preintro(&[]).unwrap();
+        let preintro =
+            build_edge_routing_preintro(&[]).expect("valid routing data should build preintro");
 
         assert_eq!(&preintro[0..4], b"ED\x00\x01");
         assert_eq!(preintro[4], 0x00);
@@ -56,7 +58,8 @@ mod tests {
     #[test]
     fn test_build_edge_routing_preintro_large_length() {
         let routing_data = vec![0xAA; 0x010203];
-        let preintro = build_edge_routing_preintro(&routing_data).unwrap();
+        let preintro = build_edge_routing_preintro(&routing_data)
+            .expect("valid routing data should build preintro");
 
         assert_eq!(preintro[4], 0x01);
         assert_eq!(preintro[5], 0x02);

@@ -93,7 +93,8 @@ impl HashState {
 
     pub fn generate_snapshot_mac(&self, name: &str, key: &[u8]) -> Vec<u8> {
         let version_be = u64_to_be(self.version);
-        let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+        let mut mac =
+            CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
         mac.update(&self.hash);
         mac.update(&version_be);
         mac.update(name.as_bytes());
@@ -117,7 +118,8 @@ pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], versio
     }
     parts.push(u64_to_be(version).to_vec());
     parts.push(name.as_bytes().to_vec());
-    let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+    let mut mac =
+        CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
     for p in parts.iter() {
         mac.update(p);
     }
@@ -133,7 +135,8 @@ pub fn generate_content_mac(
     let op_byte = [operation as u8 + 1];
     let key_data_length = u64_to_be((key_id.len() + 1) as u64);
     let mac_full = {
-        let mut mac = CryptographicMac::new("HmacSha512", key).unwrap();
+        let mut mac =
+            CryptographicMac::new("HmacSha512", key).expect("HmacSha512 is a valid algorithm");
         mac.update(&op_byte);
         mac.update(key_id);
         mac.update(data);
@@ -153,7 +156,8 @@ pub fn validate_index_mac(
     key: &[u8; 32],
 ) -> Result<(), AppStateError> {
     let computed = {
-        let mut mac = CryptographicMac::new("HmacSha256", key).unwrap();
+        let mut mac =
+            CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
         mac.update(index_json_bytes);
         mac.finalize()
     };

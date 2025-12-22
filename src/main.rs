@@ -32,7 +32,7 @@ fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
         let backend = match SqliteStore::new("whatsapp.db").await {
@@ -214,7 +214,9 @@ fn main() {
             }
         };
 
-        bot_handle.await.unwrap();
+        bot_handle
+            .await
+            .expect("Bot task should complete without panicking");
     });
 }
 

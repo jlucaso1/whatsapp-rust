@@ -881,7 +881,9 @@ impl Client {
             // This is the new logic block for handling all broadcast messages, including status.
             let participant = attrs.jid("participant");
             let is_from_me = participant.is_same_user_as(&own_jid)
-                || (own_lid.is_some() && participant.is_same_user_as(own_lid.as_ref().unwrap()));
+                || own_lid
+                    .as_ref()
+                    .is_some_and(|lid| participant.is_same_user_as(lid));
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -910,7 +912,9 @@ impl Client {
             };
 
             let is_from_me = sender.is_same_user_as(&own_jid)
-                || (own_lid.is_some() && sender.is_same_user_as(own_lid.as_ref().unwrap()));
+                || own_lid
+                    .as_ref()
+                    .is_some_and(|lid| sender.is_same_user_as(lid));
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -921,7 +925,9 @@ impl Client {
                 ..Default::default()
             }
         } else if from.is_same_user_as(&own_jid)
-            || (own_lid.is_some() && from.is_same_user_as(own_lid.as_ref().unwrap()))
+            || own_lid
+                .as_ref()
+                .is_some_and(|lid| from.is_same_user_as(lid))
         {
             // DM from self (either via PN or LID)
             // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
@@ -974,7 +980,8 @@ impl Client {
                 .optional_string("notify")
                 .map(|s| s.to_string())
                 .unwrap_or_default(),
-            timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0).unwrap(),
+            timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0)
+                .unwrap_or_else(chrono::Utc::now),
             ..Default::default()
         })
     }
@@ -1046,13 +1053,29 @@ impl Client {
             Ok(msg) => msg,
             Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
                 Ok(go_msg) => {
-                    match SignalPublicKey::from_djb_public_key_bytes(&go_msg.signing_key.unwrap()) {
+                    let (Some(signing_key), Some(id), Some(iteration), Some(chain_key)) = (
+                        go_msg.signing_key.as_ref(),
+                        go_msg.id,
+                        go_msg.iteration,
+                        go_msg.chain_key.as_ref(),
+                    ) else {
+                        log::warn!(
+                            "Go SKDM from {} missing required fields (signing_key={}, id={}, iteration={}, chain_key={})",
+                            sender_jid,
+                            go_msg.signing_key.is_some(),
+                            go_msg.id.is_some(),
+                            go_msg.iteration.is_some(),
+                            go_msg.chain_key.is_some()
+                        );
+                        return;
+                    };
+                    match SignalPublicKey::from_djb_public_key_bytes(signing_key) {
                         Ok(pub_key) => {
                             match SenderKeyDistributionMessage::new(
                                 SENDERKEY_MESSAGE_CURRENT_VERSION,
-                                go_msg.id.unwrap(),
-                                go_msg.iteration.unwrap(),
-                                go_msg.chain_key.unwrap(),
+                                id,
+                                iteration,
+                                chain_key.clone(),
                                 pub_key,
                             ) {
                                 Ok(skdm) => skdm,
@@ -1158,7 +1181,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
@@ -1180,8 +1207,12 @@ mod tests {
             .expect("parse_message_info should not fail");
 
         // 4. Assert the correct behavior
-        let expected_sender: Jid = participant_jid_str.parse().unwrap();
-        let expected_chat: Jid = status_broadcast_jid_str.parse().unwrap();
+        let expected_sender: Jid = participant_jid_str
+            .parse()
+            .expect("test JID should be valid");
+        let expected_chat: Jid = status_broadcast_jid_str
+            .parse()
+            .expect("test JID should be valid");
 
         assert_eq!(
             info.source.sender, expected_sender,
@@ -1207,10 +1238,16 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let sender_jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         let info = MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_jid.clone(),
@@ -1235,7 +1272,7 @@ mod tests {
             sender_identity_pair.identity_key(),
             receiver_identity_pair.identity_key(),
         )
-        .unwrap();
+        .expect("SignalMessage::new should succeed with valid inputs");
 
         let enc_node = NodeBuilder::new("enc")
             .attr("type", "msg")
@@ -1271,11 +1308,19 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // 2. Create a message node with both msg and skmsg
         // The msg will fail to decrypt (no session), so skmsg should be skipped
@@ -1293,7 +1338,7 @@ mod tests {
             sender_identity_pair.identity_key(),
             receiver_identity_pair.identity_key(),
         )
-        .unwrap();
+        .expect("SignalMessage::new should succeed with valid inputs");
 
         let msg_node = NodeBuilder::new("enc")
             .attr("type", "msg")
@@ -1363,12 +1408,20 @@ mod tests {
                 .await
                 .expect("Failed to open whatsapp.db - ensure you have an authenticated session"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         // Simulate a group message from a LID user we haven't chatted with 1-on-1
-        let lid_sender: Jid = "236395184570386.1:75@lid".parse().unwrap();
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let lid_sender: Jid = "236395184570386.1:75@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // In reality, this would contain actual encrypted pkmsg and skmsg bytes
         // For now, we're just documenting the structure
@@ -1438,15 +1491,25 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (_client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
         // Simulate own LID: 236395184570386.1:75@lid (note: using device 75 to match real scenario)
         // Phone number: 559984726662:75@s.whatsapp.net
-        let own_lid: Jid = "236395184570386.1:75@lid".parse().unwrap();
-        let own_phone: Jid = "559984726662:75@s.whatsapp.net".parse().unwrap();
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let own_lid: Jid = "236395184570386.1:75@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let own_phone: Jid = "559984726662:75@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // Step 1: Create a real sender key distribution message using LID address
         // This mimics what happens in handle_sender_key_distribution_message
@@ -1498,7 +1561,9 @@ mod tests {
             phone_protocol_address
         );
         assert!(
-            phone_lookup_result.unwrap().is_none(),
+            phone_lookup_result
+                .expect("lookup should not error")
+                .is_none(),
             "Sender key should NOT be found when looking up with phone number address (this demonstrates the bug)"
         );
 
@@ -1510,7 +1575,9 @@ mod tests {
 
         println!("✅ Step 3: Lookup with LID address succeeded (this is the fix)");
         assert!(
-            lid_lookup_result.unwrap().is_some(),
+            lid_lookup_result
+                .expect("lookup should not error")
+                .is_some(),
             "Sender key SHOULD be found when looking up with LID address (same as storage)"
         );
 
@@ -1544,12 +1611,18 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let transport_factory = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let (_client, _sync_rx) =
             Client::new(pm.clone(), transport_factory, mock_http_client(), None).await;
 
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // Simulate three LID participants
         let participants = vec![
@@ -1562,7 +1635,7 @@ mod tests {
 
         // Create and store sender keys for each participant under their LID address
         for (lid_str, _phone_str) in &participants {
-            let lid_jid: Jid = lid_str.parse().unwrap();
+            let lid_jid: Jid = lid_str.parse().expect("test JID should be valid");
             let lid_protocol_address = lid_jid.to_protocol_address();
             let lid_sender_key_name =
                 SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
@@ -1590,8 +1663,8 @@ mod tests {
 
         // Verify each participant's sender key can be retrieved using their LID address
         for (lid_str, phone_str) in &participants {
-            let lid_jid: Jid = lid_str.parse().unwrap();
-            let phone_jid: Jid = phone_str.parse().unwrap();
+            let lid_jid: Jid = lid_str.parse().expect("test JID should be valid");
+            let phone_jid: Jid = phone_str.parse().expect("test JID should be valid");
 
             let lid_protocol_address = lid_jid.to_protocol_address();
             let phone_protocol_address = phone_jid.to_protocol_address();
@@ -1607,7 +1680,7 @@ mod tests {
                 device_guard.load_sender_key(&lid_sender_key_name).await
             };
             assert!(
-                lid_lookup.unwrap().is_some(),
+                lid_lookup.expect("lookup should not error").is_some(),
                 "Sender key for {} should be found with LID address",
                 lid_str
             );
@@ -1618,7 +1691,7 @@ mod tests {
                 device_guard.load_sender_key(&phone_sender_key_name).await
             };
             assert!(
-                phone_lookup.unwrap().is_none(),
+                phone_lookup.expect("lookup should not error").is_none(),
                 "Sender key for {} should NOT be found with phone number address",
                 lid_str
             );
@@ -1641,25 +1714,33 @@ mod tests {
         use wacore_binary::jid::Jid;
 
         // Single dot in user portion
-        let lid1: Jid = "236395184570386.1:75@lid".parse().unwrap();
+        let lid1: Jid = "236395184570386.1:75@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert_eq!(lid1.user, "236395184570386.1");
         assert_eq!(lid1.device, 75);
         assert_eq!(lid1.agent, 0);
 
         // Multiple dots in user portion (extreme edge case)
-        let lid2: Jid = "123.456.789.0:50@lid".parse().unwrap();
+        let lid2: Jid = "123.456.789.0:50@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert_eq!(lid2.user, "123.456.789.0");
         assert_eq!(lid2.device, 50);
         assert_eq!(lid2.agent, 0);
 
         // No device number (device 0)
-        let lid3: Jid = "987654321000000.5@lid".parse().unwrap();
+        let lid3: Jid = "987654321000000.5@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert_eq!(lid3.user, "987654321000000.5");
         assert_eq!(lid3.device, 0);
         assert_eq!(lid3.agent, 0);
 
         // Very long user portion with dot
-        let lid4: Jid = "111222333444555666777.999:1@lid".parse().unwrap();
+        let lid4: Jid = "111222333444555666777.999:1@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert_eq!(lid4.user, "111222333444555666777.999");
         assert_eq!(lid4.device, 1);
         assert_eq!(lid4.agent, 0);
@@ -1700,7 +1781,7 @@ mod tests {
         ];
 
         for (jid_str, expected_name, expected_device_id, expected_to_string) in test_cases {
-            let lid_jid: Jid = jid_str.parse().unwrap();
+            let lid_jid: Jid = jid_str.parse().expect("test JID should be valid");
             let protocol_addr = lid_jid.to_protocol_address();
 
             assert_eq!(
@@ -1741,14 +1822,26 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
 
         // Set up own phone number and LID
         {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
-            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
-            device.lid = Some("236395184570386.1@lid".parse().unwrap());
+            device.pn = Some(
+                "559984726662@s.whatsapp.net"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
+            device.lid = Some(
+                "236395184570386.1@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
         }
 
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
@@ -1763,11 +1856,19 @@ mod tests {
             .attr("t", "12345")
             .build();
 
-        let info1 = client.parse_message_info(&lid_group_node).await.unwrap();
+        let info1 = client
+            .parse_message_info(&lid_group_node)
+            .await
+            .expect("parse_message_info should succeed");
         assert_eq!(info1.source.sender.user, "987654321000000.2");
         assert!(info1.source.sender_alt.is_some());
         assert_eq!(
-            info1.source.sender_alt.as_ref().unwrap().user,
+            info1
+                .source
+                .sender_alt
+                .as_ref()
+                .expect("sender_alt should be present")
+                .user,
             "551234567890"
         );
 
@@ -1781,7 +1882,10 @@ mod tests {
             .attr("t", "12346")
             .build();
 
-        let info2 = client.parse_message_info(&self_lid_node).await.unwrap();
+        let info2 = client
+            .parse_message_info(&self_lid_node)
+            .await
+            .expect("parse_message_info should succeed");
         assert!(
             info2.source.is_from_me,
             "Should detect self-sent LID message"
@@ -1789,7 +1893,12 @@ mod tests {
         assert_eq!(info2.source.sender.user, "236395184570386.1");
         assert!(info2.source.sender_alt.is_some());
         assert_eq!(
-            info2.source.sender_alt.as_ref().unwrap().user,
+            info2
+                .source
+                .sender_alt
+                .as_ref()
+                .expect("sender_alt should be present")
+                .user,
             "559984726662"
         );
 
@@ -1811,17 +1920,25 @@ mod tests {
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
             "236395184570386.1".to_string(),
-            "559984726662@s.whatsapp.net".parse().unwrap(),
+            "559984726662@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"),
         );
         lid_to_pn_map.insert(
             "987654321000000.2".to_string(),
-            "551234567890@s.whatsapp.net".parse().unwrap(),
+            "551234567890@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"),
         );
 
         let mut group_info = GroupInfo::new(
             vec![
-                "236395184570386.1:75@lid".parse().unwrap(),
-                "987654321000000.2:42@lid".parse().unwrap(),
+                "236395184570386.1:75@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
+                "987654321000000.2:42@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
             ],
             AddressingMode::Lid,
         );
@@ -1872,13 +1989,19 @@ mod tests {
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
             "236395184570386.1".to_string(),
-            "559984726662@s.whatsapp.net".parse().unwrap(),
+            "559984726662@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"),
         );
 
         let mut group_info = GroupInfo::new(
             vec![
-                "236395184570386.1:75@lid".parse().unwrap(), // LID participant
-                "551234567890:42@s.whatsapp.net".parse().unwrap(), // Phone number participant
+                "236395184570386.1:75@lid"
+                    .parse()
+                    .expect("test JID should be valid"), // LID participant
+                "551234567890:42@s.whatsapp.net"
+                    .parse()
+                    .expect("test JID should be valid"), // Phone number participant
             ],
             AddressingMode::Lid,
         );
@@ -1916,8 +2039,12 @@ mod tests {
         use std::collections::HashMap;
         use wacore_binary::jid::Jid;
 
-        let own_lid: Jid = "236395184570386.1@lid".parse().unwrap();
-        let own_phone: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let own_lid: Jid = "236395184570386.1@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let own_phone: Jid = "559984726662@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert("236395184570386.1".to_string(), own_phone.clone());
@@ -1954,13 +2081,23 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (_client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
-        let display_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
-        let encryption_jid: Jid = "559984726662:75@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
+        let display_jid: Jid = "236395184570386.1:75@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let encryption_jid: Jid = "559984726662:75@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         // Store sender key using display JID (LID)
         let display_protocol_address = display_jid.to_protocol_address();
@@ -1985,7 +2122,9 @@ mod tests {
             device_guard.load_sender_key(&display_sender_key_name).await
         };
         assert!(
-            lookup_with_display.unwrap().is_some(),
+            lookup_with_display
+                .expect("lookup should not error")
+                .is_some(),
             "Sender key should be found with display JID (LID)"
         );
 
@@ -2003,7 +2142,9 @@ mod tests {
                 .await
         };
         assert!(
-            lookup_with_encryption.unwrap().is_none(),
+            lookup_with_encryption
+                .expect("lookup should not error")
+                .is_none(),
             "Sender key should NOT be found with encryption JID (phone number)"
         );
 
@@ -2033,12 +2174,20 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "236395184570386.1:75@lid".parse().unwrap();
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "236395184570386.1:75@lid"
+            .parse()
+            .expect("test JID should be valid");
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
 
         // Step 1: Create and store a sender key (simulating first message processing)
         let sender_protocol_address = sender_jid.to_protocol_address();
@@ -2137,11 +2286,17 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "559981212574@s.whatsapp.net".parse().unwrap();
+        let sender_jid: Jid = "559981212574@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         let info = MessageInfo {
             source: crate::types::message::MessageSource {
@@ -2203,11 +2358,17 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "559981212574@s.whatsapp.net".parse().unwrap();
+        let sender_jid: Jid = "559981212574@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         let info = MessageInfo {
             source: crate::types::message::MessageSource {
@@ -2271,13 +2432,21 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
         // Simulate a group chat scenario
-        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
-        let sender_phone: Jid = "559981212574@s.whatsapp.net".parse().unwrap();
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
+        let sender_phone: Jid = "559981212574@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
 
         let info = MessageInfo {
             source: crate::types::message::MessageSource {
@@ -2336,14 +2505,26 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
 
         // Set up own phone number and LID
         {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
-            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
-            device.lid = Some("236395184570386@lid".parse().unwrap());
+            device.pn = Some(
+                "559984726662@s.whatsapp.net"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
+            device.lid = Some(
+                "236395184570386@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
         }
 
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
@@ -2361,7 +2542,10 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        let info = client.parse_message_info(&self_dm_node).await.unwrap();
+        let info = client
+            .parse_message_info(&self_dm_node)
+            .await
+            .expect("parse_message_info should succeed");
 
         // Assertions:
         // 1. is_from_me should be true (LID matches own_lid)
@@ -2415,14 +2599,26 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
 
         // Set up own phone number and LID
         {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
-            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
-            device.lid = Some("236395184570386@lid".parse().unwrap());
+            device.pn = Some(
+                "559984726662@s.whatsapp.net"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
+            device.lid = Some(
+                "236395184570386@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
         }
 
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
@@ -2438,7 +2634,10 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        let info = client.parse_message_info(&other_dm_node).await.unwrap();
+        let info = client
+            .parse_message_info(&other_dm_node)
+            .await
+            .expect("parse_message_info should succeed");
 
         // Assertions:
         // 1. is_from_me should be false
@@ -2453,7 +2652,11 @@ mod tests {
             "sender_alt should be set from sender_pn attribute"
         );
         assert_eq!(
-            info.source.sender_alt.as_ref().unwrap().user,
+            info.source
+                .sender_alt
+                .as_ref()
+                .expect("sender_alt should be present")
+                .user,
             "559985213786",
             "sender_alt should contain sender's phone number"
         );
@@ -2494,14 +2697,26 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
 
         // Set up own phone number and LID
         {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
-            device.pn = Some("559984726662@s.whatsapp.net".parse().unwrap());
-            device.lid = Some("236395184570386@lid".parse().unwrap());
+            device.pn = Some(
+                "559984726662@s.whatsapp.net"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
+            device.lid = Some(
+                "236395184570386@lid"
+                    .parse()
+                    .expect("test JID should be valid"),
+            );
         }
 
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
@@ -2518,7 +2733,10 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        let info = client.parse_message_info(&self_chat_node).await.unwrap();
+        let info = client
+            .parse_message_info(&self_chat_node)
+            .await
+            .expect("parse_message_info should succeed");
 
         // Assertions:
         // 1. is_from_me should be true
@@ -2570,7 +2788,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let phone = "559980000001";
@@ -2611,7 +2833,7 @@ mod tests {
             "Cache should be populated after receiving message with sender_lid"
         );
         assert_eq!(
-            cached_lid.unwrap(),
+            cached_lid.expect("cache should have LID"),
             lid,
             "Cached LID should match the sender_lid from the message"
         );
@@ -2635,7 +2857,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let phone = "559980000001";
@@ -2685,7 +2911,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let lid = "100000012345678";
@@ -2721,7 +2951,7 @@ mod tests {
             "Cache should be populated for LID senders with participant_pn"
         );
         assert_eq!(
-            cached_lid.unwrap(),
+            cached_lid.expect("cache should have LID"),
             lid,
             "Cached LID should match the sender's LID"
         );
@@ -2730,7 +2960,7 @@ mod tests {
         let cached_pn = client.lid_pn_cache.get_phone_number(lid).await;
         assert!(cached_pn.is_some(), "Reverse lookup (LID->PN) should work");
         assert_eq!(
-            cached_pn.unwrap(),
+            cached_pn.expect("reverse lookup should return phone"),
             phone,
             "Cached phone number should match"
         );
@@ -2751,7 +2981,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let phone = "559980000001";
@@ -2782,7 +3016,7 @@ mod tests {
         let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
         assert!(cached_lid.is_some(), "Cache should contain the mapping");
         assert_eq!(
-            cached_lid.unwrap(),
+            cached_lid.expect("cache should have LID"),
             lid,
             "Cached LID should be correct after multiple messages"
         );
@@ -2821,7 +3055,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let lid = "100000012345678";
@@ -2855,14 +3093,28 @@ mod tests {
         let info = client
             .parse_message_info(&dm_node_with_sender_lid)
             .await
-            .unwrap();
+            .expect("parse_message_info should succeed");
 
         // Verify sender is PN but sender_alt is LID
         assert_eq!(info.source.sender.user, phone);
         assert_eq!(info.source.sender.server, "s.whatsapp.net");
         assert!(info.source.sender_alt.is_some());
-        assert_eq!(info.source.sender_alt.as_ref().unwrap().user, lid);
-        assert_eq!(info.source.sender_alt.as_ref().unwrap().server, "lid");
+        assert_eq!(
+            info.source
+                .sender_alt
+                .as_ref()
+                .expect("sender_alt should be present")
+                .user,
+            lid
+        );
+        assert_eq!(
+            info.source
+                .sender_alt
+                .as_ref()
+                .expect("sender_alt should be present")
+                .server,
+            "lid"
+        );
 
         // Now simulate what handle_encrypted_message does: determine encryption JID
         // We can't easily call handle_encrypted_message, so we'll test the logic directly
@@ -2941,7 +3193,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let lid = "100000012345678";
@@ -2967,7 +3223,7 @@ mod tests {
         let info = client
             .parse_message_info(&dm_node_without_sender_lid)
             .await
-            .unwrap();
+            .expect("parse_message_info should succeed");
 
         // Verify sender is PN and NO sender_alt (since there's no sender_lid attribute)
         assert_eq!(info.source.sender.user, phone);
@@ -3049,7 +3305,11 @@ mod tests {
                 .await
                 .expect("Failed to create test backend"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         let phone = "559980000001";
@@ -3064,7 +3324,10 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        let info = client.parse_message_info(&dm_node).await.unwrap();
+        let info = client
+            .parse_message_info(&dm_node)
+            .await
+            .expect("parse_message_info should succeed");
 
         // Verify no cached LID
         let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;

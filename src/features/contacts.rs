@@ -477,8 +477,10 @@ mod tests {
 
     #[test]
     fn test_contact_info_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let lid: Jid = "12345678@lid".parse().unwrap();
+        let jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let lid: Jid = "12345678@lid".parse().expect("test JID should be valid");
 
         let info = ContactInfo {
             jid: jid.clone(),
@@ -511,7 +513,9 @@ mod tests {
 
     #[test]
     fn test_is_on_whatsapp_result_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         let result = IsOnWhatsAppResult {
             jid,
             is_registered: true,

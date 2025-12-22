@@ -54,13 +54,17 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
         }
     }
 
-    let (user_part, server) = match at_pos {
-        Some(pos) => (&s[..pos], &s[pos + 1..]),
+    // Extract at_pos as concrete value - after this point we know @ exists
+    let at = match at_pos {
+        Some(pos) => pos,
         None => {
             // Server-only JID - let the fallback validate it
             return None;
         }
     };
+
+    let user_part = &s[..at];
+    let server = &s[at + 1..];
 
     // Validate that user_part is not empty
     if user_part.is_empty() {
@@ -70,8 +74,8 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
     // Fast path for LID JIDs - dots in user are not agent separators
     if server == HIDDEN_USER_SERVER {
         let (user, device) = match colon_pos {
-            Some(pos) if pos < at_pos.unwrap() => {
-                let device_slice = &s[pos + 1..at_pos.unwrap()];
+            Some(pos) if pos < at => {
+                let device_slice = &s[pos + 1..at];
                 (&s[..pos], device_slice.parse::<u16>().unwrap_or(0))
             }
             _ => (user_part, 0),
@@ -91,7 +95,7 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
         if let Some(pos) = colon_pos {
             let user_end = pos;
             let device_start = pos + 1;
-            let device_slice = &s[device_start..at_pos.unwrap()];
+            let device_slice = &s[device_start..at];
             let device = device_slice.parse::<u16>().unwrap_or(0);
             return Some(ParsedJidParts {
                 user: &s[..user_end],
@@ -104,7 +108,7 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
         // Check for legacy dot format (legacy: user.device@server)
         if let Some(dot_pos) = last_dot_pos {
             // dot_pos is absolute position in s
-            let suffix = &s[dot_pos + 1..at_pos.unwrap()];
+            let suffix = &s[dot_pos + 1..at];
             if let Ok(device_val) = suffix.parse::<u16>() {
                 return Some(ParsedJidParts {
                     user: &s[..dot_pos],
@@ -131,8 +135,7 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
             // Colon is at `pos` in the original string
             let user_end = pos;
             let device_start = pos + 1;
-            let device_end = at_pos.unwrap();
-            let device_slice = &s[device_start..device_end];
+            let device_slice = &s[device_start..at];
             (&s[..user_end], device_slice.parse::<u16>().unwrap_or(0))
         }
         None => (user_part, 0),
@@ -702,7 +705,7 @@ mod tests {
     #[test]
     fn test_special_from_str_parsing() {
         // Test parsing of JIDs with an agent, which should be stored in the struct
-        let jid = Jid::from_str("1234567890.2:15@hosted").unwrap();
+        let jid = Jid::from_str("1234567890.2:15@hosted").expect("test hosted JID should be valid");
         assert_eq!(jid.user, "1234567890");
         assert_eq!(jid.server, "hosted");
         assert_eq!(jid.device, 15);
@@ -812,28 +815,36 @@ mod tests {
 
         // Case 1: Device ID 99 on regular server (Cloud API business account)
         // This is the most common case - a business using Meta's Cloud API
-        let cloud_api_device: Jid = "5511999887766:99@s.whatsapp.net".parse().unwrap();
+        let cloud_api_device: Jid = "5511999887766:99@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             cloud_api_device.is_hosted(),
             "Device ID 99 on s.whatsapp.net should be detected as hosted (Cloud API)"
         );
 
         // Case 2: Device ID 99 on LID server
-        let cloud_api_lid: Jid = "100000012345678:99@lid".parse().unwrap();
+        let cloud_api_lid: Jid = "100000012345678:99@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             cloud_api_lid.is_hosted(),
             "Device ID 99 on lid server should be detected as hosted"
         );
 
         // Case 3: Explicit @hosted server (phone-based hosted JID)
-        let hosted_server: Jid = "5511999887766:99@hosted".parse().unwrap();
+        let hosted_server: Jid = "5511999887766:99@hosted"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             hosted_server.is_hosted(),
             "JID with @hosted server should be detected as hosted"
         );
 
         // Case 4: Explicit @hosted.lid server (LID-based hosted JID)
-        let hosted_lid_server: Jid = "100000012345678:99@hosted.lid".parse().unwrap();
+        let hosted_lid_server: Jid = "100000012345678:99@hosted.lid"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             hosted_lid_server.is_hosted(),
             "JID with @hosted.lid server should be detected as hosted"
@@ -841,7 +852,9 @@ mod tests {
 
         // Case 5: @hosted server with different device ID (edge case)
         // Even with device ID != 99, if server is @hosted, it's a hosted device
-        let hosted_server_other_device: Jid = "5511999887766:0@hosted".parse().unwrap();
+        let hosted_server_other_device: Jid = "5511999887766:0@hosted"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             hosted_server_other_device.is_hosted(),
             "JID with @hosted server should be hosted regardless of device ID"
@@ -850,49 +863,63 @@ mod tests {
         // === NON-HOSTED DEVICES (should return false) ===
 
         // Case 6: Regular phone device (primary phone, device 0)
-        let regular_phone: Jid = "5511999887766:0@s.whatsapp.net".parse().unwrap();
+        let regular_phone: Jid = "5511999887766:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !regular_phone.is_hosted(),
             "Regular phone device (ID 0) should NOT be hosted"
         );
 
         // Case 7: Companion device (WhatsApp Web, device 33+)
-        let companion_device: Jid = "5511999887766:33@s.whatsapp.net".parse().unwrap();
+        let companion_device: Jid = "5511999887766:33@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !companion_device.is_hosted(),
             "Companion device (ID 33) should NOT be hosted"
         );
 
         // Case 8: Regular LID device
-        let regular_lid: Jid = "100000012345678:0@lid".parse().unwrap();
+        let regular_lid: Jid = "100000012345678:0@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !regular_lid.is_hosted(),
             "Regular LID device should NOT be hosted"
         );
 
         // Case 9: LID companion device
-        let lid_companion: Jid = "100000012345678:33@lid".parse().unwrap();
+        let lid_companion: Jid = "100000012345678:33@lid"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !lid_companion.is_hosted(),
             "LID companion device (ID 33) should NOT be hosted"
         );
 
         // Case 10: Group JID (not a device at all)
-        let group_jid: Jid = "120363012345678@g.us".parse().unwrap();
+        let group_jid: Jid = "120363012345678@g.us"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !group_jid.is_hosted(),
             "Group JID should NOT be detected as hosted"
         );
 
         // Case 11: User JID without device
-        let user_jid: Jid = "5511999887766@s.whatsapp.net".parse().unwrap();
+        let user_jid: Jid = "5511999887766@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !user_jid.is_hosted(),
             "User JID without device should NOT be hosted"
         );
 
         // Case 12: Bot device
-        let bot_jid: Jid = "13136555001:0@s.whatsapp.net".parse().unwrap();
+        let bot_jid: Jid = "13136555001:0@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
         assert!(
             !bot_jid.is_hosted(),
             "Bot JID should NOT be detected as hosted (different mechanism)"
@@ -914,15 +941,31 @@ mod tests {
         // Simulate a group with mixed device types
         let devices: Vec<Jid> = vec![
             // Regular devices that SHOULD receive SKDM
-            "5511999887766:0@s.whatsapp.net".parse().unwrap(), // Phone
-            "5511999887766:33@s.whatsapp.net".parse().unwrap(), // WhatsApp Web
-            "5521988776655:0@s.whatsapp.net".parse().unwrap(), // Another user's phone
-            "100000012345678:0@lid".parse().unwrap(),          // LID device
-            "100000012345678:33@lid".parse().unwrap(),         // LID companion
+            "5511999887766:0@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Phone
+            "5511999887766:33@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // WhatsApp Web
+            "5521988776655:0@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Another user's phone
+            "100000012345678:0@lid"
+                .parse()
+                .expect("test JID should be valid"), // LID device
+            "100000012345678:33@lid"
+                .parse()
+                .expect("test JID should be valid"), // LID companion
             // HOSTED devices that should be EXCLUDED from group SKDM
-            "5531977665544:99@s.whatsapp.net".parse().unwrap(), // Cloud API business
-            "100000087654321:99@lid".parse().unwrap(),          // Cloud API on LID
-            "5541966554433:99@hosted".parse().unwrap(),         // Explicit hosted
+            "5531977665544:99@s.whatsapp.net"
+                .parse()
+                .expect("test JID should be valid"), // Cloud API business
+            "100000087654321:99@lid"
+                .parse()
+                .expect("test JID should be valid"), // Cloud API on LID
+            "5541966554433:99@hosted"
+                .parse()
+                .expect("test JID should be valid"), // Explicit hosted
         ];
 
         // Filter out hosted devices (this is what prepare_group_stanza does)

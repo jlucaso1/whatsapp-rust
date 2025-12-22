@@ -71,33 +71,34 @@ mod tests {
 
     #[test]
     fn test_signal_address_string_lid_no_device() {
-        let jid = Jid::from_str("123456789@lid").unwrap();
+        let jid = Jid::from_str("123456789@lid").expect("test JID should be valid");
         assert_eq!(jid.to_signal_address_string(), "123456789@lid");
     }
 
     #[test]
     fn test_signal_address_string_lid_with_device() {
-        let jid = Jid::from_str("123456789:33@lid").unwrap();
+        let jid = Jid::from_str("123456789:33@lid").expect("test JID should be valid");
         assert_eq!(jid.to_signal_address_string(), "123456789:33@lid");
     }
 
     #[test]
     fn test_signal_address_string_lid_with_dot_in_user() {
         // LID user IDs can contain dots that are part of the identity
-        let jid = Jid::from_str("236395184570386.1:75@lid").unwrap();
+        let jid = Jid::from_str("236395184570386.1:75@lid").expect("test JID should be valid");
         assert_eq!(jid.to_signal_address_string(), "236395184570386.1:75@lid");
     }
 
     #[test]
     fn test_signal_address_string_phone_number() {
         // s.whatsapp.net should be converted to c.us
-        let jid = Jid::from_str("5511999887766@s.whatsapp.net").unwrap();
+        let jid = Jid::from_str("5511999887766@s.whatsapp.net").expect("test JID should be valid");
         assert_eq!(jid.to_signal_address_string(), "5511999887766@c.us");
     }
 
     #[test]
     fn test_signal_address_string_phone_with_device() {
-        let jid = Jid::from_str("5511999887766:33@s.whatsapp.net").unwrap();
+        let jid =
+            Jid::from_str("5511999887766:33@s.whatsapp.net").expect("test JID should be valid");
         assert_eq!(jid.to_signal_address_string(), "5511999887766:33@c.us");
     }
 
@@ -105,7 +106,7 @@ mod tests {
     fn test_protocol_address_format() {
         // ProtocolAddress.to_string() should produce: {name}.{device_id}
         // Which matches WhatsApp Web's createSignalLikeAddress format
-        let jid = Jid::from_str("123456789:33@lid").unwrap();
+        let jid = Jid::from_str("123456789:33@lid").expect("test JID should be valid");
         let addr = jid.to_protocol_address();
 
         assert_eq!(addr.name(), "123456789:33@lid");
@@ -115,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_protocol_address_lid_with_dot() {
-        let jid = Jid::from_str("236395184570386.1:75@lid").unwrap();
+        let jid = Jid::from_str("236395184570386.1:75@lid").expect("test JID should be valid");
         let addr = jid.to_protocol_address();
 
         assert_eq!(addr.name(), "236395184570386.1:75@lid");
@@ -125,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_protocol_address_phone_number() {
-        let jid = Jid::from_str("5511999887766@s.whatsapp.net").unwrap();
+        let jid = Jid::from_str("5511999887766@s.whatsapp.net").expect("test JID should be valid");
         let addr = jid.to_protocol_address();
 
         assert_eq!(addr.name(), "5511999887766@c.us");

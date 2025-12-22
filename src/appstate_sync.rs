@@ -561,7 +561,8 @@ mod tests {
         let iv = vec![0u8; 16];
 
         let mut ciphertext = Vec::new();
-        aes_256_cbc_encrypt_into(plaintext, &keys.value_encryption, &iv, &mut ciphertext).unwrap();
+        aes_256_cbc_encrypt_into(plaintext, &keys.value_encryption, &iv, &mut ciphertext)
+            .expect("AES-CBC encryption should succeed with valid inputs");
         let mut value_with_iv = iv;
         value_with_iv.extend_from_slice(&ciphertext);
         let value_mac = generate_content_mac(op, &value_with_iv, key_id_bytes, &keys.value_mac);
@@ -601,7 +602,7 @@ mod tests {
         backend
             .set_app_state_sync_key(&key_id_bytes, sync_key)
             .await
-            .unwrap();
+            .expect("test backend should accept sync key");
 
         let original_plaintext = wa::SyncActionData {
             value: Some(wa::SyncActionValue {
@@ -629,15 +630,15 @@ mod tests {
         backend
             .set_app_state_version(collection_name.as_str(), initial_state.clone())
             .await
-            .unwrap();
+            .expect("test backend should accept app state version");
 
         let original_value_blob = original_mutation
             .record
-            .unwrap()
+            .expect("mutation should have record")
             .value
-            .unwrap()
+            .expect("record should have value")
             .blob
-            .unwrap();
+            .expect("value should have blob");
         let original_value_mac = original_value_blob[original_value_blob.len() - 32..].to_vec();
         backend
             .put_app_state_mutation_macs(
@@ -649,7 +650,7 @@ mod tests {
                 }],
             )
             .await
-            .unwrap();
+            .expect("test backend should accept mutation MACs");
 
         let new_plaintext = wa::SyncActionData {
             value: Some(wa::SyncActionValue {
@@ -689,16 +690,16 @@ mod tests {
             "Processing the patch should succeed, but it failed: {:?}",
             result.err()
         );
-        let (_, final_state, _) = result.unwrap();
+        let (_, final_state, _) = result.expect("process_patch_list should succeed");
 
         let mut expected_state = initial_state.clone();
         let new_value_blob = overwrite_mutation
             .record
-            .unwrap()
+            .expect("mutation should have record")
             .value
-            .unwrap()
+            .expect("record should have value")
             .blob
-            .unwrap();
+            .expect("value should have blob");
         let new_value_mac = new_value_blob[new_value_blob.len() - 32..].to_vec();
 
         WAPATCH_INTEGRITY.subtract_then_add_in_place(

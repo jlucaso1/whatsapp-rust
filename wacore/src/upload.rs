@@ -65,11 +65,11 @@ mod tests {
     #[test]
     fn roundtrip_decrypt_stream() {
         let msg = b"Roundtrip encryption test payload.";
-        let enc = encrypt_media(msg, MediaType::Image).unwrap();
+        let enc = encrypt_media(msg, MediaType::Image).expect("media operation should succeed");
         use std::io::Cursor;
         let cursor = Cursor::new(enc.data_to_upload.clone());
-        let plain =
-            DownloadUtils::decrypt_stream(cursor, &enc.media_key, MediaType::Image).unwrap();
+        let plain = DownloadUtils::decrypt_stream(cursor, &enc.media_key, MediaType::Image)
+            .expect("media operation should succeed");
         assert_eq!(plain, msg);
     }
 }

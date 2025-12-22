@@ -81,7 +81,7 @@ impl LazyConversation {
             .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default())
             .id
             .as_ref()
-            .map(|_| self.parsed.get().unwrap())
+            .map(|_| self.parsed.get().expect("OnceLock should be initialized"))
     }
 
     /// Get the parsed conversation, parsing on first access.
@@ -153,17 +153,29 @@ impl CoreEventBus {
     }
 
     pub fn add_handler(&self, handler: Arc<dyn EventHandler>) {
-        self.handlers.write().unwrap().push(handler);
+        self.handlers
+            .write()
+            .expect("RwLock should not be poisoned")
+            .push(handler);
     }
 
     /// Returns true if there are any event handlers registered.
     /// Useful for skipping expensive work when no one is listening.
     pub fn has_handlers(&self) -> bool {
-        !self.handlers.read().unwrap().is_empty()
+        !self
+            .handlers
+            .read()
+            .expect("RwLock should not be poisoned")
+            .is_empty()
     }
 
     pub fn dispatch(&self, event: &Event) {
-        for handler in self.handlers.read().unwrap().iter() {
+        for handler in self
+            .handlers
+            .read()
+            .expect("RwLock should not be poisoned")
+            .iter()
+        {
             handler.handle_event(event);
         }
     }

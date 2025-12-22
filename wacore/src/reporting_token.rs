@@ -633,17 +633,19 @@ mod tests {
         let sender_jid = "5511999887766@s.whatsapp.net";
         let remote_jid = "5511888776655@s.whatsapp.net";
 
-        let key = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid).unwrap();
+        let key = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid)
+            .expect("valid secret should derive key successfully");
 
         assert_eq!(key.len(), REPORTING_TOKEN_KEY_SIZE);
 
         // Verify determinism
-        let key2 = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid).unwrap();
+        let key2 = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid)
+            .expect("valid secret should derive key successfully");
         assert_eq!(key, key2);
 
         // Different inputs should produce different keys
-        let key3 =
-            derive_reporting_token_key(&secret, "different_id", sender_jid, remote_jid).unwrap();
+        let key3 = derive_reporting_token_key(&secret, "different_id", sender_jid, remote_jid)
+            .expect("valid secret should derive key successfully");
         assert_ne!(key, key3);
     }
 
@@ -673,7 +675,8 @@ mod tests {
     fn test_varint_roundtrip() {
         for value in [0u64, 1, 127, 128, 255, 256, 16383, 16384, 1000000] {
             let encoded = encode_varint(value);
-            let (decoded, _) = decode_varint(&encoded).unwrap();
+            let (decoded, _) =
+                decode_varint(&encoded).expect("encoded varint should decode successfully");
             assert_eq!(decoded, value);
         }
     }
@@ -688,12 +691,13 @@ mod tests {
         let content = generate_reporting_token_content(&message);
         assert!(content.is_some());
 
-        let content = content.unwrap();
+        let content = content.expect("text message should generate reporting token content");
         // Content should be non-empty
         assert!(!content.is_empty());
 
         // Content should be deterministic (same message = same content)
-        let content2 = generate_reporting_token_content(&message).unwrap();
+        let content2 = generate_reporting_token_content(&message)
+            .expect("text message should generate reporting token content");
         assert_eq!(content, content2);
     }
 
@@ -711,8 +715,12 @@ mod tests {
         assert!(content.is_some());
 
         // Content should be deterministic
-        let content2 = generate_reporting_token_content(&message).unwrap();
-        assert_eq!(content.unwrap(), content2);
+        let content2 = generate_reporting_token_content(&message)
+            .expect("extended text message should generate content");
+        assert_eq!(
+            content.expect("extended text message should generate content"),
+            content2
+        );
     }
 
     #[test]
@@ -756,7 +764,10 @@ mod tests {
 
         assert!(extracted.is_some());
         // The extracted content should match the original field 1 (conversation)
-        assert_eq!(extracted.unwrap(), message_bytes);
+        assert_eq!(
+            extracted.expect("conversation message should extract successfully"),
+            message_bytes
+        );
     }
 
     #[test]
@@ -778,7 +789,7 @@ mod tests {
         let content = generate_reporting_token_content(&message);
         assert!(content.is_some());
 
-        let content_bytes = content.unwrap();
+        let content_bytes = content.expect("message with contextInfo should generate content");
         // The content should NOT contain the stanza_id string
         let content_str = String::from_utf8_lossy(&content_bytes);
         assert!(!content_str.contains("should-be-excluded"));
@@ -789,15 +800,18 @@ mod tests {
         let key = [0x55u8; REPORTING_TOKEN_KEY_SIZE];
         let content = b"test content";
 
-        let token = calculate_reporting_token(&key, content).unwrap();
+        let token = calculate_reporting_token(&key, content)
+            .expect("valid key and content should calculate token");
         assert_eq!(token.len(), REPORTING_TOKEN_SIZE);
 
         // Verify determinism
-        let token2 = calculate_reporting_token(&key, content).unwrap();
+        let token2 = calculate_reporting_token(&key, content)
+            .expect("valid key and content should calculate token");
         assert_eq!(token, token2);
 
         // Different content should produce different token
-        let token3 = calculate_reporting_token(&key, b"different content").unwrap();
+        let token3 = calculate_reporting_token(&key, b"different content")
+            .expect("valid key and content should calculate token");
         assert_ne!(token, token3);
     }
 
@@ -824,10 +838,8 @@ mod tests {
             integrator: 0,
         };
 
-        let result = generate_reporting_token(&message, "test_stanza_id", &sender, &remote, None);
-        assert!(result.is_some());
-
-        let result = result.unwrap();
+        let result = generate_reporting_token(&message, "test_stanza_id", &sender, &remote, None)
+            .expect("valid message should generate reporting token");
         assert_eq!(result.message_secret.len(), MESSAGE_SECRET_SIZE);
         assert_eq!(result.reporting_token.len(), REPORTING_TOKEN_SIZE);
         assert_eq!(result.version, REPORTING_TOKEN_VERSION);
@@ -863,10 +875,8 @@ mod tests {
             &sender,
             &remote,
             Some(&existing_secret),
-        );
-        assert!(result.is_some());
-
-        let result = result.unwrap();
+        )
+        .expect("valid message with existing secret should generate token");
         assert_eq!(result.message_secret, existing_secret);
     }
 
@@ -931,8 +941,9 @@ mod tests {
         let secret = [0x42u8; MESSAGE_SECRET_SIZE];
         let prepared = prepare_message_with_context(&message, &secret);
 
-        assert!(prepared.message_context_info.is_some());
-        let ctx = prepared.message_context_info.unwrap();
+        let ctx = prepared
+            .message_context_info
+            .expect("prepared message should have context info");
         assert_eq!(ctx.message_secret, Some(secret.to_vec()));
         assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
     }
@@ -950,7 +961,10 @@ mod tests {
 
         let extracted = extract_message_secret(&message);
         assert!(extracted.is_some());
-        assert_eq!(extracted.unwrap(), secret.as_slice());
+        assert_eq!(
+            extracted.expect("message should have extractable secret"),
+            secret.as_slice()
+        );
     }
 
     #[test]
@@ -999,7 +1013,8 @@ mod tests {
         let sender_jid = "5511999887766@s.whatsapp.net";
         let remote_jid = "5511888776655@s.whatsapp.net";
 
-        let key = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid).unwrap();
+        let key = derive_reporting_token_key(&secret, stanza_id, sender_jid, remote_jid)
+            .expect("valid inputs should derive key for golden test");
 
         // This is the expected output - if this changes, the algorithm is broken
         let expected_key = [
@@ -1020,7 +1035,8 @@ mod tests {
         let key = [0x55u8; REPORTING_TOKEN_KEY_SIZE];
         let content = b"Hello, World!";
 
-        let token = calculate_reporting_token(&key, content).unwrap();
+        let token = calculate_reporting_token(&key, content)
+            .expect("valid key and content should calculate token for golden test");
 
         // Expected HMAC-SHA256 truncated to 16 bytes
         let expected_token = [
@@ -1042,7 +1058,8 @@ mod tests {
             ..Default::default()
         };
 
-        let content = generate_reporting_token_content(&message).unwrap();
+        let content = generate_reporting_token_content(&message)
+            .expect("conversation message should generate content for golden test");
 
         // Field 1 (conversation) = tag 0x0a (field 1, wire type 2) + length + "Test"
         let expected = vec![0x0a, 0x04, b'T', b'e', b's', b't'];
@@ -1064,7 +1081,8 @@ mod tests {
             ..Default::default()
         };
 
-        let content = generate_reporting_token_content(&message).unwrap();
+        let content = generate_reporting_token_content(&message)
+            .expect("conversation message should generate content for golden test");
 
         // Field 6 (extendedTextMessage) containing field 1 (text) = "Hi"
         // Outer: tag 0x32 (field 6, wire type 2), length 4
@@ -1091,7 +1109,7 @@ mod tests {
 
         let result =
             generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
-                .unwrap();
+                .expect("valid message should generate token for golden test");
 
         // Verify the secret is preserved
         assert_eq!(result.message_secret, secret);
@@ -1100,7 +1118,7 @@ mod tests {
         // The token must be deterministic - same inputs = same output
         let result2 =
             generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
-                .unwrap();
+                .expect("repeated generation should succeed");
         assert_eq!(
             result.reporting_token, result2.reporting_token,
             "Token generation is not deterministic!"
@@ -1110,7 +1128,7 @@ mod tests {
         let expected_token = result.reporting_token;
         let result3 =
             generate_reporting_token(&message, "STANZA123", &sender, &remote, Some(&secret))
-                .unwrap();
+                .expect("repeated generation should succeed");
         assert_eq!(
             result3.reporting_token, expected_token,
             "Token changed across calls with same inputs!"
@@ -1135,7 +1153,8 @@ mod tests {
             ..Default::default()
         };
 
-        let content = generate_reporting_token_content(&message).unwrap();
+        let content = generate_reporting_token_content(&message)
+            .expect("conversation message should generate content for golden test");
         let content_str = String::from_utf8_lossy(&content);
 
         // Must NOT contain excluded fields
@@ -1161,9 +1180,12 @@ mod tests {
         };
 
         // Generate multiple times and verify same output
-        let content1 = generate_reporting_token_content(&message).unwrap();
-        let content2 = generate_reporting_token_content(&message).unwrap();
-        let content3 = generate_reporting_token_content(&message).unwrap();
+        let content1 = generate_reporting_token_content(&message)
+            .expect("message should generate content for determinism test");
+        let content2 = generate_reporting_token_content(&message)
+            .expect("message should generate content for determinism test");
+        let content3 = generate_reporting_token_content(&message)
+            .expect("message should generate content for determinism test");
 
         assert_eq!(content1, content2, "Content extraction not deterministic");
         assert_eq!(content2, content3, "Content extraction not deterministic");
@@ -1190,7 +1212,8 @@ mod tests {
                 value, encoded, expected_bytes
             );
 
-            let (decoded, len) = decode_varint(&encoded).unwrap();
+            let (decoded, len) =
+                decode_varint(&encoded).expect("valid encoded bytes should decode");
             assert_eq!(
                 decoded, value,
                 "decode_varint round-trip failed for {}",
@@ -1223,7 +1246,7 @@ mod tests {
             "Should extract text even with empty contextInfo"
         );
 
-        let content = content.unwrap();
+        let content = content.expect("message with empty contextInfo should generate content");
         assert!(
             content.windows(7).any(|w| w == b"Content"),
             "Text 'Content' should be in extracted bytes"
@@ -1242,7 +1265,8 @@ mod tests {
 
         // Whitelist only field 1
         let whitelist = &[ReportingField::new(1)];
-        let extracted = extract_reporting_token_content(&data, whitelist).unwrap();
+        let extracted = extract_reporting_token_content(&data, whitelist)
+            .expect("raw protobuf with whitelisted field should extract");
 
         // Should only contain field 1
         assert_eq!(extracted, vec![0x08, 0x96, 0x01]);
@@ -1268,7 +1292,8 @@ mod tests {
         static TEST_SUBFIELDS: &[ReportingField] = &[ReportingField::new(1)];
         let whitelist = &[ReportingField::with_subfields(6, TEST_SUBFIELDS)];
 
-        let extracted = extract_reporting_token_content(&data, whitelist).unwrap();
+        let extracted = extract_reporting_token_content(&data, whitelist)
+            .expect("nested protobuf with subfield filtering should extract");
 
         // Should contain field 6 with only field 1 inside
         // Outer tag (0x32) + new length (3) + inner field 1 (0x0a 0x01 'a')
@@ -1340,8 +1365,16 @@ mod tests {
         assert_eq!(prepared.conversation, original.conversation);
 
         // MessageContextInfo added with correct values
-        let ctx = prepared.message_context_info.as_ref().unwrap();
-        assert_eq!(ctx.message_secret.as_ref().unwrap(), &secret.to_vec());
+        let ctx = prepared
+            .message_context_info
+            .as_ref()
+            .expect("prepared message should have context info");
+        assert_eq!(
+            ctx.message_secret
+                .as_ref()
+                .expect("context info should have message secret"),
+            &secret.to_vec()
+        );
         assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
     }
 
@@ -1360,8 +1393,16 @@ mod tests {
         let secret = [0x12u8; MESSAGE_SECRET_SIZE];
         let prepared = prepare_message_with_context(&original, &secret);
 
-        let ctx = prepared.message_context_info.as_ref().unwrap();
-        assert_eq!(ctx.message_secret.as_ref().unwrap(), &secret.to_vec());
+        let ctx = prepared
+            .message_context_info
+            .as_ref()
+            .expect("prepared message should have existing context info preserved");
+        assert_eq!(
+            ctx.message_secret
+                .as_ref()
+                .expect("context info should have message secret"),
+            &secret.to_vec()
+        );
         assert_eq!(ctx.reporting_token_version, Some(REPORTING_TOKEN_VERSION));
         assert_eq!(ctx.device_list_metadata_version, Some(42));
     }
@@ -1381,8 +1422,7 @@ mod tests {
             generate_reporting_token(&message, "STANZA", &sender, &remote, Some(&invalid_secret));
 
         // Should still succeed (generates new secret)
-        assert!(result.is_some());
-        let result = result.unwrap();
+        let result = result.expect("message should generate token even with invalid secret");
         // Secret should be 32 bytes (new one generated)
         assert_eq!(result.message_secret.len(), MESSAGE_SECRET_SIZE);
         // Should NOT be all zeros (the invalid one truncated)

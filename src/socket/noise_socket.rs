@@ -232,8 +232,10 @@ mod tests {
 
         // Create dummy keys for testing
         let key = [0u8; 32];
-        let write_key = Aes256Gcm::new_from_slice(&key).unwrap();
-        let read_key = Aes256Gcm::new_from_slice(&key).unwrap();
+        let write_key =
+            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let read_key =
+            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
 
         let socket = NoiseSocket::new(transport, write_key, read_key);
 
@@ -250,7 +252,8 @@ mod tests {
 
         assert!(result.is_ok(), "encrypt_and_send should succeed");
 
-        let (returned_plaintext, returned_encrypted) = result.unwrap();
+        let (returned_plaintext, returned_encrypted) =
+            result.expect("encrypt_and_send result should unwrap after is_ok check");
 
         // Verify both buffers are returned
         assert_eq!(
@@ -317,12 +320,15 @@ mod tests {
 
         let recorded_order = Arc::new(Mutex::new(Vec::new()));
         let key = [0u8; 32];
-        let write_key = Aes256Gcm::new_from_slice(&key).unwrap();
-        let read_key = Aes256Gcm::new_from_slice(&key).unwrap();
+        let write_key =
+            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let read_key =
+            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
 
         let transport = Arc::new(RecordingTransport {
             recorded_order: recorded_order.clone(),
-            read_key: Aes256Gcm::new_from_slice(&key).unwrap(),
+            read_key: Aes256Gcm::new_from_slice(&key)
+                .expect("32-byte key should be valid for AES-256-GCM"),
             counter: std::sync::atomic::AtomicU32::new(0),
         });
 
@@ -343,7 +349,7 @@ mod tests {
 
         // Wait for all sends to complete
         for handle in handles {
-            let result = handle.await.unwrap();
+            let result = handle.await.expect("task should complete");
             assert!(result.is_ok(), "All sends should succeed");
         }
 
