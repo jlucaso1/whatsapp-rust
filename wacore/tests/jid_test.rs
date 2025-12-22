@@ -4,7 +4,7 @@ use wacore_binary::jid::{Jid, JidExt, SERVER_JID};
 #[test]
 fn test_jid_parsing_and_serialization() {
     let jid_str = format!("1234567890@{}", SERVER_JID);
-    let jid = Jid::from_str(&jid_str).unwrap();
+    let jid = Jid::from_str(&jid_str).expect("test JID should be valid");
     assert_eq!(jid.user, "1234567890");
     assert_eq!(jid.server, SERVER_JID);
     assert_eq!(jid.agent, 0);
@@ -14,7 +14,7 @@ fn test_jid_parsing_and_serialization() {
     assert!(!jid.is_group());
 
     let ad_jid_str = format!("1234567890:12@{}", SERVER_JID);
-    let ad_jid = Jid::from_str(&ad_jid_str).unwrap();
+    let ad_jid = Jid::from_str(&ad_jid_str).expect("test JID should be valid");
     assert_eq!(ad_jid.user, "1234567890");
     assert_eq!(ad_jid.device, 12);
     assert_eq!(ad_jid.agent, 0);
@@ -22,14 +22,14 @@ fn test_jid_parsing_and_serialization() {
     assert_eq!(ad_jid.to_string(), ad_jid_str);
 
     let group_jid_str = "123-456@g.us";
-    let group_jid = Jid::from_str(group_jid_str).unwrap();
+    let group_jid = Jid::from_str(group_jid_str).expect("test JID should be valid");
     assert_eq!(group_jid.user, "123-456");
     assert_eq!(group_jid.server, "g.us");
     assert!(group_jid.is_group());
     assert_eq!(group_jid.to_string(), group_jid_str);
 
     let server_jid_str = SERVER_JID;
-    let server_jid = Jid::from_str(server_jid_str).unwrap();
+    let server_jid = Jid::from_str(server_jid_str).expect("test JID should be valid");
     assert!(server_jid.user.is_empty());
     assert_eq!(server_jid.server, SERVER_JID);
     // Server-only JIDs should NOT have @ prefix (matches WhatsApp Web behavior)
@@ -45,9 +45,10 @@ fn test_invalid_jid_parsing() {
 
 #[test]
 fn test_is_ad_logic() {
-    let jid_ad = Jid::from_str(&format!("123:1@{}", SERVER_JID)).unwrap();
-    let jid_non_ad = Jid::from_str(&format!("123@{}", SERVER_JID)).unwrap();
-    let jid_group = Jid::from_str("456@g.us").unwrap();
+    let jid_ad = Jid::from_str(&format!("123:1@{}", SERVER_JID)).expect("test JID should be valid");
+    let jid_non_ad =
+        Jid::from_str(&format!("123@{}", SERVER_JID)).expect("test JID should be valid");
+    let jid_group = Jid::from_str("456@g.us").expect("test JID should be valid");
 
     assert!(jid_ad.is_ad());
     assert!(!jid_non_ad.is_ad());
@@ -59,7 +60,7 @@ fn test_legacy_and_agent_jid_parsing() {
     // Test case 1: Legacy companion device JID (e.g., from an older WhatsApp Web)
     // This is the primary failing case. The parser incorrectly identifies '.13' as an agent.
     let legacy_jid_str = format!("1234567890.13@{}", SERVER_JID);
-    let legacy_jid = Jid::from_str(&legacy_jid_str).unwrap();
+    let legacy_jid = Jid::from_str(&legacy_jid_str).expect("test JID should be valid");
     assert_eq!(
         legacy_jid.user, "1234567890",
         "Legacy JID user part is incorrect"
@@ -73,7 +74,7 @@ fn test_legacy_and_agent_jid_parsing() {
 
     // Test case 2: Modern companion device JID (for comparison)
     let modern_jid_str = format!("1234567890:5@{}", SERVER_JID);
-    let modern_jid = Jid::from_str(&modern_jid_str).unwrap();
+    let modern_jid = Jid::from_str(&modern_jid_str).expect("test JID should be valid");
     assert_eq!(
         modern_jid.user, "1234567890",
         "Modern JID user part is incorrect"
@@ -85,7 +86,7 @@ fn test_legacy_and_agent_jid_parsing() {
     // LID user identifiers can contain dots that are part of the identity.
     // The dot should NOT be parsed as an agent separator for LID JIDs.
     let lid_nodot_str = "987654321.1@lid";
-    let lid_nodot = Jid::from_str(lid_nodot_str).unwrap();
+    let lid_nodot = Jid::from_str(lid_nodot_str).expect("test JID should be valid");
     assert_eq!(
         lid_nodot.user, "987654321.1",
         "LID user part with dot should be preserved"
@@ -103,7 +104,7 @@ fn test_lid_jid_with_dot_in_user_part() {
     // This is the problematic JID from the logs. The user part is "236395184570386.1".
     // The old parser would incorrectly split this, creating user="236395184570386" and agent=1.
     let lid_jid_str = "236395184570386.1:75@lid";
-    let lid_jid = Jid::from_str(lid_jid_str).unwrap();
+    let lid_jid = Jid::from_str(lid_jid_str).expect("test JID should be valid");
 
     // Assert that the user part is parsed correctly, including the dot.
     assert_eq!(

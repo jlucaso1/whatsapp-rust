@@ -102,7 +102,7 @@ impl<'a> Groups<'a> {
         let iq = InfoQuery {
             namespace: "w:g2",
             query_type: InfoQueryType::Get,
-            to: "@g.us".parse().unwrap(),
+            to: "@g.us".parse().expect("@g.us is a valid JID constant"),
             content: Some(NodeContent::Nodes(vec![participating_node])),
             id: None,
             target: None,
@@ -248,8 +248,12 @@ mod tests {
 
     #[test]
     fn test_group_metadata_struct() {
-        let jid: Jid = "123456789@g.us".parse().unwrap();
-        let participant_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let jid: Jid = "123456789@g.us"
+            .parse()
+            .expect("test group JID should be valid");
+        let participant_jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test participant JID should be valid");
 
         let metadata = GroupMetadata {
             id: jid.clone(),

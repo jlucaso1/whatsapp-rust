@@ -296,9 +296,16 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
-            as Arc<dyn crate::store::traits::Backend>;
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("test backend should initialize"),
+        ) as Arc<dyn crate::store::traits::Backend>;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _sync_rx) = Client::new(
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -307,7 +314,9 @@ mod tests {
         )
         .await;
 
-        let chat: Jid = "120363021033254949@g.us".parse().unwrap();
+        let chat: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
         let msg_id = "ABC123".to_string();
         let msg = wa::Message {
             conversation: Some("hello".into()),
@@ -324,7 +333,13 @@ mod tests {
             .take_recent_message(chat.clone(), msg_id.clone())
             .await;
         assert!(taken.is_some());
-        assert_eq!(taken.unwrap().conversation.as_deref(), Some("hello"));
+        assert_eq!(
+            taken
+                .expect("taken message should exist")
+                .conversation
+                .as_deref(),
+            Some("hello")
+        );
 
         // Second take should return None
         let taken_again = client.take_recent_message(chat, msg_id).await;

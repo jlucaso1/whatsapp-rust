@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_encode_frame_no_header() {
         let payload = vec![1, 2, 3, 4, 5];
-        let encoded = encode_frame(&payload, None).unwrap();
+        let encoded = encode_frame(&payload, None).expect("frame operation should succeed");
 
         assert_eq!(encoded[0], 0);
         assert_eq!(encoded[1], 0);
@@ -119,7 +119,8 @@ mod tests {
     fn test_encode_frame_with_header() {
         let payload = vec![1, 2, 3];
         let header = vec![0xAA, 0xBB];
-        let encoded = encode_frame(&payload, Some(&header)).unwrap();
+        let encoded =
+            encode_frame(&payload, Some(&header)).expect("frame operation should succeed");
 
         assert_eq!(&encoded[0..2], &header[..]);
         assert_eq!(encoded[2], 0);
@@ -136,7 +137,9 @@ mod tests {
         assert!(decoder.decode_frame().is_none());
 
         decoder.feed(&[3, 4, 5]);
-        let frame = decoder.decode_frame().unwrap();
+        let frame = decoder
+            .decode_frame()
+            .expect("frame operation should succeed");
         assert_eq!(&frame[..], &[1, 2, 3, 4, 5]);
 
         assert!(decoder.decode_frame().is_none());
@@ -148,10 +151,14 @@ mod tests {
 
         decoder.feed(&[0, 0, 2, 0xAA, 0xBB, 0, 0, 3, 0xCC, 0xDD, 0xEE]);
 
-        let frame1 = decoder.decode_frame().unwrap();
+        let frame1 = decoder
+            .decode_frame()
+            .expect("frame operation should succeed");
         assert_eq!(&frame1[..], &[0xAA, 0xBB]);
 
-        let frame2 = decoder.decode_frame().unwrap();
+        let frame2 = decoder
+            .decode_frame()
+            .expect("frame operation should succeed");
         assert_eq!(&frame2[..], &[0xCC, 0xDD, 0xEE]);
 
         assert!(decoder.decode_frame().is_none());
@@ -170,11 +177,11 @@ mod tests {
         let original_ptr = buffer.as_ptr();
 
         let payload1 = vec![1, 2, 3, 4, 5];
-        encode_frame_into(&payload1, None, &mut buffer).unwrap();
+        encode_frame_into(&payload1, None, &mut buffer).expect("frame operation should succeed");
         assert_eq!(&buffer[3..], &payload1[..]);
 
         let payload2 = vec![6, 7, 8];
-        encode_frame_into(&payload2, None, &mut buffer).unwrap();
+        encode_frame_into(&payload2, None, &mut buffer).expect("frame operation should succeed");
         assert_eq!(&buffer[3..], &payload2[..]);
 
         assert_eq!(buffer.as_ptr(), original_ptr);
@@ -185,7 +192,8 @@ mod tests {
         let mut buffer = Vec::new();
         let payload = vec![1, 2, 3];
         let header = vec![0xAA, 0xBB];
-        encode_frame_into(&payload, Some(&header), &mut buffer).unwrap();
+        encode_frame_into(&payload, Some(&header), &mut buffer)
+            .expect("frame operation should succeed");
 
         assert_eq!(&buffer[0..2], &header[..]);
         assert_eq!(buffer[2], 0);

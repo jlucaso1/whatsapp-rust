@@ -1929,7 +1929,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -1983,7 +1987,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2030,7 +2038,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2096,7 +2108,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2135,7 +2151,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2163,7 +2183,7 @@ mod tests {
         let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
         assert!(cached_lid.is_some(), "Cache should contain the mapping");
         assert_eq!(
-            cached_lid.unwrap(),
+            cached_lid.expect("cache should have LID"),
             lid,
             "Cached LID should match what we inserted"
         );
@@ -2172,7 +2192,7 @@ mod tests {
         let cached_phone = client.lid_pn_cache.get_phone_number(lid).await;
         assert!(cached_phone.is_some(), "Reverse lookup should work");
         assert_eq!(
-            cached_phone.unwrap(),
+            cached_phone.expect("reverse lookup should return phone"),
             phone,
             "Cached phone should match what we inserted"
         );
@@ -2202,7 +2222,11 @@ mod tests {
             .await
             .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2222,7 +2246,11 @@ mod tests {
             .expect("Failed to persist LID-PN mapping in tests");
 
         assert_eq!(
-            client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
+            client
+                .lid_pn_cache
+                .get_current_lid(phone)
+                .await
+                .expect("cache should have LID"),
             lid_old,
             "Initial LID should be stored"
         );
@@ -2237,19 +2265,31 @@ mod tests {
             .expect("Failed to persist LID-PN mapping in tests");
 
         assert_eq!(
-            client.lid_pn_cache.get_current_lid(phone).await.unwrap(),
+            client
+                .lid_pn_cache
+                .get_current_lid(phone)
+                .await
+                .expect("cache should have newer LID"),
             lid_new,
             "Newer LID should be returned for phone lookup"
         );
 
         // Both LIDs should still resolve to the same phone
         assert_eq!(
-            client.lid_pn_cache.get_phone_number(lid_old).await.unwrap(),
+            client
+                .lid_pn_cache
+                .get_phone_number(lid_old)
+                .await
+                .expect("reverse lookup should return phone"),
             phone,
             "Old LID should still map to phone"
         );
         assert_eq!(
-            client.lid_pn_cache.get_phone_number(lid_new).await.unwrap(),
+            client
+                .lid_pn_cache
+                .get_phone_number(lid_new)
+                .await
+                .expect("reverse lookup should return phone"),
             phone,
             "New LID should also map to phone"
         );
@@ -2271,7 +2311,11 @@ mod tests {
                 .await
                 .expect("Failed to create in-memory backend for test"),
         );
-        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
         let (client, _rx) = Client::new(
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
@@ -2302,7 +2346,7 @@ mod tests {
             "get_lid_for_phone should return Some after caching"
         );
         assert_eq!(
-            result.unwrap(),
+            result.expect("get_lid_for_phone should return Some"),
             lid,
             "get_lid_for_phone should return the cached LID"
         );

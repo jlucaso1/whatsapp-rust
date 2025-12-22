@@ -334,7 +334,10 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
         master_ephemeral,
     )?;
 
-    let master_jid = device_snapshot.pn.clone().unwrap();
+    let master_jid = device_snapshot
+        .pn
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Cannot pair: device has no phone number JID configured"))?;
     let req_id = client.generate_request_id();
 
     let iq = PairUtils::build_master_pair_iq(&master_jid, encrypted, req_id);

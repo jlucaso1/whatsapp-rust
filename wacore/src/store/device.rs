@@ -146,8 +146,11 @@ impl Device {
                 &signed_pre_key.public_key.serialize(),
                 &mut OsRng.unwrap_err(),
             )
-            .unwrap();
-        let signed_pre_key_signature: [u8; 64] = signature_box.as_ref().try_into().unwrap();
+            .expect("signing with valid Ed25519 key should succeed");
+        let signed_pre_key_signature: [u8; 64] = signature_box
+            .as_ref()
+            .try_into()
+            .expect("Ed25519 signature is always 64 bytes");
         let mut adv_secret_key = [0u8; 32];
         rand::rng().fill_bytes(&mut adv_secret_key);
 
@@ -239,10 +242,10 @@ impl Device {
         let version = payload
             .user_agent
             .as_ref()
-            .unwrap()
+            .expect("payload should have user_agent")
             .app_version
             .as_ref()
-            .unwrap();
+            .expect("user_agent should have app_version");
         let version_str = format!(
             "{}.{}.{}",
             version.primary(),

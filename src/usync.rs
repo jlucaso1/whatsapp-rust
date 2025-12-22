@@ -99,12 +99,15 @@ mod tests {
     #[tokio::test]
     async fn test_device_cache_hit() {
         // Create a mock client
-        let backend = Arc::new(crate::store::SqliteStore::new(":memory:").await.unwrap())
-            as Arc<dyn crate::store::traits::Backend>;
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("test backend should initialize"),
+        ) as Arc<dyn crate::store::traits::Backend>;
         let pm = Arc::new(
             crate::store::persistence_manager::PersistenceManager::new(backend)
                 .await
-                .unwrap(),
+                .expect("persistence manager should initialize"),
         );
 
         let (client, _sync_rx) = crate::client::Client::new(
@@ -115,8 +118,12 @@ mod tests {
         )
         .await;
 
-        let test_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let device_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+        let test_jid: Jid = "1234567890@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let device_jid: Jid = "1234567890:1@s.whatsapp.net"
+            .parse()
+            .expect("test device JID should be valid");
 
         // Manually insert into cache
         client
@@ -128,7 +135,7 @@ mod tests {
         // Verify cache hit
         let cached = client.get_device_cache().await.get(&test_jid).await;
         assert!(cached.is_some());
-        let cached_devices = cached.unwrap();
+        let cached_devices = cached.expect("cache should have entry");
         assert_eq!(cached_devices.len(), 1);
         assert_eq!(cached_devices[0], device_jid);
     }

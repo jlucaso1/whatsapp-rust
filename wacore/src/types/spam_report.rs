@@ -156,7 +156,9 @@ mod tests {
         assert_eq!(node.tag, "spam_list");
         assert_eq!(node.attrs().string("spam_flow"), "MessageMenu");
 
-        let message = node.get_optional_child_by_tag(&["message"]).unwrap();
+        let message = node
+            .get_optional_child_by_tag(&["message"])
+            .expect("test node child should exist");
         assert_eq!(message.attrs().string("id"), "TEST123");
         assert_eq!(message.attrs().string("t"), "1234567890");
     }
@@ -180,8 +182,12 @@ mod tests {
         };
 
         let node = build_spam_list_node(&request);
-        let message = node.get_optional_child_by_tag(&["message"]).unwrap();
-        let raw = message.get_optional_child_by_tag(&["raw"]).unwrap();
+        let message = node
+            .get_optional_child_by_tag(&["message"])
+            .expect("test node child should exist");
+        let raw = message
+            .get_optional_child_by_tag(&["raw"])
+            .expect("test node child should exist");
 
         assert_eq!(raw.attrs().string("v"), "3");
         assert_eq!(raw.attrs().string("mediatype"), "image");

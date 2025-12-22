@@ -153,7 +153,8 @@ mod tests {
         let plaintext = action_data.encode_to_vec();
         let iv = vec![0u8; 16];
         let mut ciphertext = Vec::new();
-        aes_256_cbc_encrypt_into(&plaintext, &keys.value_encryption, &iv, &mut ciphertext).unwrap();
+        aes_256_cbc_encrypt_into(&plaintext, &keys.value_encryption, &iv, &mut ciphertext)
+            .expect("test encryption should succeed");
 
         let mut value_with_iv = iv;
         value_with_iv.extend_from_slice(&ciphertext);
@@ -202,7 +203,7 @@ mod tests {
             &key_id,
             false, // skip MAC validation for this test
         )
-        .unwrap();
+        .expect("test encryption should succeed");
 
         assert_eq!(
             mutation.action_value.as_ref().and_then(|v| v.timestamp),
