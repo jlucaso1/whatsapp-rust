@@ -118,11 +118,12 @@ impl PreKeyUtils {
         if reg_id_bytes.len() != 4 {
             return Err(anyhow::anyhow!("Invalid registration ID length"));
         }
-        let registration_id = u32::from_be_bytes(
-            reg_id_bytes
-                .try_into()
-                .expect("length checked to be 4 bytes"),
-        );
+        let registration_id = u32::from_be_bytes([
+            reg_id_bytes[0],
+            reg_id_bytes[1],
+            reg_id_bytes[2],
+            reg_id_bytes[3],
+        ]);
 
         let keys_node = node.get_optional_child("keys").unwrap_or(node); // unwrap_or is fine here
 
@@ -211,12 +212,9 @@ impl PreKeyUtils {
             return Err(anyhow::anyhow!("Invalid pre-key value length"));
         }
 
-        Ok(Some((
-            id,
-            value_bytes
-                .try_into()
-                .expect("length checked to be 32 bytes"),
-        )))
+        let mut value_arr = [0u8; 32];
+        value_arr.copy_from_slice(&value_bytes);
+        Ok(Some((id, value_arr)))
     }
 
     fn node_to_signed_pre_key(node: &Node) -> Result<(u32, [u8; 32], [u8; 64]), anyhow::Error> {
@@ -239,12 +237,8 @@ impl PreKeyUtils {
             return Err(anyhow::anyhow!("Invalid signature length"));
         }
 
-        Ok((
-            id,
-            public_key_bytes,
-            signature_bytes
-                .try_into()
-                .expect("length checked to be 64 bytes"),
-        ))
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&signature_bytes);
+        Ok((id, public_key_bytes, sig_arr))
     }
 }

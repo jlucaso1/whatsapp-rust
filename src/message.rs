@@ -981,7 +981,7 @@ impl Client {
                 .map(|s| s.to_string())
                 .unwrap_or_default(),
             timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             ..Default::default()
         })
     }

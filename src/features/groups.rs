@@ -1,10 +1,13 @@
 use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use wacore::client::context::GroupInfo;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{GROUP_SERVER, Jid};
 use wacore_binary::node::NodeContent;
+
+static G_US_JID: LazyLock<Jid> = LazyLock::new(|| Jid::new("", GROUP_SERVER));
 
 #[derive(Debug, Clone)]
 pub struct GroupMetadata {
@@ -102,7 +105,7 @@ impl<'a> Groups<'a> {
         let iq = InfoQuery {
             namespace: "w:g2",
             query_type: InfoQueryType::Get,
-            to: "@g.us".parse().expect("@g.us is a valid JID constant"),
+            to: G_US_JID.clone(),
             content: Some(NodeContent::Nodes(vec![participating_node])),
             id: None,
             target: None,
