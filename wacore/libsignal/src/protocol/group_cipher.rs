@@ -77,7 +77,7 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
                 log::error!("outgoing sender key state corrupt for distribution");
                 SignalProtocolError::InvalidSenderKeySession
             })?;
-        Ok::<Vec<u8>, SignalProtocolError>(buf.clone())
+        Ok::<Vec<u8>, SignalProtocolError>(std::mem::take(buf))
     })?;
 
     let signing_key = sender_key_state

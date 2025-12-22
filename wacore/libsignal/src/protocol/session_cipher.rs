@@ -104,7 +104,7 @@ pub async fn message_encrypt(
                 log::error!("session state corrupt for {remote_address}");
                 SignalProtocolError::InvalidSessionStructure("invalid sender chain message keys")
             })?;
-        Ok::<Vec<u8>, SignalProtocolError>(buf.clone())
+        Ok::<Vec<u8>, SignalProtocolError>(std::mem::take(buf))
     })?;
 
     let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
@@ -709,7 +709,7 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
             message_keys.iv(),
             buf,
         ) {
-            Ok(()) => Ok(buf.clone()),
+            Ok(()) => Ok(std::mem::take(buf)),
             Err(DecryptionErrorCrypto::BadKeyOrIv) => {
                 log::warn!("{current_or_previous} session state corrupt for {remote_address}",);
                 Err(SignalProtocolError::InvalidSessionStructure(
