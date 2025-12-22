@@ -428,9 +428,10 @@ impl FromStr for Jid {
         }
 
         // Fallback to original parsing for edge cases and validation
+        // Keep server as &str to avoid allocation until we need it
         let (user_part, server) = match s.split_once('@') {
-            Some((u, s)) => (u, s.to_string()),
-            None => ("", s.to_string()),
+            Some((u, s)) => (u, s),
+            None => ("", s),
         };
 
         if user_part.is_empty() {
@@ -447,7 +448,7 @@ impl FromStr for Jid {
                 BOT_SERVER,
                 STATUS_BROADCAST_USER,
             ];
-            if !known_servers.contains(&server.as_str()) {
+            if !known_servers.contains(&server) {
                 return Err(JidError::InvalidFormat(format!(
                     "Invalid JID format: unknown server '{}'",
                     server
@@ -465,7 +466,7 @@ impl FromStr for Jid {
             };
             return Ok(Jid {
                 user: user.to_string(),
-                server,
+                server: server.to_string(),
                 device,
                 agent: 0,
                 integrator: 0,
@@ -510,7 +511,7 @@ impl FromStr for Jid {
 
         Ok(Jid {
             user: user.to_string(),
-            server,
+            server: server.to_string(),
             agent,
             device,
             integrator: 0,

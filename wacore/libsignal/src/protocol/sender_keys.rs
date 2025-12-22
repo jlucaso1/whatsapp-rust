@@ -27,30 +27,33 @@ impl std::fmt::Display for InvalidSenderKeySessionError {
 #[derive(Debug, Clone)]
 pub struct SenderMessageKey {
     iteration: u32,
-    iv: Vec<u8>,
-    cipher_key: Vec<u8>,
-    seed: Vec<u8>,
+    iv: [u8; 16],
+    cipher_key: [u8; 32],
+    seed: [u8; 32],
 }
 
 impl SenderMessageKey {
-    pub fn new(iteration: u32, seed: Vec<u8>) -> Self {
-        let mut derived = [0; 48];
+    pub fn new(iteration: u32, seed: [u8; 32]) -> Self {
+        let mut derived = [0u8; 48];
         hkdf::Hkdf::<sha2::Sha256>::new(None, &seed)
             .expand(b"WhisperGroup", &mut derived)
             .expect("valid output length");
         Self {
             iteration,
             seed,
-            iv: derived[0..16].to_vec(),
-            cipher_key: derived[16..48].to_vec(),
+            iv: derived[0..16].try_into().expect("correct iv length"),
+            cipher_key: derived[16..48]
+                .try_into()
+                .expect("correct cipher_key length"),
         }
     }
 
     pub(crate) fn from_protobuf(smk: sender_key_state_structure::SenderMessageKey) -> Self {
-        Self::new(
-            smk.iteration.unwrap_or_default(),
-            smk.seed.unwrap_or_default(),
-        )
+        let seed_vec = smk.seed.unwrap_or_default();
+        let seed: [u8; 32] = seed_vec
+            .try_into()
+            .expect("SenderMessageKey seed must be exactly 32 bytes");
+        Self::new(smk.iteration.unwrap_or_default(), seed)
     }
 
     pub fn iteration(&self) -> u32 {
@@ -68,7 +71,7 @@ impl SenderMessageKey {
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderMessageKey {
         sender_key_state_structure::SenderMessageKey {
             iteration: Some(self.iteration),
-            seed: Some(self.seed.clone()),
+            seed: Some(self.seed.to_vec()),
         }
     }
 }
@@ -76,14 +79,14 @@ impl SenderMessageKey {
 #[derive(Debug, Clone)]
 pub struct SenderChainKey {
     iteration: u32,
-    chain_key: Vec<u8>,
+    chain_key: [u8; 32],
 }
 
 impl SenderChainKey {
     const MESSAGE_KEY_SEED: u8 = 0x01;
     const CHAIN_KEY_SEED: u8 = 0x02;
 
-    pub(crate) fn new(iteration: u32, chain_key: Vec<u8>) -> Self {
+    pub(crate) fn new(iteration: u32, chain_key: [u8; 32]) -> Self {
         Self {
             iteration,
             chain_key,
@@ -116,15 +119,16 @@ impl SenderChainKey {
         SenderMessageKey::new(self.iteration, self.get_derivative(Self::MESSAGE_KEY_SEED))
     }
 
-    fn get_derivative(&self, label: u8) -> Vec<u8> {
+    #[inline]
+    fn get_derivative(&self, label: u8) -> [u8; 32] {
         let label = [label];
-        hmac_sha256(&self.chain_key, &label).to_vec()
+        hmac_sha256(&self.chain_key, &label)
     }
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderChainKey {
         sender_key_state_structure::SenderChainKey {
             iteration: Some(self.iteration),
-            seed: Some(self.chain_key.clone()),
+            seed: Some(self.chain_key.to_vec()),
         }
     }
 }
@@ -143,11 +147,10 @@ impl SenderKeyState {
         signature_key: PublicKey,
         signature_private_key: Option<PrivateKey>,
     ) -> SenderKeyState {
+        let chain_key_arr: [u8; 32] = chain_key.try_into().expect("chain_key must be 32 bytes");
         let state = SenderKeyStateStructure {
             sender_key_id: Some(chain_id),
-            sender_chain_key: Some(
-                SenderChainKey::new(iteration, chain_key.to_vec()).as_protobuf(),
-            ),
+            sender_chain_key: Some(SenderChainKey::new(iteration, chain_key_arr).as_protobuf()),
             sender_signing_key: Some(sender_key_state_structure::SenderSigningKey {
                 public: Some(signature_key.serialize().to_vec()),
                 private: signature_private_key.map(|k| k.serialize().to_vec()),
@@ -172,9 +175,15 @@ impl SenderKeyState {
 
     pub fn sender_chain_key(&self) -> Option<SenderChainKey> {
         let sender_chain = self.state.sender_chain_key.as_ref()?;
+        let seed: [u8; 32] = sender_chain
+            .seed
+            .as_deref()
+            .unwrap_or_default()
+            .try_into()
+            .ok()?;
         Some(SenderChainKey::new(
             sender_chain.iteration.unwrap_or_default(),
-            sender_chain.seed.clone().unwrap_or_default(),
+            seed,
         ))
     }
 
@@ -375,11 +384,11 @@ mod tests {
     /// Test SenderMessageKey derivation is deterministic
     #[test]
     fn test_sender_message_key_derivation() {
-        let seed = vec![0x42u8; 32];
+        let seed = [0x42u8; 32];
         let iteration = 10;
 
-        let smk1 = SenderMessageKey::new(iteration, seed.clone());
-        let smk2 = SenderMessageKey::new(iteration, seed.clone());
+        let smk1 = SenderMessageKey::new(iteration, seed);
+        let smk2 = SenderMessageKey::new(iteration, seed);
 
         // Same seed and iteration should produce same keys
         assert_eq!(smk1.iteration(), smk2.iteration());
@@ -390,8 +399,8 @@ mod tests {
     /// Test SenderMessageKey produces different keys for different seeds
     #[test]
     fn test_sender_message_key_different_seeds() {
-        let seed1 = vec![0x42u8; 32];
-        let seed2 = vec![0x43u8; 32];
+        let seed1 = [0x42u8; 32];
+        let seed2 = [0x43u8; 32];
 
         let smk1 = SenderMessageKey::new(0, seed1);
         let smk2 = SenderMessageKey::new(0, seed2);
@@ -403,7 +412,7 @@ mod tests {
     /// Test SenderChainKey iteration and stepping
     #[test]
     fn test_sender_chain_key_stepping() {
-        let initial_chain = vec![0x55u8; 32];
+        let initial_chain = [0x55u8; 32];
         let sck = SenderChainKey::new(0, initial_chain);
 
         let sck1 = sck
@@ -431,7 +440,7 @@ mod tests {
     /// Test SenderChainKey produces correct message keys
     #[test]
     fn test_sender_chain_key_message_key() {
-        let chain = vec![0x55u8; 32];
+        let chain = [0x55u8; 32];
         let sck = SenderChainKey::new(5, chain);
 
         let smk = sck.sender_message_key();
@@ -444,9 +453,9 @@ mod tests {
     /// Test SenderChainKey stepping is deterministic
     #[test]
     fn test_sender_chain_key_determinism() {
-        let chain = vec![0x77u8; 32];
+        let chain = [0x77u8; 32];
 
-        let sck1 = SenderChainKey::new(0, chain.clone());
+        let sck1 = SenderChainKey::new(0, chain);
         let sck2 = SenderChainKey::new(0, chain);
 
         let next1 = sck1
@@ -544,7 +553,7 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        let smk = SenderMessageKey::new(5, vec![0xAA; 32]);
+        let smk = SenderMessageKey::new(5, [0xAA; 32]);
         state.add_sender_message_key(&smk);
 
         // Should be able to retrieve it
@@ -575,7 +584,7 @@ mod tests {
 
         // Add more than MAX_MESSAGE_KEYS
         for i in 0..(consts::MAX_MESSAGE_KEYS + 100) {
-            let smk = SenderMessageKey::new(i as u32, vec![0xBB; 32]);
+            let smk = SenderMessageKey::new(i as u32, [0xBB; 32]);
             state.add_sender_message_key(&smk);
         }
 

@@ -48,13 +48,10 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
 
     if subtract {
         for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-            let mut base_u16 = [0u16; 8];
-            let mut input_u16 = [0u16; 8];
-            for i in 0..8 {
-                let offset = i * 2;
-                base_u16[i] = u16::from_le_bytes([base_chunk[offset], base_chunk[offset + 1]]);
-                input_u16[i] = u16::from_le_bytes([input_chunk[offset], input_chunk[offset + 1]]);
-            }
+            // Safety: [u8; 16] and [u16; 8] have the same size and alignment.
+            // On little-endian systems, this is equivalent to from_le_bytes for each pair.
+            let base_u16: [u16; 8] = unsafe { core::mem::transmute(*base_chunk) };
+            let input_u16: [u16; 8] = unsafe { core::mem::transmute(*input_chunk) };
 
             let base_simd = u16x8::from_array(base_u16);
             let input_simd = u16x8::from_array(input_u16);
@@ -65,13 +62,10 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
         }
     } else {
         for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-            let mut base_u16 = [0u16; 8];
-            let mut input_u16 = [0u16; 8];
-            for i in 0..8 {
-                let offset = i * 2;
-                base_u16[i] = u16::from_le_bytes([base_chunk[offset], base_chunk[offset + 1]]);
-                input_u16[i] = u16::from_le_bytes([input_chunk[offset], input_chunk[offset + 1]]);
-            }
+            // Safety: [u8; 16] and [u16; 8] have the same size and alignment.
+            // On little-endian systems, this is equivalent to from_le_bytes for each pair.
+            let base_u16: [u16; 8] = unsafe { core::mem::transmute(*base_chunk) };
+            let input_u16: [u16; 8] = unsafe { core::mem::transmute(*input_chunk) };
 
             let base_simd = u16x8::from_array(base_u16);
             let input_simd = u16x8::from_array(input_u16);
