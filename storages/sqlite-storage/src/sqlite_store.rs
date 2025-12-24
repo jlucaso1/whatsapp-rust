@@ -2340,7 +2340,7 @@ impl SqliteStore {
 
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i32;
 
             diesel::insert_into(device_registry::table)
@@ -2470,7 +2470,7 @@ impl SqliteStore {
 
                 let cutoff = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs() as i32
                     - max_age_secs as i32;
 
@@ -2529,7 +2529,7 @@ impl SqliteStore {
 
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i32;
 
             diesel::insert_into(sender_key_status::table)
@@ -2576,7 +2576,7 @@ impl SqliteStore {
 
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i32;
 
             for participant in participants {
@@ -2699,5 +2699,216 @@ impl traits::SenderKeyStatusStore for SqliteStore {
     async fn needs_fresh_skdm(&self, group_jid: &str, participant: &str) -> Result<bool> {
         self.needs_fresh_skdm_for_device(group_jid, participant, 1)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use traits::{DeviceRegistryStore, SenderKeyStatusStore};
+
+    async fn create_test_store() -> SqliteStore {
+        SqliteStore::new(":memory:")
+            .await
+            .expect("Failed to create test store")
+    }
+
+    // ==================== Device Registry Tests ====================
+
+    #[tokio::test]
+    async fn test_device_registry_save_and_get() {
+        let store = create_test_store().await;
+
+        let record = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![
+                traits::DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                traits::DeviceInfo {
+                    device_id: 1,
+                    key_index: Some(42),
+                },
+            ],
+            timestamp: 1234567890,
+            phash: Some("2:abcdef".to_string()),
+        };
+
+        store.save_devices(&record).await.expect("save failed");
+        let loaded = store
+            .get_devices("1234567890")
+            .await
+            .expect("get failed")
+            .expect("record should exist");
+
+        assert_eq!(loaded.user, "1234567890");
+        assert_eq!(loaded.devices.len(), 2);
+        assert_eq!(loaded.devices[0].device_id, 0);
+        assert_eq!(loaded.devices[1].device_id, 1);
+        assert_eq!(loaded.devices[1].key_index, Some(42));
+        assert_eq!(loaded.phash, Some("2:abcdef".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_update_existing() {
+        let store = create_test_store().await;
+
+        let record1 = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![traits::DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: 1000,
+            phash: Some("2:old".to_string()),
+        };
+        store.save_devices(&record1).await.expect("save1 failed");
+
+        // Update with new data
+        let record2 = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![
+                traits::DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                traits::DeviceInfo {
+                    device_id: 2,
+                    key_index: None,
+                },
+            ],
+            timestamp: 2000,
+            phash: Some("2:new".to_string()),
+        };
+        store.save_devices(&record2).await.expect("save2 failed");
+
+        let loaded = store
+            .get_devices("1234567890")
+            .await
+            .expect("get failed")
+            .expect("record should exist");
+
+        assert_eq!(loaded.devices.len(), 2);
+        assert_eq!(loaded.phash, Some("2:new".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_get_nonexistent() {
+        let store = create_test_store().await;
+        let result = store.get_devices("nonexistent").await.expect("get failed");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_cleanup_stale() {
+        let store = create_test_store().await;
+
+        // Insert a record
+        let record = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![traits::DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: 1234567890,
+            phash: None,
+        };
+        store.save_devices(&record).await.expect("save failed");
+
+        // Cleanup with 0 max age (everything is stale)
+        let deleted = store
+            .cleanup_stale_entries(0)
+            .await
+            .expect("cleanup failed");
+        assert_eq!(deleted, 1);
+
+        // Verify it's gone
+        let loaded = store.get_devices("1234567890").await.expect("get failed");
+        assert!(loaded.is_none());
+    }
+
+    // ==================== Sender Key Status Tests ====================
+
+    #[tokio::test]
+    async fn test_sender_key_status_mark_and_check() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+        let participant = "user1@s.whatsapp.net";
+
+        // Initially should not need fresh SKDM
+        let needs = store
+            .needs_fresh_skdm(group, participant)
+            .await
+            .expect("check failed");
+        assert!(!needs);
+
+        // Mark for fresh SKDM
+        store
+            .mark_forget_sender_key(group, participant)
+            .await
+            .expect("mark failed");
+
+        // Now should need fresh SKDM
+        let needs = store
+            .needs_fresh_skdm(group, participant)
+            .await
+            .expect("check failed");
+        assert!(needs);
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_status_consume_marks() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+        let participants = vec![
+            "user1@s.whatsapp.net".to_string(),
+            "user2@s.whatsapp.net".to_string(),
+        ];
+
+        // Mark multiple participants
+        store
+            .mark_forget_sender_keys(group, &participants)
+            .await
+            .expect("mark failed");
+
+        // Consume marks
+        let consumed = store
+            .consume_forget_marks(group)
+            .await
+            .expect("consume failed");
+        assert_eq!(consumed.len(), 2);
+        assert!(consumed.contains(&"user1@s.whatsapp.net".to_string()));
+        assert!(consumed.contains(&"user2@s.whatsapp.net".to_string()));
+
+        // Marks should be consumed (no longer need fresh SKDM)
+        let needs = store
+            .needs_fresh_skdm(group, "user1@s.whatsapp.net")
+            .await
+            .expect("check failed");
+        assert!(!needs);
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_status_different_groups() {
+        let store = create_test_store().await;
+
+        let group1 = "group1@g.us";
+        let group2 = "group2@g.us";
+        let participant = "user@s.whatsapp.net";
+
+        // Mark in group1 only
+        store
+            .mark_forget_sender_key(group1, participant)
+            .await
+            .expect("mark failed");
+
+        // Should need fresh SKDM in group1
+        assert!(store.needs_fresh_skdm(group1, participant).await.unwrap());
+
+        // Should NOT need fresh SKDM in group2
+        assert!(!store.needs_fresh_skdm(group2, participant).await.unwrap());
     }
 }

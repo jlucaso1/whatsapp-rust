@@ -165,3 +165,133 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
         client.core.event_bus.dispatch(&event);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use wacore::types::events::DeviceListUpdateType;
+    use wacore_binary::builder::NodeBuilder;
+
+    /// Helper to parse device notification and extract update info
+    fn parse_device_notification_info(
+        node: &wacore_binary::node::Node,
+    ) -> Vec<(DeviceListUpdateType, Vec<u32>, Option<String>)> {
+        let Some(children) = node.children() else {
+            return vec![];
+        };
+
+        let mut results = vec![];
+        for child in children.iter() {
+            let (update_type, hash) = match child.tag.as_str() {
+                "add" => (DeviceListUpdateType::Add, None),
+                "remove" => (DeviceListUpdateType::Remove, None),
+                "update" => {
+                    let hash = child.attrs().optional_string("hash").map(|s| s.to_string());
+                    (DeviceListUpdateType::Update, hash)
+                }
+                _ => continue,
+            };
+
+            let devices: Vec<u32> = child
+                .children()
+                .map(|device_nodes| {
+                    device_nodes
+                        .iter()
+                        .filter(|n| n.tag == "device")
+                        .filter_map(|n| n.attrs().optional_u64("id").map(|id| id as u32))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            results.push((update_type, devices, hash));
+        }
+        results
+    }
+
+    #[test]
+    fn test_parse_device_add_notification() {
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "1234567890@s.whatsapp.net")
+            .children([NodeBuilder::new("add")
+                .children([
+                    NodeBuilder::new("device").attr("id", "1").build(),
+                    NodeBuilder::new("device").attr("id", "2").build(),
+                ])
+                .build()])
+            .build();
+
+        let results = parse_device_notification_info(&node);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, DeviceListUpdateType::Add);
+        assert_eq!(results[0].1, vec![1, 2]);
+        assert_eq!(results[0].2, None);
+    }
+
+    #[test]
+    fn test_parse_device_remove_notification() {
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "1234567890@s.whatsapp.net")
+            .children([NodeBuilder::new("remove")
+                .children([NodeBuilder::new("device").attr("id", "3").build()])
+                .build()])
+            .build();
+
+        let results = parse_device_notification_info(&node);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, DeviceListUpdateType::Remove);
+        assert_eq!(results[0].1, vec![3]);
+    }
+
+    #[test]
+    fn test_parse_device_update_notification_with_hash() {
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "1234567890@s.whatsapp.net")
+            .children([NodeBuilder::new("update")
+                .attr("hash", "2:abcdef123456")
+                .children([NodeBuilder::new("device").attr("id", "0").build()])
+                .build()])
+            .build();
+
+        let results = parse_device_notification_info(&node);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, DeviceListUpdateType::Update);
+        assert_eq!(results[0].1, vec![0]);
+        assert_eq!(results[0].2, Some("2:abcdef123456".to_string()));
+    }
+
+    #[test]
+    fn test_parse_empty_device_notification() {
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "1234567890@s.whatsapp.net")
+            .build();
+
+        let results = parse_device_notification_info(&node);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_device_operations() {
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "1234567890@s.whatsapp.net")
+            .children([
+                NodeBuilder::new("add")
+                    .children([NodeBuilder::new("device").attr("id", "5").build()])
+                    .build(),
+                NodeBuilder::new("remove")
+                    .children([NodeBuilder::new("device").attr("id", "2").build()])
+                    .build(),
+            ])
+            .build();
+
+        let results = parse_device_notification_info(&node);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, DeviceListUpdateType::Add);
+        assert_eq!(results[0].1, vec![5]);
+        assert_eq!(results[1].0, DeviceListUpdateType::Remove);
+        assert_eq!(results[1].1, vec![2]);
+    }
+}
