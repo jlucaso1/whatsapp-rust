@@ -477,3 +477,120 @@ impl SenderKeyDistributionStore for DeviceAwareSqliteStore {
             .await
     }
 }
+
+#[async_trait]
+impl LidPnMappingStore for DeviceAwareSqliteStore {
+    async fn get_lid_pn_mapping_by_lid(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
+        self.store
+            .get_lid_pn_mapping_by_lid_for_device(lid, self.device_id)
+            .await
+    }
+
+    async fn get_lid_pn_mapping_by_phone(&self, phone: &str) -> Result<Option<LidPnMappingEntry>> {
+        self.store
+            .get_lid_pn_mapping_by_phone_for_device(phone, self.device_id)
+            .await
+    }
+
+    async fn put_lid_pn_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
+        self.store
+            .put_lid_pn_mapping_for_device(entry, self.device_id)
+            .await
+    }
+
+    async fn get_all_lid_pn_mappings(&self) -> Result<Vec<LidPnMappingEntry>> {
+        self.store
+            .get_all_lid_pn_mappings_for_device(self.device_id)
+            .await
+    }
+
+    async fn delete_lid_pn_mapping(&self, lid: &str) -> Result<()> {
+        self.store
+            .delete_lid_pn_mapping_for_device(lid, self.device_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl BaseKeyStore for DeviceAwareSqliteStore {
+    async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()> {
+        self.store
+            .save_base_key_for_device(address, message_id, base_key, self.device_id)
+            .await
+    }
+
+    async fn has_same_base_key(
+        &self,
+        address: &str,
+        message_id: &str,
+        current_base_key: &[u8],
+    ) -> Result<bool> {
+        self.store
+            .has_same_base_key_for_device(address, message_id, current_base_key, self.device_id)
+            .await
+    }
+
+    async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()> {
+        self.store
+            .delete_base_key_for_device(address, message_id, self.device_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl DeviceRegistryStore for DeviceAwareSqliteStore {
+    async fn update_device_list(&self, record: DeviceListRecord) -> Result<()> {
+        self.store
+            .update_device_list_for_device(record, self.device_id)
+            .await
+    }
+
+    async fn has_device(&self, user: &str, device_id: u32) -> Result<bool> {
+        self.store
+            .has_device_for_device(user, device_id, self.device_id)
+            .await
+    }
+
+    async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>> {
+        self.store
+            .get_devices_for_device(user, self.device_id)
+            .await
+    }
+
+    async fn cleanup_stale_entries(&self, max_age_secs: i64) -> Result<u64> {
+        self.store
+            .cleanup_stale_entries_for_device(max_age_secs, self.device_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl SenderKeyStatusStore for DeviceAwareSqliteStore {
+    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
+        self.store
+            .mark_forget_sender_key_for_device(group_jid, participant, self.device_id)
+            .await
+    }
+
+    async fn mark_forget_sender_keys(
+        &self,
+        group_jid: &str,
+        participants: &[String],
+    ) -> Result<()> {
+        self.store
+            .mark_forget_sender_keys_for_device(group_jid, participants, self.device_id)
+            .await
+    }
+
+    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+        self.store
+            .consume_forget_marks_for_device(group_jid, self.device_id)
+            .await
+    }
+
+    async fn needs_fresh_skdm(&self, group_jid: &str, participant: &str) -> Result<bool> {
+        self.store
+            .needs_fresh_skdm_for_device(group_jid, participant, self.device_id)
+            .await
+    }
+}

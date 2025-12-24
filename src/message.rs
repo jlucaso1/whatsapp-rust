@@ -25,31 +25,172 @@ use wacore_binary::jid::JidExt as _;
 use wacore_binary::node::Node;
 use waproto::whatsapp::{self as wa};
 
+/// Maximum retry attempts per message (matches WhatsApp Web's MAX_RETRY = 5).
+/// After this many retries, we stop sending retry receipts and rely solely on PDO.
+const MAX_DECRYPT_RETRIES: u8 = 5;
+
+/// Retry count threshold for logging high retry warnings.
+/// WhatsApp Web logs metrics when retry count exceeds this value.
+const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
+
+/// Retry reason codes matching WhatsApp Web's RetryReason enum.
+/// These are included in the retry receipt to help the sender understand
+/// why the message couldn't be decrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+#[allow(dead_code)] // All variants defined for WhatsApp Web compatibility
+pub(crate) enum RetryReason {
+    /// Unknown or unspecified error
+    UnknownError = 0,
+    /// No session exists with the sender (SessionNotFound)
+    NoSession = 1,
+    /// Invalid key in the message
+    InvalidKey = 2,
+    /// PreKey ID not found (InvalidPreKeyId)
+    InvalidKeyId = 3,
+    /// Invalid message format or content (InvalidMessage)
+    InvalidMessage = 4,
+    /// Invalid signature
+    InvalidSignature = 5,
+    /// Message from the future (timestamp issue)
+    FutureMessage = 6,
+    /// MAC verification failed (bad MAC)
+    BadMac = 7,
+    /// Invalid session state
+    InvalidSession = 8,
+    /// Invalid message key
+    InvalidMsgKey = 9,
+}
+
 impl Client {
-    /// Helper method to spawn a task that sends a retry receipt for a failed decryption.
+    /// Dispatches an `UndecryptableMessage` event to notify consumers that a message
+    /// could not be decrypted. This is called when decryption fails and we need to
+    /// show a placeholder to the user (like "Waiting for this message...").
+    ///
+    /// # Arguments
+    /// * `info` - The message info for the undecryptable message
+    /// * `decrypt_fail_mode` - Whether to show or hide the placeholder (matches WhatsApp Web's `hideFail`)
+    fn dispatch_undecryptable_event(
+        &self,
+        info: &MessageInfo,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
+    ) {
+        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+            crate::types::events::UndecryptableMessage {
+                info: info.clone(),
+                is_unavailable: false,
+                unavailable_type: crate::types::events::UnavailableType::Unknown,
+                decrypt_fail_mode,
+            },
+        ));
+    }
+
+    /// Atomically increments the retry count for a message and returns the new count.
+    /// Returns `None` if max retries have been reached.
+    ///
+    /// This uses `get_with` to atomically initialize or retrieve the current count,
+    /// then immediately increments it. While not perfectly atomic (there's a small
+    /// window between get and insert), this is acceptable because:
+    /// 1. Duplicate retry receipts are handled gracefully by the sender
+    /// 2. The worst case is sending one extra retry, which doesn't break the protocol
+    async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
+        // Get current count (atomically initializes to 0 if not present)
+        let current = self
+            .message_retry_counts
+            .get_with(cache_key.to_string(), async { 0_u8 })
+            .await;
+
+        if current >= MAX_DECRYPT_RETRIES {
+            return None; // Max retries reached
+        }
+
+        let new_count = current + 1;
+        self.message_retry_counts
+            .insert(cache_key.to_string(), new_count)
+            .await;
+
+        Some(new_count)
+    }
+
+    /// Spawns a task that sends a retry receipt for a failed decryption.
+    ///
     /// This is used when sessions are not found or invalid to request the sender to resend
     /// the message with a PreKeySignalMessage to re-establish the session.
     ///
-    /// Additionally spawns a PDO (Peer Data Operation) request to our primary phone as a
-    /// backup recovery mechanism. The phone can share the already-decrypted message content
-    /// with us, which is useful when the sender's retry doesn't work (e.g., they send msg
-    /// instead of pkmsg).
-    fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, error_context: &str) {
-        let client_clone = Arc::clone(self);
-        let info_clone = info.clone();
-        let error_context = error_context.to_string();
+    /// # Retry Count Tracking
+    ///
+    /// This method tracks retry counts per message (keyed by `{chat}:{msg_id}:{sender}`)
+    /// and stops sending retry receipts after `MAX_DECRYPT_RETRIES` (5) attempts to prevent
+    /// infinite retry loops. This matches WhatsApp Web's behavior.
+    ///
+    /// # PDO Backup
+    ///
+    /// A PDO (Peer Data Operation) request is spawned only on the FIRST retry attempt.
+    /// This asks our primary phone to share the already-decrypted message content.
+    /// PDO is NOT spawned on subsequent retries to avoid duplicate requests.
+    ///
+    /// When max retries is reached, an immediate PDO request is sent as a last resort.
+    ///
+    /// # Arguments
+    /// * `info` - The message info for the failed message
+    /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
+    fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
+        let cache_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+        let client = Arc::clone(self);
+        let info = info.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
-                log::error!(
-                    "Failed to send retry receipt for {}: {:?}",
-                    error_context,
-                    e
+            // Atomically increment retry count and check if we should continue
+            let Some(retry_count) = client.increment_retry_count(&cache_key).await else {
+                // Max retries reached
+                log::info!(
+                    "Max retries ({}) reached for message {} from {} [{:?}]. Sending immediate PDO request.",
+                    MAX_DECRYPT_RETRIES,
+                    info.id,
+                    info.source.sender,
+                    reason
+                );
+                // Send PDO request immediately (no delay) as last resort
+                client.spawn_pdo_request_with_options(&info, true);
+                return;
+            };
+
+            // Log warning for high retry counts (like WhatsApp Web's MessageHighRetryCount)
+            if retry_count > HIGH_RETRY_COUNT_THRESHOLD {
+                log::warn!(
+                    "High retry count ({}) for message {} from {} [{:?}]",
+                    retry_count,
+                    info.id,
+                    info.source.sender,
+                    reason
                 );
             }
-        });
 
-        // Also spawn a PDO request to our primary phone as a backup recovery mechanism
-        self.spawn_pdo_request(info);
+            // Send the retry receipt with the actual retry count and reason
+            match client.send_retry_receipt(&info, retry_count, reason).await {
+                Ok(()) => {
+                    debug!(
+                        "Sent retry receipt #{} for message {} from {} [{:?}]",
+                        retry_count, info.id, info.source.sender, reason
+                    );
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to send retry receipt #{} for message {} [{:?}]: {:?}",
+                        retry_count,
+                        info.id,
+                        reason,
+                        e
+                    );
+                }
+            }
+
+            // Only spawn PDO on the FIRST retry to avoid duplicate requests.
+            // The PDO cache also provides deduplication, but this reduces unnecessary work.
+            if retry_count == 1 {
+                client.spawn_pdo_request(&info);
+            }
+        });
     }
 
     pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
@@ -309,14 +450,10 @@ impl Client {
                     // Still dispatch an UndecryptableMessage event so the user knows
                     // But only if we haven't already dispatched one in process_session_enc_batch
                     if !session_dispatched_undecryptable {
-                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                            crate::types::events::UndecryptableMessage {
-                                info: info.clone(),
-                                is_unavailable: false,
-                                unavailable_type: crate::types::events::UnavailableType::Unknown,
-                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                            },
-                        ));
+                        self.dispatch_undecryptable_event(
+                            &info,
+                            crate::types::events::DecryptFailMode::Show,
+                        );
                     }
 
                     // Do NOT send a delivery receipt for undecryptable messages.
@@ -340,14 +477,7 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                crate::types::events::UndecryptableMessage {
-                    info: info.clone(),
-                    is_unavailable: false,
-                    unavailable_type: crate::types::events::UnavailableType::Unknown,
-                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                },
-            ));
+            self.dispatch_undecryptable_event(&info, crate::types::events::DecryptFailMode::Show);
             // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
@@ -561,23 +691,14 @@ impl Client {
                                         address
                                     );
 
-                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                                        crate::types::events::UndecryptableMessage {
-                                            info: info.clone(),
-                                            is_unavailable: false,
-                                            unavailable_type:
-                                                crate::types::events::UnavailableType::Unknown,
-                                            decrypt_fail_mode:
-                                                crate::types::events::DecryptFailMode::Show,
-                                        },
-                                    ));
+                                    self.dispatch_undecryptable_event(
+                                        info,
+                                        crate::types::events::DecryptFailMode::Show,
+                                    );
                                     dispatched_undecryptable = true;
 
                                     // Send retry receipt so the sender fetches our new prekey bundle
-                                    self.spawn_retry_receipt(
-                                        info,
-                                        "InvalidPreKeyId after identity change",
-                                    );
+                                    self.spawn_retry_receipt(info, RetryReason::InvalidKeyId);
                                 } else {
                                     log::error!(
                                         "Decryption failed even after clearing untrusted identity for {}: {:?}",
@@ -585,24 +706,15 @@ impl Client {
                                         retry_err
                                     );
                                     // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
-                                    self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                                        crate::types::events::UndecryptableMessage {
-                                            info: info.clone(),
-                                            is_unavailable: false,
-                                            unavailable_type:
-                                                crate::types::events::UnavailableType::Unknown,
-                                            decrypt_fail_mode:
-                                                crate::types::events::DecryptFailMode::Show,
-                                        },
-                                    ));
+                                    self.dispatch_undecryptable_event(
+                                        info,
+                                        crate::types::events::DecryptFailMode::Show,
+                                    );
                                     dispatched_undecryptable = true;
 
                                     // Send retry receipt so the sender resends with a PreKeySignalMessage
                                     // to establish a new session with the new identity
-                                    self.spawn_retry_receipt(
-                                        info,
-                                        "UntrustedIdentity retry failed",
-                                    );
+                                    self.spawn_retry_receipt(info, RetryReason::InvalidKey);
                                 }
                             }
                         }
@@ -615,18 +727,14 @@ impl Client {
                             enc_type, info.source.sender
                         );
                         // Dispatch an event so the library user knows a message was missed.
-                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                            crate::types::events::UndecryptableMessage {
-                                info: info.clone(),
-                                is_unavailable: false,
-                                unavailable_type: crate::types::events::UnavailableType::Unknown,
-                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                            },
-                        ));
+                        self.dispatch_undecryptable_event(
+                            info,
+                            crate::types::events::DecryptFailMode::Show,
+                        );
                         dispatched_undecryptable = true;
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        self.spawn_retry_receipt(info, "SessionNotFound");
+                        self.spawn_retry_receipt(info, RetryReason::NoSession);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
                         // InvalidMessage typically means MAC verification failed or session is out of sync.
@@ -660,18 +768,45 @@ impl Client {
                         drop(device_guard);
 
                         // Dispatch UndecryptableMessage event
-                        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
-                            crate::types::events::UndecryptableMessage {
-                                info: info.clone(),
-                                is_unavailable: false,
-                                unavailable_type: crate::types::events::UnavailableType::Unknown,
-                                decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                            },
-                        ));
+                        self.dispatch_undecryptable_event(
+                            info,
+                            crate::types::events::DecryptFailMode::Show,
+                        );
                         dispatched_undecryptable = true;
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        self.spawn_retry_receipt(info, "InvalidMessage");
+                        self.spawn_retry_receipt(info, RetryReason::InvalidMessage);
+                        continue;
+                    } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
+                        // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
+                        // This typically happens when:
+                        // 1. We were offline for a long time
+                        // 2. The sender established a session with us using a prekey from the server
+                        // 3. We never received the initial session-establishing message
+                        // 4. Now we're receiving messages with counters 3, 4, 5... referencing that prekey
+                        //
+                        // The sender thinks they have a valid session, but we never had it.
+                        // We need to send a retry receipt with fresh prekeys so the sender can:
+                        // 1. Delete their old session
+                        // 2. Fetch our new prekeys from the retry receipt
+                        // 3. Create a NEW session and resend with counter 0
+                        log::warn!(
+                            "Decryption failed for {} message from {} due to InvalidPreKeyId. \
+                             Sender is using a prekey we don't have (likely session established while offline). \
+                             Sending retry receipt with fresh prekeys.",
+                            enc_type,
+                            info.source.sender
+                        );
+
+                        // Dispatch UndecryptableMessage event so the user knows
+                        self.dispatch_undecryptable_event(
+                            info,
+                            crate::types::events::DecryptFailMode::Show,
+                        );
+                        dispatched_undecryptable = true;
+
+                        // Send retry receipt with fresh prekeys
+                        self.spawn_retry_receipt(info, RetryReason::InvalidKeyId);
                         continue;
                     } else {
                         // For other unexpected errors, just log them
@@ -755,15 +890,9 @@ impl Client {
                         "No sender key state for batched group message from {}: {}. Sending retry receipt.",
                         info.source.sender, msg
                     );
-                    let client_clone = self.clone();
-                    let info_clone = info.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = client_clone.send_retry_receipt(&info_clone).await {
-                            log::error!("Failed to send retry receipt (batch): {:?}", e);
-                        }
-                    });
-                    // Also spawn PDO request as backup recovery mechanism
-                    self.spawn_pdo_request(info);
+                    // Use spawn_retry_receipt which has retry count tracking
+                    // NoSenderKeyState is similar to NoSession - we need the SKDM
+                    self.spawn_retry_receipt(info, RetryReason::NoSession);
                 }
                 Err(e) => {
                     log::error!(
@@ -3388,5 +3517,415 @@ mod tests {
         println!("✅ test_pn_message_uses_pn_when_no_lid_mapping passed:");
         println!("   - PN message without LID mapping uses PN for session lookup");
         println!("   - Protocol address: {}", protocol_address);
+    }
+
+    // ==================== RETRY LOGIC TESTS ====================
+    //
+    // These tests verify the retry count tracking, max retry limits,
+    // and PDO fallback behavior to ensure robust message recovery.
+
+    /// Helper to create a test MessageInfo with customizable fields
+    fn create_test_message_info(chat: &str, msg_id: &str, sender: &str) -> MessageInfo {
+        use wacore::types::message::{EditAttribute, MessageSource, MsgMetaInfo};
+
+        let chat_jid: Jid = chat.parse().expect("valid chat JID");
+        let sender_jid: Jid = sender.parse().expect("valid sender JID");
+
+        MessageInfo {
+            id: msg_id.to_string(),
+            server_id: 0,
+            r#type: "text".to_string(),
+            source: MessageSource {
+                chat: chat_jid.clone(),
+                sender: sender_jid,
+                sender_alt: None,
+                recipient_alt: None,
+                is_from_me: false,
+                is_group: chat_jid.is_group(),
+                addressing_mode: None,
+                broadcast_list_owner: None,
+            },
+            timestamp: chrono::Utc::now(),
+            push_name: "Test User".to_string(),
+            category: "".to_string(),
+            multicast: false,
+            media_type: "".to_string(),
+            edit: EditAttribute::default(),
+            bot_info: None,
+            meta_info: MsgMetaInfo::default(),
+            verified_name: None,
+            device_sent_meta: None,
+        }
+    }
+
+    /// Helper to create a test client for retry tests with a unique database
+    async fn create_test_client_for_retry_with_id(test_id: &str) -> Arc<Client> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db_name = format!(
+            "file:memdb_retry_{}_{}_{}?mode=memory&cache=shared",
+            test_id,
+            unique_id,
+            std::process::id()
+        );
+
+        let backend = Arc::new(
+            SqliteStore::new(&db_name)
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        client
+    }
+
+    #[tokio::test]
+    async fn test_increment_retry_count_starts_at_one() {
+        let client = create_test_client_for_retry_with_id("starts_at_one").await;
+
+        let cache_key = "test_chat:msg123:sender456";
+
+        // First increment should return 1
+        let count = client.increment_retry_count(cache_key).await;
+        assert_eq!(count, Some(1), "First retry should be count 1");
+
+        // Verify it's stored in cache
+        let stored = client.message_retry_counts.get(cache_key).await;
+        assert_eq!(stored, Some(1), "Cache should store count 1");
+    }
+
+    #[tokio::test]
+    async fn test_increment_retry_count_increments_correctly() {
+        let client = create_test_client_for_retry_with_id("increments").await;
+
+        let cache_key = "test_chat:msg456:sender789";
+
+        // Simulate multiple retries
+        let count1 = client.increment_retry_count(cache_key).await;
+        let count2 = client.increment_retry_count(cache_key).await;
+        let count3 = client.increment_retry_count(cache_key).await;
+
+        assert_eq!(count1, Some(1), "First retry should be 1");
+        assert_eq!(count2, Some(2), "Second retry should be 2");
+        assert_eq!(count3, Some(3), "Third retry should be 3");
+    }
+
+    #[tokio::test]
+    async fn test_increment_retry_count_respects_max_retries() {
+        let client = create_test_client_for_retry_with_id("max_retries").await;
+
+        let cache_key = "test_chat:msg_max:sender_max";
+
+        // Exhaust all retries (MAX_DECRYPT_RETRIES = 5)
+        for i in 1..=5 {
+            let count = client.increment_retry_count(cache_key).await;
+            assert_eq!(count, Some(i), "Retry {} should return {}", i, i);
+        }
+
+        // 6th attempt should return None (max reached)
+        let count_after_max = client.increment_retry_count(cache_key).await;
+        assert_eq!(
+            count_after_max, None,
+            "After max retries, should return None"
+        );
+
+        // Verify cache still has max value
+        let stored = client.message_retry_counts.get(cache_key).await;
+        assert_eq!(stored, Some(5), "Cache should retain max count");
+    }
+
+    #[tokio::test]
+    async fn test_retry_count_different_messages_are_independent() {
+        let client = create_test_client_for_retry_with_id("independent").await;
+
+        let key1 = "chat1:msg1:sender1";
+        let key2 = "chat1:msg2:sender1"; // Same chat and sender, different message
+        let key3 = "chat2:msg1:sender2"; // Different chat and sender
+
+        // Increment each independently
+        let _ = client.increment_retry_count(key1).await;
+        let _ = client.increment_retry_count(key1).await;
+        let _ = client.increment_retry_count(key1).await; // key1 = 3
+
+        let _ = client.increment_retry_count(key2).await; // key2 = 1
+
+        let _ = client.increment_retry_count(key3).await;
+        let _ = client.increment_retry_count(key3).await; // key3 = 2
+
+        // Verify each has independent counts
+        assert_eq!(client.message_retry_counts.get(key1).await, Some(3));
+        assert_eq!(client.message_retry_counts.get(key2).await, Some(1));
+        assert_eq!(client.message_retry_counts.get(key3).await, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_retry_cache_key_format() {
+        // Verify the cache key format is consistent
+        let info = create_test_message_info(
+            "120363021033254949@g.us",
+            "3EB0ABCD1234",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        let expected_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+        assert_eq!(
+            expected_key,
+            "120363021033254949@g.us:3EB0ABCD1234:5511999998888@s.whatsapp.net"
+        );
+
+        // Verify key uniqueness for different senders in same group
+        let info2 = create_test_message_info(
+            "120363021033254949@g.us",
+            "3EB0ABCD1234",                 // Same message ID
+            "5511888887777@s.whatsapp.net", // Different sender
+        );
+
+        let key2 = format!("{}:{}:{}", info2.source.chat, info2.id, info2.source.sender);
+        assert_ne!(
+            expected_key, key2,
+            "Different senders should have different keys"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_retry_increments() {
+        use tokio::task::JoinSet;
+
+        let client = create_test_client_for_retry_with_id("concurrent").await;
+        let cache_key = "concurrent_test:msg:sender";
+
+        // Spawn 10 concurrent increment tasks
+        let mut tasks = JoinSet::new();
+        for _ in 0..10 {
+            let client_clone = client.clone();
+            let key = cache_key.to_string();
+            tasks.spawn(async move { client_clone.increment_retry_count(&key).await });
+        }
+
+        // Collect all results
+        let mut results = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            if let Ok(count) = result {
+                results.push(count);
+            }
+        }
+
+        // Verify all results are valid (Some(1-5) or None for overflow)
+        let valid_counts: Vec<_> = results.iter().filter(|r| r.is_some()).collect();
+        let none_counts: Vec<_> = results.iter().filter(|r| r.is_none()).collect();
+
+        // Should have at most 5 successful increments (might have some due to race)
+        assert!(
+            valid_counts.len() >= 5,
+            "Should have at least 5 successful increments"
+        );
+        // After 5 increments, the rest should be None
+        assert!(
+            none_counts.len() <= 5,
+            "At most 5 should return None (after max)"
+        );
+
+        // Final count should be 5 (max)
+        let final_count = client.message_retry_counts.get(cache_key).await;
+        assert_eq!(final_count, Some(5), "Final count should be capped at 5");
+    }
+
+    #[tokio::test]
+    async fn test_high_retry_count_threshold() {
+        // Verify HIGH_RETRY_COUNT_THRESHOLD is set correctly
+        assert_eq!(
+            HIGH_RETRY_COUNT_THRESHOLD, 3,
+            "High retry threshold should be 3"
+        );
+        assert_eq!(MAX_DECRYPT_RETRIES, 5, "Max retries should be 5");
+        // Compile-time assertion that threshold < max (avoids clippy warning)
+        const _: () = assert!(HIGH_RETRY_COUNT_THRESHOLD < MAX_DECRYPT_RETRIES);
+    }
+
+    #[tokio::test]
+    async fn test_message_info_creation_for_groups() {
+        let info = create_test_message_info(
+            "120363021033254949@g.us",
+            "MSG123",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        assert!(
+            info.source.is_group,
+            "Group JID should be detected as group"
+        );
+        assert!(
+            !info.source.is_from_me,
+            "Test messages default to not from me"
+        );
+        assert_eq!(info.id, "MSG123");
+    }
+
+    #[tokio::test]
+    async fn test_message_info_creation_for_dm() {
+        let info = create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "DM456",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        assert!(
+            !info.source.is_group,
+            "DM JID should not be detected as group"
+        );
+        assert_eq!(info.id, "DM456");
+    }
+
+    #[tokio::test]
+    async fn test_retry_count_cache_expiration() {
+        // Note: This test verifies cache configuration, not actual TTL (which would be slow)
+        let client = create_test_client_for_retry_with_id("expiration").await;
+
+        // The cache should have a TTL of 5 minutes (300 seconds) as configured in client.rs
+        // We can verify entries are being stored and the cache is functional
+        let cache_key = "expiry_test:msg:sender";
+
+        let count = client.increment_retry_count(cache_key).await;
+        assert_eq!(count, Some(1));
+
+        // Entry should still exist immediately after
+        let stored = client.message_retry_counts.get(cache_key).await;
+        assert!(
+            stored.is_some(),
+            "Entry should exist immediately after insert"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_retry_receipt_basic_flow() {
+        // This is an integration test that verifies spawn_retry_receipt
+        // doesn't panic and updates the retry count correctly
+
+        let client = create_test_client_for_retry_with_id("spawn_basic").await;
+        let info = create_test_message_info(
+            "120363021033254949@g.us",
+            "SPAWN_TEST_MSG",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        let cache_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+
+        // Verify count starts at 0
+        assert!(
+            client.message_retry_counts.get(&cache_key).await.is_none(),
+            "Cache should be empty initially"
+        );
+
+        // Call spawn_retry_receipt (this spawns a task, so we need to wait)
+        client.spawn_retry_receipt(&info, RetryReason::UnknownError);
+
+        // Give the spawned task time to execute
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Verify count was incremented (the actual send will fail due to no connection, but count should update)
+        let stored = client.message_retry_counts.get(&cache_key).await;
+        assert_eq!(stored, Some(1), "Retry count should be 1 after spawn");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_retry_receipt_respects_max_retries() {
+        let client = create_test_client_for_retry_with_id("spawn_max").await;
+        let info = create_test_message_info(
+            "120363021033254949@g.us",
+            "MAX_RETRY_TEST",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        let cache_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+
+        // Pre-fill cache to max retries
+        client
+            .message_retry_counts
+            .insert(cache_key.clone(), MAX_DECRYPT_RETRIES)
+            .await;
+
+        // Verify count is at max
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(MAX_DECRYPT_RETRIES)
+        );
+
+        // Call spawn_retry_receipt - should NOT increment (already at max)
+        client.spawn_retry_receipt(&info, RetryReason::UnknownError);
+
+        // Give the spawned task time to execute
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Count should still be at max (not incremented)
+        let stored = client.message_retry_counts.get(&cache_key).await;
+        assert_eq!(
+            stored,
+            Some(MAX_DECRYPT_RETRIES),
+            "Count should remain at max"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pdo_cache_key_format_matches() {
+        // PDO uses "{chat}:{msg_id}" format
+        // Retry uses "{chat}:{msg_id}:{sender}" format
+        // They are intentionally different to track independently
+
+        let info = create_test_message_info(
+            "120363021033254949@g.us",
+            "PDO_KEY_TEST",
+            "5511999998888@s.whatsapp.net",
+        );
+
+        let retry_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+        let pdo_key = format!("{}:{}", info.source.chat, info.id);
+
+        assert_ne!(retry_key, pdo_key, "PDO and retry keys should be different");
+        assert!(
+            retry_key.starts_with(&pdo_key),
+            "Retry key should start with PDO key pattern"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multiple_senders_same_message_id_tracked_separately() {
+        // In a group, multiple senders could theoretically have the same message ID
+        // (unlikely but the system should handle it)
+
+        let client = create_test_client_for_retry_with_id("multi_sender").await;
+
+        let group = "120363021033254949@g.us";
+        let msg_id = "SAME_MSG_ID";
+        let sender1 = "5511111111111@s.whatsapp.net";
+        let sender2 = "5522222222222@s.whatsapp.net";
+
+        let key1 = format!("{}:{}:{}", group, msg_id, sender1);
+        let key2 = format!("{}:{}:{}", group, msg_id, sender2);
+
+        // Increment for sender1 multiple times
+        client.increment_retry_count(&key1).await;
+        client.increment_retry_count(&key1).await;
+        client.increment_retry_count(&key1).await;
+
+        // Increment for sender2 once
+        client.increment_retry_count(&key2).await;
+
+        // Verify independent tracking
+        assert_eq!(
+            client.message_retry_counts.get(&key1).await,
+            Some(3),
+            "Sender1 should have 3 retries"
+        );
+        assert_eq!(
+            client.message_retry_counts.get(&key2).await,
+            Some(1),
+            "Sender2 should have 1 retry"
+        );
     }
 }

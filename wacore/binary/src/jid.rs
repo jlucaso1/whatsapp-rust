@@ -247,6 +247,10 @@ pub trait JidExt {
         self.server() == BROADCAST_SERVER && self.user() != STATUS_BROADCAST_USER
     }
 
+    fn is_status_broadcast(&self) -> bool {
+        self.server() == BROADCAST_SERVER && self.user() == STATUS_BROADCAST_USER
+    }
+
     fn is_bot(&self) -> bool {
         (self.server() == DEFAULT_USER_SERVER
             && self.device() == 0

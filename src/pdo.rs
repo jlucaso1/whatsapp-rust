@@ -78,9 +78,20 @@ impl Client {
             integrator: 0,
         };
 
-        // Check if we've already requested this message recently to avoid duplicate requests
+        // Atomically check-and-insert to avoid race conditions where two concurrent
+        // calls could both pass a contains_key check before either inserts.
         let cache_key = format!("{}:{}", info.source.chat, info.id);
-        if self.pdo_pending_requests.contains_key(&cache_key) {
+        let pending = PendingPdoRequest {
+            message_info: info.clone(),
+            requested_at: std::time::Instant::now(),
+        };
+        let entry = self
+            .pdo_pending_requests
+            .entry(cache_key.clone())
+            .or_insert(pending)
+            .await;
+
+        if !entry.is_fresh() {
             debug!(
                 "PDO request already pending for message {} from {}",
                 info.id, info.source.sender
@@ -126,15 +137,6 @@ impl Client {
             protocol_message: Some(Box::new(protocol_message)),
             ..Default::default()
         };
-
-        // Store the pending request before sending
-        let pending = PendingPdoRequest {
-            message_info: info.clone(),
-            requested_at: std::time::Instant::now(),
-        };
-        self.pdo_pending_requests
-            .insert(cache_key.clone(), pending)
-            .await;
 
         info!(
             "Sending PDO placeholder resend request for message {} from {} in {} to primary phone {}",
@@ -359,7 +361,14 @@ impl Client {
 
     /// Spawns a PDO request for a message that failed to decrypt.
     /// This is called alongside the retry receipt to increase chances of recovery.
-    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &MessageInfo) {
+    ///
+    /// When `immediate` is true, the PDO request is sent without delay.
+    /// This is used when we've exhausted retry attempts and need immediate PDO recovery.
+    pub(crate) fn spawn_pdo_request_with_options(
+        self: &Arc<Self>,
+        info: &MessageInfo,
+        immediate: bool,
+    ) {
         // Don't send PDO for our own messages or status broadcasts
         if info.source.is_from_me {
             return;
@@ -372,9 +381,11 @@ impl Client {
         let info_clone = info.clone();
 
         tokio::spawn(async move {
-            // Add a small delay to allow the retry receipt to be processed first
-            // This avoids overwhelming the phone with simultaneous requests
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            if !immediate {
+                // Add a small delay to allow the retry receipt to be processed first
+                // This avoids overwhelming the phone with simultaneous requests
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
 
             if let Err(e) = client_clone
                 .send_pdo_placeholder_resend_request(&info_clone)
@@ -386,5 +397,11 @@ impl Client {
                 );
             }
         });
+    }
+
+    /// Spawns a PDO request for a message that failed to decrypt.
+    /// This is called alongside the retry receipt to increase chances of recovery.
+    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &MessageInfo) {
+        self.spawn_pdo_request_with_options(info, false);
     }
 }

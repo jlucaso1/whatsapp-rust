@@ -125,6 +125,11 @@ pub struct Client {
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
+    /// Track retry attempts per message to prevent infinite retry loops.
+    /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
+    /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
+    pub(crate) message_retry_counts: Cache<String, u8>,
+
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -152,6 +157,11 @@ pub struct Client {
     /// Cache for pending PDO (Peer Data Operation) requests.
     /// Maps message cache keys (chat:id) to pending request info.
     pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
+
+    /// LRU cache for device registry (matches WhatsApp Web's 5000 entry limit).
+    /// Maps user ID to DeviceListRecord for fast device existence checks.
+    /// Backed by persistent storage.
+    pub(crate) device_registry_cache: Cache<String, wacore::store::traits::DeviceListRecord>,
 
     /// Router for dispatching stanzas to their appropriate handlers
     pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
@@ -232,6 +242,13 @@ impl Client {
 
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
+            // Retry count tracking cache for preventing infinite retry loops.
+            // TTL of 5 minutes to match retry functionality, max 5000 entries.
+            message_retry_counts: Cache::builder()
+                .time_to_live(Duration::from_secs(300))
+                .max_capacity(5_000)
+                .build(),
+
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
@@ -249,6 +266,10 @@ impl Client {
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
+            device_registry_cache: Cache::builder()
+                .max_capacity(5_000) // Match WhatsApp Web's 5000 entry limit
+                .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
+                .build(),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
@@ -294,6 +315,274 @@ impl Client {
 
         self.lid_pn_cache.warm_up(cache_entries).await;
         Ok(())
+    }
+
+    /// Check if a device exists for a user.
+    /// Uses the in-memory cache first, then falls back to persistent storage.
+    /// Returns true for device_id 0 (primary device always exists).
+    /// Matches WhatsApp Web's WAWebApiDeviceList.hasDevice behavior.
+    pub(crate) async fn has_device(&self, user: &str, device_id: u32) -> bool {
+        // Device ID 0 (primary device) always exists
+        if device_id == 0 {
+            return true;
+        }
+
+        // Check cache first
+        if let Some(record) = self.device_registry_cache.get(user).await {
+            return record.devices.iter().any(|d| d.device_id == device_id);
+        }
+
+        // Fall back to persistence
+        let backend = self.persistence_manager.backend();
+        match backend.get_devices(user).await {
+            Ok(Some(record)) => {
+                let has_device = record.devices.iter().any(|d| d.device_id == device_id);
+                // Populate cache
+                self.device_registry_cache
+                    .insert(user.to_string(), record)
+                    .await;
+                has_device
+            }
+            Ok(None) => {
+                // No record means we don't have device info for this user.
+                // WhatsApp Web returns false in this case (!!r && ...).
+                // This ensures unknown devices are rejected in retry handling.
+                false
+            }
+            Err(e) => {
+                warn!("Failed to check device registry: {e}");
+                // On error, be permissive
+                true
+            }
+        }
+    }
+
+    /// Update the device list for a user.
+    /// Called when we receive device list updates from usync responses.
+    pub(crate) async fn update_device_list(
+        &self,
+        record: wacore::store::traits::DeviceListRecord,
+    ) -> Result<()> {
+        let user = record.user.clone();
+
+        // Update cache
+        self.device_registry_cache
+            .insert(user, record.clone())
+            .await;
+
+        // Persist to storage
+        let backend = self.persistence_manager.backend();
+        backend
+            .update_device_list(record)
+            .await
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Mark participants for fresh SKDM on next group send.
+    /// Filters out our own devices (we don't need to send SKDM to ourselves).
+    /// Matches WhatsApp Web's WAWebApiParticipantStore.markForgetSenderKey behavior.
+    /// Called from handle_retry_receipt for group/status messages.
+    pub(crate) async fn mark_forget_sender_key(
+        &self,
+        group_jid: &str,
+        participants: &[String],
+    ) -> Result<()> {
+        // Get our own user ID to filter out (WhatsApp Web: isMeDevice check)
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
+        let own_lid_user = device_guard.lid.as_ref().map(|j| j.user.clone());
+        let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.clone());
+        drop(device_guard);
+
+        // Filter out own devices (WhatsApp Web: !isMeDevice(e))
+        let filtered: Vec<String> = participants
+            .iter()
+            .filter(|p| {
+                // Parse participant JID and check if it's our own
+                let is_own_lid = own_lid_user.as_ref().is_some_and(|lid| {
+                    p.starts_with(&format!("{lid}:"))
+                        || p.starts_with(&format!("{lid}@"))
+                        || p.as_str() == lid
+                });
+                let is_own_pn = own_pn_user.as_ref().is_some_and(|pn| {
+                    p.starts_with(&format!("{pn}:"))
+                        || p.starts_with(&format!("{pn}@"))
+                        || p.as_str() == pn
+                });
+                !is_own_lid && !is_own_pn
+            })
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Ok(());
+        }
+
+        let backend = self.persistence_manager.backend();
+        backend
+            .mark_forget_sender_keys(group_jid, &filtered)
+            .await
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Ensure phone-to-LID mappings are resolved for the given JIDs.
+    /// Matches WhatsApp Web's WAWebManagePhoneNumberMappingJob.ensurePhoneNumberToLidMapping().
+    /// Should be called before establishing new E2E sessions to avoid duplicate sessions.
+    ///
+    /// This checks the local cache for existing mappings. For JIDs without cached mappings,
+    /// the caller should consider fetching them via usync query if establishing sessions.
+    pub(crate) async fn resolve_lid_mappings(
+        &self,
+        jids: &[wacore_binary::jid::Jid],
+    ) -> Vec<wacore_binary::jid::Jid> {
+        let mut resolved = Vec::with_capacity(jids.len());
+
+        for jid in jids {
+            // Only resolve for user JIDs (not groups, status, etc.)
+            if jid.server != "s.whatsapp.net" && jid.server != "lid" {
+                resolved.push(jid.clone());
+                continue;
+            }
+
+            // If it's already a LID, use as-is
+            if jid.server == "lid" {
+                resolved.push(jid.clone());
+                continue;
+            }
+
+            // Try to resolve PN to LID from cache
+            if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
+                resolved.push(wacore_binary::jid::Jid {
+                    user: lid_user,
+                    server: "lid".to_string(),
+                    device: jid.device,
+                    agent: jid.agent,
+                    integrator: jid.integrator,
+                });
+            } else {
+                // No cached mapping, use original JID
+                // TODO: Could trigger usync query here for proactive resolution
+                resolved.push(jid.clone());
+            }
+        }
+
+        resolved
+    }
+
+    /// Wait for offline message delivery to complete.
+    /// Matches WhatsApp Web's WAWebEventsWaitForOfflineDeliveryEnd.waitForOfflineDeliveryEnd().
+    /// Should be called before establishing new E2E sessions to avoid conflicts.
+    pub(crate) async fn wait_for_offline_delivery_end(&self) {
+        use std::sync::atomic::Ordering;
+
+        if self.offline_sync_completed.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Wait with a reasonable timeout to avoid blocking forever
+        const TIMEOUT_SECS: u64 = 10;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(TIMEOUT_SECS),
+            self.offline_sync_notifier.notified(),
+        )
+        .await;
+    }
+
+    /// Ensure E2E sessions exist for the given device JIDs.
+    /// Matches WhatsApp Web's ensureE2ESessions behavior (lx-whGBdTEw.js:31006-31152).
+    /// - Waits for offline delivery to complete
+    /// - Resolves phone-to-LID mappings
+    /// - Uses SessionManager for deduplication and batching
+    pub(crate) async fn ensure_e2e_sessions(
+        &self,
+        device_jids: Vec<wacore_binary::jid::Jid>,
+    ) -> Result<()> {
+        use wacore::libsignal::store::SessionStore;
+        use wacore::types::jid::JidExt;
+
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+
+        // 1. Wait for offline sync (matches WhatsApp Web)
+        self.wait_for_offline_delivery_end().await;
+
+        // 2. Resolve LID mappings (matches WhatsApp Web)
+        let resolved_jids = self.resolve_lid_mappings(&device_jids).await;
+
+        // 3. Filter to JIDs that need sessions (inline has_session check)
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let mut jids_needing_sessions = Vec::new();
+
+        {
+            let device_guard = device_store.read().await;
+            for jid in resolved_jids {
+                let signal_addr = jid.to_protocol_address();
+                if device_guard.load_session(&signal_addr).await.is_err() {
+                    jids_needing_sessions.push(jid);
+                }
+            }
+        }
+
+        if jids_needing_sessions.is_empty() {
+            return Ok(());
+        }
+
+        // 4. Fetch and establish sessions (with batching)
+        for batch in jids_needing_sessions.chunks(crate::session::SESSION_CHECK_BATCH_SIZE) {
+            self.fetch_and_establish_sessions(batch.to_vec()).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Fetch prekeys and establish sessions for a batch of JIDs.
+    async fn fetch_and_establish_sessions(
+        &self,
+        jids: Vec<wacore_binary::jid::Jid>,
+    ) -> Result<(), anyhow::Error> {
+        use rand::TryRngCore;
+        use wacore::libsignal::protocol::{UsePQRatchet, process_prekey_bundle};
+        use wacore::types::jid::JidExt;
+
+        if jids.is_empty() {
+            return Ok(());
+        }
+
+        let prekey_bundles = self.fetch_pre_keys(&jids, Some("identity")).await?;
+
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let mut adapter =
+            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+
+        for jid in &jids {
+            if let Some(bundle) = prekey_bundles.get(jid) {
+                let signal_addr = jid.to_protocol_address();
+                if let Err(e) = process_prekey_bundle(
+                    &signal_addr,
+                    &mut adapter.session_store,
+                    &mut adapter.identity_store,
+                    bundle,
+                    &mut rand::rngs::OsRng.unwrap_err(),
+                    UsePQRatchet::No,
+                )
+                .await
+                {
+                    log::warn!("Failed to establish session with {}: {}", jid, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get participants marked for fresh SKDM and consume the marks.
+    /// Matches WhatsApp Web's getGroupSenderKeyList pattern.
+    pub(crate) async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+        let backend = self.persistence_manager.backend();
+        backend
+            .consume_forget_marks(group_jid)
+            .await
+            .map_err(|e| anyhow!("{e}"))
     }
 
     /// Add a LID-PN mapping to both the in-memory cache and persistent storage.

@@ -15,6 +15,7 @@ pub mod message;
 pub mod pair;
 pub mod request;
 pub mod send;
+pub mod session;
 pub mod socket;
 pub mod store;
 pub mod transport;

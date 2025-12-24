@@ -117,6 +117,95 @@ pub trait LidPnMappingStore: Send + Sync {
     async fn delete_lid_pn_mapping(&self, lid: &str) -> Result<()>;
 }
 
+/// Store for tracking session base keys during retry collision detection.
+/// Used to detect when a sender hasn't regenerated their session keys despite
+/// receiving our retry receipts. This matches WhatsApp Web's behavior:
+/// - On retry count 2: Save the session's base key
+/// - On retry count > 2: Check if the base key is the same (collision = sender hasn't regenerated)
+#[async_trait]
+pub trait BaseKeyStore: Send + Sync {
+    /// Save the base key for a session address (typically on retry count 2).
+    /// The message_id helps identify which retry sequence this belongs to.
+    async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()>;
+
+    /// Check if the current session has the same base key as the saved one.
+    /// Returns true if the base key matches (collision detected).
+    async fn has_same_base_key(
+        &self,
+        address: &str,
+        message_id: &str,
+        current_base_key: &[u8],
+    ) -> Result<bool>;
+
+    /// Delete base key entry (called after successful message or session deletion).
+    async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()>;
+}
+
+/// Device information for registry tracking.
+/// Used to track known devices per user for validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    /// The device ID (0 = primary device, 1+ = companion devices)
+    pub device_id: u32,
+    /// The key index, if known
+    pub key_index: Option<u32>,
+}
+
+/// Device list record matching WhatsApp Web's DeviceListRecord structure.
+/// Stores the known devices for a user, updated from usync responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceListRecord {
+    /// The user part of the JID (phone number or LID)
+    pub user: String,
+    /// List of known devices for this user
+    pub devices: Vec<DeviceInfo>,
+    /// Timestamp when this record was last updated
+    pub timestamp: i64,
+    /// Participant hash from usync, if available
+    pub phash: Option<String>,
+}
+
+/// Store for tracking known devices per user.
+/// Used to validate device existence before processing retry receipts.
+/// Matches WhatsApp Web's WAWebApiDeviceList behavior.
+#[async_trait]
+pub trait DeviceRegistryStore: Send + Sync {
+    /// Update the device list for a user (called after usync responses).
+    async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
+
+    /// Check if a specific device exists for a user.
+    /// Returns true for device_id 0 (primary device always exists).
+    async fn has_device(&self, user: &str, device_id: u32) -> Result<bool>;
+
+    /// Get all known devices for a user.
+    async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
+
+    /// Remove stale device entries older than max_age_secs.
+    async fn cleanup_stale_entries(&self, max_age_secs: i64) -> Result<u64>;
+}
+
+/// Store for tracking sender key validity status per participant per group.
+/// Implements WhatsApp Web's lazy deletion pattern (markForgetSenderKey).
+/// Instead of immediately deleting sender keys on retry, we mark them for
+/// regeneration and consume the marks on the next group send.
+#[async_trait]
+pub trait SenderKeyStatusStore: Send + Sync {
+    /// Mark a participant's sender key as needing regeneration for a group.
+    /// The key won't be deleted until the next group send.
+    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()>;
+
+    /// Mark multiple participants' sender keys as needing regeneration.
+    async fn mark_forget_sender_keys(&self, group_jid: &str, participants: &[String])
+    -> Result<()>;
+
+    /// Get participants that need fresh SKDM (marked for forget).
+    /// Consumes the marks (deletes them after reading).
+    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
+
+    /// Check if a specific participant needs fresh SKDM.
+    async fn needs_fresh_skdm(&self, group_jid: &str, participant: &str) -> Result<bool>;
+}
+
 /// Trait for device data persistence operations
 #[async_trait]
 pub trait DevicePersistence: Send + Sync {
@@ -156,6 +245,9 @@ pub trait Backend:
     + SenderKeyStoreHelper
     + SenderKeyDistributionStore
     + LidPnMappingStore
+    + BaseKeyStore
+    + DeviceRegistryStore
+    + SenderKeyStatusStore
     + DevicePersistence
     + Send
     + Sync
@@ -172,6 +264,9 @@ impl<T> Backend for T where
         + SenderKeyStoreHelper
         + SenderKeyDistributionStore
         + LidPnMappingStore
+        + BaseKeyStore
+        + DeviceRegistryStore
+        + SenderKeyStatusStore
         + DevicePersistence
         + Send
         + Sync

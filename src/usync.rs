@@ -78,11 +78,34 @@ impl Client {
                     .push(device.clone());
             }
 
-            for (user_jid, devices) in devices_by_user {
+            for (user_jid, devices) in &devices_by_user {
                 self.get_device_cache()
                     .await
-                    .insert(user_jid, devices)
+                    .insert(user_jid.clone(), devices.clone())
                     .await;
+
+                // Also update device registry for hasDevice checks (matches WhatsApp Web)
+                let device_list = wacore::store::traits::DeviceListRecord {
+                    user: user_jid.user.clone(),
+                    devices: devices
+                        .iter()
+                        .map(|d| wacore::store::traits::DeviceInfo {
+                            device_id: d.device as u32,
+                            key_index: None,
+                        })
+                        .collect(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    phash: None, // TODO: parse from usync response if available
+                };
+                if let Err(e) = self.update_device_list(device_list).await {
+                    warn!(
+                        "Failed to update device registry for {}: {}",
+                        user_jid.user, e
+                    );
+                }
             }
             all_devices.extend(fetched_devices);
         }

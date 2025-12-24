@@ -551,6 +551,87 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl wacore::store::traits::BaseKeyStore for MockBackend {
+        async fn save_base_key(
+            &self,
+            _address: &str,
+            _message_id: &str,
+            _base_key: &[u8],
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn has_same_base_key(
+            &self,
+            _address: &str,
+            _message_id: &str,
+            _current_base_key: &[u8],
+        ) -> StoreResult<bool> {
+            Ok(false)
+        }
+
+        async fn delete_base_key(&self, _address: &str, _message_id: &str) -> StoreResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl wacore::store::traits::DeviceRegistryStore for MockBackend {
+        async fn update_device_list(
+            &self,
+            _record: wacore::store::traits::DeviceListRecord,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn has_device(&self, _user: &str, _device_id: u32) -> StoreResult<bool> {
+            Ok(true)
+        }
+
+        async fn get_devices(
+            &self,
+            _user: &str,
+        ) -> StoreResult<Option<wacore::store::traits::DeviceListRecord>> {
+            Ok(None)
+        }
+
+        async fn cleanup_stale_entries(&self, _max_age_secs: i64) -> StoreResult<u64> {
+            Ok(0)
+        }
+    }
+
+    #[async_trait]
+    impl wacore::store::traits::SenderKeyStatusStore for MockBackend {
+        async fn mark_forget_sender_key(
+            &self,
+            _group_jid: &str,
+            _participant: &str,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn mark_forget_sender_keys(
+            &self,
+            _group_jid: &str,
+            _participants: &[String],
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn consume_forget_marks(&self, _group_jid: &str) -> StoreResult<Vec<String>> {
+            Ok(vec![])
+        }
+
+        async fn needs_fresh_skdm(
+            &self,
+            _group_jid: &str,
+            _participant: &str,
+        ) -> StoreResult<bool> {
+            Ok(false)
+        }
+    }
+
     fn create_encrypted_mutation(
         op: wa::syncd_mutation::SyncdOperation,
         index_mac: &[u8],
