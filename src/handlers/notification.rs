@@ -52,15 +52,17 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             }
         }
         "server_sync" => {
-            info!(target: "Client", "Received `server_sync` notification, scheduling app state sync(s).");
+            // Server sync notifications inform us of app state changes from other devices.
+            // For bot use case, we don't need to sync these (pins, mutes, archives, etc.).
+            // Just acknowledge without syncing.
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
                     let name = collection_node.attrs().string("name");
-                    let mut attrs = collection_node.attrs();
-                    let version = attrs.optional_u64("version").unwrap_or(0);
-                    info!(
+                    let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
+                    debug!(
                         target: "Client/AppState",
-                        "scheduling sync for collection '{name}' from version {version}."
+                        "Received server_sync for collection '{}' version {} (not syncing)",
+                        name, version
                     );
                 }
             }
@@ -264,21 +266,23 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             .as_secs()
     }) as i64;
 
-    // Build DeviceListRecord for storage
+    // Build device info list for storage
+    let device_infos: Vec<DeviceInfo> = devices
+        .iter()
+        .map(|d| DeviceInfo {
+            device_id: d.jid.device as u32,
+            key_index: d.key_index,
+        })
+        .collect();
+
+    // Update the entry for the JID we received in the notification
     let device_list = DeviceListRecord {
         user: from_jid.user.clone(),
-        devices: devices
-            .iter()
-            .map(|d| DeviceInfo {
-                device_id: d.jid.device as u32,
-                key_index: d.key_index,
-            })
-            .collect(),
+        devices: device_infos.clone(),
         timestamp,
-        phash: dhash, // Use dhash as phash (they serve similar purposes)
+        phash: dhash.clone(),
     };
 
-    // Update cache + persistent storage
     if let Err(e) = client.update_device_list(device_list).await {
         warn!(
             target: "Client/AccountSync",
@@ -286,6 +290,37 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             e
         );
         return;
+    }
+
+    // Also update the alternate identity (LID if from is PN, or PN if from is LID)
+    // This ensures both entries stay in sync for our own account
+    let alternate_user = if from_jid.is_lid() {
+        own_pn.map(|j| j.user.clone())
+    } else {
+        own_lid.map(|j| j.user.clone())
+    };
+
+    if let Some(alt_user) = alternate_user {
+        let alt_device_list = DeviceListRecord {
+            user: alt_user.clone(),
+            devices: device_infos.clone(),
+            timestamp,
+            phash: dhash,
+        };
+
+        if let Err(e) = client.update_device_list(alt_device_list).await {
+            warn!(
+                target: "Client/AccountSync",
+                "Failed to update alternate device list ({}): {}",
+                alt_user, e
+            );
+        } else {
+            debug!(
+                target: "Client/AccountSync",
+                "Also updated alternate identity device list: {}",
+                alt_user
+            );
+        }
     }
 
     info!(

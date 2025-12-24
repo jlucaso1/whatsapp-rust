@@ -77,6 +77,22 @@ impl Client {
                     .await;
 
                 // Also update device registry for hasDevice checks (matches WhatsApp Web)
+                // Preserve key_index values from existing records (set via account_sync)
+                let existing_key_indices: std::collections::HashMap<u32, Option<u32>> = self
+                    .persistence_manager
+                    .backend()
+                    .get_devices(&user_list.user.user)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| {
+                        r.devices
+                            .into_iter()
+                            .map(|d| (d.device_id, d.key_index))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 let device_list = wacore::store::traits::DeviceListRecord {
                     user: user_list.user.user.clone(),
                     devices: user_list
@@ -84,7 +100,11 @@ impl Client {
                         .iter()
                         .map(|d| wacore::store::traits::DeviceInfo {
                             device_id: d.device as u32,
-                            key_index: None,
+                            // Preserve existing key_index if we have it
+                            key_index: existing_key_indices
+                                .get(&(d.device as u32))
+                                .copied()
+                                .flatten(),
                         })
                         .collect(),
                     timestamp: std::time::SystemTime::now()
