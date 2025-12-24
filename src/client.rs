@@ -325,6 +325,7 @@ impl Client {
 
     /// Background loop to periodically clean up stale device registry entries.
     /// Runs every 6 hours, deleting entries older than 7 days.
+    /// Terminates gracefully when shutdown is signaled.
     async fn device_registry_cleanup_loop(&self) {
         use tokio::time::{Duration, interval};
 
@@ -336,30 +337,40 @@ impl Client {
         let mut interval = interval(Duration::from_secs(CLEANUP_INTERVAL_HOURS * 60 * 60));
 
         loop {
-            interval.tick().await;
-
-            let backend = self.persistence_manager.backend();
-            match backend.cleanup_stale_entries(MAX_AGE_SECS).await {
-                Ok(deleted) => {
-                    if deleted > 0 {
-                        info!(
-                            target: "Client/DeviceRegistry",
-                            "Cleaned up {} stale device registry entries (older than {} days)",
-                            deleted, MAX_AGE_DAYS
-                        );
-                    } else {
-                        debug!(
-                            target: "Client/DeviceRegistry",
-                            "No stale device registry entries to clean up"
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(
+            tokio::select! {
+                biased;
+                _ = self.shutdown_notifier.notified() => {
+                    debug!(
                         target: "Client/DeviceRegistry",
-                        "Failed to clean up stale device registry entries: {}",
-                        e
+                        "Shutdown signaled, exiting cleanup loop"
                     );
+                    return;
+                }
+                _ = interval.tick() => {
+                    let backend = self.persistence_manager.backend();
+                    match backend.cleanup_stale_entries(MAX_AGE_SECS).await {
+                        Ok(deleted) => {
+                            if deleted > 0 {
+                                info!(
+                                    target: "Client/DeviceRegistry",
+                                    "Cleaned up {} stale device registry entries (older than {} days)",
+                                    deleted, MAX_AGE_DAYS
+                                );
+                            } else {
+                                debug!(
+                                    target: "Client/DeviceRegistry",
+                                    "No stale device registry entries to clean up"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                target: "Client/DeviceRegistry",
+                                "Failed to clean up stale device registry entries: {}",
+                                e
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -430,15 +441,18 @@ impl Client {
     /// Called when we receive device change notifications (add/remove/update).
     /// This forces the next device lookup to fetch fresh data.
     pub(crate) async fn invalidate_device_cache(&self, user: &str) {
+        use wacore_binary::jid::{DEFAULT_USER_SERVER, HIDDEN_USER_SERVER};
+
         // Remove from in-memory cache
         self.device_registry_cache.invalidate(user).await;
 
         // Also invalidate the device cache (Jid -> Vec<Jid>)
-        // Parse user to Jid and remove from device cache
-        if let Ok(jid) = format!("{user}@s.whatsapp.net").parse::<wacore_binary::jid::Jid>() {
+        // Parse user to Jid and remove from device cache for both PN and LID servers
+        if let Ok(jid) = format!("{user}@{DEFAULT_USER_SERVER}").parse::<wacore_binary::jid::Jid>()
+        {
             self.get_device_cache().await.invalidate(&jid).await;
         }
-        if let Ok(jid) = format!("{user}@lid").parse::<wacore_binary::jid::Jid>() {
+        if let Ok(jid) = format!("{user}@{HIDDEN_USER_SERVER}").parse::<wacore_binary::jid::Jid>() {
             self.get_device_cache().await.invalidate(&jid).await;
         }
 
