@@ -266,21 +266,19 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             .as_secs()
     }) as i64;
 
-    // Build device info list for storage
-    let device_infos: Vec<DeviceInfo> = devices
-        .iter()
-        .map(|d| DeviceInfo {
-            device_id: d.jid.device as u32,
-            key_index: d.key_index,
-        })
-        .collect();
-
-    // Update the entry for the JID we received in the notification
+    // Build DeviceListRecord for storage
+    // Note: update_device_list() will automatically store under LID if mapping is known
     let device_list = DeviceListRecord {
         user: from_jid.user.clone(),
-        devices: device_infos.clone(),
+        devices: devices
+            .iter()
+            .map(|d| DeviceInfo {
+                device_id: d.jid.device as u32,
+                key_index: d.key_index,
+            })
+            .collect(),
         timestamp,
-        phash: dhash.clone(),
+        phash: dhash,
     };
 
     if let Err(e) = client.update_device_list(device_list).await {
@@ -290,37 +288,6 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             e
         );
         return;
-    }
-
-    // Also update the alternate identity (LID if from is PN, or PN if from is LID)
-    // This ensures both entries stay in sync for our own account
-    let alternate_user = if from_jid.is_lid() {
-        own_pn.map(|j| j.user.clone())
-    } else {
-        own_lid.map(|j| j.user.clone())
-    };
-
-    if let Some(alt_user) = alternate_user {
-        let alt_device_list = DeviceListRecord {
-            user: alt_user.clone(),
-            devices: device_infos.clone(),
-            timestamp,
-            phash: dhash,
-        };
-
-        if let Err(e) = client.update_device_list(alt_device_list).await {
-            warn!(
-                target: "Client/AccountSync",
-                "Failed to update alternate device list ({}): {}",
-                alt_user, e
-            );
-        } else {
-            debug!(
-                target: "Client/AccountSync",
-                "Also updated alternate identity device list: {}",
-                alt_user
-            );
-        }
     }
 
     info!(
