@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
 use log::{debug, warn};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::NodeContent;
 
@@ -43,7 +43,8 @@ impl Client {
                 timeout: None,
             };
             let resp_node = self.send_iq(iq).await?;
-            let fetched_devices = wacore::usync::parse_get_user_devices_response(&resp_node)?;
+            let user_device_lists =
+                wacore::usync::parse_get_user_devices_response_with_phash(&resp_node)?;
 
             // Extract and persist LID mappings from the response
             let lid_mappings = wacore::usync::parse_lid_mappings_from_response(&resp_node);
@@ -68,26 +69,18 @@ impl Client {
                 );
             }
 
-            // 3. Update the cache with the newly fetched data
-            let mut devices_by_user = HashMap::new();
-            for device in fetched_devices.iter() {
-                let user_jid = device.to_non_ad();
-                devices_by_user
-                    .entry(user_jid)
-                    .or_insert_with(Vec::new)
-                    .push(device.clone());
-            }
-
-            for (user_jid, devices) in &devices_by_user {
+            // 3. Update the cache with the newly fetched data (now with phash)
+            for user_list in &user_device_lists {
                 self.get_device_cache()
                     .await
-                    .insert(user_jid.clone(), devices.clone())
+                    .insert(user_list.user.clone(), user_list.devices.clone())
                     .await;
 
                 // Also update device registry for hasDevice checks (matches WhatsApp Web)
                 let device_list = wacore::store::traits::DeviceListRecord {
-                    user: user_jid.user.clone(),
-                    devices: devices
+                    user: user_list.user.user.clone(),
+                    devices: user_list
+                        .devices
                         .iter()
                         .map(|d| wacore::store::traits::DeviceInfo {
                             device_id: d.device as u32,
@@ -98,15 +91,21 @@ impl Client {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs() as i64,
-                    phash: None, // TODO: parse from usync response if available
+                    phash: user_list.phash.clone(),
                 };
                 if let Err(e) = self.update_device_list(device_list).await {
                     warn!(
                         "Failed to update device registry for {}: {}",
-                        user_jid.user, e
+                        user_list.user.user, e
                     );
                 }
             }
+
+            // Collect all devices for return
+            let fetched_devices: Vec<Jid> = user_device_lists
+                .into_iter()
+                .flat_map(|u| u.devices)
+                .collect();
             all_devices.extend(fetched_devices);
         }
 

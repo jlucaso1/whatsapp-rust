@@ -188,6 +188,32 @@ pub struct SelfPushNameUpdated {
     pub new_name: String,
 }
 
+/// Type of device list update notification.
+/// Matches WhatsApp Web's device notification types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum DeviceListUpdateType {
+    /// A device was added to the user's account
+    Add,
+    /// A device was removed from the user's account
+    Remove,
+    /// Device information was updated
+    Update,
+}
+
+/// Device list update notification.
+/// Emitted when a user's device list changes (device added/removed/updated).
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceListUpdate {
+    /// The user whose device list changed
+    pub user: Jid,
+    /// Type of update (add/remove/update)
+    pub update_type: DeviceListUpdateType,
+    /// List of device IDs affected
+    pub devices: Vec<u32>,
+    /// Hash for cache validation (if provided)
+    pub hash: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum Event {
     Connected(Connected),
@@ -229,6 +255,9 @@ pub enum Event {
     HistorySync(HistorySync),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
+
+    /// Device list changed for a user (device added/removed/updated)
+    DeviceListUpdate(DeviceListUpdate),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),

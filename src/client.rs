@@ -286,6 +286,12 @@ impl Client {
             }
         });
 
+        // Start background task to clean up stale device registry entries
+        let cleanup_arc = arc.clone();
+        tokio::spawn(async move {
+            cleanup_arc.device_registry_cleanup_loop().await;
+        });
+
         (arc, rx)
     }
 
@@ -315,6 +321,48 @@ impl Client {
 
         self.lid_pn_cache.warm_up(cache_entries).await;
         Ok(())
+    }
+
+    /// Background loop to periodically clean up stale device registry entries.
+    /// Runs every 6 hours, deleting entries older than 7 days.
+    async fn device_registry_cleanup_loop(&self) {
+        use tokio::time::{Duration, interval};
+
+        const CLEANUP_INTERVAL_HOURS: u64 = 6;
+        const MAX_AGE_DAYS: i64 = 7;
+        const MAX_AGE_SECS: i64 = MAX_AGE_DAYS * 24 * 60 * 60;
+
+        // Run cleanup immediately on startup, then every 6 hours
+        let mut interval = interval(Duration::from_secs(CLEANUP_INTERVAL_HOURS * 60 * 60));
+
+        loop {
+            interval.tick().await;
+
+            let backend = self.persistence_manager.backend();
+            match backend.cleanup_stale_entries(MAX_AGE_SECS).await {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        info!(
+                            target: "Client/DeviceRegistry",
+                            "Cleaned up {} stale device registry entries (older than {} days)",
+                            deleted, MAX_AGE_DAYS
+                        );
+                    } else {
+                        debug!(
+                            target: "Client/DeviceRegistry",
+                            "No stale device registry entries to clean up"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        target: "Client/DeviceRegistry",
+                        "Failed to clean up stale device registry entries: {}",
+                        e
+                    );
+                }
+            }
+        }
     }
 
     /// Check if a device exists for a user.
@@ -376,6 +424,25 @@ impl Client {
             .update_device_list(record)
             .await
             .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Invalidate the device cache for a specific user.
+    /// Called when we receive device change notifications (add/remove/update).
+    /// This forces the next device lookup to fetch fresh data.
+    pub(crate) async fn invalidate_device_cache(&self, user: &str) {
+        // Remove from in-memory cache
+        self.device_registry_cache.invalidate(user).await;
+
+        // Also invalidate the device cache (Jid -> Vec<Jid>)
+        // Parse user to Jid and remove from device cache
+        if let Ok(jid) = format!("{user}@s.whatsapp.net").parse::<wacore_binary::jid::Jid>() {
+            self.get_device_cache().await.invalidate(&jid).await;
+        }
+        if let Ok(jid) = format!("{user}@lid").parse::<wacore_binary::jid::Jid>() {
+            self.get_device_cache().await.invalidate(&jid).await;
+        }
+
+        log::debug!("Invalidated device cache for user: {}", user);
     }
 
     /// Mark participants for fresh SKDM on next group send.
