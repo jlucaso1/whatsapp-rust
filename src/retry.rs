@@ -211,10 +211,9 @@ impl Client {
 
         if is_group_or_status {
             // For groups and status broadcasts, mark participant as needing fresh SKDM.
-            // WhatsApp Web uses markForgetSenderKey which lazily marks participants for
+            // WhatsApp Web uses `markForgetSenderKey` which lazily marks participants for
             // SKDM redistribution on the next send, rather than immediately deleting
-            // the sender key. See QEwAiKl168gjhs8lKF5BveDpSNctHgKi9vkBfXFq3lH76qTNfGJr
-            // mpMliohPfH0eaer-kKZlq8qPDGpO.a5da42fabb6b.js:52821
+            // the sender key.
             let group_jid = receipt.source.chat.to_string();
             let participant_str = participant_jid.to_string();
 

@@ -565,7 +565,7 @@ impl Client {
     }
 
     /// Ensure E2E sessions exist for the given device JIDs.
-    /// Matches WhatsApp Web's ensureE2ESessions behavior (lx-whGBdTEw.js:31006-31152).
+    /// Matches WhatsApp Web's `ensureE2ESessions` behavior.
     /// - Waits for offline delivery to complete
     /// - Resolves phone-to-LID mappings
     /// - Uses SessionManager for deduplication and batching

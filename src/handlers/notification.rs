@@ -4,7 +4,9 @@ use crate::types::events::Event;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
+use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{DeviceListUpdate, DeviceListUpdateType};
+use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
 
 /// Handler for `<notification>` stanzas.
@@ -64,17 +66,18 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             }
         }
         "account_sync" => {
+            // Handle push name updates
             if let Some(new_push_name) = node.attrs().optional_string("pushname") {
                 client
                     .clone()
                     .update_push_name_and_notify(new_push_name.to_string())
                     .await;
-            } else {
-                warn!(target: "Client", "TODO: Implement full handler for <notification type='account_sync'>, for now dispatching generic event.");
-                client
-                    .core
-                    .event_bus
-                    .dispatch(&Event::Notification(node.clone()));
+            }
+
+            // Handle device list updates (when a new device is paired)
+            // Matches WhatsApp Web's handleAccountSyncNotification for DEVICES type
+            if let Some(devices_node) = node.get_optional_child_by_tag(&["devices"]) {
+                handle_account_sync_devices(client, node, devices_node).await;
             }
         }
         "devices" => {
@@ -166,8 +169,146 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     }
 }
 
+/// Parsed device info from account_sync notification
+struct AccountSyncDevice {
+    jid: Jid,
+    key_index: Option<u32>,
+}
+
+/// Parse devices from account_sync notification's <devices> child.
+///
+/// Example structure:
+/// ```xml
+/// <devices dhash="2:FnEWjS13">
+///   <device jid="559984726662@s.whatsapp.net"/>
+///   <device jid="559984726662:64@s.whatsapp.net" key-index="2"/>
+///   <key-index-list ts="1766612162"><!-- bytes --></key-index-list>
+/// </devices>
+/// ```
+fn parse_account_sync_device_list(devices_node: &Node) -> Vec<AccountSyncDevice> {
+    let Some(children) = devices_node.children() else {
+        return Vec::new();
+    };
+
+    children
+        .iter()
+        .filter(|n| n.tag == "device")
+        .filter_map(|n| {
+            let jid = n.attrs().optional_jid("jid")?;
+            let key_index = n.attrs().optional_u64("key-index").map(|v| v as u32);
+            Some(AccountSyncDevice { jid, key_index })
+        })
+        .collect()
+}
+
+/// Handle account_sync notification with <devices> child.
+///
+/// This is sent when devices are added/removed from OUR account (e.g., pairing a new WhatsApp Web).
+/// Matches WhatsApp Web's `handleAccountSyncNotification` for `AccountSyncType.DEVICES`.
+///
+/// Key behaviors:
+/// 1. Check if notification is for our own account (isSameAccountAndAddressingMode)
+/// 2. Parse device list from notification
+/// 3. Update device registry with new device list
+/// 4. Does NOT trigger app state sync (that's handled by server_sync)
+async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_node: &Node) {
+    // Extract the "from" JID - this is the account the notification is about
+    let from_jid = match node.attrs().optional_jid("from") {
+        Some(jid) => jid,
+        None => {
+            warn!(target: "Client/AccountSync", "account_sync devices missing 'from' attribute");
+            return;
+        }
+    };
+
+    // Get our own JIDs (PN and LID) to verify this is about our account
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    let own_pn = device_snapshot.pn.as_ref();
+    let own_lid = device_snapshot.lid.as_ref();
+
+    // Check if notification is about our own account
+    // Matches WhatsApp Web's isSameAccountAndAddressingMode check
+    let is_own_account = own_pn.is_some_and(|pn| pn.is_same_user_as(&from_jid))
+        || own_lid.is_some_and(|lid| lid.is_same_user_as(&from_jid));
+
+    if !is_own_account {
+        // WhatsApp Web logs "wid-is-not-self" error in this case
+        warn!(
+            target: "Client/AccountSync",
+            "Received account_sync devices for non-self user: {} (our PN: {:?}, LID: {:?})",
+            from_jid,
+            own_pn.map(|j| j.user.as_str()),
+            own_lid.map(|j| j.user.as_str())
+        );
+        return;
+    }
+
+    // Parse device list from notification
+    let devices = parse_account_sync_device_list(devices_node);
+    if devices.is_empty() {
+        debug!(target: "Client/AccountSync", "account_sync devices list is empty");
+        return;
+    }
+
+    // Extract dhash (device hash) for cache validation
+    let dhash = devices_node
+        .attrs()
+        .optional_string("dhash")
+        .map(String::from);
+
+    // Get timestamp from notification
+    let timestamp = node.attrs().optional_u64("t").unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }) as i64;
+
+    // Build DeviceListRecord for storage
+    let device_list = DeviceListRecord {
+        user: from_jid.user.clone(),
+        devices: devices
+            .iter()
+            .map(|d| DeviceInfo {
+                device_id: d.jid.device as u32,
+                key_index: d.key_index,
+            })
+            .collect(),
+        timestamp,
+        phash: dhash, // Use dhash as phash (they serve similar purposes)
+    };
+
+    // Update cache + persistent storage
+    if let Err(e) = client.update_device_list(device_list).await {
+        warn!(
+            target: "Client/AccountSync",
+            "Failed to update device list from account_sync: {}",
+            e
+        );
+        return;
+    }
+
+    info!(
+        target: "Client/AccountSync",
+        "Updated own device list from account_sync: {} devices (user: {})",
+        devices.len(),
+        from_jid.user
+    );
+
+    // Log individual devices at debug level
+    for device in &devices {
+        debug!(
+            target: "Client/AccountSync",
+            "  Device: {} (key-index: {:?})",
+            device.jid,
+            device.key_index
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use wacore::types::events::DeviceListUpdateType;
     use wacore_binary::builder::NodeBuilder;
 
@@ -293,5 +434,113 @@ mod tests {
         assert_eq!(results[0].1, vec![5]);
         assert_eq!(results[1].0, DeviceListUpdateType::Remove);
         assert_eq!(results[1].1, vec![2]);
+    }
+
+    // Tests for account_sync device parsing
+
+    #[test]
+    fn test_parse_account_sync_device_list_basic() {
+        let devices_node = NodeBuilder::new("devices")
+            .attr("dhash", "2:FnEWjS13")
+            .children([
+                NodeBuilder::new("device")
+                    .attr("jid", "559984726662@s.whatsapp.net")
+                    .build(),
+                NodeBuilder::new("device")
+                    .attr("jid", "559984726662:64@s.whatsapp.net")
+                    .attr("key-index", "2")
+                    .build(),
+            ])
+            .build();
+
+        let devices = parse_account_sync_device_list(&devices_node);
+        assert_eq!(devices.len(), 2);
+
+        // Primary device (device 0)
+        assert_eq!(devices[0].jid.user, "559984726662");
+        assert_eq!(devices[0].jid.device, 0);
+        assert_eq!(devices[0].key_index, None);
+
+        // Companion device (device 64)
+        assert_eq!(devices[1].jid.user, "559984726662");
+        assert_eq!(devices[1].jid.device, 64);
+        assert_eq!(devices[1].key_index, Some(2));
+    }
+
+    #[test]
+    fn test_parse_account_sync_device_list_with_key_index_list() {
+        // Real-world structure includes <key-index-list> which should be ignored
+        let devices_node = NodeBuilder::new("devices")
+            .attr("dhash", "2:FnEWjS13")
+            .children([
+                NodeBuilder::new("device")
+                    .attr("jid", "559984726662@s.whatsapp.net")
+                    .build(),
+                NodeBuilder::new("device")
+                    .attr("jid", "559984726662:77@s.whatsapp.net")
+                    .attr("key-index", "15")
+                    .build(),
+                NodeBuilder::new("key-index-list")
+                    .attr("ts", "1766612162")
+                    .bytes(vec![0x01, 0x02, 0x03]) // Simulated signed bytes
+                    .build(),
+            ])
+            .build();
+
+        let devices = parse_account_sync_device_list(&devices_node);
+        // Should only parse <device> tags, not <key-index-list>
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].jid.device, 0);
+        assert_eq!(devices[1].jid.device, 77);
+        assert_eq!(devices[1].key_index, Some(15));
+    }
+
+    #[test]
+    fn test_parse_account_sync_device_list_empty() {
+        let devices_node = NodeBuilder::new("devices")
+            .attr("dhash", "2:FnEWjS13")
+            .build();
+
+        let devices = parse_account_sync_device_list(&devices_node);
+        assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn test_parse_account_sync_device_list_multiple_devices() {
+        let devices_node = NodeBuilder::new("devices")
+            .attr("dhash", "2:XYZ123")
+            .children([
+                NodeBuilder::new("device")
+                    .attr("jid", "1234567890@s.whatsapp.net")
+                    .build(),
+                NodeBuilder::new("device")
+                    .attr("jid", "1234567890:1@s.whatsapp.net")
+                    .attr("key-index", "1")
+                    .build(),
+                NodeBuilder::new("device")
+                    .attr("jid", "1234567890:2@s.whatsapp.net")
+                    .attr("key-index", "5")
+                    .build(),
+                NodeBuilder::new("device")
+                    .attr("jid", "1234567890:3@s.whatsapp.net")
+                    .attr("key-index", "10")
+                    .build(),
+            ])
+            .build();
+
+        let devices = parse_account_sync_device_list(&devices_node);
+        assert_eq!(devices.len(), 4);
+
+        // Verify device IDs are correctly parsed
+        assert_eq!(devices[0].jid.device, 0);
+        assert_eq!(devices[1].jid.device, 1);
+        assert_eq!(devices[2].jid.device, 2);
+        assert_eq!(devices[3].jid.device, 3);
+
+        // Verify key indexes
+        assert_eq!(devices[0].key_index, None);
+        assert_eq!(devices[1].key_index, Some(1));
+        assert_eq!(devices[2].key_index, Some(5));
+        assert_eq!(devices[3].key_index, Some(10));
     }
 }
