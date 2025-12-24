@@ -168,13 +168,7 @@ mod tests {
         let request = SpamReportRequest {
             message_id: "TEST456".to_string(),
             message_timestamp: 1234567890,
-            from_jid: Some(Jid {
-                user: "5511999887766".to_string(),
-                server: "s.whatsapp.net".to_string(),
-                device: 0,
-                agent: 0,
-                integrator: 0,
-            }),
+            from_jid: Some(Jid::pn("5511999887766")),
             spam_flow: SpamFlow::MessageMenu,
             raw_message: Some(vec![0x01, 0x02, 0x03]),
             media_type: Some("image".to_string()),
@@ -198,21 +192,9 @@ mod tests {
         let request = SpamReportRequest {
             message_id: "TEST789".to_string(),
             message_timestamp: 1234567890,
-            group_jid: Some(Jid {
-                user: "120363025918861132".to_string(),
-                server: "g.us".to_string(),
-                device: 0,
-                agent: 0,
-                integrator: 0,
-            }),
+            group_jid: Some(Jid::group("120363025918861132")),
             group_subject: Some("Test Group".to_string()),
-            participant_jid: Some(Jid {
-                user: "5511999887766".to_string(),
-                server: "s.whatsapp.net".to_string(),
-                device: 0,
-                agent: 0,
-                integrator: 0,
-            }),
+            participant_jid: Some(Jid::pn("5511999887766")),
             spam_flow: SpamFlow::GroupInfoReport,
             ..Default::default()
         };

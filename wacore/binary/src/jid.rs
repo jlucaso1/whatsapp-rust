@@ -317,6 +317,53 @@ impl Jid {
         }
     }
 
+    /// Create a phone number JID (s.whatsapp.net)
+    pub fn pn(user: impl Into<String>) -> Self {
+        Self {
+            user: user.into(),
+            server: DEFAULT_USER_SERVER.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Create a LID JID (lid server)
+    pub fn lid(user: impl Into<String>) -> Self {
+        Self {
+            user: user.into(),
+            server: HIDDEN_USER_SERVER.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Create a group JID (g.us)
+    pub fn group(id: impl Into<String>) -> Self {
+        Self {
+            user: id.into(),
+            server: GROUP_SERVER.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Create a phone number JID with device ID
+    pub fn pn_device(user: impl Into<String>, device: u16) -> Self {
+        Self {
+            user: user.into(),
+            server: DEFAULT_USER_SERVER.to_string(),
+            device,
+            ..Default::default()
+        }
+    }
+
+    /// Create a LID JID with device ID
+    pub fn lid_device(user: impl Into<String>, device: u16) -> Self {
+        Self {
+            user: user.into(),
+            server: HIDDEN_USER_SERVER.to_string(),
+            device,
+            ..Default::default()
+        }
+    }
+
     /// Returns true if this is a Phone Number based JID (s.whatsapp.net)
     #[inline]
     pub fn is_pn(&self) -> bool {
@@ -994,5 +1041,67 @@ mod tests {
         // Count how many hosted devices were filtered out
         let hosted_count = devices.iter().filter(|jid| jid.is_hosted()).count();
         assert_eq!(hosted_count, 3, "Should have filtered out 3 hosted devices");
+    }
+
+    #[test]
+    fn test_jid_pn_factory() {
+        let jid = Jid::pn("1234567890");
+        assert_eq!(jid.user, "1234567890");
+        assert_eq!(jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(jid.device, 0);
+        assert!(jid.is_pn());
+    }
+
+    #[test]
+    fn test_jid_lid_factory() {
+        let jid = Jid::lid("100000012345678");
+        assert_eq!(jid.user, "100000012345678");
+        assert_eq!(jid.server, HIDDEN_USER_SERVER);
+        assert_eq!(jid.device, 0);
+        assert!(jid.is_lid());
+    }
+
+    #[test]
+    fn test_jid_group_factory() {
+        let jid = Jid::group("123456789-1234567890");
+        assert_eq!(jid.user, "123456789-1234567890");
+        assert_eq!(jid.server, GROUP_SERVER);
+        assert!(jid.is_group());
+    }
+
+    #[test]
+    fn test_jid_pn_device_factory() {
+        let jid = Jid::pn_device("1234567890", 5);
+        assert_eq!(jid.user, "1234567890");
+        assert_eq!(jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(jid.device, 5);
+        assert!(jid.is_pn());
+        assert!(jid.is_ad());
+    }
+
+    #[test]
+    fn test_jid_lid_device_factory() {
+        let jid = Jid::lid_device("100000012345678", 33);
+        assert_eq!(jid.user, "100000012345678");
+        assert_eq!(jid.server, HIDDEN_USER_SERVER);
+        assert_eq!(jid.device, 33);
+        assert!(jid.is_lid());
+        assert!(jid.is_ad());
+    }
+
+    #[test]
+    fn test_jid_factories_with_string_types() {
+        // Test with &str
+        let jid1 = Jid::pn("123");
+        assert_eq!(jid1.user, "123");
+
+        // Test with String
+        let jid2 = Jid::lid(String::from("456"));
+        assert_eq!(jid2.user, "456");
+
+        // Test with owned String
+        let user = "789".to_string();
+        let jid3 = Jid::group(user);
+        assert_eq!(jid3.user, "789");
     }
 }

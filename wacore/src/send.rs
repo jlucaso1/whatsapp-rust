@@ -137,17 +137,11 @@ where
         }
 
         // No session under PN - check if there's one under the corresponding LID
-        if device_jid.server == "s.whatsapp.net"
+        if device_jid.is_pn()
             && let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await
         {
             // Construct the LID JID with the same device ID
-            let lid_jid = Jid {
-                user: lid_user.clone(),
-                server: "lid".to_string(),
-                device: device_jid.device,
-                agent: device_jid.agent,
-                integrator: device_jid.integrator,
-            };
+            let lid_jid = Jid::lid_device(lid_user, device_jid.device);
             let lid_address = lid_jid.to_protocol_address();
 
             if stores
@@ -1045,20 +1039,16 @@ mod tests {
     fn test_large_group_with_mixed_device_availability() {
         let mut all_devices = Vec::new();
 
-        for i in 0..10 {
-            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i)
-                .parse()
-                .expect("test JID should be valid");
+        for i in 0..10u16 {
+            let device_jid = Jid::pn_device("1234567890", i);
             all_devices.push(device_jid);
         }
 
         let mut resolver = MockSendContextResolver::new().with_devices(all_devices.clone());
 
         // Add bundles for devices 0-6, mark 7-9 as missing
-        for i in 0..10 {
-            let device_jid: Jid = format!("1234567890:{}@s.whatsapp.net", i)
-                .parse()
-                .expect("test JID should be valid");
+        for i in 0..10u16 {
+            let device_jid = Jid::pn_device("1234567890", i);
 
             if i < 7 {
                 resolver = resolver.with_bundle(device_jid, create_mock_bundle());
@@ -1369,9 +1359,7 @@ mod tests {
         let resolver = MockSendContextResolver::new().with_phone_to_lid(phone, lid);
 
         // Simulate the device JID we're trying to send to (PN format)
-        let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, device_id)
-            .parse()
-            .expect("test PN device JID should be valid");
+        let pn_device_jid = Jid::pn_device(phone, device_id);
 
         // Step 1: Look up LID for the phone number (using direct HashMap access)
         let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
@@ -1379,13 +1367,7 @@ mod tests {
         let lid_user = lid_user.expect("phone should have LID mapping");
 
         // Step 2: Construct the LID JID with same device ID
-        let lid_jid = Jid {
-            user: lid_user.clone(),
-            server: "lid".to_string(),
-            device: pn_device_jid.device,
-            agent: pn_device_jid.agent,
-            integrator: pn_device_jid.integrator,
-        };
+        let lid_jid = Jid::lid_device(lid_user.clone(), pn_device_jid.device);
 
         // Step 3: Verify the LID JID is correctly constructed
         assert_eq!(lid_jid.user, lid, "LID user should match");
@@ -1427,21 +1409,16 @@ mod tests {
         let resolver = MockSendContextResolver::new().with_phone_to_lid(phone, lid);
 
         // Simulate sending to a companion device (WhatsApp Web)
-        let pn_device_jid: Jid = format!("{}:{}@s.whatsapp.net", phone, companion_device_id)
-            .parse()
-            .expect("test companion device JID should be valid");
+        let pn_device_jid = Jid::pn_device(phone, companion_device_id);
 
         // Look up LID using direct HashMap access
         let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
 
         // Construct LID JID
-        let lid_jid = Jid {
-            user: lid_user.expect("phone should have LID mapping for companion test"),
-            server: "lid".to_string(),
-            device: pn_device_jid.device,
-            agent: pn_device_jid.agent,
-            integrator: pn_device_jid.integrator,
-        };
+        let lid_jid = Jid::lid_device(
+            lid_user.expect("phone should have LID mapping for companion test"),
+            pn_device_jid.device,
+        );
 
         assert_eq!(
             lid_jid.device, companion_device_id,

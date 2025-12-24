@@ -225,13 +225,7 @@ mod tests {
     use std::time::Duration;
 
     fn make_jid(user: &str) -> Jid {
-        Jid {
-            user: user.to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        }
+        Jid::pn(user)
     }
 
     #[tokio::test]

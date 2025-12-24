@@ -2936,8 +2936,8 @@ mod tests {
         // Create a DM message node with sender_lid attribute
         // This simulates receiving a message from WhatsApp Web
         let dm_node = NodeBuilder::new("message")
-            .attr("from", format!("{}@s.whatsapp.net", phone))
-            .attr("sender_lid", format!("{}@lid", lid))
+            .attr("from", Jid::pn(phone).to_string())
+            .attr("sender_lid", Jid::lid(lid).to_string())
             .attr("id", "TEST123456789")
             .attr("t", "1765482972")
             .attr("type", "text")
@@ -2997,7 +2997,7 @@ mod tests {
 
         // Create a DM message node WITHOUT sender_lid attribute
         let dm_node = NodeBuilder::new("message")
-            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("from", Jid::pn(phone).to_string())
             // Note: NO sender_lid attribute
             .attr("id", "TEST123456789")
             .attr("t", "1765482972")
@@ -3054,8 +3054,8 @@ mod tests {
         // This happens in LID-mode groups (addressing_mode="lid")
         let group_node = NodeBuilder::new("message")
             .attr("from", "120363123456789012@g.us") // Group chat
-            .attr("participant", format!("{}@lid", lid)) // Sender is LID
-            .attr("participant_pn", format!("{}@s.whatsapp.net", phone)) // Their phone number
+            .attr("participant", Jid::lid(lid).to_string()) // Sender is LID
+            .attr("participant_pn", Jid::pn(phone).to_string()) // Their phone number
             .attr("addressing_mode", "lid") // Required for participant_pn to be parsed
             .attr("id", "TEST123456789")
             .attr("t", "1765482972")
@@ -3123,8 +3123,8 @@ mod tests {
         // Send multiple messages from the same sender
         for i in 0..3 {
             let dm_node = NodeBuilder::new("message")
-                .attr("from", format!("{}@s.whatsapp.net", phone))
-                .attr("sender_lid", format!("{}@lid", lid))
+                .attr("from", Jid::pn(phone).to_string())
+                .attr("sender_lid", Jid::lid(lid).to_string())
                 .attr("id", format!("TEST{}", i))
                 .attr("t", "1765482972")
                 .attr("type", "text")
@@ -3212,8 +3212,8 @@ mod tests {
 
         // Test scenario: Parse a PN-addressed DM message (with sender_lid attribute)
         let dm_node_with_sender_lid = wacore_binary::builder::NodeBuilder::new("message")
-            .attr("from", format!("{}@s.whatsapp.net", phone))
-            .attr("sender_lid", format!("{}@lid", lid))
+            .attr("from", Jid::pn(phone).to_string())
+            .attr("sender_lid", Jid::lid(lid).to_string())
             .attr("id", "test_dm_with_lid")
             .attr("t", "1765494882")
             .attr("type", "text")
@@ -3342,7 +3342,7 @@ mod tests {
 
         // Parse a PN-addressed DM message WITHOUT sender_lid attribute
         let dm_node_without_sender_lid = wacore_binary::builder::NodeBuilder::new("message")
-            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("from", Jid::pn(phone).to_string())
             // Note: No sender_lid attribute!
             .attr("id", "test_dm_no_lid")
             .attr("t", "1765494882")
@@ -3447,7 +3447,7 @@ mod tests {
 
         // Parse a PN-addressed DM message without sender_lid
         let dm_node = wacore_binary::builder::NodeBuilder::new("message")
-            .attr("from", format!("{}@s.whatsapp.net", phone))
+            .attr("from", Jid::pn(phone).to_string())
             .attr("id", "test_dm_no_mapping")
             .attr("t", "1765494882")
             .attr("type", "text")

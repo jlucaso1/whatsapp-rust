@@ -441,20 +441,21 @@ impl Client {
     /// Called when we receive device change notifications (add/remove/update).
     /// This forces the next device lookup to fetch fresh data.
     pub(crate) async fn invalidate_device_cache(&self, user: &str) {
-        use wacore_binary::jid::{DEFAULT_USER_SERVER, HIDDEN_USER_SERVER};
+        use wacore_binary::jid::Jid;
 
         // Remove from in-memory cache
         self.device_registry_cache.invalidate(user).await;
 
         // Also invalidate the device cache (Jid -> Vec<Jid>)
-        // Parse user to Jid and remove from device cache for both PN and LID servers
-        if let Ok(jid) = format!("{user}@{DEFAULT_USER_SERVER}").parse::<wacore_binary::jid::Jid>()
-        {
-            self.get_device_cache().await.invalidate(&jid).await;
-        }
-        if let Ok(jid) = format!("{user}@{HIDDEN_USER_SERVER}").parse::<wacore_binary::jid::Jid>() {
-            self.get_device_cache().await.invalidate(&jid).await;
-        }
+        // Remove from device cache for both PN and LID servers
+        self.get_device_cache()
+            .await
+            .invalidate(&Jid::pn(user))
+            .await;
+        self.get_device_cache()
+            .await
+            .invalidate(&Jid::lid(user))
+            .await;
 
         log::debug!("Invalidated device cache for user: {}", user);
     }
@@ -520,26 +521,20 @@ impl Client {
 
         for jid in jids {
             // Only resolve for user JIDs (not groups, status, etc.)
-            if jid.server != "s.whatsapp.net" && jid.server != "lid" {
+            if !jid.is_pn() && !jid.is_lid() {
                 resolved.push(jid.clone());
                 continue;
             }
 
             // If it's already a LID, use as-is
-            if jid.server == "lid" {
+            if jid.is_lid() {
                 resolved.push(jid.clone());
                 continue;
             }
 
             // Try to resolve PN to LID from cache
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
-                resolved.push(wacore_binary::jid::Jid {
-                    user: lid_user,
-                    server: "lid".to_string(),
-                    device: jid.device,
-                    agent: jid.agent,
-                    integrator: jid.integrator,
-                });
+                resolved.push(wacore_binary::jid::Jid::lid_device(lid_user, jid.device));
             } else {
                 // No cached mapping, use original JID
                 // TODO: Could trigger usync query here for proactive resolution

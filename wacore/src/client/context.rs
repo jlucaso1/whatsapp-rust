@@ -8,11 +8,7 @@ fn build_pn_to_lid_map(lid_to_pn_map: &HashMap<String, Jid>) -> HashMap<String, 
     lid_to_pn_map
         .iter()
         .map(|(lid_user, phone_jid)| {
-            let lid_jid = Jid {
-                user: lid_user.clone(),
-                server: "lid".to_string(),
-                ..Default::default()
-            };
+            let lid_jid = Jid::lid(lid_user);
             (phone_jid.user.clone(), lid_jid)
         })
         .collect()
@@ -86,16 +82,10 @@ impl GroupInfo {
     /// Convert a phone-based device JID to a LID-based device JID using the mapping.
     /// If no mapping exists, returns the original JID unchanged.
     pub fn phone_device_jid_to_lid(&self, phone_device_jid: &Jid) -> Jid {
-        if phone_device_jid.server == "s.whatsapp.net"
+        if phone_device_jid.is_pn()
             && let Some(lid_base) = self.lid_jid_for_phone_user(&phone_device_jid.user)
         {
-            return Jid {
-                user: lid_base.user.clone(),
-                server: "lid".to_string(),
-                device: phone_device_jid.device,
-                agent: phone_device_jid.agent,
-                integrator: phone_device_jid.integrator,
-            };
+            return Jid::lid_device(&lid_base.user, phone_device_jid.device);
         }
         phone_device_jid.clone()
     }
