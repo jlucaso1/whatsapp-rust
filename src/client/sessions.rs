@@ -52,7 +52,7 @@ impl Client {
         // 2. Resolve LID mappings (matches WhatsApp Web)
         let resolved_jids = self.resolve_lid_mappings(&device_jids).await;
 
-        // 3. Filter to JIDs that need sessions (inline has_session check)
+        // 3. Filter to JIDs that need sessions
         let device_store = self.persistence_manager.get_device_arc().await;
         let mut jids_needing_sessions = Vec::new();
 
@@ -60,8 +60,18 @@ impl Client {
             let device_guard = device_store.read().await;
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
-                if device_guard.load_session(&signal_addr).await.is_err() {
-                    jids_needing_sessions.push(jid);
+                match device_guard.contains_session(&signal_addr).await {
+                    Ok(true) => {
+                        // Session exists, skip
+                    }
+                    Ok(false) => {
+                        // No session, need to establish one
+                        jids_needing_sessions.push(jid);
+                    }
+                    Err(e) => {
+                        // Storage error - log and skip this JID rather than treating as missing
+                        log::warn!("Failed to check session for {}: {}", jid, e);
+                    }
                 }
             }
         }

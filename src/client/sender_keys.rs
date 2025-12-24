@@ -81,11 +81,19 @@ impl Client {
     /// Returns the deserialized message if found, None otherwise.
     pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
         use prost::Message;
-        let key = RecentMessageKey { to, id };
-        self.recent_messages
-            .remove(&key)
-            .await
-            .and_then(|bytes| wa::Message::decode(bytes.as_slice()).ok())
+        let key = RecentMessageKey {
+            to: to.clone(),
+            id: id.clone(),
+        };
+        self.recent_messages.remove(&key).await.and_then(|bytes| {
+            match wa::Message::decode(bytes.as_slice()) {
+                Ok(msg) => Some(msg),
+                Err(e) => {
+                    log::warn!("Failed to decode cached message for {}:{}: {}", to, id, e);
+                    None
+                }
+            }
+        })
     }
 
     /// Store a recent message in the cache (serialized as bytes).

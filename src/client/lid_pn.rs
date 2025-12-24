@@ -144,7 +144,7 @@ impl Client {
             // PN JID - check if we have a LID mapping
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
                 let lid_jid = Jid {
-                    user: lid_user.clone(),
+                    user: lid_user,
                     server: lid_server.to_string(),
                     device: target.device,
                     agent: target.agent,
