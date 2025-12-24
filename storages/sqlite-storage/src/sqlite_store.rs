@@ -2735,7 +2735,7 @@ mod tests {
             phash: Some("2:abcdef".to_string()),
         };
 
-        store.save_devices(&record).await.expect("save failed");
+        store.update_device_list(record).await.expect("save failed");
         let loaded = store
             .get_devices("1234567890")
             .await
@@ -2763,7 +2763,10 @@ mod tests {
             timestamp: 1000,
             phash: Some("2:old".to_string()),
         };
-        store.save_devices(&record1).await.expect("save1 failed");
+        store
+            .update_device_list(record1)
+            .await
+            .expect("save1 failed");
 
         // Update with new data
         let record2 = traits::DeviceListRecord {
@@ -2781,7 +2784,10 @@ mod tests {
             timestamp: 2000,
             phash: Some("2:new".to_string()),
         };
-        store.save_devices(&record2).await.expect("save2 failed");
+        store
+            .update_device_list(record2)
+            .await
+            .expect("save2 failed");
 
         let loaded = store
             .get_devices("1234567890")
@@ -2814,11 +2820,29 @@ mod tests {
             timestamp: 1234567890,
             phash: None,
         };
-        store.save_devices(&record).await.expect("save failed");
+        store.update_device_list(record).await.expect("save failed");
 
-        // Cleanup with 0 max age (everything is stale)
+        // Manually set updated_at to an old value (10 days ago) via raw SQL
+        let pool = store.pool.clone();
+        let old_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32
+            - (10 * 24 * 60 * 60); // 10 days ago
+
+        {
+            let mut conn = pool.get().expect("get conn");
+            diesel::sql_query(format!(
+                "UPDATE device_registry SET updated_at = {} WHERE user_id = '1234567890'",
+                old_time
+            ))
+            .execute(&mut conn)
+            .expect("update old time");
+        }
+
+        // Cleanup with 7 day max age - record should be deleted (it's 10 days old)
         let deleted = store
-            .cleanup_stale_entries(0)
+            .cleanup_stale_entries(7 * 24 * 60 * 60)
             .await
             .expect("cleanup failed");
         assert_eq!(deleted, 1);
