@@ -37,7 +37,7 @@ impl Client {
     /// Matches WhatsApp Web's `ensureE2ESessions` behavior.
     /// - Waits for offline delivery to complete
     /// - Resolves phone-to-LID mappings
-    /// - Uses SessionManager for deduplication and batching
+    /// - Batches prekey fetches to avoid overwhelming the server
     pub(crate) async fn ensure_e2e_sessions(&self, device_jids: Vec<Jid>) -> Result<()> {
         use wacore::libsignal::store::SessionStore;
         use wacore::types::jid::JidExt;
@@ -89,13 +89,17 @@ impl Client {
     }
 
     /// Fetch prekeys and establish sessions for a batch of JIDs.
-    async fn fetch_and_establish_sessions(&self, jids: Vec<Jid>) -> Result<(), anyhow::Error> {
+    ///
+    /// Returns the number of sessions successfully established.
+    /// Returns an error only if the prekey fetch itself fails (network error).
+    /// Individual session establishment failures are logged but don't fail the batch.
+    async fn fetch_and_establish_sessions(&self, jids: Vec<Jid>) -> Result<usize, anyhow::Error> {
         use rand::TryRngCore;
         use wacore::libsignal::protocol::{UsePQRatchet, process_prekey_bundle};
         use wacore::types::jid::JidExt;
 
         if jids.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         let prekey_bundles = self.fetch_pre_keys(&jids, Some("identity")).await?;
@@ -104,10 +108,14 @@ impl Client {
         let mut adapter =
             crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
 
+        let mut success_count = 0;
+        let mut missing_count = 0;
+        let mut failed_count = 0;
+
         for jid in &jids {
             if let Some(bundle) = prekey_bundles.get(jid) {
                 let signal_addr = jid.to_protocol_address();
-                if let Err(e) = process_prekey_bundle(
+                match process_prekey_bundle(
                     &signal_addr,
                     &mut adapter.session_store,
                     &mut adapter.identity_store,
@@ -117,28 +125,58 @@ impl Client {
                 )
                 .await
                 {
-                    log::warn!("Failed to establish session with {}: {}", jid, e);
+                    Ok(_) => {
+                        success_count += 1;
+                        log::debug!("Successfully established session with {}", jid);
+                    }
+                    Err(e) => {
+                        failed_count += 1;
+                        log::warn!("Failed to establish session with {}: {}", jid, e);
+                    }
+                }
+            } else {
+                missing_count += 1;
+                // Device 0 is critical for PDO - log at warn level
+                if jid.device == 0 {
+                    log::warn!(
+                        "Server did not return prekeys for primary phone {} - PDO will not work",
+                        jid
+                    );
+                } else {
+                    log::debug!("Server did not return prekeys for {}", jid);
                 }
             }
         }
-        Ok(())
+
+        if missing_count > 0 || failed_count > 0 {
+            log::info!(
+                "Session establishment: {} succeeded, {} missing prekeys, {} failed (of {} requested)",
+                success_count,
+                missing_count,
+                failed_count,
+                jids.len()
+            );
+        }
+
+        Ok(success_count)
     }
 
-    /// Establish session with our own primary phone (device 0) for PDO.
+    /// Establish session with primary phone (device 0) immediately for PDO.
     ///
     /// PDO (Peer Data Operation) allows the linked device to request already-decrypted
     /// message content from the primary phone when local decryption fails. This requires
     /// a Signal session to encrypt the request.
     ///
-    /// This should be called after login/offline sync completes to ensure PDO works
-    /// for any messages that fail to decrypt during the session.
+    /// This is called during login BEFORE offline messages arrive. It does NOT wait
+    /// for offline sync to complete - it establishes the session immediately so that
+    /// PDO can work for any messages that fail to decrypt during offline sync.
     ///
     /// # WhatsApp Web Reference
     ///
-    /// - PDO sends to device 0: `createDeviceWidFromUserAndDevice(user, server, 0)`
-    /// - Session establishment happens after `offline_delivery_end` event
-    /// - `ensureE2ESessions` always waits for `waitForOfflineDeliveryEnd()` first
-    pub(crate) async fn establish_primary_phone_session(&self) -> Result<()> {
+    /// WhatsApp Web establishes sessions proactively on app bootstrap via
+    /// `bootstrapDeviceCapabilities()` which sends to device 0 before any
+    /// offline messages are processed.
+    pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
         let own_pn = device_snapshot
@@ -146,16 +184,26 @@ impl Client {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Not logged in - no phone number available"))?;
 
-        // Create JID for device 0 (primary phone) using the base phone number
-        // The primary phone is always device 0, regardless of our own device ID
         let primary_phone_jid = own_pn.with_device(0);
 
         log::info!(
-            "Establishing session with primary phone {} for PDO",
+            "Proactively establishing session with primary phone {} on login",
             primary_phone_jid
         );
 
-        self.ensure_e2e_sessions(vec![primary_phone_jid]).await
+        // Directly fetch and establish session without waiting for offline sync
+        let success_count = self
+            .fetch_and_establish_sessions(vec![primary_phone_jid.clone()])
+            .await?;
+
+        if success_count == 0 {
+            anyhow::bail!(
+                "Failed to establish session with primary phone {} - PDO will not work",
+                primary_phone_jid
+            );
+        }
+
+        Ok(())
     }
 }
 
