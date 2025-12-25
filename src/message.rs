@@ -1124,21 +1124,25 @@ impl Client {
         &self,
         keys: &wa::message::AppStateSyncKeyShare,
     ) {
+        struct KeyComponents<'a> {
+            key_id: &'a [u8],
+            data: &'a [u8],
+            fingerprint_bytes: Vec<u8>,
+            timestamp: i64,
+        }
+
         /// Extract components from an AppStateSyncKey for storage.
-        /// Returns (key_id, data, fingerprint_bytes, timestamp) if all fields are present.
-        fn extract_key_components(
-            key: &wa::message::AppStateSyncKey,
-        ) -> Option<(&Vec<u8>, &Vec<u8>, Vec<u8>, i64)> {
+        fn extract_key_components(key: &wa::message::AppStateSyncKey) -> Option<KeyComponents<'_>> {
             let key_id = key.key_id.as_ref()?.key_id.as_ref()?;
             let key_data = key.key_data.as_ref()?;
             let fingerprint = key_data.fingerprint.as_ref()?;
             let data = key_data.key_data.as_ref()?;
-            Some((
+            Some(KeyComponents {
                 key_id,
                 data,
-                fingerprint.encode_to_vec(),
-                key_data.timestamp(),
-            ))
+                fingerprint_bytes: fingerprint.encode_to_vec(),
+                timestamp: key_data.timestamp(),
+            })
         }
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -1148,18 +1152,20 @@ impl Client {
         let mut failed_count = 0;
 
         for key in &keys.keys {
-            if let Some((key_id, data, fingerprint_bytes, timestamp)) = extract_key_components(key)
-            {
+            if let Some(components) = extract_key_components(key) {
                 let new_key = crate::store::traits::AppStateSyncKey {
-                    key_data: data.clone(),
-                    fingerprint: fingerprint_bytes,
-                    timestamp,
+                    key_data: components.data.to_vec(),
+                    fingerprint: components.fingerprint_bytes,
+                    timestamp: components.timestamp,
                 };
 
-                if let Err(e) = key_store.set_app_state_sync_key(key_id, new_key).await {
+                if let Err(e) = key_store
+                    .set_app_state_sync_key(components.key_id, new_key)
+                    .await
+                {
                     log::error!(
                         "Failed to store app state sync key {:?}: {:?}",
-                        hex::encode(key_id),
+                        hex::encode(components.key_id),
                         e
                     );
                     failed_count += 1;
