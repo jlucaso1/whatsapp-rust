@@ -667,6 +667,12 @@ impl SessionRecord {
 
     /// Restore a previous session at a specific index.
     /// Used to put a session back after a failed decryption attempt.
+    ///
+    /// # Note
+    /// This method is designed for the take-restore pattern where a session is
+    /// taken with `take_previous_session` and restored at the same index if
+    /// decryption fails. It does not enforce `ARCHIVED_STATES_MAX_LENGTH` since
+    /// the caller is expected to restore only what was taken.
     pub fn restore_previous_session(&mut self, index: usize, state: SessionState) {
         let structure: SessionStructure = state.into();
         if index <= self.previous_sessions.len() {
