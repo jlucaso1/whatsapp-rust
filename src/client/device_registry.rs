@@ -270,7 +270,11 @@ impl Client {
                 self.device_registry_cache
                     .insert(lid.to_string(), record)
                     .await;
-                self.device_registry_cache.invalidate(pn).await;
+
+                // Invalidate both the string-keyed device_registry_cache AND the
+                // JID-keyed device cache. Using invalidate_device_cache ensures
+                // we clean up Jid::pn(pn) entries that would otherwise become stale.
+                self.invalidate_device_cache(pn).await;
             }
             Ok(None) => {}
             Err(e) => {
