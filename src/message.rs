@@ -1024,10 +1024,7 @@ impl Client {
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
             let participant = attrs.jid("participant");
-            let is_from_me = participant.is_same_user_as(&own_jid)
-                || own_lid
-                    .as_ref()
-                    .is_some_and(|lid| participant.is_same_user_as(lid));
+            let is_from_me = participant.matches_user_or_lid(&own_jid, own_lid.as_ref());
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -1055,10 +1052,7 @@ impl Client {
                 None
             };
 
-            let is_from_me = sender.is_same_user_as(&own_jid)
-                || own_lid
-                    .as_ref()
-                    .is_some_and(|lid| sender.is_same_user_as(lid));
+            let is_from_me = sender.matches_user_or_lid(&own_jid, own_lid.as_ref());
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -1068,11 +1062,7 @@ impl Client {
                 sender_alt,
                 ..Default::default()
             }
-        } else if from.is_same_user_as(&own_jid)
-            || own_lid
-                .as_ref()
-                .is_some_and(|lid| from.is_same_user_as(lid))
-        {
+        } else if from.matches_user_or_lid(&own_jid, own_lid.as_ref()) {
             // DM from self (either via PN or LID)
             // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
             // For self-sent messages, we don't set sender_alt here - the decryption
@@ -1134,6 +1124,23 @@ impl Client {
         &self,
         keys: &wa::message::AppStateSyncKeyShare,
     ) {
+        /// Extract components from an AppStateSyncKey for storage.
+        /// Returns (key_id, data, fingerprint_bytes, timestamp) if all fields are present.
+        fn extract_key_components(
+            key: &wa::message::AppStateSyncKey,
+        ) -> Option<(&Vec<u8>, &Vec<u8>, Vec<u8>, i64)> {
+            let key_id = key.key_id.as_ref()?.key_id.as_ref()?;
+            let key_data = key.key_data.as_ref()?;
+            let fingerprint = key_data.fingerprint.as_ref()?;
+            let data = key_data.key_data.as_ref()?;
+            Some((
+                key_id,
+                data,
+                fingerprint.encode_to_vec(),
+                key_data.timestamp(),
+            ))
+        }
+
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let key_store = device_snapshot.backend.clone();
 
@@ -1141,17 +1148,12 @@ impl Client {
         let mut failed_count = 0;
 
         for key in &keys.keys {
-            if let Some(key_id_proto) = &key.key_id
-                && let Some(key_id) = &key_id_proto.key_id
-                && let Some(key_data) = &key.key_data
-                && let Some(fingerprint) = &key_data.fingerprint
-                && let Some(data) = &key_data.key_data
+            if let Some((key_id, data, fingerprint_bytes, timestamp)) = extract_key_components(key)
             {
-                let fingerprint_bytes = fingerprint.encode_to_vec();
                 let new_key = crate::store::traits::AppStateSyncKey {
                     key_data: data.clone(),
                     fingerprint: fingerprint_bytes,
-                    timestamp: key_data.timestamp(),
+                    timestamp,
                 };
 
                 if let Err(e) = key_store.set_app_state_sync_key(key_id, new_key).await {

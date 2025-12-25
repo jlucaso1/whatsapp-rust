@@ -348,15 +348,15 @@ impl Client {
         let mut router = StanzaRouter::new();
 
         // Register all handlers
-        router.register(Arc::new(MessageHandler::new()));
-        router.register(Arc::new(ReceiptHandler::new()));
-        router.register(Arc::new(IqHandler::new()));
-        router.register(Arc::new(SuccessHandler::new()));
-        router.register(Arc::new(FailureHandler::new()));
-        router.register(Arc::new(StreamErrorHandler::new()));
-        router.register(Arc::new(IbHandler::new()));
-        router.register(Arc::new(NotificationHandler::new()));
-        router.register(Arc::new(AckHandler::new()));
+        router.register(Arc::new(MessageHandler::default()));
+        router.register(Arc::new(ReceiptHandler::default()));
+        router.register(Arc::new(IqHandler::default()));
+        router.register(Arc::new(SuccessHandler::default()));
+        router.register(Arc::new(FailureHandler::default()));
+        router.register(Arc::new(StreamErrorHandler::default()));
+        router.register(Arc::new(IbHandler::default()));
+        router.register(Arc::new(NotificationHandler::default()));
+        router.register(Arc::new(AckHandler::default()));
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));

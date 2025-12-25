@@ -16,12 +16,6 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct IqHandler;
 
-impl IqHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[async_trait]
 impl StanzaHandler for IqHandler {
     fn tag(&self) -> &'static str {

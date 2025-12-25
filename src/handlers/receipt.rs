@@ -13,12 +13,6 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct ReceiptHandler;
 
-impl ReceiptHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[async_trait]
 impl StanzaHandler for ReceiptHandler {
     fn tag(&self) -> &'static str {

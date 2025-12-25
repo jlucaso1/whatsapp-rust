@@ -418,6 +418,13 @@ impl Jid {
         }
     }
 
+    /// Check if this JID matches the user or their LID.
+    /// Useful for checking if a participant is "us" in group messages.
+    #[inline]
+    pub fn matches_user_or_lid(&self, user: &Jid, lid: Option<&Jid>) -> bool {
+        self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
+    }
+
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
             self.server.clone()

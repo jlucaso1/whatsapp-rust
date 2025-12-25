@@ -10,12 +10,6 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct SuccessHandler;
 
-impl SuccessHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[async_trait]
 impl StanzaHandler for SuccessHandler {
     fn tag(&self) -> &'static str {
@@ -33,12 +27,6 @@ impl StanzaHandler for SuccessHandler {
 /// Processes connection or authentication failures.
 #[derive(Default)]
 pub struct FailureHandler;
-
-impl FailureHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 #[async_trait]
 impl StanzaHandler for FailureHandler {
@@ -58,12 +46,6 @@ impl StanzaHandler for FailureHandler {
 #[derive(Default)]
 pub struct StreamErrorHandler;
 
-impl StreamErrorHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[async_trait]
 impl StanzaHandler for StreamErrorHandler {
     fn tag(&self) -> &'static str {
@@ -81,12 +63,6 @@ impl StanzaHandler for StreamErrorHandler {
 /// Processes acknowledgment messages.
 #[derive(Default)]
 pub struct AckHandler;
-
-impl AckHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 #[async_trait]
 impl StanzaHandler for AckHandler {
