@@ -319,11 +319,13 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    /// Write attributes from a borrowed AttrsRef (Vec of Cow pairs).
+    /// Write attributes from a borrowed AttrsRef (Vec of key-value pairs).
     fn write_attributes_ref(&mut self, attrs: &AttrsRef<'_>) -> Result<()> {
         for (key, value) in attrs {
             self.write_string(key)?;
-            self.write_string(value)?;
+            // ValueRef can be either a string or a JID - convert to string representation
+            let value_str = value.to_string_cow();
+            self.write_string(&value_str)?;
         }
         Ok(())
     }

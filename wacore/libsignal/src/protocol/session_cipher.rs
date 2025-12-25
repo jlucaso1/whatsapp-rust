@@ -491,8 +491,8 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
     let mut errs = vec![];
 
-    if let Some(current_state) = record.session_state() {
-        let mut current_state = current_state.clone();
+    // Take ownership of current state instead of cloning - avoids allocation
+    if let Some(mut current_state) = record.take_session_state() {
         let result = decrypt_message_with_state(
             CurrentOrPrevious::Current,
             &mut current_state,
@@ -519,6 +519,8 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                 });
             }
             Err(SignalProtocolError::DuplicatedMessage(chain, counter)) => {
+                // Restore state before returning error
+                record.set_session_state(current_state);
                 return Err(SignalProtocolError::DuplicatedMessage(chain, counter));
             }
             Err(e) => {
@@ -530,6 +532,8 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                         // using that session. No need to check older sessions.
                         // Log at warn level since this error may be recoverable at higher layers
                         // (e.g., UntrustedIdentity can be handled by clearing old identity and retrying)
+                        // Restore state before returning error
+                        record.set_session_state(current_state);
                         log::warn!(
                             "{}",
                             create_decryption_failure_log(
@@ -546,7 +550,10 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                             "decryption failed",
                         ));
                     }
-                    CiphertextMessageType::Whisper => {}
+                    CiphertextMessageType::Whisper => {
+                        // Restore state before trying previous sessions
+                        record.set_session_state(current_state);
+                    }
                     CiphertextMessageType::SenderKey | CiphertextMessageType::Plaintext => {
                         unreachable!("should not be using Double Ratchet for these")
                     }

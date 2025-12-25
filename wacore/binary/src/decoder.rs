@@ -1,6 +1,6 @@
 use crate::error::{BinaryError, Result};
 use crate::jid::JidRef;
-use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec};
+use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec, ValueRef};
 use crate::token;
 use std::borrow::Cow;
 use std::simd::{Simd, prelude::*, u8x16};
@@ -201,6 +201,44 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    /// Read a value that can be either a string or a JID.
+    /// This avoids string allocation for JID tokens by returning the JidRef directly.
+    fn read_value(&mut self) -> Result<Option<ValueRef<'a>>> {
+        let tag = self.read_u8()?;
+        match tag {
+            token::LIST_EMPTY => Ok(None),
+            token::BINARY_8 => {
+                let size = self.read_u8()? as usize;
+                self.read_string(size).map(|s| Some(ValueRef::String(s)))
+            }
+            token::BINARY_20 => {
+                let size = self.read_u20_be()? as usize;
+                self.read_string(size).map(|s| Some(ValueRef::String(s)))
+            }
+            token::BINARY_32 => {
+                let size = self.read_u32_be()? as usize;
+                self.read_string(size).map(|s| Some(ValueRef::String(s)))
+            }
+            // JID tokens - return JidRef directly without string allocation
+            token::JID_PAIR => self.read_jid_pair().map(|j| Some(ValueRef::Jid(j))),
+            token::AD_JID => self.read_ad_jid().map(|j| Some(ValueRef::Jid(j))),
+            token::INTEROP_JID => self.read_interop_jid().map(|j| Some(ValueRef::Jid(j))),
+            token::FB_JID => self.read_fb_jid().map(|j| Some(ValueRef::Jid(j))),
+            token::NIBBLE_8 | token::HEX_8 => self
+                .read_packed(tag)
+                .map(|s| Some(ValueRef::String(Cow::Owned(s)))),
+            tag @ token::DICTIONARY_0..=token::DICTIONARY_3 => {
+                let index = self.read_u8()?;
+                token::get_double_token(tag - token::DICTIONARY_0, index)
+                    .map(|s| Some(ValueRef::String(Cow::Borrowed(s))))
+                    .ok_or(BinaryError::InvalidToken(tag))
+            }
+            _ => token::get_single_token(tag)
+                .map(|s| Some(ValueRef::String(Cow::Borrowed(s))))
+                .ok_or(BinaryError::InvalidToken(tag)),
+        }
+    }
+
     fn read_packed(&mut self, tag: u8) -> Result<String> {
         let packed_len_byte = self.read_u8()?;
         let is_half_byte = (packed_len_byte & 0x80) != 0;
@@ -292,7 +330,10 @@ impl<'a> Decoder<'a> {
             let key = self
                 .read_value_as_string()?
                 .ok_or(BinaryError::NonStringKey)?;
-            let value = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+            // Use read_value to get ValueRef - avoids string allocation for JIDs
+            let value = self
+                .read_value()?
+                .unwrap_or(ValueRef::String(Cow::Borrowed("")));
             attrs.push((key, value));
         }
         Ok(attrs)

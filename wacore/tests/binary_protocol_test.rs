@@ -82,14 +82,16 @@ fn test_unmarshal_ref_known_good_data() {
         node_ref
             .get_attr("location")
             .expect("test data should be valid")
-            .as_ref(),
+            .as_str()
+            .expect("location should be a string"),
         "frc"
     );
     assert_eq!(
         node_ref
             .get_attr("props")
             .expect("test data should be valid")
-            .as_ref(),
+            .as_str()
+            .expect("props should be a string"),
         "27"
     );
 }
