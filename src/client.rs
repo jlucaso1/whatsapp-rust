@@ -1226,7 +1226,7 @@ impl Client {
                 }
             };
             if !missing.is_empty() {
-                let mut to_request: Vec<Vec<u8>> = Vec::new();
+                let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                 let mut guard = self.app_state_key_requests.lock().await;
                 let now = std::time::Instant::now();
                 for key_id in missing {

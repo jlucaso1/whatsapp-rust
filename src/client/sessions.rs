@@ -52,9 +52,9 @@ impl Client {
         // 2. Resolve LID mappings (matches WhatsApp Web)
         let resolved_jids = self.resolve_lid_mappings(&device_jids).await;
 
-        // 3. Filter to JIDs that need sessions
+        // 3. Filter to JIDs that need sessions (pre-allocate with upper bound)
         let device_store = self.persistence_manager.get_device_arc().await;
-        let mut jids_needing_sessions = Vec::new();
+        let mut jids_needing_sessions = Vec::with_capacity(resolved_jids.len());
 
         {
             let device_guard = device_store.read().await;

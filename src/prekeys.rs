@@ -97,8 +97,8 @@ impl Client {
         };
 
         // Step 1: Try to get existing unuploaded keys from storage
-        let mut keys_to_upload = Vec::new();
-        let mut key_pairs_to_upload = Vec::new();
+        let mut keys_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
+        let mut key_pairs_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
 
         // Check if we have existing unuploaded keys by trying IDs sequentially
         // We'll check a reasonable range to find existing keys

@@ -34,20 +34,28 @@ impl Client {
         let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.clone());
         drop(device_guard);
 
+        // Pre-compute prefix strings outside the filter loop to avoid repeated allocations
+        let lid_prefixes = own_lid_user
+            .as_ref()
+            .map(|lid| (format!("{lid}:"), format!("{lid}@")));
+        let pn_prefixes = own_pn_user
+            .as_ref()
+            .map(|pn| (format!("{pn}:"), format!("{pn}@")));
+
         // Filter out own devices (WhatsApp Web: !isMeDevice(e))
         let filtered: Vec<String> = participants
             .iter()
             .filter(|p| {
                 // Parse participant JID and check if it's our own
-                let is_own_lid = own_lid_user.as_ref().is_some_and(|lid| {
-                    p.starts_with(&format!("{lid}:"))
-                        || p.starts_with(&format!("{lid}@"))
-                        || p.as_str() == lid
+                let is_own_lid = lid_prefixes.as_ref().is_some_and(|(colon, at)| {
+                    p.starts_with(colon)
+                        || p.starts_with(at)
+                        || own_lid_user.as_ref().is_some_and(|lid| p.as_str() == lid)
                 });
-                let is_own_pn = own_pn_user.as_ref().is_some_and(|pn| {
-                    p.starts_with(&format!("{pn}:"))
-                        || p.starts_with(&format!("{pn}@"))
-                        || p.as_str() == pn
+                let is_own_pn = pn_prefixes.as_ref().is_some_and(|(colon, at)| {
+                    p.starts_with(colon)
+                        || p.starts_with(at)
+                        || own_pn_user.as_ref().is_some_and(|pn| p.as_str() == pn)
                 });
                 !is_own_lid && !is_own_pn
             })

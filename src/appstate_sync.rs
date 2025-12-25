@@ -133,8 +133,8 @@ impl AppStateProcessor {
 
         // Process patches
         for patch in &pl.patches {
-            // Collect index MACs we need to look up
-            let mut need_db_lookup: Vec<Vec<u8>> = Vec::new();
+            // Collect index MACs we need to look up (pre-allocate with upper bound)
+            let mut need_db_lookup: Vec<Vec<u8>> = Vec::with_capacity(patch.mutations.len());
             for m in &patch.mutations {
                 if let Some(rec) = &m.record
                     && let Some(ind) = &rec.index
@@ -146,7 +146,8 @@ impl AppStateProcessor {
             }
 
             // Batch fetch previous value MACs from database
-            let mut db_prev: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            let mut db_prev: HashMap<Vec<u8>, Vec<u8>> =
+                HashMap::with_capacity(need_db_lookup.len());
             for index_mac in need_db_lookup {
                 if let Some(mac) = self
                     .backend

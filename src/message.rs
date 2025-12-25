@@ -377,8 +377,8 @@ impl Client {
             return;
         }
 
-        let mut session_enc_nodes = Vec::new();
-        let mut group_content_enc_nodes = Vec::new();
+        let mut session_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
+        let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
 
         for &enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");

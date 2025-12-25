@@ -81,23 +81,30 @@ impl LidPnCache {
     /// For the PN -> Entry map, this only updates if the new entry has a
     /// newer or equal `created_at` timestamp (matching WhatsApp Web behavior).
     pub async fn add(&self, entry: LidPnEntry) {
+        // Check if PN map needs update first (before we move/clone the entry)
+        let should_update_pn = {
+            let pn_map = self.pn_to_entry.read().await;
+            match pn_map.get(&entry.phone_number) {
+                Some(existing) => existing.created_at <= entry.created_at,
+                None => true,
+            }
+        };
+
+        // Clone for LID map (we need the original for PN map if updating)
+        let entry_for_lid = entry.clone();
+
         // Update LID -> Entry map
         {
             let mut lid_map = self.lid_to_entry.write().await;
-            lid_map.insert(entry.lid.clone(), entry.clone());
+            lid_map.insert(entry_for_lid.lid.clone(), entry_for_lid);
         }
 
         // Update PN -> Entry map (only if newer or equal timestamp)
-        {
+        if should_update_pn {
             let mut pn_map = self.pn_to_entry.write().await;
-            let should_update = match pn_map.get(&entry.phone_number) {
-                Some(existing) => existing.created_at <= entry.created_at,
-                None => true,
-            };
-
-            if should_update {
-                pn_map.insert(entry.phone_number.clone(), entry);
-            }
+            // Use the original entry - avoids an extra clone
+            let phone_key = entry.phone_number.clone();
+            pn_map.insert(phone_key, entry);
         }
     }
 
