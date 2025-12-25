@@ -401,7 +401,7 @@ impl Jid {
         match self.server.as_str() {
             DEFAULT_USER_SERVER => 0,
             // For LID (HIDDEN_USER_SERVER), use the parsed agent value.
-            // LID user identifiers can contain dots (e.g., "236395184570386.1"),
+            // LID user identifiers can contain dots (e.g., "100000000000001.1"),
             // which are part of the identity, not agent separators.
             // Only non-device LID JIDs (without ':') may have an agent suffix.
             HIDDEN_USER_SERVER => self.agent,

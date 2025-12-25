@@ -101,14 +101,14 @@ fn test_legacy_and_agent_jid_parsing() {
 
 #[test]
 fn test_lid_jid_with_dot_in_user_part() {
-    // This is the problematic JID from the logs. The user part is "236395184570386.1".
-    // The old parser would incorrectly split this, creating user="236395184570386" and agent=1.
-    let lid_jid_str = "236395184570386.1:75@lid";
+    // This is the problematic JID from the logs. The user part is "100000000000001.1".
+    // The old parser would incorrectly split this, creating user="100000000000001" and agent=1.
+    let lid_jid_str = "100000000000001.1:75@lid";
     let lid_jid = Jid::from_str(lid_jid_str).expect("test JID should be valid");
 
     // Assert that the user part is parsed correctly, including the dot.
     assert_eq!(
-        lid_jid.user, "236395184570386.1",
+        lid_jid.user, "100000000000001.1",
         "LID user part with a dot was parsed incorrectly"
     );
 
@@ -131,7 +131,7 @@ fn test_lid_jid_with_dot_in_user_part() {
     let protocol_addr = lid_jid.to_protocol_address();
     assert_eq!(
         protocol_addr.name(),
-        "236395184570386.1:75@lid",
+        "100000000000001.1:75@lid",
         "ProtocolAddress name should match WhatsApp Web's SignalAddress format"
     );
     assert_eq!(
@@ -141,7 +141,7 @@ fn test_lid_jid_with_dot_in_user_part() {
     );
     assert_eq!(
         protocol_addr.to_string(),
-        "236395184570386.1:75@lid.0",
+        "100000000000001.1:75@lid.0",
         "ProtocolAddress.to_string() should match WhatsApp Web's createSignalLikeAddress format"
     );
 }

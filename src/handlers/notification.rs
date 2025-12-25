@@ -182,8 +182,8 @@ struct AccountSyncDevice {
 /// Example structure:
 /// ```xml
 /// <devices dhash="2:FnEWjS13">
-///   <device jid="559984726662@s.whatsapp.net"/>
-///   <device jid="559984726662:64@s.whatsapp.net" key-index="2"/>
+///   <device jid="15551234567@s.whatsapp.net"/>
+///   <device jid="15551234567:64@s.whatsapp.net" key-index="2"/>
 ///   <key-index-list ts="1766612162"><!-- bytes --></key-index-list>
 /// </devices>
 /// ```
@@ -446,10 +446,10 @@ mod tests {
             .attr("dhash", "2:FnEWjS13")
             .children([
                 NodeBuilder::new("device")
-                    .attr("jid", "559984726662@s.whatsapp.net")
+                    .attr("jid", "15551234567@s.whatsapp.net")
                     .build(),
                 NodeBuilder::new("device")
-                    .attr("jid", "559984726662:64@s.whatsapp.net")
+                    .attr("jid", "15551234567:64@s.whatsapp.net")
                     .attr("key-index", "2")
                     .build(),
             ])
@@ -459,12 +459,12 @@ mod tests {
         assert_eq!(devices.len(), 2);
 
         // Primary device (device 0)
-        assert_eq!(devices[0].jid.user, "559984726662");
+        assert_eq!(devices[0].jid.user, "15551234567");
         assert_eq!(devices[0].jid.device, 0);
         assert_eq!(devices[0].key_index, None);
 
         // Companion device (device 64)
-        assert_eq!(devices[1].jid.user, "559984726662");
+        assert_eq!(devices[1].jid.user, "15551234567");
         assert_eq!(devices[1].jid.device, 64);
         assert_eq!(devices[1].key_index, Some(2));
     }
@@ -476,10 +476,10 @@ mod tests {
             .attr("dhash", "2:FnEWjS13")
             .children([
                 NodeBuilder::new("device")
-                    .attr("jid", "559984726662@s.whatsapp.net")
+                    .attr("jid", "15551234567@s.whatsapp.net")
                     .build(),
                 NodeBuilder::new("device")
-                    .attr("jid", "559984726662:77@s.whatsapp.net")
+                    .attr("jid", "15551234567:77@s.whatsapp.net")
                     .attr("key-index", "15")
                     .build(),
                 NodeBuilder::new("key-index-list")

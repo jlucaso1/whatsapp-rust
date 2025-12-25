@@ -84,8 +84,8 @@ mod tests {
     #[test]
     fn test_signal_address_string_lid_with_dot_in_user() {
         // LID user IDs can contain dots that are part of the identity
-        let jid = Jid::from_str("236395184570386.1:75@lid").expect("test JID should be valid");
-        assert_eq!(jid.to_signal_address_string(), "236395184570386.1:75@lid");
+        let jid = Jid::from_str("100000000000001.1:75@lid").expect("test JID should be valid");
+        assert_eq!(jid.to_signal_address_string(), "100000000000001.1:75@lid");
     }
 
     #[test]
@@ -116,12 +116,12 @@ mod tests {
 
     #[test]
     fn test_protocol_address_lid_with_dot() {
-        let jid = Jid::from_str("236395184570386.1:75@lid").expect("test JID should be valid");
+        let jid = Jid::from_str("100000000000001.1:75@lid").expect("test JID should be valid");
         let addr = jid.to_protocol_address();
 
-        assert_eq!(addr.name(), "236395184570386.1:75@lid");
+        assert_eq!(addr.name(), "100000000000001.1:75@lid");
         assert_eq!(u32::from(addr.device_id()), 0);
-        assert_eq!(addr.to_string(), "236395184570386.1:75@lid.0");
+        assert_eq!(addr.to_string(), "100000000000001.1:75@lid.0");
     }
 
     #[test]

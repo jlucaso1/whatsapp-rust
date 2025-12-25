@@ -595,7 +595,8 @@ impl Client {
                     // This allows us to decrypt any in-flight messages that were encrypted with the old session.
                     if let SignalProtocolError::UntrustedIdentity(ref address) = e {
                         log::warn!(
-                            "Received message from untrusted identity: {}. This typically means the sender re-installed WhatsApp or changed their device. Clearing old identity to trust new key (keeping session for in-flight messages).",
+                            "[msg:{}] Received message from untrusted identity: {}. This typically means the sender re-installed WhatsApp or changed their device. Clearing old identity to trust new key (keeping session for in-flight messages).",
+                            info.id,
                             address
                         );
 
@@ -621,7 +622,8 @@ impl Client {
 
                         // Re-attempt decryption with the new identity
                         log::info!(
-                            "Retrying message decryption for {} after clearing untrusted identity",
+                            "[msg:{}] Retrying message decryption for {} after clearing untrusted identity",
+                            info.id,
                             address
                         );
 
@@ -640,7 +642,8 @@ impl Client {
                         match retry_decrypt_res {
                             Ok(padded_plaintext) => {
                                 log::info!(
-                                    "Successfully decrypted message from {} after handling untrusted identity",
+                                    "[msg:{}] Successfully decrypted message from {} after handling untrusted identity",
+                                    info.id,
                                     address
                                 );
                                 any_success = true;
@@ -685,9 +688,10 @@ impl Client {
                                     // Solution: Send a retry receipt with a fresh prekey so the sender
                                     // can establish a new session and resend the message.
                                     log::warn!(
-                                        "Decryption failed for {} due to InvalidPreKeyId after identity change. \
+                                        "[msg:{}] Decryption failed for {} due to InvalidPreKeyId after identity change. \
                                          The sender is using an old prekey we no longer have. \
                                          Sending retry receipt with fresh keys.",
+                                        info.id,
                                         address
                                     );
 
@@ -701,7 +705,8 @@ impl Client {
                                     self.spawn_retry_receipt(info, RetryReason::InvalidKeyId);
                                 } else {
                                     log::error!(
-                                        "Decryption failed even after clearing untrusted identity for {}: {:?}",
+                                        "[msg:{}] Decryption failed even after clearing untrusted identity for {}: {:?}",
+                                        info.id,
                                         address,
                                         retry_err
                                     );
@@ -723,8 +728,8 @@ impl Client {
                     // Handle SessionNotFound gracefully - send retry receipt to request session establishment
                     if let SignalProtocolError::SessionNotFound(_) = e {
                         warn!(
-                            "No session found for {} message from {}. Sending retry receipt to request session establishment.",
-                            enc_type, info.source.sender
+                            "[msg:{}] No session found for {} message from {}. Sending retry receipt to request session establishment.",
+                            info.id, enc_type, info.source.sender
                         );
                         // Dispatch an event so the library user knows a message was missed.
                         self.dispatch_undecryptable_event(
@@ -743,8 +748,9 @@ impl Client {
                         // 1. Delete the stale session so a new one can be established
                         // 2. Send a retry receipt so the sender resends with a PreKeySignalMessage
                         log::warn!(
-                            "Decryption failed for {} message from {} due to InvalidMessage (likely MAC failure). \
+                            "[msg:{}] Decryption failed for {} message from {} due to InvalidMessage (likely MAC failure). \
                              Deleting stale session and sending retry receipt.",
+                            info.id,
                             enc_type,
                             info.source.sender
                         );
@@ -791,9 +797,10 @@ impl Client {
                         // 2. Fetch our new prekeys from the retry receipt
                         // 3. Create a NEW session and resend with counter 0
                         log::warn!(
-                            "Decryption failed for {} message from {} due to InvalidPreKeyId. \
+                            "[msg:{}] Decryption failed for {} message from {} due to InvalidPreKeyId. \
                              Sender is using a prekey we don't have (likely session established while offline). \
                              Sending retry receipt with fresh prekeys.",
+                            info.id,
                             enc_type,
                             info.source.sender
                         );
@@ -810,7 +817,13 @@ impl Client {
                         continue;
                     } else {
                         // For other unexpected errors, just log them
-                        log::error!("Batch session decrypt failed (type: {}): {:?}", enc_type, e);
+                        log::error!(
+                            "[msg:{}] Batch session decrypt failed (type: {}) from {}: {:?}",
+                            info.id,
+                            enc_type,
+                            info.source.sender,
+                            e
+                        );
                         continue;
                     }
                 }
@@ -1504,7 +1517,7 @@ mod tests {
     ///
     /// Context:
     /// - LID (Lightweight Identity) is WhatsApp's new identity system
-    /// - LID JIDs use format: `236395184570386.1:75@lid` (note the dot)
+    /// - LID JIDs use format: `100000000000001.1:75@lid` (note the dot)
     /// - Group messages from LID users fail to decrypt if we lack a Signal session
     /// - This causes SessionNotFound errors which we now handle gracefully
     ///
@@ -1526,7 +1539,7 @@ mod tests {
         use wacore_binary::jid::Jid;
 
         // This test reproduces the real-world scenario where:
-        // 1. A LID user (e.g., 236395184570386.1:75@lid) sends a group message
+        // 1. A LID user (e.g., 100000000000001.1:75@lid) sends a group message
         // 2. We don't have a 1-on-1 Signal session with this LID user
         // 3. The message contains both PreKeySignalMessage (pkmsg) and SenderKeyDistributionMessage (skmsg)
         // 4. Decryption fails with SessionNotFound
@@ -1545,7 +1558,7 @@ mod tests {
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
         // Simulate a group message from a LID user we haven't chatted with 1-on-1
-        let lid_sender: Jid = "236395184570386.1:75@lid"
+        let lid_sender: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
         let group_jid: Jid = "120363021033254949@g.us"
@@ -1628,12 +1641,12 @@ mod tests {
         let (_client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        // Simulate own LID: 236395184570386.1:75@lid (note: using device 75 to match real scenario)
-        // Phone number: 559984726662:75@s.whatsapp.net
-        let own_lid: Jid = "236395184570386.1:75@lid"
+        // Simulate own LID: 100000000000001.1:75@lid (note: using device 75 to match real scenario)
+        // Phone number: 15551234567:75@s.whatsapp.net
+        let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
-        let own_phone: Jid = "559984726662:75@s.whatsapp.net"
+        let own_phone: Jid = "15551234567:75@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
         let group_jid: Jid = "120363021033254949@g.us"
@@ -1755,7 +1768,7 @@ mod tests {
 
         // Simulate three LID participants
         let participants = vec![
-            ("236395184570386.1:75@lid", "559984726662:75@s.whatsapp.net"),
+            ("100000000000001.1:75@lid", "15551234567:75@s.whatsapp.net"),
             ("987654321000000.2:42@lid", "551234567890:42@s.whatsapp.net"),
             ("111222333444555.3:10@lid", "559876543210:10@s.whatsapp.net"),
         ];
@@ -1843,10 +1856,10 @@ mod tests {
         use wacore_binary::jid::Jid;
 
         // Single dot in user portion
-        let lid1: Jid = "236395184570386.1:75@lid"
+        let lid1: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
-        assert_eq!(lid1.user, "236395184570386.1");
+        assert_eq!(lid1.user, "100000000000001.1");
         assert_eq!(lid1.device, 75);
         assert_eq!(lid1.agent, 0);
 
@@ -1888,10 +1901,10 @@ mod tests {
         // Format: (jid_str, expected_name, expected_device_id, expected_to_string)
         let test_cases = vec![
             (
-                "236395184570386.1:75@lid",
-                "236395184570386.1:75@lid",
+                "100000000000001.1:75@lid",
+                "100000000000001.1:75@lid",
                 0,
-                "236395184570386.1:75@lid.0",
+                "100000000000001.1:75@lid.0",
             ),
             (
                 "987654321000000.2:42@lid",
@@ -1962,12 +1975,12 @@ mod tests {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
             device.pn = Some(
-                "559984726662@s.whatsapp.net"
+                "15551234567@s.whatsapp.net"
                     .parse()
                     .expect("test JID should be valid"),
             );
             device.lid = Some(
-                "236395184570386.1@lid"
+                "100000000000001.1@lid"
                     .parse()
                     .expect("test JID should be valid"),
             );
@@ -2004,8 +2017,8 @@ mod tests {
         // Test case 2: Self-sent LID group message
         let self_lid_node = NodeBuilder::new("message")
             .attr("from", "120363021033254949@g.us")
-            .attr("participant", "236395184570386.1:75@lid")
-            .attr("participant_pn", "559984726662:75@s.whatsapp.net")
+            .attr("participant", "100000000000001.1:75@lid")
+            .attr("participant_pn", "15551234567:75@s.whatsapp.net")
             .attr("addressing_mode", "lid")
             .attr("id", "test2")
             .attr("t", "12346")
@@ -2019,7 +2032,7 @@ mod tests {
             info2.source.is_from_me,
             "Should detect self-sent LID message"
         );
-        assert_eq!(info2.source.sender.user, "236395184570386.1");
+        assert_eq!(info2.source.sender.user, "100000000000001.1");
         assert!(info2.source.sender_alt.is_some());
         assert_eq!(
             info2
@@ -2028,7 +2041,7 @@ mod tests {
                 .as_ref()
                 .expect("sender_alt should be present")
                 .user,
-            "559984726662"
+            "15551234567"
         );
 
         println!("✅ sender_alt extraction working correctly for LID groups");
@@ -2048,8 +2061,8 @@ mod tests {
         // Simulate a LID group with phone number mappings
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
-            "236395184570386.1".to_string(),
-            "559984726662@s.whatsapp.net"
+            "100000000000001.1".to_string(),
+            "15551234567@s.whatsapp.net"
                 .parse()
                 .expect("test JID should be valid"),
         );
@@ -2062,7 +2075,7 @@ mod tests {
 
         let mut group_info = GroupInfo::new(
             vec![
-                "236395184570386.1:75@lid"
+                "100000000000001.1:75@lid"
                     .parse()
                     .expect("test JID should be valid"),
                 "987654321000000.2:42@lid"
@@ -2098,7 +2111,7 @@ mod tests {
         }
 
         assert_eq!(jids_to_query.len(), 2);
-        assert!(jids_to_query.iter().any(|j| j.user == "559984726662"));
+        assert!(jids_to_query.iter().any(|j| j.user == "15551234567"));
         assert!(jids_to_query.iter().any(|j| j.user == "551234567890"));
 
         println!("✅ LID-to-phone mapping working correctly for device queries");
@@ -2117,15 +2130,15 @@ mod tests {
 
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
-            "236395184570386.1".to_string(),
-            "559984726662@s.whatsapp.net"
+            "100000000000001.1".to_string(),
+            "15551234567@s.whatsapp.net"
                 .parse()
                 .expect("test JID should be valid"),
         );
 
         let mut group_info = GroupInfo::new(
             vec![
-                "236395184570386.1:75@lid"
+                "100000000000001.1:75@lid"
                     .parse()
                     .expect("test JID should be valid"), // LID participant
                 "551234567890:42@s.whatsapp.net"
@@ -2168,15 +2181,15 @@ mod tests {
         use std::collections::HashMap;
         use wacore_binary::jid::Jid;
 
-        let own_lid: Jid = "236395184570386.1@lid"
+        let own_lid: Jid = "100000000000001.1@lid"
             .parse()
             .expect("test JID should be valid");
-        let own_phone: Jid = "559984726662@s.whatsapp.net"
+        let own_phone: Jid = "15551234567@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
 
         let mut lid_to_pn_map = HashMap::new();
-        lid_to_pn_map.insert("236395184570386.1".to_string(), own_phone.clone());
+        lid_to_pn_map.insert("100000000000001.1".to_string(), own_phone.clone());
 
         // Simulate the own JID check logic from wacore/src/send.rs
         let own_base_jid = own_lid.to_non_ad();
@@ -2190,7 +2203,7 @@ mod tests {
         };
 
         // Verify we're checking using the phone number
-        assert_eq!(own_jid_to_check.user, "559984726662");
+        assert_eq!(own_jid_to_check.user, "15551234567");
         assert_eq!(own_jid_to_check.server, SERVER_JID);
 
         println!("✅ Own JID check correctly uses phone number in LID mode");
@@ -2221,10 +2234,10 @@ mod tests {
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
             .expect("test JID should be valid");
-        let display_jid: Jid = "236395184570386.1:75@lid"
+        let display_jid: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
-        let encryption_jid: Jid = "559984726662:75@s.whatsapp.net"
+        let encryption_jid: Jid = "15551234567:75@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
 
@@ -2311,7 +2324,7 @@ mod tests {
         let (client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        let sender_jid: Jid = "236395184570386.1:75@lid"
+        let sender_jid: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
         let group_jid: Jid = "120363021033254949@g.us"
@@ -2376,7 +2389,7 @@ mod tests {
 
         // Step 3: Handle the message (should NOT skip skmsg)
         // Before the fix, this would log:
-        // "Skipping skmsg decryption for message SECOND_MSG_TEST from 236395184570386.1:75@lid
+        // "Skipping skmsg decryption for message SECOND_MSG_TEST from 100000000000001.1:75@lid
         //  because the initial session/senderkey message failed to decrypt."
         //
         // After the fix, it should decrypt successfully.
@@ -2645,12 +2658,12 @@ mod tests {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
             device.pn = Some(
-                "559984726662@s.whatsapp.net"
+                "15551234567@s.whatsapp.net"
                     .parse()
                     .expect("test JID should be valid"),
             );
             device.lid = Some(
-                "236395184570386@lid"
+                "100000000000001@lid"
                     .parse()
                     .expect("test JID should be valid"),
             );
@@ -2660,9 +2673,9 @@ mod tests {
 
         // Simulate self-sent DM to another user (from your phone to your bot echo)
         // Real log example:
-        // from="236395184570386@lid" recipient="39492358562039@lid" peer_recipient_pn="559985213786@s.whatsapp.net"
+        // from="100000000000001@lid" recipient="39492358562039@lid" peer_recipient_pn="559985213786@s.whatsapp.net"
         let self_dm_node = NodeBuilder::new("message")
-            .attr("from", "236395184570386@lid") // Your LID
+            .attr("from", "100000000000001@lid") // Your LID
             .attr("recipient", "39492358562039@lid") // Recipient's LID
             .attr("peer_recipient_pn", "559985213786@s.whatsapp.net") // Recipient's PN (NOT sender's!)
             .attr("notify", "jl")
@@ -2697,7 +2710,7 @@ mod tests {
 
         // 4. Sender should be own LID
         assert_eq!(
-            info.source.sender.user, "236395184570386",
+            info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
 
@@ -2739,12 +2752,12 @@ mod tests {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
             device.pn = Some(
-                "559984726662@s.whatsapp.net"
+                "15551234567@s.whatsapp.net"
                     .parse()
                     .expect("test JID should be valid"),
             );
             device.lid = Some(
-                "236395184570386@lid"
+                "100000000000001@lid"
                     .parse()
                     .expect("test JID should be valid"),
             );
@@ -2837,12 +2850,12 @@ mod tests {
             let device_arc = pm.get_device_arc().await;
             let mut device = device_arc.write().await;
             device.pn = Some(
-                "559984726662@s.whatsapp.net"
+                "15551234567@s.whatsapp.net"
                     .parse()
                     .expect("test JID should be valid"),
             );
             device.lid = Some(
-                "236395184570386@lid"
+                "100000000000001@lid"
                     .parse()
                     .expect("test JID should be valid"),
             );
@@ -2853,9 +2866,9 @@ mod tests {
         // Simulate DM to self (like "Notes to Myself" or pinging yourself)
         // from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
         let self_chat_node = NodeBuilder::new("message")
-            .attr("from", "236395184570386@lid") // Your LID
-            .attr("recipient", "236395184570386@lid") // Also your LID (self-chat)
-            .attr("peer_recipient_pn", "559984726662@s.whatsapp.net") // Your PN
+            .attr("from", "100000000000001@lid") // Your LID
+            .attr("recipient", "100000000000001@lid") // Also your LID (self-chat)
+            .attr("peer_recipient_pn", "15551234567@s.whatsapp.net") // Your PN
             .attr("notify", "jl")
             .attr("id", "AC391DD54A28E1CE1F3B106DF9951FAD")
             .attr("t", "1764822437")
@@ -2882,13 +2895,13 @@ mod tests {
 
         // 3. Chat should be the recipient (self)
         assert_eq!(
-            info.source.chat.user, "236395184570386",
+            info.source.chat.user, "100000000000001",
             "Chat should be self (recipient)"
         );
 
         // 4. Sender should be own LID
         assert_eq!(
-            info.source.sender.user, "236395184570386",
+            info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
 
