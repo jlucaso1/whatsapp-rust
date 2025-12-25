@@ -52,9 +52,9 @@ impl Client {
         // 2. Resolve LID mappings (matches WhatsApp Web)
         let resolved_jids = self.resolve_lid_mappings(&device_jids).await;
 
-        // 3. Filter to JIDs that need sessions
+        // 3. Filter to JIDs that need sessions (pre-allocate with upper bound)
         let device_store = self.persistence_manager.get_device_arc().await;
-        let mut jids_needing_sessions = Vec::new();
+        let mut jids_needing_sessions = Vec::with_capacity(resolved_jids.len());
 
         {
             let device_guard = device_store.read().await;
@@ -82,7 +82,7 @@ impl Client {
 
         // 4. Fetch and establish sessions (with batching)
         for batch in jids_needing_sessions.chunks(crate::session::SESSION_CHECK_BATCH_SIZE) {
-            self.fetch_and_establish_sessions(batch.to_vec()).await?;
+            self.fetch_and_establish_sessions(batch).await?;
         }
 
         Ok(())
@@ -93,7 +93,7 @@ impl Client {
     /// Returns the number of sessions successfully established.
     /// Returns an error only if the prekey fetch itself fails (network error).
     /// Individual session establishment failures are logged but don't fail the batch.
-    async fn fetch_and_establish_sessions(&self, jids: Vec<Jid>) -> Result<usize, anyhow::Error> {
+    async fn fetch_and_establish_sessions(&self, jids: &[Jid]) -> Result<usize, anyhow::Error> {
         use rand::TryRngCore;
         use wacore::libsignal::protocol::{UsePQRatchet, process_prekey_bundle};
         use wacore::types::jid::JidExt;
@@ -102,7 +102,7 @@ impl Client {
             return Ok(0);
         }
 
-        let prekey_bundles = self.fetch_pre_keys(&jids, Some("identity")).await?;
+        let prekey_bundles = self.fetch_pre_keys(jids, Some("identity")).await?;
 
         let device_store = self.persistence_manager.get_device_arc().await;
         let mut adapter =
@@ -112,7 +112,7 @@ impl Client {
         let mut missing_count = 0;
         let mut failed_count = 0;
 
-        for jid in &jids {
+        for jid in jids {
             if let Some(bundle) = prekey_bundles.get(jid) {
                 let signal_addr = jid.to_protocol_address();
                 match process_prekey_bundle(
@@ -193,7 +193,7 @@ impl Client {
 
         // Directly fetch and establish session without waiting for offline sync
         let success_count = self
-            .fetch_and_establish_sessions(vec![primary_phone_jid.clone()])
+            .fetch_and_establish_sessions(std::slice::from_ref(&primary_phone_jid))
             .await?;
 
         if success_count == 0 {
@@ -214,36 +214,36 @@ mod tests {
 
     #[test]
     fn test_primary_phone_jid_creation_from_pn() {
-        let own_pn = Jid::pn("559984726662");
+        let own_pn = Jid::pn("559999999999");
         let primary_phone_jid = own_pn.with_device(0);
 
-        assert_eq!(primary_phone_jid.user, "559984726662");
+        assert_eq!(primary_phone_jid.user, "559999999999");
         assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
         assert_eq!(primary_phone_jid.device, 0);
         assert_eq!(primary_phone_jid.agent, 0);
-        assert_eq!(primary_phone_jid.to_string(), "559984726662@s.whatsapp.net");
+        assert_eq!(primary_phone_jid.to_string(), "559999999999@s.whatsapp.net");
     }
 
     #[test]
     fn test_primary_phone_jid_overwrites_existing_device() {
         // Edge case: pn with device ID should still produce device 0
-        let own_pn = Jid::pn_device("559984726662", 33);
+        let own_pn = Jid::pn_device("559999999999", 33);
         let primary_phone_jid = own_pn.with_device(0);
 
-        assert_eq!(primary_phone_jid.user, "559984726662");
+        assert_eq!(primary_phone_jid.user, "559999999999");
         assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
         assert_eq!(primary_phone_jid.device, 0);
     }
 
     #[test]
     fn test_primary_phone_jid_is_not_ad() {
-        let primary_phone_jid = Jid::pn("559984726662").with_device(0);
+        let primary_phone_jid = Jid::pn("559999999999").with_device(0);
         assert!(!primary_phone_jid.is_ad()); // device 0 is NOT an additional device
     }
 
     #[test]
     fn test_linked_device_is_ad() {
-        let linked_device_jid = Jid::pn_device("559984726662", 33);
+        let linked_device_jid = Jid::pn_device("559999999999", 33);
         assert!(linked_device_jid.is_ad()); // device > 0 IS an additional device
     }
 
@@ -260,14 +260,14 @@ mod tests {
 
     #[test]
     fn test_primary_phone_jid_roundtrip() {
-        let own_pn = Jid::pn("559984726662");
+        let own_pn = Jid::pn("559999999999");
         let primary_phone_jid = own_pn.with_device(0);
 
         let jid_string = primary_phone_jid.to_string();
-        assert_eq!(jid_string, "559984726662@s.whatsapp.net");
+        assert_eq!(jid_string, "559999999999@s.whatsapp.net");
 
         let parsed: Jid = jid_string.parse().expect("JID should be parseable");
-        assert_eq!(parsed.user, "559984726662");
+        assert_eq!(parsed.user, "559999999999");
         assert_eq!(parsed.server, DEFAULT_USER_SERVER);
         assert_eq!(parsed.device, 0);
     }
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_primary_phone_vs_companion_devices() {
-        let user = "559984726662";
+        let user = "559999999999";
         let primary = Jid::pn(user).with_device(0);
         let companion_web = Jid::pn_device(user, 33);
         let companion_desktop = Jid::pn_device(user, 34);

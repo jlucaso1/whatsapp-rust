@@ -644,6 +644,45 @@ impl SessionRecord {
         self.current_session = Some(session);
     }
 
+    /// Take ownership of the current session state, leaving None.
+    /// Use `set_session_state()` to restore it if decryption fails.
+    pub fn take_session_state(&mut self) -> Option<SessionState> {
+        self.current_session.take()
+    }
+
+    /// Get the number of previous sessions.
+    pub fn previous_session_count(&self) -> usize {
+        self.previous_sessions.len()
+    }
+
+    /// Take a previous session by index, removing it from the list.
+    /// The session is converted from SessionStructure to SessionState.
+    pub fn take_previous_session(&mut self, index: usize) -> Option<SessionState> {
+        if index < self.previous_sessions.len() {
+            Some(self.previous_sessions.remove(index).into())
+        } else {
+            None
+        }
+    }
+
+    /// Restore a previous session at a specific index.
+    /// Used to put a session back after a failed decryption attempt.
+    ///
+    /// # Note
+    /// This method is designed for the take-restore pattern where a session is
+    /// taken with `take_previous_session` and restored at the same index if
+    /// decryption fails. It does not enforce `ARCHIVED_STATES_MAX_LENGTH` since
+    /// the caller is expected to restore only what was taken.
+    pub fn restore_previous_session(&mut self, index: usize, state: SessionState) {
+        let structure: SessionStructure = state.into();
+        if index <= self.previous_sessions.len() {
+            self.previous_sessions.insert(index, structure);
+        } else {
+            // If index is out of bounds, just push to end
+            self.previous_sessions.push(structure);
+        }
+    }
+
     pub fn previous_session_states(
         &self,
     ) -> impl ExactSizeIterator<Item = Result<SessionState, InvalidSessionError>> + '_ {

@@ -1,4 +1,4 @@
-use super::error::StoreError;
+use super::error::{StoreError, db_err};
 use crate::store::Device;
 use crate::store::traits::Backend;
 use log::{debug, error};
@@ -20,24 +20,15 @@ impl PersistenceManager {
     pub async fn new(backend: Arc<dyn Backend>) -> Result<Self, StoreError> {
         debug!("PersistenceManager: Ensuring device row exists (single-device mode).");
         // Ensure a device row with id=1 exists; create it if not.
-        let exists = backend
-            .device_exists(1)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let exists = backend.device_exists(1).await.map_err(db_err)?;
         if !exists {
             debug!("PersistenceManager: No device row found. Creating new device row.");
-            let id = backend
-                .create_new_device()
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let id = backend.create_new_device().await.map_err(db_err)?;
             debug!("PersistenceManager: Created device row with id={id}.");
         }
 
         debug!("PersistenceManager: Attempting to load device data via Backend.");
-        let device_data_opt = backend
-            .load_device_data()
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let device_data_opt = backend.load_device_data().await.map_err(db_err)?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             debug!(
@@ -75,7 +66,7 @@ impl PersistenceManager {
         let device_data_opt = backend
             .load_device_data_for_device(device_id)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(db_err)?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             debug!(
@@ -147,12 +138,12 @@ impl PersistenceManager {
                 self.backend
                     .save_device_data_for_device(device_id, &serializable_device)
                     .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(db_err)?;
             } else {
                 self.backend
                     .save_device_data(&serializable_device)
                     .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(db_err)?;
             }
             debug!("Device state saved successfully.");
         }
@@ -196,7 +187,7 @@ impl PersistenceManager {
         self.backend
             .get_skdm_recipients(group_jid)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))
+            .map_err(db_err)
     }
 
     /// Mark devices as having received SKDM for a group
@@ -208,7 +199,7 @@ impl PersistenceManager {
         self.backend
             .add_skdm_recipients(group_jid, device_jids)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))
+            .map_err(db_err)
     }
 
     /// Clear all SKDM recipients for a group (used when sender key is rotated)
@@ -216,6 +207,6 @@ impl PersistenceManager {
         self.backend
             .clear_skdm_recipients(group_jid)
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))
+            .map_err(db_err)
     }
 }

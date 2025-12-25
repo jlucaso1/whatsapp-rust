@@ -9,6 +9,19 @@ use wacore::types::events::{DeviceListUpdate, DeviceListUpdateType};
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
 
+/// Extract device IDs from child `<device>` elements of a node.
+fn extract_device_ids(node: &Node) -> Vec<u32> {
+    node.children()
+        .map(|device_nodes| {
+            device_nodes
+                .iter()
+                .filter(|n| n.tag == "device")
+                .filter_map(|n| n.attrs().optional_u64("id").map(|id| id as u32))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Handler for `<notification>` stanzas.
 ///
 /// Processes various notification types including:
@@ -18,12 +31,6 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 /// - Device notifications (device add/remove/update)
 #[derive(Default)]
 pub struct NotificationHandler;
-
-impl NotificationHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 #[async_trait]
 impl StanzaHandler for NotificationHandler {
@@ -138,17 +145,7 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
             _ => continue,
         };
 
-        // Extract device IDs from child <device> elements
-        let devices: Vec<u32> = child
-            .children()
-            .map(|device_nodes| {
-                device_nodes
-                    .iter()
-                    .filter(|n| n.tag == "device")
-                    .filter_map(|n| n.attrs().optional_u64("id").map(|id| id as u32))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let devices = extract_device_ids(child);
 
         debug!(
             target: "Client",
@@ -334,16 +331,7 @@ mod tests {
                 _ => continue,
             };
 
-            let devices: Vec<u32> = child
-                .children()
-                .map(|device_nodes| {
-                    device_nodes
-                        .iter()
-                        .filter(|n| n.tag == "device")
-                        .filter_map(|n| n.attrs().optional_u64("id").map(|id| id as u32))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let devices = extract_device_ids(child);
 
             results.push((update_type, devices, hash));
         }

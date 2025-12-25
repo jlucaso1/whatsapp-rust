@@ -348,15 +348,15 @@ impl Client {
         let mut router = StanzaRouter::new();
 
         // Register all handlers
-        router.register(Arc::new(MessageHandler::new()));
-        router.register(Arc::new(ReceiptHandler::new()));
-        router.register(Arc::new(IqHandler::new()));
-        router.register(Arc::new(SuccessHandler::new()));
-        router.register(Arc::new(FailureHandler::new()));
-        router.register(Arc::new(StreamErrorHandler::new()));
-        router.register(Arc::new(IbHandler::new()));
-        router.register(Arc::new(NotificationHandler::new()));
-        router.register(Arc::new(AckHandler::new()));
+        router.register(Arc::new(MessageHandler));
+        router.register(Arc::new(ReceiptHandler));
+        router.register(Arc::new(IqHandler));
+        router.register(Arc::new(SuccessHandler));
+        router.register(Arc::new(FailureHandler));
+        router.register(Arc::new(StreamErrorHandler));
+        router.register(Arc::new(IbHandler));
+        router.register(Arc::new(NotificationHandler));
+        router.register(Arc::new(AckHandler));
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));
@@ -1226,7 +1226,7 @@ impl Client {
                 }
             };
             if !missing.is_empty() {
-                let mut to_request: Vec<Vec<u8>> = Vec::new();
+                let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                 let mut guard = self.app_state_key_requests.lock().await;
                 let now = std::time::Instant::now();
                 for key_id in missing {
@@ -2563,7 +2563,7 @@ mod tests {
 
         // Now test with actual JIDs - it should wait for offline sync
         let client_clone = client.clone();
-        let test_jid = Jid::pn("559984726662");
+        let test_jid = Jid::pn("559999999999");
         let ensure_handle = tokio::spawn(async move {
             // This will wait for offline sync before proceeding
             let start = std::time::Instant::now();
@@ -2621,7 +2621,7 @@ mod tests {
 
         // Set a PN so establish_primary_phone_session_immediate doesn't fail early
         pm.modify_device(|device| {
-            device.pn = Some(Jid::pn("559984726662"));
+            device.pn = Some(Jid::pn("559999999999"));
         })
         .await;
 

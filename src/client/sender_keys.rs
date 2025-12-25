@@ -34,20 +34,25 @@ impl Client {
         let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.clone());
         drop(device_guard);
 
+        // Pre-compute prefix strings outside the filter loop to avoid repeated allocations
+        // Include exact match string in tuple to avoid repeated Option lookups
+        let lid_prefixes = own_lid_user
+            .as_ref()
+            .map(|lid| (format!("{lid}:"), format!("{lid}@"), lid.as_str()));
+        let pn_prefixes = own_pn_user
+            .as_ref()
+            .map(|pn| (format!("{pn}:"), format!("{pn}@"), pn.as_str()));
+
         // Filter out own devices (WhatsApp Web: !isMeDevice(e))
         let filtered: Vec<String> = participants
             .iter()
             .filter(|p| {
                 // Parse participant JID and check if it's our own
-                let is_own_lid = own_lid_user.as_ref().is_some_and(|lid| {
-                    p.starts_with(&format!("{lid}:"))
-                        || p.starts_with(&format!("{lid}@"))
-                        || p.as_str() == lid
+                let is_own_lid = lid_prefixes.as_ref().is_some_and(|(colon, at, exact)| {
+                    p.starts_with(colon) || p.starts_with(at) || p.as_str() == *exact
                 });
-                let is_own_pn = own_pn_user.as_ref().is_some_and(|pn| {
-                    p.starts_with(&format!("{pn}:"))
-                        || p.starts_with(&format!("{pn}@"))
-                        || p.as_str() == pn
+                let is_own_pn = pn_prefixes.as_ref().is_some_and(|(colon, at, exact)| {
+                    p.starts_with(colon) || p.starts_with(at) || p.as_str() == *exact
                 });
                 !is_own_lid && !is_own_pn
             })

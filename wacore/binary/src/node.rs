@@ -1,9 +1,66 @@
 use crate::attrs::{AttrParser, AttrParserRef};
+use crate::jid::{Jid, JidRef};
 use indexmap::IndexMap;
 use std::borrow::Cow;
 
 pub type Attrs = IndexMap<String, String>;
-pub type AttrsRef<'a> = Vec<(Cow<'a, str>, Cow<'a, str>)>;
+pub type AttrsRef<'a> = Vec<(Cow<'a, str>, ValueRef<'a>)>;
+
+/// A decoded attribute value that can be either a string or a structured JID.
+/// This avoids string allocation when decoding JID tokens - the JidRef is returned
+/// directly and only converted to a string when actually needed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueRef<'a> {
+    String(Cow<'a, str>),
+    Jid(JidRef<'a>),
+}
+
+impl<'a> ValueRef<'a> {
+    /// Get the value as a string slice, if it's a string variant.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            ValueRef::String(s) => Some(s.as_ref()),
+            ValueRef::Jid(_) => None,
+        }
+    }
+
+    /// Get the value as a JidRef, if it's a JID variant.
+    pub fn as_jid(&self) -> Option<&JidRef<'a>> {
+        match self {
+            ValueRef::Jid(j) => Some(j),
+            ValueRef::String(_) => None,
+        }
+    }
+
+    /// Convert to an owned Jid, parsing from string if necessary.
+    pub fn to_jid(&self) -> Option<Jid> {
+        match self {
+            ValueRef::Jid(j) => Some(j.to_owned()),
+            ValueRef::String(s) => Jid::from_str(s.as_ref()).ok(),
+        }
+    }
+
+    /// Convert to a string, formatting the JID if necessary.
+    /// Returns a Cow to avoid allocation when the value is already a string.
+    pub fn to_string_cow(&self) -> Cow<'a, str> {
+        match self {
+            ValueRef::String(s) => s.clone(),
+            ValueRef::Jid(j) => Cow::Owned(j.to_string()),
+        }
+    }
+}
+
+use std::fmt;
+use std::str::FromStr;
+
+impl<'a> fmt::Display for ValueRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueRef::String(s) => write!(f, "{}", s),
+            ValueRef::Jid(j) => write!(f, "{}", j),
+        }
+    }
+}
 
 pub type NodeVec<'a> = Vec<NodeRef<'a>>;
 
@@ -67,7 +124,12 @@ impl Node {
             attrs: self
                 .attrs
                 .iter()
-                .map(|(k, v)| (Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())))
+                .map(|(k, v)| {
+                    (
+                        Cow::Borrowed(k.as_str()),
+                        ValueRef::String(Cow::Borrowed(v.as_str())),
+                    )
+                })
                 .collect(),
             content: self.content.as_ref().map(|c| Box::new(c.as_content_ref())),
         }
@@ -138,11 +200,11 @@ impl<'a> NodeRef<'a> {
         }
     }
 
-    pub fn get_attr(&self, key: &str) -> Option<&Cow<'a, str>> {
+    pub fn get_attr(&self, key: &str) -> Option<&ValueRef<'a>> {
         self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    pub fn attrs_iter(&self) -> impl Iterator<Item = (&Cow<'a, str>, &Cow<'a, str>)> {
+    pub fn attrs_iter(&self) -> impl Iterator<Item = (&Cow<'a, str>, &ValueRef<'a>)> {
         self.attrs.iter().map(|(k, v)| (k, v))
     }
 
@@ -181,7 +243,7 @@ impl<'a> NodeRef<'a> {
             attrs: self
                 .attrs
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(k, v)| (k.to_string(), v.to_string_cow().into_owned()))
                 .collect::<IndexMap<String, String>>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),

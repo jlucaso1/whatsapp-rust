@@ -14,19 +14,8 @@ use wacore_binary::node::{Node, NodeContent};
 /// - Edge routing information
 /// - Offline sync previews and completion notifications
 /// - Thread metadata
+#[derive(Default)]
 pub struct IbHandler;
-
-impl Default for IbHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IbHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 #[async_trait]
 impl StanzaHandler for IbHandler {

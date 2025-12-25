@@ -145,10 +145,14 @@ impl Client {
         let original_user = record.user.clone();
         let lookup = self.resolve_lookup_keys(&original_user).await;
         let canonical_key = lookup.canonical_key().to_string();
-        record.user = canonical_key.clone();
+        record.user.clone_from(&canonical_key); // More efficient: reuses allocation
 
+        // Clone record for cache before moving to backend
+        let record_for_cache = record.clone();
+
+        // Use canonical_key directly as cache key (no extra clone)
         self.device_registry_cache
-            .insert(canonical_key.clone(), record.clone())
+            .insert(canonical_key.clone(), record_for_cache)
             .await;
 
         let backend = self.persistence_manager.backend();

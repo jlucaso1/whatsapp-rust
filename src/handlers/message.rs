@@ -20,12 +20,6 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct MessageHandler;
 
-impl MessageHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[async_trait]
 impl StanzaHandler for MessageHandler {
     fn tag(&self) -> &'static str {

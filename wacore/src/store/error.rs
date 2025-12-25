@@ -28,3 +28,10 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Helper to convert any Display error into StoreError::Database.
+/// Use with `.map_err(db_err)?` instead of `.map_err(|e| StoreError::Database(e.to_string()))?`
+#[inline]
+pub fn db_err<E: std::fmt::Display>(e: E) -> StoreError {
+    StoreError::Database(e.to_string())
+}

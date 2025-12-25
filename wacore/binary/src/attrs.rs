@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{BinaryError, Result};
 use crate::jid::Jid;
-use crate::node::{Attrs, Node, NodeRef};
+use crate::node::{Attrs, Node, NodeRef, ValueRef};
 
 pub struct AttrParser<'a> {
     pub attrs: &'a Attrs,
@@ -11,7 +11,7 @@ pub struct AttrParser<'a> {
 }
 
 pub struct AttrParserRef<'a> {
-    pub attrs: &'a [(Cow<'a, str>, Cow<'a, str>)],
+    pub attrs: &'a [(Cow<'a, str>, ValueRef<'a>)],
     pub errors: Vec<BinaryError>,
 }
 
@@ -35,7 +35,7 @@ impl<'a> AttrParserRef<'a> {
         }
     }
 
-    fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a Cow<'a, str>> {
+    fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a ValueRef<'a>> {
         let val = self
             .attrs
             .iter()
@@ -51,25 +51,33 @@ impl<'a> AttrParserRef<'a> {
         val
     }
 
+    /// Get string from the value.
+    /// For JID values, this returns None - use optional_jid instead.
     pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).map(|s| s.as_ref())
+        self.get_raw(key, false).and_then(|v| v.as_str())
     }
 
     pub fn string(&mut self, key: &str) -> String {
         self.get_raw(key, true)
-            .map(|s| s.as_ref().to_string())
+            .map(|v| v.to_string_cow().into_owned())
             .unwrap_or_default()
     }
 
+    /// Get JID from the value.
+    /// If the value is a JidRef, returns it directly without parsing (zero allocation).
+    /// If the value is a string, parses it as a JID.
     pub fn optional_jid(&mut self, key: &str) -> Option<Jid> {
-        self.get_raw(key, false)
-            .and_then(|s| match Jid::from_str(s.as_ref()) {
-                Ok(jid) => Some(jid),
-                Err(e) => {
-                    self.errors.push(BinaryError::from(e));
-                    None
+        self.get_raw(key, false).and_then(|v| match v.to_jid() {
+            Some(jid) => Some(jid),
+            None => {
+                // to_jid() only returns None if it's a String that failed to parse
+                if let ValueRef::String(s) = v {
+                    self.errors
+                        .push(BinaryError::AttrParse(format!("Invalid JID: {s}")));
                 }
-            })
+                None
+            }
+        })
     }
 
     pub fn jid(&mut self, key: &str) -> Jid {
@@ -81,9 +89,13 @@ impl<'a> AttrParserRef<'a> {
         self.jid(key).to_non_ad()
     }
 
+    fn get_string_value(&mut self, key: &str, require: bool) -> Option<Cow<'a, str>> {
+        self.get_raw(key, require).map(|v| v.to_string_cow())
+    }
+
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {
-        self.get_raw(key, require)
-            .and_then(|s| match s.as_ref().parse::<bool>() {
+        self.get_string_value(key, require)
+            .and_then(|s| match s.parse::<bool>() {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(
@@ -103,8 +115,8 @@ impl<'a> AttrParserRef<'a> {
     }
 
     pub fn optional_u64(&mut self, key: &str) -> Option<u64> {
-        self.get_raw(key, false)
-            .and_then(|s| match s.as_ref().parse::<u64>() {
+        self.get_string_value(key, false)
+            .and_then(|s| match s.parse::<u64>() {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(
@@ -134,8 +146,8 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_i64(&mut self, key: &str, require: bool) -> Option<i64> {
-        self.get_raw(key, require)
-            .and_then(|s| match s.as_ref().parse::<i64>() {
+        self.get_string_value(key, require)
+            .and_then(|s| match s.parse::<i64>() {
                 Ok(val) => Some(val),
                 Err(e) => {
                     self.errors.push(BinaryError::AttrParse(format!(

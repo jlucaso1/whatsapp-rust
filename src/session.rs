@@ -109,8 +109,8 @@ impl SessionManager {
             let mut processing = self.processing.lock().await;
             let mut pending = self.pending.lock().await;
 
-            let mut to_process = Vec::new();
-            let mut to_wait = Vec::new();
+            let mut to_process = Vec::with_capacity(jids_needing_sessions.len());
+            let mut to_wait = Vec::with_capacity(jids_needing_sessions.len());
 
             for jid in jids_needing_sessions {
                 let jid_str = jid.to_string();

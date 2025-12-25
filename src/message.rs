@@ -377,8 +377,8 @@ impl Client {
             return;
         }
 
-        let mut session_enc_nodes = Vec::new();
-        let mut group_content_enc_nodes = Vec::new();
+        let mut session_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
+        let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
 
         for &enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
@@ -547,8 +547,8 @@ impl Client {
         let mut dispatched_undecryptable = false;
 
         for enc_node in enc_nodes {
-            let ciphertext = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+            let ciphertext: &[u8] = match &enc_node.content {
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
                 _ => {
                     log::warn!("Enc node has no byte content (batch session)");
                     continue;
@@ -558,7 +558,7 @@ impl Client {
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
             let parsed_message = if enc_type == "pkmsg" {
-                match PreKeySignalMessage::try_from(ciphertext.as_slice()) {
+                match PreKeySignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
                     Err(e) => {
                         log::error!("Failed to parse PreKeySignalMessage: {e:?}");
@@ -566,7 +566,7 @@ impl Client {
                     }
                 }
             } else {
-                match SignalMessage::try_from(ciphertext.as_slice()) {
+                match SignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::SignalMessage(m),
                     Err(e) => {
                         log::error!("Failed to parse SignalMessage: {e:?}");
@@ -846,8 +846,8 @@ impl Client {
         let device_arc = self.persistence_manager.get_device_arc().await;
 
         for enc_node in enc_nodes {
-            let ciphertext = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+            let ciphertext: &[u8] = match &enc_node.content {
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
                 _ => {
                     log::warn!("Enc node has no byte content (batch group)");
                     continue;
@@ -872,7 +872,7 @@ impl Client {
 
             let decrypt_result = {
                 let mut device_guard = device_arc.write().await;
-                group_decrypt(ciphertext.as_slice(), &mut *device_guard, &sender_key_name).await
+                group_decrypt(ciphertext, &mut *device_guard, &sender_key_name).await
             };
 
             match decrypt_result {
@@ -1024,10 +1024,7 @@ impl Client {
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
             let participant = attrs.jid("participant");
-            let is_from_me = participant.is_same_user_as(&own_jid)
-                || own_lid
-                    .as_ref()
-                    .is_some_and(|lid| participant.is_same_user_as(lid));
+            let is_from_me = participant.matches_user_or_lid(&own_jid, own_lid.as_ref());
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -1055,10 +1052,7 @@ impl Client {
                 None
             };
 
-            let is_from_me = sender.is_same_user_as(&own_jid)
-                || own_lid
-                    .as_ref()
-                    .is_some_and(|lid| sender.is_same_user_as(lid));
+            let is_from_me = sender.matches_user_or_lid(&own_jid, own_lid.as_ref());
 
             crate::types::message::MessageSource {
                 chat: from.clone(),
@@ -1068,11 +1062,7 @@ impl Client {
                 sender_alt,
                 ..Default::default()
             }
-        } else if from.is_same_user_as(&own_jid)
-            || own_lid
-                .as_ref()
-                .is_some_and(|lid| from.is_same_user_as(lid))
-        {
+        } else if from.matches_user_or_lid(&own_jid, own_lid.as_ref()) {
             // DM from self (either via PN or LID)
             // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
             // For self-sent messages, we don't set sender_alt here - the decryption
@@ -1134,6 +1124,27 @@ impl Client {
         &self,
         keys: &wa::message::AppStateSyncKeyShare,
     ) {
+        struct KeyComponents<'a> {
+            key_id: &'a [u8],
+            data: &'a [u8],
+            fingerprint_bytes: Vec<u8>,
+            timestamp: i64,
+        }
+
+        /// Extract components from an AppStateSyncKey for storage.
+        fn extract_key_components(key: &wa::message::AppStateSyncKey) -> Option<KeyComponents<'_>> {
+            let key_id = key.key_id.as_ref()?.key_id.as_ref()?;
+            let key_data = key.key_data.as_ref()?;
+            let fingerprint = key_data.fingerprint.as_ref()?;
+            let data = key_data.key_data.as_ref()?;
+            Some(KeyComponents {
+                key_id,
+                data,
+                fingerprint_bytes: fingerprint.encode_to_vec(),
+                timestamp: key_data.timestamp(),
+            })
+        }
+
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let key_store = device_snapshot.backend.clone();
 
@@ -1141,23 +1152,20 @@ impl Client {
         let mut failed_count = 0;
 
         for key in &keys.keys {
-            if let Some(key_id_proto) = &key.key_id
-                && let Some(key_id) = &key_id_proto.key_id
-                && let Some(key_data) = &key.key_data
-                && let Some(fingerprint) = &key_data.fingerprint
-                && let Some(data) = &key_data.key_data
-            {
-                let fingerprint_bytes = fingerprint.encode_to_vec();
+            if let Some(components) = extract_key_components(key) {
                 let new_key = crate::store::traits::AppStateSyncKey {
-                    key_data: data.clone(),
-                    fingerprint: fingerprint_bytes,
-                    timestamp: key_data.timestamp(),
+                    key_data: components.data.to_vec(),
+                    fingerprint: components.fingerprint_bytes,
+                    timestamp: components.timestamp,
                 };
 
-                if let Err(e) = key_store.set_app_state_sync_key(key_id, new_key).await {
+                if let Err(e) = key_store
+                    .set_app_state_sync_key(components.key_id, new_key)
+                    .await
+                {
                     log::error!(
                         "Failed to store app state sync key {:?}: {:?}",
-                        hex::encode(key_id),
+                        hex::encode(components.key_id),
                         e
                     );
                     failed_count += 1;
