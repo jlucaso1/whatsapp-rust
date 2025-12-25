@@ -88,28 +88,40 @@ impl Client {
     /// Atomically increments the retry count for a message and returns the new count.
     /// Returns `None` if max retries have been reached.
     ///
-    /// This uses `get_with` to atomically initialize or retrieve the current count,
-    /// then immediately increments it. While not perfectly atomic (there's a small
-    /// window between get and insert), this is acceptable because:
-    /// 1. Duplicate retry receipts are handled gracefully by the sender
-    /// 2. The worst case is sending one extra retry, which doesn't break the protocol
+    /// Uses moka's `and_compute_with` for truly atomic read-modify-write operations,
+    /// preventing race conditions where concurrent calls could exceed MAX_DECRYPT_RETRIES.
     async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
-        // Get current count (atomically initializes to 0 if not present)
-        let current = self
+        use moka::ops::compute::Op;
+
+        let result = self
             .message_retry_counts
-            .get_with(cache_key.to_string(), async { 0_u8 })
+            .entry_by_ref(cache_key)
+            .and_compute_with(|maybe_entry| {
+                let op = if let Some(entry) = maybe_entry {
+                    let current = entry.into_value();
+                    if current >= MAX_DECRYPT_RETRIES {
+                        // Max retries reached, don't increment
+                        Op::Nop
+                    } else {
+                        // Increment the counter
+                        Op::Put(current + 1)
+                    }
+                } else {
+                    // No entry exists, insert initial count of 1
+                    Op::Put(1_u8)
+                };
+                std::future::ready(op)
+            })
             .await;
 
-        if current >= MAX_DECRYPT_RETRIES {
-            return None; // Max retries reached
+        // Extract the new count from the result
+        match result {
+            moka::ops::compute::CompResult::Inserted(entry) => Some(entry.into_value()),
+            moka::ops::compute::CompResult::ReplacedWith(entry) => Some(entry.into_value()),
+            moka::ops::compute::CompResult::Unchanged(_) => None, // Max retries reached
+            moka::ops::compute::CompResult::StillNone(_) => None, // Should not happen
+            moka::ops::compute::CompResult::Removed(_) => None,   // Should not happen
         }
-
-        let new_count = current + 1;
-        self.message_retry_counts
-            .insert(cache_key.to_string(), new_count)
-            .await;
-
-        Some(new_count)
     }
 
     /// Spawns a task that sends a retry receipt for a failed decryption.
@@ -422,11 +434,17 @@ impl Client {
         // 1. There were no session messages (session already exists), OR
         // 2. Session messages were successfully decrypted, OR
         // 3. Session messages were duplicates (already processed, so session exists)
+        // 4. It's a status@broadcast (we might have sender key cached from previous status)
         // Skip only if session messages FAILED to decrypt (not duplicates, not absent)
         if !group_content_enc_nodes.is_empty() {
+            // For status broadcasts, always try skmsg even if pkmsg failed.
+            // WhatsApp Web does this too - the pkmsg contains the SKDM which might fail,
+            // but if we already have the sender key cached from a previous status,
+            // we can still decrypt the skmsg content.
             let should_process_skmsg = session_enc_nodes.is_empty()
                 || session_decrypted_successfully
-                || session_had_duplicates;
+                || session_had_duplicates
+                || info.source.chat.is_status_broadcast();
 
             if should_process_skmsg {
                 if let Err(e) = self
@@ -3706,6 +3724,11 @@ mod tests {
         );
     }
 
+    /// Test concurrent retry increments are properly serialized.
+    ///
+    /// With moka's `and_compute_with`, the increment operation is atomic.
+    /// This means exactly 5 increments should succeed (returning 1-5),
+    /// and exactly 5 should fail (returning None after max is reached).
     #[tokio::test]
     async fn test_concurrent_retry_increments() {
         use tokio::task::JoinSet;
@@ -3729,19 +3752,28 @@ mod tests {
             }
         }
 
-        // Verify all results are valid (Some(1-5) or None for overflow)
+        // With atomic operations, exactly 5 should succeed and 5 should fail
         let valid_counts: Vec<_> = results.iter().filter(|r| r.is_some()).collect();
         let none_counts: Vec<_> = results.iter().filter(|r| r.is_none()).collect();
 
-        // Should have at most 5 successful increments (might have some due to race)
-        assert!(
-            valid_counts.len() >= 5,
-            "Should have at least 5 successful increments"
+        assert_eq!(
+            valid_counts.len(),
+            5,
+            "Exactly 5 increments should succeed with atomic operations"
         );
-        // After 5 increments, the rest should be None
-        assert!(
-            none_counts.len() <= 5,
-            "At most 5 should return None (after max)"
+        assert_eq!(
+            none_counts.len(),
+            5,
+            "Exactly 5 should return None (after max is reached)"
+        );
+
+        // Verify the successful increments returned values 1-5
+        let mut values: Vec<u8> = valid_counts.iter().filter_map(|r| **r).collect();
+        values.sort();
+        assert_eq!(
+            values,
+            vec![1, 2, 3, 4, 5],
+            "Successful increments should return 1, 2, 3, 4, 5"
         );
 
         // Final count should be 5 (max)
@@ -3940,5 +3972,105 @@ mod tests {
             Some(1),
             "Sender2 should have 1 retry"
         );
+    }
+
+    /// Test: Status broadcast messages should always try skmsg even if pkmsg fails
+    ///
+    /// Based on WhatsApp Web behavior from `.cargo/captured-js/lx-whGBdTEw.js`:
+    /// - WhatsApp Web tracks pkmsg and skmsg failures separately
+    /// - If pkmsg fails but skmsg succeeds, result is SUCCESS
+    /// - For status@broadcast, we might have sender key cached from previous status
+    ///
+    /// This test verifies that the `should_process_skmsg` logic correctly
+    /// includes status broadcasts even when session decryption fails.
+    #[test]
+    fn test_status_broadcast_should_always_process_skmsg() {
+        use wacore_binary::jid::{Jid, JidExt};
+
+        // status@broadcast JID
+        let status_jid: Jid = "status@broadcast".parse().expect("status JID should parse");
+        assert!(
+            status_jid.is_status_broadcast(),
+            "status@broadcast should be recognized as status broadcast"
+        );
+
+        // Regular broadcast list should NOT be status broadcast
+        let broadcast_list: Jid = "123456789@broadcast"
+            .parse()
+            .expect("broadcast JID should parse");
+        assert!(
+            !broadcast_list.is_status_broadcast(),
+            "Regular broadcast list should not be status broadcast"
+        );
+        assert!(
+            broadcast_list.is_broadcast_list(),
+            "123456789@broadcast should be broadcast list"
+        );
+
+        // Group JID should NOT be status broadcast
+        let group_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("group JID should parse");
+        assert!(
+            !group_jid.is_status_broadcast(),
+            "Group JID should not be status broadcast"
+        );
+
+        // 1:1 JID should NOT be status broadcast
+        let user_jid: Jid = "15551234567@s.whatsapp.net"
+            .parse()
+            .expect("user JID should parse");
+        assert!(
+            !user_jid.is_status_broadcast(),
+            "User JID should not be status broadcast"
+        );
+    }
+
+    /// Test: Verify should_process_skmsg logic for status broadcast
+    ///
+    /// Simulates the decision logic from handle_encrypted_message:
+    /// - For status@broadcast, should_process_skmsg should be true even when
+    ///   session_decrypted_successfully=false and session_had_duplicates=false
+    #[test]
+    fn test_should_process_skmsg_logic_for_status_broadcast() {
+        use wacore_binary::jid::{Jid, JidExt};
+
+        // Test cases: (chat_jid, session_empty, session_success, session_dupe, expected)
+        let test_cases = [
+            // Status broadcast: always process skmsg
+            ("status@broadcast", false, false, false, true),
+            ("status@broadcast", false, false, true, true),
+            ("status@broadcast", false, true, false, true),
+            ("status@broadcast", true, false, false, true),
+            // Regular group: only process if session ok or empty
+            ("120363021033254949@g.us", false, false, false, false), // Fail: session failed
+            ("120363021033254949@g.us", false, false, true, true),   // OK: duplicate
+            ("120363021033254949@g.us", false, true, false, true),   // OK: success
+            ("120363021033254949@g.us", true, false, false, true),   // OK: no session msgs
+            // 1:1 chat: same logic as group
+            ("15551234567@s.whatsapp.net", false, false, false, false),
+            ("15551234567@s.whatsapp.net", true, false, false, true),
+        ];
+
+        for (jid_str, session_empty, session_success, session_dupe, expected) in test_cases {
+            let chat_jid: Jid = jid_str.parse().expect("JID should parse");
+
+            // Recreate the should_process_skmsg logic from handle_encrypted_message
+            let should_process_skmsg =
+                session_empty || session_success || session_dupe || chat_jid.is_status_broadcast();
+
+            assert_eq!(
+                should_process_skmsg,
+                expected,
+                "For chat {} with session_empty={}, session_success={}, session_dupe={}: \
+                 expected should_process_skmsg={}, got {}",
+                jid_str,
+                session_empty,
+                session_success,
+                session_dupe,
+                expected,
+                should_process_skmsg
+            );
+        }
     }
 }

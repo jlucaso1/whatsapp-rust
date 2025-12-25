@@ -116,14 +116,19 @@ impl Client {
             self.device_registry_cache.invalidate(key).await;
         }
 
-        self.get_device_cache()
-            .await
-            .invalidate(&Jid::pn(user))
-            .await;
-        self.get_device_cache()
-            .await
-            .invalidate(&Jid::lid(user))
-            .await;
+        // Invalidate device cache using properly-typed JIDs from lookup_keys.
+        // get_lookup_keys returns: [LID, PN] when mapping is known, or [user] when unknown.
+        // We use the cache to determine the correct type for each key.
+        let device_cache = self.get_device_cache().await;
+        for key in &keys {
+            // Check if this key is a LID (has a phone number mapping)
+            if self.lid_pn_cache.get_phone_number(key).await.is_some() {
+                device_cache.invalidate(&Jid::lid(key)).await;
+            } else {
+                // Key is a phone number or unknown - use PN JID
+                device_cache.invalidate(&Jid::pn(key)).await;
+            }
+        }
 
         debug!(
             "Invalidated device cache for user: {} (keys: {:?})",
@@ -376,5 +381,125 @@ mod tests {
         assert!(client.has_device(lid, 1).await);
         // Non-existent device should return false
         assert!(!client.has_device(lid, 99).await);
+    }
+
+    /// Test that invalidate_device_cache uses correctly-typed JIDs.
+    ///
+    /// This test prevents a regression where the code was using both
+    /// Jid::pn(user) and Jid::lid(user) on the raw user string, which
+    /// creates invalid JIDs (e.g., "15551234567@lid" for a phone number).
+    ///
+    /// The fix uses the lid_pn_cache to determine the correct Jid type
+    /// for each lookup key.
+    #[tokio::test]
+    async fn test_invalidate_device_cache_uses_correct_jid_types() {
+        use crate::lid_pn_cache::LidPnEntry;
+        use wacore_binary::jid::Jid;
+
+        let client = create_test_client().await;
+        let lid = "100000000000001";
+        let pn = "15551234567";
+
+        // Set up LID-to-PN mapping
+        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
+        client.lid_pn_cache.add(entry).await;
+
+        // Insert device registry record
+        let record = wacore::store::traits::DeviceListRecord {
+            user: lid.to_string(),
+            devices: vec![wacore::store::traits::DeviceInfo {
+                device_id: 1,
+                key_index: None,
+            }],
+            timestamp: 12345,
+            phash: None,
+        };
+        client
+            .device_registry_cache
+            .insert(lid.to_string(), record)
+            .await;
+
+        // Insert into device cache using correctly-typed JIDs
+        let lid_jid = Jid::lid(lid);
+        let pn_jid = Jid::pn(pn);
+
+        // Simulate devices being cached under both JID types
+        let device_cache = client.get_device_cache().await;
+        device_cache
+            .insert(lid_jid.clone(), vec![lid_jid.clone()])
+            .await;
+        device_cache
+            .insert(pn_jid.clone(), vec![pn_jid.clone()])
+            .await;
+
+        // Verify cache entries exist before invalidation
+        assert!(
+            client.device_registry_cache.get(lid).await.is_some(),
+            "Device registry cache should have LID entry before invalidation"
+        );
+        assert!(
+            device_cache.get(&lid_jid).await.is_some(),
+            "Device cache should have LID JID entry before invalidation"
+        );
+        assert!(
+            device_cache.get(&pn_jid).await.is_some(),
+            "Device cache should have PN JID entry before invalidation"
+        );
+
+        // Call invalidate_device_cache with the phone number (tests PN -> LID resolution)
+        client.invalidate_device_cache(pn).await;
+
+        // Verify all caches are properly invalidated
+        assert!(
+            client.device_registry_cache.get(lid).await.is_none(),
+            "Device registry cache should be invalidated for LID"
+        );
+        assert!(
+            device_cache.get(&lid_jid).await.is_none(),
+            "Device cache should be invalidated for LID JID"
+        );
+        assert!(
+            device_cache.get(&pn_jid).await.is_none(),
+            "Device cache should be invalidated for PN JID"
+        );
+
+        // Also test invalidation when called with LID directly
+        // Re-insert entries
+        let record2 = wacore::store::traits::DeviceListRecord {
+            user: lid.to_string(),
+            devices: vec![wacore::store::traits::DeviceInfo {
+                device_id: 2,
+                key_index: None,
+            }],
+            timestamp: 12346,
+            phash: None,
+        };
+        client
+            .device_registry_cache
+            .insert(lid.to_string(), record2)
+            .await;
+        device_cache
+            .insert(lid_jid.clone(), vec![lid_jid.clone()])
+            .await;
+        device_cache
+            .insert(pn_jid.clone(), vec![pn_jid.clone()])
+            .await;
+
+        // Call invalidate_device_cache with the LID
+        client.invalidate_device_cache(lid).await;
+
+        // Verify all caches are properly invalidated
+        assert!(
+            client.device_registry_cache.get(lid).await.is_none(),
+            "Device registry cache should be invalidated for LID (called with LID)"
+        );
+        assert!(
+            device_cache.get(&lid_jid).await.is_none(),
+            "Device cache should be invalidated for LID JID (called with LID)"
+        );
+        assert!(
+            device_cache.get(&pn_jid).await.is_none(),
+            "Device cache should be invalidated for PN JID (called with LID)"
+        );
     }
 }
