@@ -181,31 +181,3 @@ impl Client {
         false
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // This test verifies that the public API methods are accessible
-    // It's a compile-time test - if the methods aren't public, this won't compile
-    #[tokio::test]
-    async fn test_public_api_accessibility() {
-        // We can't test the actual functionality without a real client setup,
-        // but we can verify the methods exist and are public by checking they exist
-
-        // This is a compile-time test for method visibility
-        // The fact that this compiles means the methods are public and accessible
-
-        // If these were private, this would fail to compile
-        fn _check_methods_exist() {
-            // Check that generate_message_id exists and is accessible
-            let _method = Client::generate_message_id;
-
-            // Check that send_iq exists and is accessible
-            let _method = Client::send_iq;
-        }
-
-        // Test passes if it compiles - which it will if methods are public
-        _check_methods_exist();
-    }
-}

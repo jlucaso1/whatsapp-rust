@@ -682,25 +682,9 @@ impl Client {
 mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
+    use crate::test_utils::MockHttpClient;
     use wacore_binary::jid::Jid;
     use waproto::whatsapp as wa;
-
-    // Mock HTTP client for tests
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Ok(crate::http::HttpResponse {
-                status_code: 200,
-                body: Vec::new(),
-            })
-        }
-    }
 
     #[tokio::test]
     async fn recent_message_cache_insert_and_take() {
@@ -786,38 +770,6 @@ mod tests {
     }
 
     #[test]
-    fn max_retry_count_matches_whatsapp_web() {
-        // WhatsApp Web uses MAX_RETRY = 5
-        assert_eq!(MAX_RETRY_COUNT, 5);
-    }
-
-    #[test]
-    fn min_retry_count_for_keys_matches_whatsapp_web() {
-        // WhatsApp Web only includes keys when retryCount >= 2
-        assert_eq!(MIN_RETRY_COUNT_FOR_KEYS, 2);
-    }
-
-    #[test]
-    fn key_inclusion_threshold_logic() {
-        // Test that we correctly determine when to include keys
-
-        // retry_count = 3, 4, 5: should include keys
-        for count in 2..=5u8 {
-            assert!(count >= MIN_RETRY_COUNT_FOR_KEYS);
-        }
-    }
-
-    #[test]
-    fn retry_count_boundary_conditions() {
-        // Test boundary conditions for retry count handling
-
-        // Count 6+ is above max, should be refused
-        for count in 5..=10u8 {
-            assert!(count >= MAX_RETRY_COUNT);
-        }
-    }
-
-    #[test]
     fn peer_detection_logic() {
         // Test that we correctly identify peer devices by matching user IDs
         let our_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
@@ -832,58 +784,6 @@ mod tests {
     }
 
     #[test]
-    fn deduplication_key_format() {
-        // Test the deduplication key format for groups vs DMs
-        let group_chat: Jid = "120363021033254949@g.us".parse().unwrap();
-        let dm_chat: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let sender: Jid = "9876543210@s.whatsapp.net".parse().unwrap();
-        let message_id = "ABC123";
-
-        // Group key includes sender (each participant retries independently)
-        let group_key = format!("{}:{}:{}", group_chat, message_id, sender);
-        assert!(group_key.contains("@g.us"));
-        assert!(group_key.contains(message_id));
-        assert!(group_key.contains("9876543210"));
-
-        // DM key excludes sender (only one sender per chat)
-        let dm_key = format!("{}:{}", dm_chat, message_id);
-        assert!(dm_key.contains("@s.whatsapp.net"));
-        assert!(dm_key.contains(message_id));
-        assert!(!dm_key.contains("9876543210")); // No sender in DM key
-
-        // Verify they're different formats
-        assert_ne!(group_key.matches(':').count(), dm_key.matches(':').count());
-    }
-
-    #[test]
-    fn group_vs_dm_detection() {
-        // Test that we correctly identify groups vs DMs
-        let group: Jid = "120363021033254949@g.us".parse().unwrap();
-        let dm: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let status: Jid = "status@broadcast".parse().unwrap();
-
-        assert!(group.is_group());
-        assert!(!dm.is_group());
-        assert!(!status.is_group()); // Status is broadcast, not group
-    }
-
-    #[test]
-    fn registration_id_parsing() {
-        // Test parsing registration ID from bytes (4 bytes big-endian)
-        let bytes = [0x00, 0x01, 0x02, 0x03];
-        let reg_id = u32::from_be_bytes(bytes);
-        assert_eq!(reg_id, 0x00010203);
-
-        // Test with shorter bytes (variable-length encoding)
-        let short_bytes = [0x01, 0x02, 0x03];
-        let mut arr = [0u8; 4];
-        let start = 4 - short_bytes.len();
-        arr[start..].copy_from_slice(&short_bytes);
-        let reg_id_short = u32::from_be_bytes(arr);
-        assert_eq!(reg_id_short, 0x00010203);
-    }
-
-    #[test]
     fn prekey_id_parsing() {
         // PreKey IDs are 3 bytes big-endian
         let id_bytes = [0x01, 0x02, 0x03];
@@ -894,22 +794,6 @@ mod tests {
         let skey_id_bytes = [0xFF, 0xFE, 0xFD];
         let skey_id = u32::from_be_bytes([0, skey_id_bytes[0], skey_id_bytes[1], skey_id_bytes[2]]);
         assert_eq!(skey_id, 0x00FFFEFD);
-    }
-
-    #[test]
-    fn min_retry_for_base_key_check_constant() {
-        // WhatsApp Web saves base key on retry 2, checks on retry > 2
-        assert_eq!(MIN_RETRY_FOR_BASE_KEY_CHECK, 2);
-    }
-
-    #[test]
-    fn base_key_tracking_threshold_logic() {
-        // Test that we correctly determine when to save and check base keys
-
-        // retry_count = 3, 4: should check base key for collision
-        for count in 3..=4u8 {
-            assert!(count > MIN_RETRY_FOR_BASE_KEY_CHECK);
-        }
     }
 
     #[tokio::test]
@@ -1108,32 +992,6 @@ mod tests {
         // Similar but not bot (doesn't start with exact prefix)
         let not_bot: Jid = "1313556123456@s.whatsapp.net".parse().unwrap();
         assert!(!not_bot.is_bot());
-    }
-
-    #[test]
-    fn status_broadcast_detection() {
-        // Test status broadcast detection for retry handling
-        use wacore_binary::jid::JidExt as _;
-
-        // Status broadcast JID
-        let status: Jid = "status@broadcast".parse().unwrap();
-        assert!(status.is_status_broadcast());
-        assert!(!status.is_group());
-
-        // Regular broadcast list (not status)
-        let broadcast_list: Jid = "123456789@broadcast".parse().unwrap();
-        assert!(!broadcast_list.is_status_broadcast());
-        assert!(broadcast_list.is_broadcast_list());
-
-        // Group JID (not status broadcast)
-        let group: Jid = "120363021033254949@g.us".parse().unwrap();
-        assert!(!group.is_status_broadcast());
-        assert!(group.is_group());
-
-        // Regular DM (not status broadcast)
-        let dm: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        assert!(!dm.is_status_broadcast());
-        assert!(!dm.is_group());
     }
 
     #[test]

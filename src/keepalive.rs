@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, InfoQueryType, IqError};
+use crate::request::{InfoQuery, IqError};
 use log::{debug, info, warn};
 use rand::Rng;
 use std::sync::Arc;
@@ -20,15 +20,8 @@ impl Client {
 
         info!(target: "Client/Keepalive", "Sending keepalive ping");
 
-        let iq = InfoQuery {
-            namespace: "w:p",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: None,
-            timeout: Some(KEEP_ALIVE_RESPONSE_DEADLINE),
-        };
+        let iq =
+            InfoQuery::get("w:p", server_jid(), None).with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE);
 
         match self.send_iq(iq).await {
             Ok(_) => {

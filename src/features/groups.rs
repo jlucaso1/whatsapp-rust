@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::request::{InfoQuery, InfoQueryType};
+use crate::request::InfoQuery;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use wacore::client::context::GroupInfo;
@@ -42,15 +42,11 @@ impl<'a> Groups<'a> {
             .attr("request", "interactive")
             .build();
 
-        let iq = InfoQuery {
-            namespace: "w:g2",
-            query_type: InfoQueryType::Get,
-            to: jid.clone(),
-            content: Some(NodeContent::Nodes(vec![query_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "w:g2",
+            jid.clone(),
+            Some(NodeContent::Nodes(vec![query_node])),
+        );
 
         let resp_node = self.client.send_iq(iq).await?;
 
@@ -102,15 +98,11 @@ impl<'a> Groups<'a> {
             .children([participants_node, description_node])
             .build();
 
-        let iq = InfoQuery {
-            namespace: "w:g2",
-            query_type: InfoQueryType::Get,
-            to: G_US_JID.clone(),
-            content: Some(NodeContent::Nodes(vec![participating_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "w:g2",
+            G_US_JID.clone(),
+            Some(NodeContent::Nodes(vec![participating_node])),
+        );
 
         let resp_node = self.client.send_iq(iq).await?;
 
@@ -175,15 +167,11 @@ impl<'a> Groups<'a> {
             .attr("request", "interactive")
             .build();
 
-        let iq = InfoQuery {
-            namespace: "w:g2",
-            query_type: InfoQueryType::Get,
-            to: jid.clone(),
-            content: Some(NodeContent::Nodes(vec![query_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "w:g2",
+            jid.clone(),
+            Some(NodeContent::Nodes(vec![query_node])),
+        );
 
         let resp_node = self.client.send_iq(iq).await?;
 

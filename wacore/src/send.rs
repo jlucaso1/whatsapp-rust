@@ -587,7 +587,7 @@ pub async fn prepare_group_stanza<
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
                 // If this is a LID JID and we have a phone number mapping, use it for device query
-                if base_jid.server == "lid"
+                if base_jid.is_lid()
                     && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     log::debug!(
@@ -602,7 +602,7 @@ pub async fn prepare_group_stanza<
             .collect();
 
         // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
-        let own_jid_to_check = if own_base_jid.server == "lid" {
+        let own_jid_to_check = if own_base_jid.is_lid() {
             group_info
                 .phone_jid_for_lid_user(&own_base_jid.user)
                 .map(|pn| pn.to_non_ad())

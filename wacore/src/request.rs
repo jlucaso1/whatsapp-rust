@@ -32,6 +32,42 @@ pub struct InfoQuery<'a> {
     pub timeout: Option<Duration>,
 }
 
+impl<'a> InfoQuery<'a> {
+    pub fn get(namespace: &'a str, to: Jid, content: Option<NodeContent>) -> Self {
+        Self {
+            namespace,
+            query_type: InfoQueryType::Get,
+            to,
+            target: None,
+            id: None,
+            content,
+            timeout: None,
+        }
+    }
+
+    pub fn set(namespace: &'a str, to: Jid, content: Option<NodeContent>) -> Self {
+        Self {
+            namespace,
+            query_type: InfoQueryType::Set,
+            to,
+            target: None,
+            id: None,
+            content,
+            timeout: None,
+        }
+    }
+
+    pub fn with_target(mut self, target: Jid) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum IqError {
     #[error("IQ request timed out")]
