@@ -59,4 +59,8 @@ jobs:
             --testbed ubuntu-latest \
             --adapter rust_iai_callgrind \
             --github-actions "$GITHUB_TOKEN" \
+            --threshold-measure instructions \
+            --threshold-test percentage \
+            --threshold-upper-boundary 0.05 \
+            --thresholds-reset \
             "cargo bench --workspace"

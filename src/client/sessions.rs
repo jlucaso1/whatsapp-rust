@@ -249,10 +249,10 @@ mod tests {
 
     #[test]
     fn test_primary_phone_jid_from_lid() {
-        let own_lid = Jid::lid("236395184570386");
+        let own_lid = Jid::lid("100000000000001");
         let primary_phone_jid = own_lid.with_device(0);
 
-        assert_eq!(primary_phone_jid.user, "236395184570386");
+        assert_eq!(primary_phone_jid.user, "100000000000001");
         assert_eq!(primary_phone_jid.server, HIDDEN_USER_SERVER);
         assert_eq!(primary_phone_jid.device, 0);
         assert!(!primary_phone_jid.is_ad());

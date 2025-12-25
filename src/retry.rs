@@ -638,15 +638,6 @@ impl Client {
             info.source.sender.to_string()
         };
 
-        // Determine if this retry is for a peer message (from one of our own devices).
-        // WhatsApp Web uses category="peer" when sending retry receipts to our own devices.
-        // This distinguishes peer-to-peer device communication from regular user messages.
-        let is_peer = device_snapshot
-            .pn
-            .as_ref()
-            .map(|our_pn| info.source.sender.user == our_pn.user)
-            .unwrap_or(false);
-
         // Build the receipt node. For group messages, include the participant attribute
         // to identify which group member should resend. For DMs, omit it since the
         // "to" address already identifies the sender.
@@ -659,9 +650,30 @@ impl Client {
             builder = builder.attr("participant", info.source.sender.to_string());
         }
 
-        // Add category="peer" for messages from our own devices (matches WhatsApp Web behavior).
-        if is_peer {
-            builder = builder.attr("category", "peer");
+        // Handle peer vs device sync messages (matches WhatsApp Web's sendRetryReceipt):
+        // WhatsApp Web checks: if (to.isUser()) { if (isMeAccount(to)) { ... } }
+        // This means the category/recipient logic ONLY applies to DMs (not groups).
+        // For groups, only the participant attribute is set (handled above).
+        if !info.source.is_group {
+            let is_from_own_account = device_snapshot
+                .pn
+                .as_ref()
+                .is_some_and(|pn| info.source.sender.is_same_user_as(pn))
+                || device_snapshot
+                    .lid
+                    .as_ref()
+                    .is_some_and(|lid| info.source.sender.is_same_user_as(lid));
+
+            if is_from_own_account {
+                if info.category == "peer" {
+                    builder = builder.attr("category", "peer");
+                } else {
+                    // Include recipient so the sender can look up the original message.
+                    // Without this, the retry fails silently (getTargetChat returns null).
+                    let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
+                    builder = builder.attr("recipient", recipient.to_string());
+                }
+            }
         }
 
         // Build children list - keys are only included when retryCount >= 2
@@ -683,7 +695,7 @@ mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::jid::{Jid, JidExt};
     use waproto::whatsapp as wa;
 
     #[tokio::test]
@@ -771,16 +783,167 @@ mod tests {
 
     #[test]
     fn peer_detection_logic() {
-        // Test that we correctly identify peer devices by matching user IDs
-        let our_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
-        let peer_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap(); // Same user, device 1
-        let other_jid: Jid = "9876543210@s.whatsapp.net".parse().unwrap(); // Different user
+        let our_jid = Jid::pn("559911112222");
+        let peer_jid = Jid::pn_device("559911112222", 1);
+        let other_jid = Jid::pn("559933334444");
 
-        // Same user = peer device
         assert_eq!(our_jid.user, peer_jid.user);
-
-        // Different user = not peer
         assert_ne!(our_jid.user, other_jid.user);
+    }
+
+    /// Integration test for retry receipt attribute logic.
+    /// Tests the fix for lost device sync messages (AC7B18EBD4445BFC55C0EA3CF9F913F8 case).
+    /// Matches WhatsApp Web's sendRetryReceipt: if (to.isUser()) { if (isMeAccount(to)) { ... } }
+    #[test]
+    fn retry_receipt_attributes_for_device_sync_vs_peer_vs_group() {
+        use wacore::types::message::{MessageInfo, MessageSource};
+        use wacore_binary::builder::NodeBuilder;
+
+        let our_pn = Jid::pn("559999999999");
+        let our_lid = Jid::lid("100000000000001");
+
+        fn build_retry_receipt(
+            info: &MessageInfo,
+            our_pn: &Jid,
+            our_lid: &Jid,
+        ) -> wacore_binary::node::Node {
+            let mut builder = NodeBuilder::new("receipt")
+                .attr("to", info.source.sender.to_string())
+                .attr("id", info.id.clone())
+                .attr("type", "retry");
+
+            if info.source.is_group {
+                builder = builder.attr("participant", info.source.sender.to_string());
+            }
+
+            if !info.source.is_group {
+                let is_from_own_account = info.source.sender.is_same_user_as(our_pn)
+                    || info.source.sender.is_same_user_as(our_lid);
+
+                if is_from_own_account {
+                    if info.category == "peer" {
+                        builder = builder.attr("category", "peer");
+                    } else {
+                        let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
+                        builder = builder.attr("recipient", recipient.to_string());
+                    }
+                }
+            }
+
+            builder.build()
+        }
+
+        // Case 1: Device sync DM
+        let recipient_lid = Jid::lid("200000000000002");
+        let device_sync_info = MessageInfo {
+            id: "DEVICE_SYNC_MSG_001".to_string(),
+            source: MessageSource {
+                chat: recipient_lid.clone(),
+                sender: our_lid.clone(),
+                is_from_me: true,
+                is_group: false,
+                recipient: Some(recipient_lid.clone()),
+                ..Default::default()
+            },
+            category: String::new(),
+            ..Default::default()
+        };
+
+        let node = build_retry_receipt(&device_sync_info, &our_pn, &our_lid);
+        assert_eq!(
+            node.attrs().optional_string("recipient"),
+            Some("200000000000002@lid"),
+            "Device sync DM should include recipient"
+        );
+        assert!(
+            node.attrs().optional_string("category").is_none(),
+            "Device sync DM should NOT have category=peer"
+        );
+        assert!(
+            node.attrs().optional_string("participant").is_none(),
+            "DM should NOT have participant"
+        );
+
+        // Case 2: Peer DM with category="peer"
+        let other_pn = Jid::pn("551188888888");
+        let peer_info = MessageInfo {
+            id: "PEER123".to_string(),
+            source: MessageSource {
+                chat: other_pn.clone(),
+                sender: our_pn.clone(),
+                is_from_me: true,
+                is_group: false,
+                recipient: None,
+                ..Default::default()
+            },
+            category: "peer".to_string(),
+            ..Default::default()
+        };
+
+        let node = build_retry_receipt(&peer_info, &our_pn, &our_lid);
+        assert_eq!(
+            node.attrs().optional_string("category"),
+            Some("peer"),
+            "Peer DM should have category=peer"
+        );
+        assert!(
+            node.attrs().optional_string("recipient").is_none(),
+            "Peer DM should NOT have recipient"
+        );
+
+        // Case 3: Group message from our own account
+        let group_info = MessageInfo {
+            id: "GROUP123".to_string(),
+            source: MessageSource {
+                chat: "123456789@g.us".parse().unwrap(),
+                sender: our_lid.clone(),
+                is_from_me: true,
+                is_group: true,
+                recipient: None,
+                ..Default::default()
+            },
+            category: String::new(),
+            ..Default::default()
+        };
+
+        let node = build_retry_receipt(&group_info, &our_pn, &our_lid);
+        assert!(
+            node.attrs().optional_string("participant").is_some(),
+            "Group should have participant"
+        );
+        assert!(
+            node.attrs().optional_string("category").is_none(),
+            "Group should NOT have category"
+        );
+        assert!(
+            node.attrs().optional_string("recipient").is_none(),
+            "Group should NOT have recipient"
+        );
+
+        // Case 4: DM from someone else
+        let other_dm_info = MessageInfo {
+            id: "OTHER123".to_string(),
+            source: MessageSource {
+                chat: other_pn.clone(),
+                sender: other_pn.clone(),
+                is_from_me: false,
+                is_group: false,
+                recipient: None,
+                ..Default::default()
+            },
+            category: String::new(),
+            ..Default::default()
+        };
+
+        let node = build_retry_receipt(&other_dm_info, &our_pn, &our_lid);
+        assert!(
+            node.attrs().optional_string("category").is_none(),
+            "DM from other should NOT have category"
+        );
+        assert!(
+            node.attrs().optional_string("recipient").is_none(),
+            "DM from other should NOT have recipient"
+        );
     }
 
     #[test]
