@@ -44,3 +44,6 @@ pub mod sync_task;
 pub mod version;
 
 pub use spam_report::{SpamFlow, SpamReportRequest, SpamReportResult};
+
+#[cfg(test)]
+pub mod test_utils;

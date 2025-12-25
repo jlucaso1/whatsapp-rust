@@ -85,6 +85,19 @@ impl Client {
         ));
     }
 
+    /// Handles a decryption failure by dispatching an undecryptable event and spawning a retry receipt.
+    ///
+    /// This is a convenience method that combines the common pattern of:
+    /// 1. Dispatching an UndecryptableMessage event
+    /// 2. Spawning a retry receipt to request re-encryption
+    ///
+    /// Returns `true` to be assigned to `dispatched_undecryptable` flag.
+    fn handle_decrypt_failure(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) -> bool {
+        self.dispatch_undecryptable_event(info, crate::types::events::DecryptFailMode::Show);
+        self.spawn_retry_receipt(info, reason);
+        true
+    }
+
     /// Atomically increments the retry count for a message and returns the new count.
     /// Returns `None` if max retries have been reached.
     ///
@@ -713,14 +726,9 @@ impl Client {
                                         address
                                     );
 
-                                    self.dispatch_undecryptable_event(
-                                        info,
-                                        crate::types::events::DecryptFailMode::Show,
-                                    );
-                                    dispatched_undecryptable = true;
-
                                     // Send retry receipt so the sender fetches our new prekey bundle
-                                    self.spawn_retry_receipt(info, RetryReason::InvalidKeyId);
+                                    dispatched_undecryptable = self
+                                        .handle_decrypt_failure(info, RetryReason::InvalidKeyId);
                                 } else {
                                     log::error!(
                                         "[msg:{}] Decryption failed even after clearing untrusted identity for {}: {:?}",
@@ -728,16 +736,10 @@ impl Client {
                                         address,
                                         retry_err
                                     );
-                                    // Dispatch UndecryptableMessage since we couldn't decrypt even after handling the identity change
-                                    self.dispatch_undecryptable_event(
-                                        info,
-                                        crate::types::events::DecryptFailMode::Show,
-                                    );
-                                    dispatched_undecryptable = true;
-
                                     // Send retry receipt so the sender resends with a PreKeySignalMessage
                                     // to establish a new session with the new identity
-                                    self.spawn_retry_receipt(info, RetryReason::InvalidKey);
+                                    dispatched_undecryptable =
+                                        self.handle_decrypt_failure(info, RetryReason::InvalidKey);
                                 }
                             }
                         }
@@ -749,15 +751,9 @@ impl Client {
                             "[msg:{}] No session found for {} message from {}. Sending retry receipt to request session establishment.",
                             info.id, enc_type, info.source.sender
                         );
-                        // Dispatch an event so the library user knows a message was missed.
-                        self.dispatch_undecryptable_event(
-                            info,
-                            crate::types::events::DecryptFailMode::Show,
-                        );
-                        dispatched_undecryptable = true;
-
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        self.spawn_retry_receipt(info, RetryReason::NoSession);
+                        dispatched_undecryptable =
+                            self.handle_decrypt_failure(info, RetryReason::NoSession);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
                         // InvalidMessage typically means MAC verification failed or session is out of sync.
@@ -791,15 +787,9 @@ impl Client {
                         }
                         drop(device_guard);
 
-                        // Dispatch UndecryptableMessage event
-                        self.dispatch_undecryptable_event(
-                            info,
-                            crate::types::events::DecryptFailMode::Show,
-                        );
-                        dispatched_undecryptable = true;
-
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        self.spawn_retry_receipt(info, RetryReason::InvalidMessage);
+                        dispatched_undecryptable =
+                            self.handle_decrypt_failure(info, RetryReason::InvalidMessage);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
                         // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
@@ -823,15 +813,9 @@ impl Client {
                             info.source.sender
                         );
 
-                        // Dispatch UndecryptableMessage event so the user knows
-                        self.dispatch_undecryptable_event(
-                            info,
-                            crate::types::events::DecryptFailMode::Show,
-                        );
-                        dispatched_undecryptable = true;
-
                         // Send retry receipt with fresh prekeys
-                        self.spawn_retry_receipt(info, RetryReason::InvalidKeyId);
+                        dispatched_undecryptable =
+                            self.handle_decrypt_failure(info, RetryReason::InvalidKeyId);
                         continue;
                     } else {
                         // For other unexpected errors, just log them
@@ -1304,29 +1288,13 @@ mod tests {
     use super::*;
     use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
+    use crate::test_utils::MockHttpClient;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
     use wacore_binary::jid::{Jid, SERVER_JID};
 
     fn mock_transport() -> Arc<dyn crate::transport::TransportFactory> {
         Arc::new(crate::transport::mock::MockTransportFactory::new())
-    }
-
-    // Mock HTTP client for tests
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Ok(crate::http::HttpResponse {
-                status_code: 200,
-                body: Vec::new(),
-            })
-        }
     }
 
     fn mock_http_client() -> Arc<dyn crate::http::HttpClient> {
@@ -1528,100 +1496,6 @@ mod tests {
         // If we get here without panicking, the test passes.
         // The key improvement is that we won't send a retry receipt for the skmsg
         // since we detected the msg failure and skipped skmsg processing entirely.
-    }
-
-    /// Test case for reproducing LID group message decryption failure
-    /// when no 1-on-1 Signal session exists with the LID sender.
-    ///
-    /// Context:
-    /// - LID (Lightweight Identity) is WhatsApp's new identity system
-    /// - LID JIDs use format: `100000000000001.1:75@lid` (note the dot)
-    /// - Group messages from LID users fail to decrypt if we lack a Signal session
-    /// - This causes SessionNotFound errors which we now handle gracefully
-    ///
-    /// Expected behavior:
-    /// - No crash or panic
-    /// - UndecryptableMessage event dispatched
-    /// - No delivery receipt sent (only transport ack)
-    /// - Offline counter increments on reconnection (expected)
-    ///
-    /// Solution needed:
-    /// - Implement proactive session establishment with LID contacts
-    /// - Possibly fetch pre-keys when encountering new LID senders in groups
-    #[tokio::test]
-    #[ignore = "Requires valid whatsapp.db with active session to reproduce. This is a known issue documented in README.md"]
-    async fn test_lid_group_message_without_session() {
-        use crate::store::SqliteStore;
-        use std::sync::Arc;
-        use wacore_binary::builder::NodeBuilder;
-        use wacore_binary::jid::Jid;
-
-        // This test reproduces the real-world scenario where:
-        // 1. A LID user (e.g., 100000000000001.1:75@lid) sends a group message
-        // 2. We don't have a 1-on-1 Signal session with this LID user
-        // 3. The message contains both PreKeySignalMessage (pkmsg) and SenderKeyDistributionMessage (skmsg)
-        // 4. Decryption fails with SessionNotFound
-
-        // Setup: Create client with real database
-        let backend = Arc::new(
-            SqliteStore::new("whatsapp.db")
-                .await
-                .expect("Failed to open whatsapp.db - ensure you have an authenticated session"),
-        );
-        let pm = Arc::new(
-            PersistenceManager::new(backend)
-                .await
-                .expect("test backend should initialize"),
-        );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
-
-        // Simulate a group message from a LID user we haven't chatted with 1-on-1
-        let lid_sender: Jid = "100000000000001.1:75@lid"
-            .parse()
-            .expect("test JID should be valid");
-        let group_jid: Jid = "120363021033254949@g.us"
-            .parse()
-            .expect("test JID should be valid");
-
-        // In reality, this would contain actual encrypted pkmsg and skmsg bytes
-        // For now, we're just documenting the structure
-        let pkmsg_node = NodeBuilder::new("enc")
-            .attr("type", "pkmsg")
-            .attr("v", "2")
-            .bytes(vec![/* actual pkmsg bytes */])
-            .build();
-
-        let skmsg_node = NodeBuilder::new("enc")
-            .attr("type", "skmsg")
-            .attr("v", "2")
-            .bytes(vec![/* actual skmsg bytes */])
-            .build();
-
-        let message_node = Arc::new(
-            NodeBuilder::new("message")
-                .attr("from", group_jid.to_string())
-                .attr("participant", lid_sender.to_string())
-                .attr("id", "LID_TEST_MSG_001")
-                .attr("t", "1759296831")
-                .attr("type", "text")
-                .attr("notify", "LID Test User")
-                .attr("offline", "1")
-                .attr("addressing_mode", "lid")
-                .children(vec![pkmsg_node, skmsg_node])
-                .build(),
-        );
-
-        // Attempt to handle the message
-        // Expected: Graceful failure, no crash, UndecryptableMessage event dispatched
-        client.handle_encrypted_message(message_node).await;
-
-        // If we reach here without panicking, the graceful handling works
-        // However, the message remains undecryptable until we:
-        // 1. Establish a Signal session with the LID user (send them a 1-on-1 message)
-        // 2. OR implement proactive pre-key fetching for LID contacts
-        // 3. OR implement session-less SKDM decryption if protocol allows
-
-        println!("✅ LID message handled gracefully (but not decrypted - this is the known issue)");
     }
 
     /// Test case for reproducing sender key JID mismatch in LID group messages
@@ -2110,7 +1984,7 @@ mod tests {
             .iter()
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
-                if base_jid.server == "lid"
+                if base_jid.is_lid()
                     && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     return phone_jid.to_non_ad();
@@ -2172,7 +2046,7 @@ mod tests {
             .iter()
             .map(|jid| {
                 let base_jid = jid.to_non_ad();
-                if base_jid.server == "lid"
+                if base_jid.is_lid()
                     && let Some(phone_jid) = group_info.phone_jid_for_lid_user(&base_jid.user)
                 {
                     return phone_jid.to_non_ad();
@@ -2211,7 +2085,7 @@ mod tests {
 
         // Simulate the own JID check logic from wacore/src/send.rs
         let own_base_jid = own_lid.to_non_ad();
-        let own_jid_to_check = if own_base_jid.server == "lid" {
+        let own_jid_to_check = if own_base_jid.is_lid() {
             lid_to_pn_map
                 .get(&own_base_jid.user)
                 .map(|pn| pn.to_non_ad())

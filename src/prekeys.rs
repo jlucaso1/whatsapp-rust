@@ -5,7 +5,7 @@ use wacore::libsignal::protocol::PreKeyBundle;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::NodeContent;
 
-use crate::request::{InfoQuery, InfoQueryType};
+use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
 
 use anyhow;
@@ -28,15 +28,11 @@ impl Client {
         let content = PreKeyUtils::build_fetch_prekeys_request(jids, reason);
 
         let resp_node = self
-            .send_iq(crate::request::InfoQuery {
-                namespace: "encrypt",
-                query_type: crate::request::InfoQueryType::Get,
-                to: server_jid(),
-                content: Some(NodeContent::Nodes(vec![content])),
-                id: None,
-                target: None,
-                timeout: None,
-            })
+            .send_iq(crate::request::InfoQuery::get(
+                "encrypt",
+                server_jid(),
+                Some(NodeContent::Nodes(vec![content])),
+            ))
             .await?;
 
         let bundles = PreKeyUtils::parse_prekeys_response(&resp_node)?;
@@ -51,15 +47,11 @@ impl Client {
     /// Query the WhatsApp server for how many pre-keys it currently has for this device.
     pub(crate) async fn get_server_pre_key_count(&self) -> Result<usize, crate::request::IqError> {
         let count_node = NodeBuilder::new("count").build();
-        let iq = InfoQuery {
-            namespace: "encrypt",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![count_node])),
-            id: None,
-            target: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "encrypt",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(vec![count_node])),
+        );
 
         let resp_node = self.send_iq(iq).await?;
         let count_resp_node = resp_node.get_optional_child("count").ok_or_else(|| {
@@ -185,15 +177,11 @@ impl Client {
             &pre_key_pairs,
         );
 
-        let iq = InfoQuery {
-            namespace: "encrypt",
-            query_type: InfoQueryType::Set,
-            to: server_jid(),
-            content: Some(wacore_binary::node::NodeContent::Nodes(iq_content)),
-            id: None,
-            target: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::set(
+            "encrypt",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(iq_content)),
+        );
 
         // Step 4: Send IQ to upload pre-keys
         if let Err(e) = self.send_iq(iq).await {

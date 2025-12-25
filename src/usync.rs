@@ -33,15 +33,11 @@ impl Client {
             let jids_vec: Vec<Jid> = jids_to_fetch.into_iter().collect();
             let usync_node = wacore::usync::build_get_user_devices_query(&jids_vec, sid.as_str());
 
-            let iq = crate::request::InfoQuery {
-                namespace: "usync",
-                query_type: crate::request::InfoQueryType::Get,
-                to: server_jid(),
-                content: Some(NodeContent::Nodes(vec![usync_node])),
-                id: None,
-                target: None,
-                timeout: None,
-            };
+            let iq = crate::request::InfoQuery::get(
+                "usync",
+                server_jid(),
+                Some(NodeContent::Nodes(vec![usync_node])),
+            );
             let resp_node = self.send_iq(iq).await?;
             let user_device_lists =
                 wacore::usync::parse_get_user_devices_response_with_phash(&resp_node)?;
@@ -136,29 +132,11 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::test_utils::create_test_client;
 
     #[tokio::test]
     async fn test_device_cache_hit() {
-        // Create a mock client
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
-        let pm = Arc::new(
-            crate::store::persistence_manager::PersistenceManager::new(backend)
-                .await
-                .expect("persistence manager should initialize"),
-        );
-
-        let (client, _sync_rx) = crate::client::Client::new(
-            pm.clone(),
-            Arc::new(crate::transport::mock::MockTransportFactory::new()),
-            Arc::new(MockHttpClient),
-            None,
-        )
-        .await;
+        let client = create_test_client().await;
 
         let test_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -204,19 +182,5 @@ mod tests {
             "Cache should have at most 2 items, has {}",
             count
         );
-    }
-
-    // Mock HTTP client for tests
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Err(anyhow::anyhow!("Not implemented"))
-        }
     }
 }

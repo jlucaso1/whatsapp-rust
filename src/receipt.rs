@@ -108,24 +108,8 @@ mod tests {
     use super::*;
     use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
+    use crate::test_utils::MockHttpClient;
     use crate::types::message::{MessageInfo, MessageSource};
-
-    // Mock HTTP client for tests
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Ok(crate::http::HttpResponse {
-                status_code: 200,
-                body: Vec::new(),
-            })
-        }
-    }
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {

@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::request::{InfoQuery, InfoQueryType, IqError};
+use crate::request::{InfoQuery, IqError};
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::NodeContent;
 
@@ -35,15 +35,11 @@ impl Client {
 
         let server_jid = Jid::new("", SERVER_JID);
 
-        let query = InfoQuery {
-            query_type: InfoQueryType::Set,
-            namespace: "spam",
-            to: server_jid,
-            target: None,
-            content: Some(NodeContent::Nodes(vec![spam_list_node])),
-            id: None,
-            timeout: None,
-        };
+        let query = InfoQuery::set(
+            "spam",
+            server_jid,
+            Some(NodeContent::Nodes(vec![spam_list_node])),
+        );
 
         let response = self.send_iq(query).await?;
 

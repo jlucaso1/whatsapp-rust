@@ -408,20 +408,6 @@ impl SessionStore for Device {
     }
 }
 
-pub struct DeviceArcWrapper(pub Arc<Device>);
-
-impl DeviceArcWrapper {
-    pub fn new(device: Arc<Device>) -> Self {
-        Self(device)
-    }
-}
-
-impl Clone for DeviceArcWrapper {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
 use tokio::sync::RwLock;
 
 pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);

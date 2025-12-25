@@ -288,42 +288,11 @@ impl Client {
 mod tests {
     use super::*;
     use crate::lid_pn_cache::LearningSource;
+    use crate::test_utils::create_test_client_with_failing_http;
     use std::sync::Arc;
 
     async fn create_test_client() -> Arc<Client> {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
-        let pm = Arc::new(
-            crate::store::persistence_manager::PersistenceManager::new(backend)
-                .await
-                .expect("persistence manager should initialize"),
-        );
-
-        let (client, _rx) = Client::new(
-            pm,
-            Arc::new(crate::transport::mock::MockTransportFactory::new()),
-            Arc::new(MockHttpClient),
-            None,
-        )
-        .await;
-
-        client
-    }
-
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Err(anyhow::anyhow!("Not implemented"))
-        }
+        create_test_client_with_failing_http("device_registry").await
     }
 
     #[tokio::test]

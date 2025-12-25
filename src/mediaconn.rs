@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, InfoQueryType, IqError};
+use crate::request::{InfoQuery, IqError};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use wacore_binary::builder::NodeBuilder;
@@ -37,17 +37,13 @@ impl Client {
         }
 
         let resp = self
-            .send_iq(InfoQuery {
-                namespace: "w:m",
-                query_type: InfoQueryType::Set,
-                to: server_jid(),
-                target: None,
-                id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![
+            .send_iq(InfoQuery::set(
+                "w:m",
+                server_jid(),
+                Some(wacore_binary::node::NodeContent::Nodes(vec![
                     NodeBuilder::new("media_conn").build(),
                 ])),
-                timeout: None,
-            })
+            ))
             .await?;
 
         let media_conn_node =

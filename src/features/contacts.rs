@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, InfoQueryType};
+use crate::request::InfoQuery;
 use anyhow::{Result, anyhow};
 use log::debug;
 use std::collections::HashMap;
@@ -101,15 +101,11 @@ impl<'a> Contacts<'a> {
             .children(vec![query_node, list_node])
             .build();
 
-        let iq = InfoQuery {
-            namespace: "usync",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![usync_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "usync",
+            server_jid(),
+            Some(NodeContent::Nodes(vec![usync_node])),
+        );
 
         let response_node = self.client.send_iq(iq).await?;
         Self::parse_is_on_whatsapp_response(&response_node)
@@ -162,15 +158,11 @@ impl<'a> Contacts<'a> {
             .children(vec![query_node, list_node])
             .build();
 
-        let iq = InfoQuery {
-            namespace: "usync",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![usync_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "usync",
+            server_jid(),
+            Some(NodeContent::Nodes(vec![usync_node])),
+        );
 
         let response_node = self.client.send_iq(iq).await?;
         Self::parse_contact_info_response(&response_node)
@@ -193,15 +185,12 @@ impl<'a> Contacts<'a> {
             .attr("query", "url")
             .build();
 
-        let iq = InfoQuery {
-            namespace: "w:profile:picture",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: Some(jid.clone()),
-            id: None,
-            content: Some(NodeContent::Nodes(vec![picture_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "w:profile:picture",
+            server_jid(),
+            Some(NodeContent::Nodes(vec![picture_node])),
+        )
+        .with_target(jid.clone());
 
         let response_node = self.client.send_iq(iq).await?;
         Self::parse_profile_picture_response(&response_node)
@@ -247,15 +236,11 @@ impl<'a> Contacts<'a> {
             .children(vec![query_node, list_node])
             .build();
 
-        let iq = InfoQuery {
-            namespace: "usync",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![usync_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "usync",
+            server_jid(),
+            Some(NodeContent::Nodes(vec![usync_node])),
+        );
 
         let response_node = self.client.send_iq(iq).await?;
         Self::parse_user_info_response(&response_node)

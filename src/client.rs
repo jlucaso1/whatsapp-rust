@@ -734,21 +734,17 @@ impl Client {
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::request::InfoQuery;
 
         let tag = if passive { "passive" } else { "active" };
 
-        let query = InfoQuery {
-            namespace: "passive",
-            query_type: InfoQueryType::Set,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
+        let query = InfoQuery::set(
+            "passive",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(vec![
                 NodeBuilder::new(tag).build(),
             ])),
-            timeout: None,
-        };
+        );
 
         self.send_iq(query).await.map(|_| ())
     }
@@ -776,7 +772,7 @@ impl Client {
     }
 
     pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::request::InfoQuery;
 
         debug!(target: "Client", "Fetching properties (props)...");
 
@@ -785,54 +781,42 @@ impl Client {
             .attr("hash", "") // TODO: load hash from persistence
             .build();
 
-        let iq = InfoQuery {
-            namespace: "w",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![props_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "w",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(vec![props_node])),
+        );
 
         self.send_iq(iq).await.map(|_| ())
     }
 
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::request::InfoQuery;
 
         debug!(target: "Client", "Fetching privacy settings...");
 
-        let iq = InfoQuery {
-            namespace: "privacy",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![
+        let iq = InfoQuery::get(
+            "privacy",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(vec![
                 NodeBuilder::new("privacy").build(),
             ])),
-            timeout: None,
-        };
+        );
 
         self.send_iq(iq).await.map(|_| ())
     }
 
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::{InfoQuery, InfoQueryType};
+        use crate::request::InfoQuery;
 
         debug!(target: "Client", "Sending digest key bundle...");
 
         let digest_node = NodeBuilder::new("digest").build();
-        let iq = InfoQuery {
-            namespace: "encrypt",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![digest_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::get(
+            "encrypt",
+            server_jid(),
+            Some(wacore_binary::node::NodeContent::Nodes(vec![digest_node])),
+        );
 
         self.send_iq(iq).await.map(|_| ())
     }
@@ -1807,25 +1791,9 @@ impl Client {
 mod tests {
     use super::*;
     use crate::lid_pn_cache::LearningSource;
+    use crate::test_utils::MockHttpClient;
     use tokio::sync::oneshot;
     use wacore_binary::jid::SERVER_JID;
-
-    // Mock HTTP client for tests
-    #[derive(Debug, Clone)]
-    struct MockHttpClient;
-
-    #[async_trait::async_trait]
-    impl crate::http::HttpClient for MockHttpClient {
-        async fn execute(
-            &self,
-            _request: crate::http::HttpRequest,
-        ) -> Result<crate::http::HttpResponse, anyhow::Error> {
-            Ok(crate::http::HttpResponse {
-                status_code: 200,
-                body: Vec::new(),
-            })
-        }
-    }
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {

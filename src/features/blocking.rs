@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, InfoQueryType, IqError};
+use crate::request::{InfoQuery, IqError};
 use anyhow::Result;
 use log::debug;
 use wacore_binary::builder::NodeBuilder;
@@ -35,15 +35,7 @@ impl<'a> Blocking<'a> {
     pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>> {
         debug!(target: "Blocking", "Fetching blocklist...");
 
-        let iq = InfoQuery {
-            namespace: "blocklist",
-            query_type: InfoQueryType::Get,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: None,
-            timeout: None,
-        };
+        let iq = InfoQuery::get("blocklist", server_jid(), None);
 
         let response = self.client.send_iq(iq).await?;
         self.parse_blocklist_response(&response)
@@ -55,15 +47,11 @@ impl<'a> Blocking<'a> {
             .attr("jid", jid.to_string())
             .build();
 
-        let iq = InfoQuery {
-            namespace: "blocklist",
-            query_type: InfoQueryType::Set,
-            to: server_jid(),
-            target: None,
-            id: None,
-            content: Some(NodeContent::Nodes(vec![item_node])),
-            timeout: None,
-        };
+        let iq = InfoQuery::set(
+            "blocklist",
+            server_jid(),
+            Some(NodeContent::Nodes(vec![item_node])),
+        );
 
         self.client.send_iq(iq).await?;
         debug!(target: "Blocking", "Successfully {}ed contact: {}", action, jid);
