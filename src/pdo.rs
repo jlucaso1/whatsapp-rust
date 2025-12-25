@@ -342,6 +342,7 @@ impl Client {
                 is_group,
                 addressing_mode: None,
                 broadcast_list_owner: None,
+                recipient: None,
             },
             timestamp,
             push_name: web_msg.push_name.clone().unwrap_or_default(),

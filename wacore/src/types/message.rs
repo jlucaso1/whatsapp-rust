@@ -19,6 +19,7 @@ pub struct MessageSource {
     pub sender_alt: Option<Jid>,
     pub recipient_alt: Option<Jid>,
     pub broadcast_list_owner: Option<Jid>,
+    pub recipient: Option<Jid>,
 }
 
 impl MessageSource {

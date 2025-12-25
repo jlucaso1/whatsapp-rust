@@ -1067,10 +1067,20 @@ impl Client {
             // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
             // For self-sent messages, we don't set sender_alt here - the decryption
             // logic will use our own PN via the is_from_me fallback path.
+            // We store the original `recipient` attribute for retry receipts - this is needed
+            // because device sync messages may have a different recipient than our device,
+            // and the sender needs this to look up the original message.
+            let recipient = attrs.optional_jid("recipient");
+            // chat uses non-AD format for session routing, recipient keeps original for retry receipts
+            let chat = recipient
+                .as_ref()
+                .map(|r| r.to_non_ad())
+                .unwrap_or_else(|| from.to_non_ad());
             crate::types::message::MessageSource {
-                chat: attrs.non_ad_jid("recipient"),
+                chat,
                 sender: from.clone(),
                 is_from_me: true,
+                recipient,
                 // sender_alt stays None - decryption uses own PN for self-sent messages
                 ..Default::default()
             }
@@ -1107,6 +1117,13 @@ impl Client {
                 _ => None,
             });
 
+        // Parse the category attribute - this is used for peer device messages ("peer")
+        // and is critical for proper retry receipt handling.
+        let category = attrs
+            .optional_string("category")
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
         Ok(MessageInfo {
             source,
             id: attrs.string("id"),
@@ -1116,6 +1133,7 @@ impl Client {
                 .unwrap_or_default(),
             timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0)
                 .unwrap_or_else(chrono::Utc::now),
+            category,
             ..Default::default()
         })
     }
@@ -3457,6 +3475,7 @@ mod tests {
                 is_group: chat_jid.is_group(),
                 addressing_mode: None,
                 broadcast_list_owner: None,
+                recipient: None,
             },
             timestamp: chrono::Utc::now(),
             push_name: "Test User".to_string(),
