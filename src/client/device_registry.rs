@@ -140,7 +140,7 @@ impl Client {
         &self,
         mut record: wacore::store::traits::DeviceListRecord,
     ) -> Result<()> {
-        use anyhow::anyhow;
+        use anyhow::Context;
 
         let original_user = record.user.clone();
         let lookup = self.resolve_lookup_keys(&original_user).await;
@@ -155,7 +155,7 @@ impl Client {
         backend
             .update_device_list(record)
             .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .context("Failed to update device list in backend")?;
 
         if canonical_key != original_user {
             self.device_registry_cache.invalidate(&original_user).await;
