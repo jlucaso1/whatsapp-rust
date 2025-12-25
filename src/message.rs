@@ -547,8 +547,8 @@ impl Client {
         let mut dispatched_undecryptable = false;
 
         for enc_node in enc_nodes {
-            let ciphertext = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+            let ciphertext: &[u8] = match &enc_node.content {
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
                 _ => {
                     log::warn!("Enc node has no byte content (batch session)");
                     continue;
@@ -558,7 +558,7 @@ impl Client {
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
             let parsed_message = if enc_type == "pkmsg" {
-                match PreKeySignalMessage::try_from(ciphertext.as_slice()) {
+                match PreKeySignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
                     Err(e) => {
                         log::error!("Failed to parse PreKeySignalMessage: {e:?}");
@@ -566,7 +566,7 @@ impl Client {
                     }
                 }
             } else {
-                match SignalMessage::try_from(ciphertext.as_slice()) {
+                match SignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::SignalMessage(m),
                     Err(e) => {
                         log::error!("Failed to parse SignalMessage: {e:?}");
@@ -846,8 +846,8 @@ impl Client {
         let device_arc = self.persistence_manager.get_device_arc().await;
 
         for enc_node in enc_nodes {
-            let ciphertext = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+            let ciphertext: &[u8] = match &enc_node.content {
+                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
                 _ => {
                     log::warn!("Enc node has no byte content (batch group)");
                     continue;
@@ -872,7 +872,7 @@ impl Client {
 
             let decrypt_result = {
                 let mut device_guard = device_arc.write().await;
-                group_decrypt(ciphertext.as_slice(), &mut *device_guard, &sender_key_name).await
+                group_decrypt(ciphertext, &mut *device_guard, &sender_key_name).await
             };
 
             match decrypt_result {

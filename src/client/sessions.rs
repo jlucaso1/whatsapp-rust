@@ -82,7 +82,7 @@ impl Client {
 
         // 4. Fetch and establish sessions (with batching)
         for batch in jids_needing_sessions.chunks(crate::session::SESSION_CHECK_BATCH_SIZE) {
-            self.fetch_and_establish_sessions(batch.to_vec()).await?;
+            self.fetch_and_establish_sessions(batch).await?;
         }
 
         Ok(())
@@ -93,7 +93,7 @@ impl Client {
     /// Returns the number of sessions successfully established.
     /// Returns an error only if the prekey fetch itself fails (network error).
     /// Individual session establishment failures are logged but don't fail the batch.
-    async fn fetch_and_establish_sessions(&self, jids: Vec<Jid>) -> Result<usize, anyhow::Error> {
+    async fn fetch_and_establish_sessions(&self, jids: &[Jid]) -> Result<usize, anyhow::Error> {
         use rand::TryRngCore;
         use wacore::libsignal::protocol::{UsePQRatchet, process_prekey_bundle};
         use wacore::types::jid::JidExt;
@@ -102,7 +102,7 @@ impl Client {
             return Ok(0);
         }
 
-        let prekey_bundles = self.fetch_pre_keys(&jids, Some("identity")).await?;
+        let prekey_bundles = self.fetch_pre_keys(jids, Some("identity")).await?;
 
         let device_store = self.persistence_manager.get_device_arc().await;
         let mut adapter =
@@ -112,7 +112,7 @@ impl Client {
         let mut missing_count = 0;
         let mut failed_count = 0;
 
-        for jid in &jids {
+        for jid in jids {
             if let Some(bundle) = prekey_bundles.get(jid) {
                 let signal_addr = jid.to_protocol_address();
                 match process_prekey_bundle(
@@ -193,7 +193,7 @@ impl Client {
 
         // Directly fetch and establish session without waiting for offline sync
         let success_count = self
-            .fetch_and_establish_sessions(vec![primary_phone_jid.clone()])
+            .fetch_and_establish_sessions(std::slice::from_ref(&primary_phone_jid))
             .await?;
 
         if success_count == 0 {
