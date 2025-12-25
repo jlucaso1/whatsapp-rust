@@ -921,7 +921,20 @@ impl Client {
                 return;
             }
 
-            // === Send active IQ first ===
+            // === Establish session with primary phone for PDO ===
+            // This must happen BEFORE we exit passive mode (before offline messages arrive).
+            // PDO needs a session with device 0 to request decrypted content from our phone.
+            // Matches WhatsApp Web's bootstrapDeviceCapabilities() pattern.
+            check_generation!();
+            if let Err(e) = client_clone
+                .establish_primary_phone_session_immediate()
+                .await
+            {
+                warn!(target: "Client/PDO", "Failed to establish session with primary phone on login: {:?}", e);
+                // Don't fail login - PDO will retry via ensure_e2e_sessions fallback
+            }
+
+            // === Send active IQ ===
             // The server sends <ib><offline count="X"/></ib> AFTER we exit passive mode.
             // This matches WhatsApp Web's behavior: sendPassiveModeProtocol("active") first,
             // then wait for offlineDeliveryEnd.
@@ -2246,5 +2259,450 @@ mod tests {
         info!(
             "✅ test_get_lid_for_phone_via_send_context_resolver passed: SendContextResolver correctly returns cached LID"
         );
+    }
+
+    // =========================================================================
+    // PDO Session Establishment Timing Tests
+    // =========================================================================
+    // These tests verify the critical timing behavior for PDO:
+    // - Session with device 0 must be established BEFORE offline messages arrive
+    // - ensure_e2e_sessions() waits for offline sync (for normal message sending)
+    // - establish_primary_phone_session_immediate() does NOT wait (for login)
+    // =========================================================================
+
+    /// Test that wait_for_offline_delivery_end returns immediately when the flag is already set.
+    #[tokio::test]
+    async fn test_wait_for_offline_delivery_end_returns_immediately_when_flag_set() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(
+                "file:memdb_offline_sync_flag_set?mode=memory&cache=shared",
+            )
+            .await
+            .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Set the flag to true (simulating offline sync completed)
+        client
+            .offline_sync_completed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // This should return immediately (not wait 10 seconds)
+        let start = std::time::Instant::now();
+        client.wait_for_offline_delivery_end().await;
+        let elapsed = start.elapsed();
+
+        // Should complete in < 100ms (not 10 second timeout)
+        assert!(
+            elapsed.as_millis() < 100,
+            "wait_for_offline_delivery_end should return immediately when flag is set, took {:?}",
+            elapsed
+        );
+
+        info!("✅ test_wait_for_offline_delivery_end_returns_immediately_when_flag_set passed");
+    }
+
+    /// Test that wait_for_offline_delivery_end times out when the flag is NOT set.
+    /// This verifies the 10-second timeout is working.
+    #[tokio::test]
+    async fn test_wait_for_offline_delivery_end_times_out_when_flag_not_set() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(
+                "file:memdb_offline_sync_timeout?mode=memory&cache=shared",
+            )
+            .await
+            .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Flag is false by default, so we need to use a shorter timeout for the test
+        // We'll verify behavior by using tokio timeout
+        let start = std::time::Instant::now();
+
+        // Use a short timeout to test the behavior without waiting 10 seconds
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            client.wait_for_offline_delivery_end(),
+        )
+        .await;
+
+        let elapsed = start.elapsed();
+
+        // The wait should NOT complete immediately - it should timeout
+        // (because the flag is false and no one is notifying)
+        assert!(
+            result.is_err(),
+            "wait_for_offline_delivery_end should not return immediately when flag is false"
+        );
+        assert!(
+            elapsed.as_millis() >= 95, // Allow small timing variance
+            "Should have waited for the timeout duration, took {:?}",
+            elapsed
+        );
+
+        info!("✅ test_wait_for_offline_delivery_end_times_out_when_flag_not_set passed");
+    }
+
+    /// Test that wait_for_offline_delivery_end returns when notified.
+    #[tokio::test]
+    async fn test_wait_for_offline_delivery_end_returns_on_notify() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_offline_notify?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let client_clone = client.clone();
+
+        // Spawn a task that will notify after 50ms
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            client_clone.offline_sync_notifier.notify_waiters();
+        });
+
+        let start = std::time::Instant::now();
+        client.wait_for_offline_delivery_end().await;
+        let elapsed = start.elapsed();
+
+        // Should complete around 50ms (when notified), not 10 seconds
+        assert!(
+            elapsed.as_millis() < 200,
+            "wait_for_offline_delivery_end should return when notified, took {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed.as_millis() >= 45, // Should have waited for the notify
+            "Should have waited for the notify, only took {:?}",
+            elapsed
+        );
+
+        info!("✅ test_wait_for_offline_delivery_end_returns_on_notify passed");
+    }
+
+    /// Test that the offline_sync_completed flag starts as false.
+    #[tokio::test]
+    async fn test_offline_sync_flag_initially_false() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(
+                "file:memdb_offline_flag_initial?mode=memory&cache=shared",
+            )
+            .await
+            .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // The flag should be false initially
+        assert!(
+            !client
+                .offline_sync_completed
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "offline_sync_completed should be false when Client is first created"
+        );
+
+        info!("✅ test_offline_sync_flag_initially_false passed");
+    }
+
+    /// Test the complete offline sync lifecycle:
+    /// 1. Flag starts false
+    /// 2. Flag is set true after IB offline stanza
+    /// 3. Notify is called
+    #[tokio::test]
+    async fn test_offline_sync_lifecycle() {
+        use std::sync::atomic::Ordering;
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_offline_lifecycle?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // 1. Initially false
+        assert!(!client.offline_sync_completed.load(Ordering::Relaxed));
+
+        // 2. Spawn a waiter
+        let client_waiter = client.clone();
+        let waiter_handle = tokio::spawn(async move {
+            client_waiter.wait_for_offline_delivery_end().await;
+            true // Return that we completed
+        });
+
+        // Give the waiter time to start waiting
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Verify waiter hasn't completed yet
+        assert!(
+            !waiter_handle.is_finished(),
+            "Waiter should still be waiting"
+        );
+
+        // 3. Simulate IB handler behavior (set flag and notify)
+        client.offline_sync_completed.store(true, Ordering::Relaxed);
+        client.offline_sync_notifier.notify_waiters();
+
+        // 4. Waiter should complete
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), waiter_handle)
+            .await
+            .expect("Waiter should complete after notify")
+            .expect("Waiter task should not panic");
+
+        assert!(result, "Waiter should have completed successfully");
+        assert!(client.offline_sync_completed.load(Ordering::Relaxed));
+
+        info!("✅ test_offline_sync_lifecycle passed");
+    }
+
+    /// Test that establish_primary_phone_session_immediate returns error when no PN is set.
+    /// This verifies the "not logged in" guard works.
+    #[tokio::test]
+    async fn test_establish_primary_phone_session_fails_without_pn() {
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_no_pn?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // No PN set, so this should fail
+        let result = client.establish_primary_phone_session_immediate().await;
+
+        assert!(
+            result.is_err(),
+            "establish_primary_phone_session_immediate should fail when no PN is set"
+        );
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Not logged in"),
+            "Error should mention 'Not logged in', got: {}",
+            error_msg
+        );
+
+        info!("✅ test_establish_primary_phone_session_fails_without_pn passed");
+    }
+
+    /// Test that ensure_e2e_sessions waits for offline sync to complete.
+    /// This is the CRITICAL difference between ensure_e2e_sessions and
+    /// establish_primary_phone_session_immediate.
+    #[tokio::test]
+    async fn test_ensure_e2e_sessions_waits_for_offline_sync() {
+        use std::sync::atomic::Ordering;
+        use wacore_binary::jid::Jid;
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_ensure_e2e_waits?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Flag is false (offline sync not complete)
+        assert!(!client.offline_sync_completed.load(Ordering::Relaxed));
+
+        // Call ensure_e2e_sessions with an empty list (so it returns early after the wait)
+        // This lets us test the waiting behavior without needing network
+        let client_clone = client.clone();
+        let ensure_handle = tokio::spawn(async move {
+            // Start with some JIDs - but since we're testing the wait, we use empty
+            // to avoid needing actual session establishment
+            client_clone.ensure_e2e_sessions(vec![]).await
+        });
+
+        // Wait a bit - ensure_e2e_sessions should return immediately for empty list
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(
+            ensure_handle.is_finished(),
+            "ensure_e2e_sessions should return immediately for empty JID list"
+        );
+
+        // Now test with actual JIDs - it should wait for offline sync
+        let client_clone = client.clone();
+        let test_jid = Jid::pn("559984726662");
+        let ensure_handle = tokio::spawn(async move {
+            // This will wait for offline sync before proceeding
+            let start = std::time::Instant::now();
+            let _ = client_clone.ensure_e2e_sessions(vec![test_jid]).await;
+            start.elapsed()
+        });
+
+        // Give it a moment to start
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // It should still be waiting (offline sync not complete)
+        assert!(
+            !ensure_handle.is_finished(),
+            "ensure_e2e_sessions should be waiting for offline sync"
+        );
+
+        // Now complete offline sync
+        client.offline_sync_completed.store(true, Ordering::Relaxed);
+        client.offline_sync_notifier.notify_waiters();
+
+        // Now it should complete (might fail on session establishment, but that's ok)
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), ensure_handle).await;
+
+        assert!(
+            result.is_ok(),
+            "ensure_e2e_sessions should complete after offline sync"
+        );
+
+        info!("✅ test_ensure_e2e_sessions_waits_for_offline_sync passed");
+    }
+
+    /// Integration test: Verify that the immediate session establishment does NOT
+    /// wait for offline sync. This is critical for PDO to work during offline sync.
+    ///
+    /// The flow is:
+    /// 1. Login -> establish_primary_phone_session_immediate() is called
+    /// 2. This should NOT wait for offline sync (flag is false at this point)
+    /// 3. After session is established, offline messages arrive
+    /// 4. When decryption fails, PDO can immediately send to device 0
+    #[tokio::test]
+    async fn test_immediate_session_does_not_wait_for_offline_sync() {
+        use std::sync::atomic::Ordering;
+        use wacore_binary::jid::Jid;
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new("file:memdb_immediate_no_wait?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("persistence manager should initialize"),
+        );
+
+        // Set a PN so establish_primary_phone_session_immediate doesn't fail early
+        pm.modify_device(|device| {
+            device.pn = Some(Jid::pn("559984726662"));
+        })
+        .await;
+
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Flag is false (offline sync not complete - simulating login state)
+        assert!(!client.offline_sync_completed.load(Ordering::Relaxed));
+
+        // Call establish_primary_phone_session_immediate
+        // It should NOT wait for offline sync - it should proceed immediately
+        let start = std::time::Instant::now();
+
+        // Note: This will fail because we can't actually fetch prekeys in tests,
+        // but the important thing is that it doesn't WAIT for offline sync
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client.establish_primary_phone_session_immediate(),
+        )
+        .await;
+
+        let elapsed = start.elapsed();
+
+        // The call should complete (or fail) quickly, NOT wait for 10 second timeout
+        assert!(
+            result.is_ok(),
+            "establish_primary_phone_session_immediate should not wait for offline sync, timed out"
+        );
+
+        // It should complete in < 500ms (not 10 second wait)
+        assert!(
+            elapsed.as_millis() < 500,
+            "establish_primary_phone_session_immediate should not wait, took {:?}",
+            elapsed
+        );
+
+        // The actual result might be an error (no network), but that's fine
+        // The important thing is it didn't wait for offline sync
+        info!(
+            "establish_primary_phone_session_immediate completed in {:?} (result: {:?})",
+            elapsed,
+            result.unwrap().is_ok()
+        );
+
+        info!("✅ test_immediate_session_does_not_wait_for_offline_sync passed");
     }
 }

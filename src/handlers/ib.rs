@@ -129,18 +129,9 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 client.offline_sync_completed.store(true, Ordering::Relaxed);
                 client.offline_sync_notifier.notify_waiters();
 
-                // Proactively establish session with primary phone for PDO.
-                // PDO (Peer Data Operation) requires an encrypted session to request
-                // already-decrypted message content from the phone when decryption fails.
-                let client_for_session = client.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = client_for_session.establish_primary_phone_session().await {
-                        warn!(
-                            target: "Client/PDO",
-                            "Failed to establish session with primary phone: {:?}", e
-                        );
-                    }
-                });
+                // NOTE: Session with primary phone (device 0) is established on login
+                // BEFORE offline messages arrive (see client.rs post-login task).
+                // This ensures PDO can send immediately when decryption fails.
 
                 client
                     .core

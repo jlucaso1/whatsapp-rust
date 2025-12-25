@@ -388,7 +388,7 @@ impl Client {
                 .send_pdo_placeholder_resend_request(&info_clone)
                 .await
             {
-                debug!(
+                warn!(
                     "Failed to send PDO request for message {} from {}: {:?}",
                     info_clone.id, info_clone.source.sender, e
                 );
