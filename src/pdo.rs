@@ -70,17 +70,22 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("Not logged in - no phone number available for PDO"))?;
 
         // Create JID for device 0 (primary phone)
-        let primary_phone_jid = Jid {
-            user: own_pn.user.clone(),
-            server: own_pn.server.clone(),
-            agent: 0,
-            device: 0, // Primary phone is device 0
-            integrator: 0,
-        };
+        let primary_phone_jid = own_pn.with_device(0);
 
-        // Check if we've already requested this message recently to avoid duplicate requests
+        // Atomically check-and-insert to avoid race conditions where two concurrent
+        // calls could both pass a contains_key check before either inserts.
         let cache_key = format!("{}:{}", info.source.chat, info.id);
-        if self.pdo_pending_requests.contains_key(&cache_key) {
+        let pending = PendingPdoRequest {
+            message_info: info.clone(),
+            requested_at: std::time::Instant::now(),
+        };
+        let entry = self
+            .pdo_pending_requests
+            .entry(cache_key.clone())
+            .or_insert(pending)
+            .await;
+
+        if !entry.is_fresh() {
             debug!(
                 "PDO request already pending for message {} from {}",
                 info.id, info.source.sender
@@ -127,22 +132,16 @@ impl Client {
             ..Default::default()
         };
 
-        // Store the pending request before sending
-        let pending = PendingPdoRequest {
-            message_info: info.clone(),
-            requested_at: std::time::Instant::now(),
-        };
-        self.pdo_pending_requests
-            .insert(cache_key.clone(), pending)
-            .await;
-
         info!(
             "Sending PDO placeholder resend request for message {} from {} in {} to primary phone {}",
             info.id, info.source.sender, info.source.chat, primary_phone_jid
         );
 
+        // Ensure E2E session exists before sending (matches WhatsApp Web behavior)
+        self.ensure_e2e_sessions(vec![primary_phone_jid.clone()])
+            .await?;
+
         // Send the message to our primary phone (device 0)
-        // Use peer category for PDO messages
         match self.send_peer_message(primary_phone_jid, &msg).await {
             Ok(_) => {
                 debug!("PDO request sent successfully for message {}", info.id);
@@ -359,7 +358,14 @@ impl Client {
 
     /// Spawns a PDO request for a message that failed to decrypt.
     /// This is called alongside the retry receipt to increase chances of recovery.
-    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &MessageInfo) {
+    ///
+    /// When `immediate` is true, the PDO request is sent without delay.
+    /// This is used when we've exhausted retry attempts and need immediate PDO recovery.
+    pub(crate) fn spawn_pdo_request_with_options(
+        self: &Arc<Self>,
+        info: &MessageInfo,
+        immediate: bool,
+    ) {
         // Don't send PDO for our own messages or status broadcasts
         if info.source.is_from_me {
             return;
@@ -372,9 +378,11 @@ impl Client {
         let info_clone = info.clone();
 
         tokio::spawn(async move {
-            // Add a small delay to allow the retry receipt to be processed first
-            // This avoids overwhelming the phone with simultaneous requests
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            if !immediate {
+                // Add a small delay to allow the retry receipt to be processed first
+                // This avoids overwhelming the phone with simultaneous requests
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
 
             if let Err(e) = client_clone
                 .send_pdo_placeholder_resend_request(&info_clone)
@@ -386,5 +394,45 @@ impl Client {
                 );
             }
         });
+    }
+
+    /// Spawns a PDO request for a message that failed to decrypt.
+    /// This is called alongside the retry receipt to increase chances of recovery.
+    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &MessageInfo) {
+        self.spawn_pdo_request_with_options(info, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wacore_binary::jid::{DEFAULT_USER_SERVER, Jid, JidExt};
+
+    #[test]
+    fn test_pdo_primary_phone_jid_is_device_0() {
+        // PDO sends to device 0 (primary phone)
+        let own_pn = Jid::pn("559984726662");
+        let primary_phone_jid = own_pn.with_device(0);
+
+        assert_eq!(primary_phone_jid.device, 0);
+        assert!(!primary_phone_jid.is_ad()); // Device 0 is NOT an additional device
+    }
+
+    #[test]
+    fn test_pdo_primary_phone_jid_preserves_user() {
+        let own_pn = Jid::pn("559984726662");
+        let primary_phone_jid = own_pn.with_device(0);
+
+        assert_eq!(primary_phone_jid.user, "559984726662");
+        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+    }
+
+    #[test]
+    fn test_pdo_primary_phone_jid_from_linked_device() {
+        // Even if we're device 33, PDO should send to device 0
+        let own_pn = Jid::pn_device("559984726662", 33);
+        let primary_phone_jid = own_pn.with_device(0);
+
+        assert_eq!(primary_phone_jid.user, "559984726662");
+        assert_eq!(primary_phone_jid.device, 0);
     }
 }

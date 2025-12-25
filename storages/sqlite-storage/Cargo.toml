@@ -23,6 +23,7 @@ libsqlite3-sys = { version = "0.35.0", default-features = false, features = [
 ] }
 log = "0.4.29"
 prost = { version = "0.14.1", default-features = false }
+serde_json = "1"
 tokio = { version = "1.47.1", features = ["sync", "rt"] }
 
 # Workspace dependencies

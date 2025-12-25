@@ -34,13 +34,7 @@ fn create_extended_message() -> wa::Message {
 }
 
 fn create_test_jid(user: &str) -> Jid {
-    Jid {
-        user: user.to_string(),
-        server: "s.whatsapp.net".to_string(),
-        device: 0,
-        agent: 0,
-        integrator: 0,
-    }
+    Jid::pn(user)
 }
 
 // Setup functions

@@ -200,7 +200,7 @@ mod tests {
                 chat: "120363021033254949@g.us"
                     .parse()
                     .expect("test JID should be valid"),
-                sender: "559984726662@s.whatsapp.net"
+                sender: "15551234567@s.whatsapp.net"
                     .parse()
                     .expect("test JID should be valid"),
                 is_from_me: false,

@@ -90,3 +90,116 @@ Before finalizing a feature/fix, always run:
 - **Format**: `cargo fmt`
 - **Lint**: `cargo clippy --all-targets`
 - **Test**: `cargo test --all`
+
+---
+
+## 6. Debugging Tools
+
+### evcxr - Rust REPL
+
+For interactive debugging and quick code exploration, use `evcxr`:
+
+```bash
+# Install (use binstall for faster installation)
+cargo binstall evcxr_repl -y
+
+# Run from project root
+evcxr
+```
+
+**Use cases:**
+
+- **Decode binary protocol data**: Inspect nibble-encoded values, hex strings, or protocol buffers
+- **Test encoding/decoding logic**: Quickly verify transformations without full compile cycles
+- **Explore data structures**: Inspect how structs serialize/deserialize
+- **Prototype algorithms**: Test Signal protocol operations or crypto functions
+
+### Using Project Crates in evcxr
+
+You can import local crates using the `:dep` command with relative paths. Note that package names use hyphens, but Rust imports use underscores:
+
+```rust
+// Add dependencies (run from project root)
+:dep wacore-binary = { path = "wacore/binary" }
+:dep hex = "0.4"
+
+// Import modules
+use wacore_binary::jid::Jid;
+use wacore_binary::marshal::{marshal, unmarshal_ref};
+use wacore_binary::builder::NodeBuilder;
+```
+
+**Important**: evcxr processes each line independently. For multi-line code with local variables, wrap in a block:
+
+```rust
+{
+    let jid: Jid = "100000000000001.1:75@lid".parse().unwrap();
+    println!("User: {}, Device: {}, Is LID: {}", jid.user, jid.device, jid.is_lid());
+}
+```
+
+### Example: Decoding Binary Protocol Data
+
+```rust
+:dep wacore-binary = { path = "wacore/binary" }
+:dep hex = "0.4"
+use wacore_binary::marshal::unmarshal_ref;
+
+{
+    let data = hex::decode("f80f4c1a...").unwrap();
+    let node = unmarshal_ref(&data).unwrap();
+    println!("Tag: {}", node.tag);
+    for (k, v) in node.attrs.iter() { println!("  {}: {}", k, v); }
+}
+```
+
+### Example: Building and Marshaling Nodes
+
+```rust
+:dep wacore-binary = { path = "wacore/binary" }
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::marshal::marshal;
+
+{
+    let node = NodeBuilder::new("message")
+        .attr("type", "text")
+        .attr("to", "15551234567@s.whatsapp.net")
+        .build();
+    println!("{:?}", node);
+    let bytes = marshal(&node).unwrap();
+    println!("Marshaled: {:02x?}", bytes);
+}
+```
+
+### Example: Decoding Nibble-Encoded Data
+
+WhatsApp binary protocol uses nibble encoding for numeric strings. Each byte contains two digits (0-9), with 0xF as terminator for odd-length strings:
+
+```rust
+fn decode_nibbles(hex: &str) -> String {
+    let mut result = String::new();
+    for i in (0..hex.len()).step_by(2) {
+        let byte = u8::from_str_radix(&hex[i..i+2], 16).unwrap();
+        let high = byte >> 4;
+        let low = byte & 0x0f;
+        if high < 10 { result.push(('0' as u8 + high) as char); }
+        if low < 10 { result.push(('0' as u8 + low) as char); }
+        else if low == 0x0f { break; } // terminator
+    }
+    result
+}
+
+fn encode_nibbles(s: &str) -> String {
+    let mut result = String::new();
+    let bytes: Vec<u8> = s.bytes().map(|b| b - b'0').collect();
+    for chunk in bytes.chunks(2) {
+        let high = chunk[0];
+        let low = if chunk.len() > 1 { chunk[1] } else { 0x0f };
+        result.push_str(&format!("{:x}{:x}", high, low));
+    }
+    result
+}
+
+decode_nibbles("100000000000001f") // -> "100000000000001"
+encode_nibbles("100000000000001")  // -> "100000000000001f"
+```

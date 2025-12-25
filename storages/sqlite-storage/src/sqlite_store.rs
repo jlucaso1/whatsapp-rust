@@ -2158,6 +2158,114 @@ impl SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))??;
         Ok(())
     }
+
+    // ---- Base Key Tracking helpers ----
+
+    /// Save the base key for a session address. Used for retry collision detection.
+    pub async fn save_base_key_for_device(
+        &self,
+        address: &str,
+        message_id: &str,
+        base_key: &[u8],
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let address = address.to_string();
+        let message_id = message_id.to_string();
+        let base_key = base_key.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            diesel::insert_into(base_keys::table)
+                .values((
+                    base_keys::address.eq(&address),
+                    base_keys::message_id.eq(&message_id),
+                    base_keys::base_key.eq(&base_key),
+                    base_keys::device_id.eq(device_id),
+                ))
+                .on_conflict((
+                    base_keys::address,
+                    base_keys::message_id,
+                    base_keys::device_id,
+                ))
+                .do_update()
+                .set(base_keys::base_key.eq(&base_key))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    /// Check if the current session has the same base key as the saved one.
+    /// Returns true if the base key matches (collision detected).
+    pub async fn has_same_base_key_for_device(
+        &self,
+        address: &str,
+        message_id: &str,
+        current_base_key: &[u8],
+        device_id: i32,
+    ) -> Result<bool> {
+        let pool = self.pool.clone();
+        let address = address.to_string();
+        let message_id = message_id.to_string();
+        let current_base_key = current_base_key.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let saved_key: Option<Vec<u8>> = base_keys::table
+                .select(base_keys::base_key)
+                .filter(base_keys::address.eq(&address))
+                .filter(base_keys::message_id.eq(&message_id))
+                .filter(base_keys::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(saved_key.as_ref() == Some(&current_base_key))
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    /// Delete base key entry for a session address.
+    pub async fn delete_base_key_for_device(
+        &self,
+        address: &str,
+        message_id: &str,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let address = address.to_string();
+        let message_id = message_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            diesel::delete(
+                base_keys::table
+                    .filter(base_keys::address.eq(&address))
+                    .filter(base_keys::message_id.eq(&message_id))
+                    .filter(base_keys::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -2186,5 +2294,645 @@ impl LidPnMappingStore for SqliteStore {
 
     async fn delete_lid_pn_mapping(&self, lid: &str) -> Result<()> {
         self.delete_lid_pn_mapping_for_device(lid, 1).await
+    }
+}
+
+#[async_trait]
+impl BaseKeyStore for SqliteStore {
+    async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()> {
+        self.save_base_key_for_device(address, message_id, base_key, 1)
+            .await
+    }
+
+    async fn has_same_base_key(
+        &self,
+        address: &str,
+        message_id: &str,
+        current_base_key: &[u8],
+    ) -> Result<bool> {
+        self.has_same_base_key_for_device(address, message_id, current_base_key, 1)
+            .await
+    }
+
+    async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()> {
+        self.delete_base_key_for_device(address, message_id, 1)
+            .await
+    }
+}
+
+// ---- Device Registry helpers ----
+
+impl SqliteStore {
+    /// Update device list for a user with a specific device ID.
+    pub async fn update_device_list_for_device(
+        &self,
+        record: traits::DeviceListRecord,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let devices_json = serde_json::to_string(&record.devices)
+            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+
+        self.with_semaphore(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i32;
+
+            diesel::insert_into(device_registry::table)
+                .values((
+                    device_registry::user_id.eq(&record.user),
+                    device_registry::devices_json.eq(&devices_json),
+                    device_registry::timestamp.eq(record.timestamp as i32),
+                    device_registry::phash.eq(&record.phash),
+                    device_registry::device_id.eq(device_id),
+                    device_registry::updated_at.eq(now),
+                ))
+                .on_conflict((device_registry::user_id, device_registry::device_id))
+                .do_update()
+                .set((
+                    device_registry::devices_json.eq(&devices_json),
+                    device_registry::timestamp.eq(record.timestamp as i32),
+                    device_registry::phash.eq(&record.phash),
+                    device_registry::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Check if a device exists for a user.
+    pub async fn has_device_for_device(
+        &self,
+        user: &str,
+        target_device_id: u32,
+        device_id: i32,
+    ) -> Result<bool> {
+        // Device ID 0 (primary device) always exists
+        if target_device_id == 0 {
+            return Ok(true);
+        }
+
+        let pool = self.pool.clone();
+        let user = user.to_string();
+
+        let result = self
+            .with_semaphore(move || -> Result<bool> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                let devices_json: Option<String> = device_registry::table
+                    .select(device_registry::devices_json)
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                if let Some(json) = devices_json {
+                    let devices: Vec<traits::DeviceInfo> = serde_json::from_str(&json)
+                        .map_err(|e: serde_json::Error| StoreError::Serialization(e.to_string()))?;
+                    Ok(devices.iter().any(|d| d.device_id == target_device_id))
+                } else {
+                    Ok(false)
+                }
+            })
+            .await?;
+        Ok(result)
+    }
+
+    /// Get all known devices for a user.
+    pub async fn get_devices_for_device(
+        &self,
+        user: &str,
+        device_id: i32,
+    ) -> Result<Option<traits::DeviceListRecord>> {
+        let pool = self.pool.clone();
+        let user = user.to_string();
+
+        let result = self
+            .with_semaphore(move || -> Result<Option<traits::DeviceListRecord>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                let row: Option<(String, String, i32, Option<String>)> = device_registry::table
+                    .select((
+                        device_registry::user_id,
+                        device_registry::devices_json,
+                        device_registry::timestamp,
+                        device_registry::phash,
+                    ))
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                if let Some((user_id, devices_json, timestamp, phash)) = row {
+                    let devices: Vec<traits::DeviceInfo> = serde_json::from_str(&devices_json)
+                        .map_err(|e: serde_json::Error| StoreError::Serialization(e.to_string()))?;
+                    Ok(Some(traits::DeviceListRecord {
+                        user: user_id,
+                        devices,
+                        timestamp: timestamp as i64,
+                        phash,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await?;
+        Ok(result)
+    }
+
+    /// Remove stale device entries older than max_age_secs.
+    pub async fn cleanup_stale_entries_for_device(
+        &self,
+        max_age_secs: i64,
+        device_id: i32,
+    ) -> Result<u64> {
+        let pool = self.pool.clone();
+
+        let result = self
+            .with_semaphore(move || -> Result<u64> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                let cutoff = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i32
+                    - max_age_secs as i32;
+
+                let deleted = diesel::delete(
+                    device_registry::table
+                        .filter(device_registry::updated_at.lt(cutoff))
+                        .filter(device_registry::device_id.eq(device_id)),
+                )
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                Ok(deleted as u64)
+            })
+            .await?;
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl traits::DeviceRegistryStore for SqliteStore {
+    async fn update_device_list(&self, record: traits::DeviceListRecord) -> Result<()> {
+        self.update_device_list_for_device(record, 1).await
+    }
+
+    async fn has_device(&self, user: &str, device_id: u32) -> Result<bool> {
+        self.has_device_for_device(user, device_id, 1).await
+    }
+
+    async fn get_devices(&self, user: &str) -> Result<Option<traits::DeviceListRecord>> {
+        self.get_devices_for_device(user, 1).await
+    }
+
+    async fn cleanup_stale_entries(&self, max_age_secs: i64) -> Result<u64> {
+        self.cleanup_stale_entries_for_device(max_age_secs, 1).await
+    }
+}
+
+// ---- Sender Key Status helpers ----
+
+impl SqliteStore {
+    /// Mark a participant's sender key for regeneration.
+    pub async fn mark_forget_sender_key_for_device(
+        &self,
+        group_jid: &str,
+        participant: &str,
+        device_id: i32,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        let participant = participant.to_string();
+
+        self.with_semaphore(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i32;
+
+            diesel::insert_into(sender_key_status::table)
+                .values((
+                    sender_key_status::group_jid.eq(&group_jid),
+                    sender_key_status::participant.eq(&participant),
+                    sender_key_status::device_id.eq(device_id),
+                    sender_key_status::marked_at.eq(now),
+                ))
+                .on_conflict((
+                    sender_key_status::group_jid,
+                    sender_key_status::participant,
+                    sender_key_status::device_id,
+                ))
+                .do_update()
+                .set(sender_key_status::marked_at.eq(now))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Mark multiple participants' sender keys for regeneration.
+    pub async fn mark_forget_sender_keys_for_device(
+        &self,
+        group_jid: &str,
+        participants: &[String],
+        device_id: i32,
+    ) -> Result<()> {
+        if participants.is_empty() {
+            return Ok(());
+        }
+
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        let participants = participants.to_vec();
+
+        self.with_semaphore(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i32;
+
+            for participant in participants {
+                diesel::insert_into(sender_key_status::table)
+                    .values((
+                        sender_key_status::group_jid.eq(&group_jid),
+                        sender_key_status::participant.eq(&participant),
+                        sender_key_status::device_id.eq(device_id),
+                        sender_key_status::marked_at.eq(now),
+                    ))
+                    .on_conflict((
+                        sender_key_status::group_jid,
+                        sender_key_status::participant,
+                        sender_key_status::device_id,
+                    ))
+                    .do_update()
+                    .set(sender_key_status::marked_at.eq(now))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Get participants that need fresh SKDM, consuming the marks.
+    pub async fn consume_forget_marks_for_device(
+        &self,
+        group_jid: &str,
+        device_id: i32,
+    ) -> Result<Vec<String>> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+
+        let result = self
+            .with_semaphore(move || -> Result<Vec<String>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                // Get all marked participants
+                let participants: Vec<String> = sender_key_status::table
+                    .select(sender_key_status::participant)
+                    .filter(sender_key_status::group_jid.eq(&group_jid))
+                    .filter(sender_key_status::device_id.eq(device_id))
+                    .load(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                // Delete the marks (consume them)
+                if !participants.is_empty() {
+                    diesel::delete(
+                        sender_key_status::table
+                            .filter(sender_key_status::group_jid.eq(&group_jid))
+                            .filter(sender_key_status::device_id.eq(device_id)),
+                    )
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                }
+
+                Ok(participants)
+            })
+            .await?;
+        Ok(result)
+    }
+
+    /// Check if a participant needs fresh SKDM.
+    pub async fn needs_fresh_skdm_for_device(
+        &self,
+        group_jid: &str,
+        participant: &str,
+        device_id: i32,
+    ) -> Result<bool> {
+        let pool = self.pool.clone();
+        let group_jid = group_jid.to_string();
+        let participant = participant.to_string();
+
+        let result = self
+            .with_semaphore(move || -> Result<bool> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+                let exists: Option<i32> = sender_key_status::table
+                    .select(sender_key_status::marked_at)
+                    .filter(sender_key_status::group_jid.eq(&group_jid))
+                    .filter(sender_key_status::participant.eq(&participant))
+                    .filter(sender_key_status::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                Ok(exists.is_some())
+            })
+            .await?;
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl traits::SenderKeyStatusStore for SqliteStore {
+    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
+        self.mark_forget_sender_key_for_device(group_jid, participant, 1)
+            .await
+    }
+
+    async fn mark_forget_sender_keys(
+        &self,
+        group_jid: &str,
+        participants: &[String],
+    ) -> Result<()> {
+        self.mark_forget_sender_keys_for_device(group_jid, participants, 1)
+            .await
+    }
+
+    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+        self.consume_forget_marks_for_device(group_jid, 1).await
+    }
+
+    async fn needs_fresh_skdm(&self, group_jid: &str, participant: &str) -> Result<bool> {
+        self.needs_fresh_skdm_for_device(group_jid, participant, 1)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use traits::{DeviceRegistryStore, SenderKeyStatusStore};
+
+    async fn create_test_store() -> SqliteStore {
+        SqliteStore::new(":memory:")
+            .await
+            .expect("Failed to create test store")
+    }
+
+    // ==================== Device Registry Tests ====================
+
+    #[tokio::test]
+    async fn test_device_registry_save_and_get() {
+        let store = create_test_store().await;
+
+        let record = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![
+                traits::DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                traits::DeviceInfo {
+                    device_id: 1,
+                    key_index: Some(42),
+                },
+            ],
+            timestamp: 1234567890,
+            phash: Some("2:abcdef".to_string()),
+        };
+
+        store.update_device_list(record).await.expect("save failed");
+        let loaded = store
+            .get_devices("1234567890")
+            .await
+            .expect("get failed")
+            .expect("record should exist");
+
+        assert_eq!(loaded.user, "1234567890");
+        assert_eq!(loaded.devices.len(), 2);
+        assert_eq!(loaded.devices[0].device_id, 0);
+        assert_eq!(loaded.devices[1].device_id, 1);
+        assert_eq!(loaded.devices[1].key_index, Some(42));
+        assert_eq!(loaded.phash, Some("2:abcdef".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_update_existing() {
+        let store = create_test_store().await;
+
+        let record1 = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![traits::DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: 1000,
+            phash: Some("2:old".to_string()),
+        };
+        store
+            .update_device_list(record1)
+            .await
+            .expect("save1 failed");
+
+        // Update with new data
+        let record2 = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![
+                traits::DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                traits::DeviceInfo {
+                    device_id: 2,
+                    key_index: None,
+                },
+            ],
+            timestamp: 2000,
+            phash: Some("2:new".to_string()),
+        };
+        store
+            .update_device_list(record2)
+            .await
+            .expect("save2 failed");
+
+        let loaded = store
+            .get_devices("1234567890")
+            .await
+            .expect("get failed")
+            .expect("record should exist");
+
+        assert_eq!(loaded.devices.len(), 2);
+        assert_eq!(loaded.phash, Some("2:new".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_get_nonexistent() {
+        let store = create_test_store().await;
+        let result = store.get_devices("nonexistent").await.expect("get failed");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_cleanup_stale() {
+        let store = create_test_store().await;
+
+        // Insert a record
+        let record = traits::DeviceListRecord {
+            user: "1234567890".to_string(),
+            devices: vec![traits::DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: 1234567890,
+            phash: None,
+        };
+        store.update_device_list(record).await.expect("save failed");
+
+        // Manually set updated_at to an old value (10 days ago) via raw SQL
+        let pool = store.pool.clone();
+        let old_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32
+            - (10 * 24 * 60 * 60); // 10 days ago
+
+        {
+            let mut conn = pool.get().expect("get conn");
+            diesel::sql_query(format!(
+                "UPDATE device_registry SET updated_at = {} WHERE user_id = '1234567890'",
+                old_time
+            ))
+            .execute(&mut conn)
+            .expect("update old time");
+        }
+
+        // Cleanup with 7 day max age - record should be deleted (it's 10 days old)
+        let deleted = store
+            .cleanup_stale_entries(7 * 24 * 60 * 60)
+            .await
+            .expect("cleanup failed");
+        assert_eq!(deleted, 1);
+
+        // Verify it's gone
+        let loaded = store.get_devices("1234567890").await.expect("get failed");
+        assert!(loaded.is_none());
+    }
+
+    // ==================== Sender Key Status Tests ====================
+
+    #[tokio::test]
+    async fn test_sender_key_status_mark_and_check() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+        let participant = "user1@s.whatsapp.net";
+
+        // Initially should not need fresh SKDM
+        let needs = store
+            .needs_fresh_skdm(group, participant)
+            .await
+            .expect("check failed");
+        assert!(!needs);
+
+        // Mark for fresh SKDM
+        store
+            .mark_forget_sender_key(group, participant)
+            .await
+            .expect("mark failed");
+
+        // Now should need fresh SKDM
+        let needs = store
+            .needs_fresh_skdm(group, participant)
+            .await
+            .expect("check failed");
+        assert!(needs);
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_status_consume_marks() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+        let participants = vec![
+            "user1@s.whatsapp.net".to_string(),
+            "user2@s.whatsapp.net".to_string(),
+        ];
+
+        // Mark multiple participants
+        store
+            .mark_forget_sender_keys(group, &participants)
+            .await
+            .expect("mark failed");
+
+        // Consume marks
+        let consumed = store
+            .consume_forget_marks(group)
+            .await
+            .expect("consume failed");
+        assert_eq!(consumed.len(), 2);
+        assert!(consumed.contains(&"user1@s.whatsapp.net".to_string()));
+        assert!(consumed.contains(&"user2@s.whatsapp.net".to_string()));
+
+        // Marks should be consumed (no longer need fresh SKDM)
+        let needs = store
+            .needs_fresh_skdm(group, "user1@s.whatsapp.net")
+            .await
+            .expect("check failed");
+        assert!(!needs);
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_status_different_groups() {
+        let store = create_test_store().await;
+
+        let group1 = "group1@g.us";
+        let group2 = "group2@g.us";
+        let participant = "user@s.whatsapp.net";
+
+        // Mark in group1 only
+        store
+            .mark_forget_sender_key(group1, participant)
+            .await
+            .expect("mark failed");
+
+        // Should need fresh SKDM in group1
+        assert!(store.needs_fresh_skdm(group1, participant).await.unwrap());
+
+        // Should NOT need fresh SKDM in group2
+        assert!(!store.needs_fresh_skdm(group2, participant).await.unwrap());
     }
 }

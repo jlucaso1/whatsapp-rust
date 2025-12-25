@@ -125,6 +125,13 @@ impl Client {
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 
+            // Consume forget marks - these participants need fresh SKDMs (matches WhatsApp Web)
+            // markForgetSenderKey is called during retry handling, this consumes those marks
+            let marked_for_fresh_skdm = self
+                .consume_forget_marks(&to.to_string())
+                .await
+                .unwrap_or_default();
+
             // Determine which devices need SKDM distribution
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 // Forcing full distribution (either first message or explicit request)
@@ -175,6 +182,31 @@ impl Client {
                         }
                     }
                 }
+            };
+
+            // Merge marked_for_fresh_skdm into skdm_target_devices
+            // These are devices that need fresh SKDMs due to retry/error handling
+            let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
+                match skdm_target_devices {
+                    None => None, // Already doing full distribution
+                    Some(mut devices) => {
+                        // Parse marked JID strings and add to target list
+                        for marked_jid_str in &marked_for_fresh_skdm {
+                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
+                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
+                            {
+                                log::debug!(
+                                    "Adding {} to SKDM targets (marked for fresh key)",
+                                    marked_jid_str
+                                );
+                                devices.push(marked_jid);
+                            }
+                        }
+                        Some(devices)
+                    }
+                }
+            } else {
+                skdm_target_devices
             };
 
             // Track devices that will receive SKDM in this message
@@ -281,6 +313,12 @@ impl Client {
             }
         } else {
             // Direct message: Acquire lock only during encryption
+
+            // Ensure E2E sessions exist before encryption (matches WhatsApp Web)
+            // This deduplicates concurrent prekey fetches for the same recipient
+            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
+            self.ensure_e2e_sessions(recipient_devices).await?;
+
             // Resolve encryption JID and prepare lock acquisition
             let encryption_jid = self.resolve_encryption_jid(&to).await;
             let signal_addr_str = encryption_jid.to_protocol_address().to_string();

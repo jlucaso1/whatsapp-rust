@@ -120,21 +120,11 @@ impl<'a> Groups<'a> {
             for group_node in groups_node.get_children_by_tag("group") {
                 let group_id_str = group_node.attrs().string("id");
                 let group_jid: Jid = if group_id_str.contains('@') {
-                    group_id_str.parse().unwrap_or_else(|_| Jid {
-                        user: group_id_str.clone(),
-                        server: "g.us".to_string(),
-                        agent: 0,
-                        device: 0,
-                        integrator: 0,
-                    })
+                    group_id_str
+                        .parse()
+                        .unwrap_or_else(|_| Jid::group(&group_id_str))
                 } else {
-                    Jid {
-                        user: group_id_str.clone(),
-                        server: "g.us".to_string(),
-                        agent: 0,
-                        device: 0,
-                        integrator: 0,
-                    }
+                    Jid::group(&group_id_str)
                 };
 
                 let subject = group_node

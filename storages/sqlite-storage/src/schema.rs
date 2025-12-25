@@ -27,6 +27,27 @@ diesel::table! {
 }
 
 diesel::table! {
+    base_keys (address, message_id, device_id) {
+        address -> Text,
+        message_id -> Text,
+        base_key -> Binary,
+        device_id -> Integer,
+        created_at -> Integer,
+    }
+}
+
+diesel::table! {
+    device_registry (user_id, device_id) {
+        user_id -> Text,
+        devices_json -> Text,
+        timestamp -> Integer,
+        phash -> Nullable<Text>,
+        device_id -> Integer,
+        updated_at -> Integer,
+    }
+}
+
+diesel::table! {
     device (id) {
         id -> Integer,
         lid -> Text,
@@ -77,6 +98,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    sender_key_status (group_jid, participant, device_id) {
+        group_jid -> Text,
+        participant -> Text,
+        device_id -> Integer,
+        marked_at -> Integer,
+    }
+}
+
+diesel::table! {
     sender_keys (address, device_id) {
         address -> Text,
         record -> Binary,
@@ -113,10 +143,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_mutation_macs,
     app_state_versions,
+    base_keys,
     device,
+    device_registry,
     identities,
     lid_pn_mapping,
     prekeys,
+    sender_key_status,
     sender_keys,
     sessions,
     signed_prekeys,

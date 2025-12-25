@@ -1,7 +1,11 @@
 mod context_impl;
+mod device_registry;
+mod lid_pn;
+mod sender_keys;
+mod sessions;
 
 use crate::handshake;
-use crate::lid_pn_cache::{LearningSource, LidPnCache, LidPnEntry};
+use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
@@ -125,6 +129,11 @@ pub struct Client {
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
+    /// Track retry attempts per message to prevent infinite retry loops.
+    /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
+    /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
+    pub(crate) message_retry_counts: Cache<String, u8>,
+
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -152,6 +161,11 @@ pub struct Client {
     /// Cache for pending PDO (Peer Data Operation) requests.
     /// Maps message cache keys (chat:id) to pending request info.
     pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
+
+    /// LRU cache for device registry (matches WhatsApp Web's 5000 entry limit).
+    /// Maps user ID to DeviceListRecord for fast device existence checks.
+    /// Backed by persistent storage.
+    pub(crate) device_registry_cache: Cache<String, wacore::store::traits::DeviceListRecord>,
 
     /// Router for dispatching stanzas to their appropriate handlers
     pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
@@ -232,6 +246,13 @@ impl Client {
 
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
+            // Retry count tracking cache for preventing infinite retry loops.
+            // TTL of 5 minutes to match retry functionality, max 5000 entries.
+            message_retry_counts: Cache::builder()
+                .time_to_live(Duration::from_secs(300))
+                .max_capacity(5_000)
+                .build(),
+
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
             last_successful_connect: Arc::new(Mutex::new(None)),
@@ -249,6 +270,10 @@ impl Client {
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
+            device_registry_cache: Cache::builder()
+                .max_capacity(5_000) // Match WhatsApp Web's 5000 entry limit
+                .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
+                .build(),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
@@ -265,106 +290,13 @@ impl Client {
             }
         });
 
+        // Start background task to clean up stale device registry entries
+        let cleanup_arc = arc.clone();
+        tokio::spawn(async move {
+            cleanup_arc.device_registry_cleanup_loop().await;
+        });
+
         (arc, rx)
-    }
-
-    /// Warm up the LID-PN cache from persistent storage.
-    /// This is called during client initialization to populate the in-memory cache
-    /// with previously learned LID-PN mappings.
-    async fn warm_up_lid_pn_cache(&self) -> Result<(), anyhow::Error> {
-        let backend = self.persistence_manager.backend();
-        let entries = backend.get_all_lid_pn_mappings().await?;
-
-        if entries.is_empty() {
-            debug!("LID-PN cache warm-up: no entries found in storage");
-            return Ok(());
-        }
-
-        let cache_entries: Vec<LidPnEntry> = entries
-            .into_iter()
-            .map(|e| {
-                LidPnEntry::with_timestamp(
-                    e.lid,
-                    e.phone_number,
-                    e.created_at,
-                    LearningSource::parse(&e.learning_source),
-                )
-            })
-            .collect();
-
-        self.lid_pn_cache.warm_up(cache_entries).await;
-        Ok(())
-    }
-
-    /// Add a LID-PN mapping to both the in-memory cache and persistent storage.
-    /// This is called when we learn about a mapping from messages, usync, etc.
-    pub(crate) async fn add_lid_pn_mapping(
-        &self,
-        lid: &str,
-        phone_number: &str,
-        source: LearningSource,
-    ) -> Result<()> {
-        use wacore::store::traits::LidPnMappingEntry;
-
-        // Add to in-memory cache
-        let entry = LidPnEntry::new(lid.to_string(), phone_number.to_string(), source);
-        self.lid_pn_cache.add(entry.clone()).await;
-
-        // Persist to storage in background (don't block message processing)
-        let backend = self.persistence_manager.backend();
-        let storage_entry = LidPnMappingEntry {
-            lid: entry.lid,
-            phone_number: entry.phone_number,
-            created_at: entry.created_at,
-            updated_at: entry.created_at,
-            learning_source: entry.learning_source.as_str().to_string(),
-        };
-
-        backend
-            .put_lid_pn_mapping(&storage_entry)
-            .await
-            .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
-        Ok(())
-    }
-
-    /// Resolve the encryption JID for a given target JID.
-    /// This uses the same logic as the receiving path to ensure consistent
-    /// lock keys between sending and receiving.
-    ///
-    /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
-    /// This ensures that sending and receiving use the same session lock.
-    pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-        if target.server == lid_server {
-            // Already a LID - use it directly
-            target.clone()
-        } else if target.server == pn_server {
-            // PN JID - check if we have a LID mapping
-            if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
-                let lid_jid = Jid {
-                    user: lid_user.clone(),
-                    server: lid_server.to_string(),
-                    device: target.device,
-                    agent: target.agent,
-                    integrator: target.integrator,
-                };
-                log::debug!(
-                    "[SEND-LOCK] Resolved {} to LID {} for session lock",
-                    target,
-                    lid_jid
-                );
-                lid_jid
-            } else {
-                // No LID mapping - use PN as-is
-                log::debug!("[SEND-LOCK] No LID mapping for {}, using PN", target);
-                target.clone()
-            }
-        } else {
-            // Other server type - use as-is
-            target.clone()
-        }
     }
 
     pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
@@ -631,27 +563,6 @@ impl Client {
                 }
             }
         }
-    }
-
-    /// Take a recent message from the cache (removes it).
-    /// Returns the deserialized message if found, None otherwise.
-    pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
-        use prost::Message;
-        let key = RecentMessageKey { to, id };
-        self.recent_messages
-            .remove(&key)
-            .await
-            .and_then(|bytes| wa::Message::decode(bytes.as_slice()).ok())
-    }
-
-    /// Store a recent message in the cache (serialized as bytes).
-    /// This is lightweight - only stores the protobuf bytes, not Arc<Message>.
-    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
-        use prost::Message;
-        let key = RecentMessageKey { to, id };
-        // Serialize message to bytes - much lighter than storing Arc<Message>
-        let bytes = msg.encode_to_vec();
-        self.recent_messages.insert(key, bytes).await;
     }
 
     /// Decrypt a frame and return the parsed node.
@@ -1834,27 +1745,7 @@ impl Client {
         snapshot.lid.clone()
     }
 
-    /// Get the phone number for a given LID from the LID-PN cache.
-    ///
-    /// This looks up the mapping in the in-memory cache. The mapping is populated
-    /// from messages, usync responses, and other sources during normal operation.
-    ///
-    /// # Arguments
-    ///
-    /// * `lid` - The LID user part (e.g., "100000012345678") or full LID JID
-    ///
-    /// # Returns
-    ///
-    /// The phone number user part if a mapping exists, None otherwise.
-    pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String> {
-        // Handle both full JID (e.g., "100000012345678@lid") and user part only
-        let lid_user = if lid.contains('@') {
-            lid.split('@').next().unwrap_or(lid)
-        } else {
-            lid
-        };
-        self.lid_pn_cache.get_phone_number(lid_user).await
-    }
+    // get_phone_number_from_lid is in client/lid_pn.rs
 
     pub(crate) async fn send_protocol_receipt(
         &self,
@@ -1902,6 +1793,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lid_pn_cache::LearningSource;
     use tokio::sync::oneshot;
     use wacore_binary::jid::SERVER_JID;
 

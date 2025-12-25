@@ -1,0 +1,108 @@
+//! Sender Key and message cache methods for Client.
+//!
+//! This module contains methods for managing sender keys (SKDM) for group messaging
+//! and caching recent messages for retry handling.
+//!
+//! Key features:
+//! - Mark participants for fresh SKDM on retry
+//! - Consume forget marks when sending group messages
+//! - Cache recent messages for retry handling
+
+use anyhow::Result;
+use wacore_binary::jid::Jid;
+use waproto::whatsapp as wa;
+
+use super::Client;
+use crate::client::RecentMessageKey;
+
+impl Client {
+    /// Mark participants for fresh SKDM on next group send.
+    /// Filters out our own devices (we don't need to send SKDM to ourselves).
+    /// Matches WhatsApp Web's WAWebApiParticipantStore.markForgetSenderKey behavior.
+    /// Called from handle_retry_receipt for group/status messages.
+    pub(crate) async fn mark_forget_sender_key(
+        &self,
+        group_jid: &str,
+        participants: &[String],
+    ) -> Result<()> {
+        use anyhow::anyhow;
+
+        // Get our own user ID to filter out (WhatsApp Web: isMeDevice check)
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
+        let own_lid_user = device_guard.lid.as_ref().map(|j| j.user.clone());
+        let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.clone());
+        drop(device_guard);
+
+        // Filter out own devices (WhatsApp Web: !isMeDevice(e))
+        let filtered: Vec<String> = participants
+            .iter()
+            .filter(|p| {
+                // Parse participant JID and check if it's our own
+                let is_own_lid = own_lid_user.as_ref().is_some_and(|lid| {
+                    p.starts_with(&format!("{lid}:"))
+                        || p.starts_with(&format!("{lid}@"))
+                        || p.as_str() == lid
+                });
+                let is_own_pn = own_pn_user.as_ref().is_some_and(|pn| {
+                    p.starts_with(&format!("{pn}:"))
+                        || p.starts_with(&format!("{pn}@"))
+                        || p.as_str() == pn
+                });
+                !is_own_lid && !is_own_pn
+            })
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Ok(());
+        }
+
+        let backend = self.persistence_manager.backend();
+        backend
+            .mark_forget_sender_keys(group_jid, &filtered)
+            .await
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Get participants marked for fresh SKDM and consume the marks.
+    /// Matches WhatsApp Web's getGroupSenderKeyList pattern.
+    pub(crate) async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+        use anyhow::anyhow;
+
+        let backend = self.persistence_manager.backend();
+        backend
+            .consume_forget_marks(group_jid)
+            .await
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Take a recent message from the cache (removes it).
+    /// Returns the deserialized message if found, None otherwise.
+    pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
+        use prost::Message;
+        let key = RecentMessageKey {
+            to: to.clone(),
+            id: id.clone(),
+        };
+        self.recent_messages.remove(&key).await.and_then(|bytes| {
+            match wa::Message::decode(bytes.as_slice()) {
+                Ok(msg) => Some(msg),
+                Err(e) => {
+                    log::warn!("Failed to decode cached message for {}:{}: {}", to, id, e);
+                    None
+                }
+            }
+        })
+    }
+
+    /// Store a recent message in the cache (serialized as bytes).
+    /// This is lightweight - only stores the protobuf bytes, not Arc<Message>.
+    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
+        use prost::Message;
+        let key = RecentMessageKey { to, id };
+        // Serialize message to bytes - much lighter than storing Arc<Message>
+        let bytes = msg.encode_to_vec();
+        self.recent_messages.insert(key, bytes).await;
+    }
+}

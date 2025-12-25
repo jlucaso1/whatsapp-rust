@@ -822,21 +822,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sender = Jid {
-            user: "5511999887766".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
-
-        let remote = Jid {
-            user: "5511888776655".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
+        let sender = Jid::pn("5511999887766");
+        let remote = Jid::pn("5511888776655");
 
         let result = generate_reporting_token(&message, "test_stanza_id", &sender, &remote, None)
             .expect("valid message should generate reporting token");
@@ -852,21 +839,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sender = Jid {
-            user: "5511999887766".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
-
-        let remote = Jid {
-            user: "5511888776655".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
+        let sender = Jid::pn("5511999887766");
+        let remote = Jid::pn("5511888776655");
 
         let existing_secret = [0xAAu8; MESSAGE_SECRET_SIZE];
         let result = generate_reporting_token(
@@ -974,21 +948,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sender = Jid {
-            user: "5511999887766".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
-
-        let remote = Jid {
-            user: "5511888776655".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
+        let sender = Jid::pn("5511999887766");
+        let remote = Jid::pn("5511888776655");
 
         let result = generate_reporting_token(&message, "test_id", &sender, &remote, None);
         assert!(result.is_none());
@@ -996,13 +957,7 @@ mod tests {
 
     /// Helper to create a test JID
     fn test_jid(user: &str) -> Jid {
-        Jid {
-            user: user.to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        }
+        Jid::pn(user)
     }
 
     #[test]

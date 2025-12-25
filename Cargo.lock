@@ -2382,6 +2382,7 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "prost",
+ "serde_json",
  "tokio",
  "wacore",
  "waproto",
