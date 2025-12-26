@@ -1,3 +1,19 @@
+// # Updating the Proto File
+//
+// When modifying `src/whatsapp.proto`, follow these steps:
+//
+// 1. Format the proto file (requires `buf` CLI: https://buf.build/docs/installation):
+//    ```
+//    buf format waproto/src/whatsapp.proto -w
+//    ```
+//
+// 2. Regenerate the Rust code:
+//    ```
+//    GENERATE_PROTO=1 cargo build -p waproto
+//    ```
+//
+// 3. Fix any breaking changes in the codebase (e.g., `optional` -> `required` field changes)
+
 fn main() -> std::io::Result<()> {
     // By default, we expect the `whatsapp.rs` file to be pre-generated.
     // This build script will only regenerate it if the `GENERATE_PROTO`

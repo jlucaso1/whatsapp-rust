@@ -168,7 +168,7 @@ impl Device {
             push_name: String::new(),
             app_version_primary: 2,
             app_version_secondary: 3000,
-            app_version_tertiary: 1023868176,
+            app_version_tertiary: 1031424117,
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
             edge_routing_info: None,

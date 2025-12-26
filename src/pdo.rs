@@ -226,10 +226,7 @@ impl Client {
         };
 
         // Extract message key to find the original pending request
-        let Some(key) = &web_msg_info.key else {
-            warn!("PDO response WebMessageInfo missing message key");
-            return;
-        };
+        let key = &web_msg_info.key;
 
         let remote_jid = key.remote_jid.as_deref().unwrap_or("");
         let msg_id = key.id.as_deref().unwrap_or("");
@@ -291,10 +288,7 @@ impl Client {
         &self,
         web_msg: &wa::WebMessageInfo,
     ) -> Result<MessageInfo, anyhow::Error> {
-        let key = web_msg
-            .key
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("WebMessageInfo missing key"))?;
+        let key = &web_msg.key;
 
         let remote_jid: Jid = key
             .remote_jid
@@ -308,7 +302,7 @@ impl Client {
         let sender = if is_group {
             key.participant
                 .as_ref()
-                .map(|p| p.parse())
+                .map(|p: &String| p.parse())
                 .transpose()?
                 .unwrap_or_else(|| remote_jid.clone())
         } else if is_from_me {
