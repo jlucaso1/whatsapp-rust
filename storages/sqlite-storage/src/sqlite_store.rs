@@ -498,7 +498,7 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address_owned = address.to_string();
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        self.with_write(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -512,9 +512,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(())
     }
 
     pub async fn load_identity_for_device(
@@ -605,7 +602,7 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address_owned = address.to_string();
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        self.with_write(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -619,9 +616,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(())
     }
 
     pub async fn put_sender_key_for_device(
@@ -633,7 +627,8 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address = address.to_string();
         let record_vec = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
+
+        self.with_write(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -651,8 +646,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn get_sender_key_for_device(
@@ -662,7 +655,8 @@ impl SqliteStore {
     ) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+
+        self.with_read(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -676,13 +670,13 @@ impl SqliteStore {
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn delete_sender_key_for_device(&self, address: &str, device_id: i32) -> Result<()> {
         let pool = self.pool.clone();
         let address = address.to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
+
+        self.with_write(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -696,8 +690,6 @@ impl SqliteStore {
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn get_app_state_sync_key_for_device(
