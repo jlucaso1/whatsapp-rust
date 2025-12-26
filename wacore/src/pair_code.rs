@@ -249,10 +249,16 @@ impl PairCodeUtils {
             });
         }
 
-        // Extract salt, iv, and ciphertext (length already validated above)
-        let salt: [u8; PAIR_CODE_SALT_SIZE] = wrapped[0..32].try_into().unwrap();
-        let iv: [u8; PAIR_CODE_IV_SIZE] = wrapped[32..48].try_into().unwrap();
-        let mut plaintext: [u8; 32] = wrapped[48..80].try_into().unwrap();
+        // Extract salt, iv, and ciphertext (length validated above guarantees these succeed)
+        let salt: [u8; PAIR_CODE_SALT_SIZE] = wrapped[0..32]
+            .try_into()
+            .expect("salt slice is exactly 32 bytes");
+        let iv: [u8; PAIR_CODE_IV_SIZE] = wrapped[32..48]
+            .try_into()
+            .expect("iv slice is exactly 16 bytes");
+        let mut plaintext: [u8; 32] = wrapped[48..80]
+            .try_into()
+            .expect("ciphertext slice is exactly 32 bytes");
 
         // Derive key using the PRIMARY's salt
         let derived_key = Self::derive_key(pair_code, &salt);
@@ -369,12 +375,14 @@ impl PairCodeUtils {
     /// 2. DH key exchange with primary's identity public key
     /// 3. HKDF to derive bundle encryption key
     /// 4. AES-GCM encryption of the key bundle
+    ///
+    /// Returns the wrapped bundle and a new ADV secret derived from the DH exchanges.
+    /// The ADV secret should be stored to enable HMAC verification of pair-success.
     pub fn prepare_key_bundle(
         ephemeral_keypair: &KeyPair,
         primary_ephemeral_pub: &[u8; 32],
         primary_identity_pub: &[u8; 32],
         identity_key: &KeyPair,
-        _adv_secret_key: &[u8; 32],
     ) -> Result<(Vec<u8>, [u8; 32]), PairCodeError> {
         // Parse primary's ephemeral public key
         let primary_eph_pub =

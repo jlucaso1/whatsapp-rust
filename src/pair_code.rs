@@ -326,12 +326,14 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
 
     // Prepare encrypted key bundle
+    // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
+    // verification in pair-success. Currently the HMAC check in do_pair_crypto is
+    // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
     let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
         &ephemeral_keypair,
         &primary_ephemeral_pub,
         &primary_identity_pub,
         &device_snapshot.identity_key,
-        &device_snapshot.adv_secret_key,
     ) {
         Ok(result) => result,
         Err(e) => {
