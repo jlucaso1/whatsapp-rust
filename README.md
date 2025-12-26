@@ -1,59 +1,114 @@
-# Whatsapp-Rust
+# whatsapp-rust
 
-A high-performance, asynchronous Rust library for interacting with the WhatsApp platform, inspired by the Go-based `whatsmeow` library and the Typescript-based `Baileys`. This project leverages Rust's safety, performance, and modern async ecosystem (Tokio) to provide a robust and type-safe client.
+A high-performance, async Rust library for the WhatsApp Web API. Inspired by [whatsmeow](https://github.com/tulir/whatsmeow) (Go) and [Baileys](https://github.com/WhiskeySockets/Baileys) (TypeScript).
 
-## Core Features
+## Features
 
-- ✅ **Secure Connection & Pairing:** Full implementation of the Noise Protocol handshake and QR code pairing for secure, multi-device sessions.
-- ✅ **End-to-End Encrypted Messaging:** Robust support for the Signal Protocol, enabling E2E encrypted communication for both one-on-one and group chats.
-- ✅ **Media Handling:** Full support for uploading and downloading media files (images, videos, documents, GIFs), including correct handling of encryption and MAC verification.
-- ✅ **Runtime Agnostic:** Abstracted transport layer allows use with any async runtime or platform (Tokio, async-std, WASM, etc.).
-- ✅ **Flexible Storage Architecture:** Storage-agnostic core with pluggable backends. SQLite provided by default, but supports custom implementations (PostgreSQL, MongoDB, Redis, browser storage, etc.) through a clean trait-based interface.
+### Authentication
 
-### Custom Backend Implementation
+- QR code pairing
+- Pair code (phone number) linking
+- Persistent sessions with automatic reconnection
 
-See `examples/custom_backend_example.rs` for a complete implementation template.
+### Messaging
 
-### Custom Transport and HTTP Implementations
+- End-to-end encrypted messages (Signal Protocol)
+- One-on-one and group chats
+- Message editing and reactions
+- Quoting/replying to messages
+- Delivery, read, and played receipts
 
-You can implement your own transport and HTTP client for different runtimes or platforms by implementing the `Transport`, `TransportFactory`, and `HttpClient` traits. This enables:
+### Media
 
-- Using different async runtimes (async-std, smol)
-- Compiling to WebAssembly with browser APIs
-- Testing with mock implementations
-- Custom protocols or proxies
+- Upload and download images, videos, documents, GIFs, and audio
+- Automatic encryption and decryption
 
-See the `whatsapp-rust-tokio-transport` and `whatsapp-rust-ureq-http-client` crates for reference implementations.
+### Contacts & Groups
 
-## Quick Start: A Universal Ping-Pong Bot
+- Check if phone numbers are on WhatsApp
+- Fetch profile pictures and user info
+- Query group metadata and participants
+- List all groups you're participating in
 
-The following example demonstrates a simple bot that can "pong" back text, images, and videos.
+### Presence & Chat State
 
-Check the file `src/main.rs` and run it with `cargo run`.
+- Set online/offline presence
+- Typing indicators (composing, recording, paused)
+- Block and unblock contacts
 
-## Roadmap
+### Architecture
 
-With the core messaging and media functionality now stable, the project can focus on expanding feature parity and improving robustness.
+- **Modular design** - Pluggable storage, transport, and HTTP clients
+- **Runtime agnostic** - Works with Tokio, async-std, or WASM
+- **SQLite included** - Default storage backend, easily swappable
 
-1.  **Phase 1: Robustness and Event Handling**
+## Quick Start
 
-    - [ ] Implement handlers for all receipt types (read, played, etc.).
-    - [ ] Implement presence handling (`<presence>`).
-    - [ ] Expand `usync` implementation for robust contact and profile synchronization.
+```rust
+use std::sync::Arc;
+use whatsapp_rust::bot::Bot;
+use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
+use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use wacore::types::events::Event;
 
-2.  **Phase 2: Expanded Message Types**
-    - [ ] Explore newsletter and channel support.
-    - [ ] Profile management (setting status, profile pictures).
+#[tokio::main]
+async fn main() {
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await.unwrap());
+
+    let mut bot = Bot::builder()
+        .with_backend(backend)
+        .with_transport_factory(TokioWebSocketTransportFactory::new())
+        .with_http_client(UreqHttpClient::new())
+        .on_event(|event, client| async move {
+            match event {
+                Event::PairingQrCode { code, .. } => println!("QR:\n{}", code),
+                Event::Message(msg, info) => {
+                    println!("Message from {}: {:?}", info.source.sender, msg);
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+
+    bot.run().await.unwrap().await.unwrap();
+}
+```
+
+Run the included demo bot:
+
+```bash
+cargo run                          # QR code only
+cargo run -- -p 15551234567        # Pair code + QR code
+cargo run -- -p 15551234567 -c 12345678 # Custom pair code
+```
+
+## Project Structure
+
+```
+whatsapp-rust/
+├── src/                    # Main client library
+├── wacore/                 # Platform-agnostic core (no_std compatible)
+│   ├── binary/             # WhatsApp binary protocol
+│   ├── libsignal/          # Signal Protocol implementation
+│   └── appstate/           # App state management
+├── waproto/                # Protocol Buffers definitions
+├── storages/sqlite-storage # SQLite backend
+├── transports/tokio-transport
+└── http_clients/ureq-client
+```
+
+## Custom Backends
+
+Implement your own storage, transport, or HTTP client by implementing the respective traits. See the default implementations for reference.
 
 ## Disclaimer
 
-This project is an unofficial, open-source reimplementation of a WhatsApp client. Using custom or third-party clients can violate WhatsApp/Meta's Terms of Service and may result in temporary or permanent account suspension or bans. Use this software at your own risk.
+This is an unofficial, open-source reimplementation. Using custom WhatsApp clients may violate Meta's Terms of Service and could result in account suspension. Use at your own risk.
 
 ## Acknowledgements
 
-Thanks to the following projects for their inspiration and reference implementations:
-
-- whatsmeow (Go) — https://github.com/tulir/whatsmeow
-- Baileys (NodeJS) — https://github.com/WhiskeySockets/Baileys
-
-Their work has been invaluable for understanding the WhatsApp protocol and multi-device sync details used throughout this project.
+- [whatsmeow](https://github.com/tulir/whatsmeow) (Go)
+- [Baileys](https://github.com/WhiskeySockets/Baileys) (TypeScript)
