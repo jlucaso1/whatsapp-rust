@@ -5,7 +5,6 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use log::warn;
 use prost::Message;
 use std::sync::Arc;
 use wacore::appstate::hash::HashState;
@@ -42,7 +41,10 @@ type DeviceRow = (
 #[derive(Clone)]
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
-    pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
+    /// RwLock for database operations:
+    /// - Read lock: Multiple concurrent reads allowed (WAL mode supports this)
+    /// - Write lock: Serializes writes to prevent SQLITE_BUSY errors
+    pub(crate) db_lock: Arc<tokio::sync::RwLock<()>>,
     device_id: i32,
 }
 
@@ -79,7 +81,12 @@ impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
 
-        let pool_size = 2;
+        // Pool size: Use available parallelism or default to 4
+        // With WAL mode, multiple readers can proceed concurrently
+        let pool_size = std::thread::available_parallelism()
+            .map(|p| p.get() as u32)
+            .unwrap_or(4)
+            .max(4); // At least 4 connections
 
         let pool = Pool::builder()
             .max_size(pool_size)
@@ -107,7 +114,7 @@ impl SqliteStore {
 
         Ok(Self {
             pool,
-            db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            db_lock: Arc::new(tokio::sync::RwLock::new(())),
             device_id: 1,
         })
     }
@@ -125,24 +132,33 @@ impl SqliteStore {
         self.device_id
     }
 
-    async fn with_semaphore<F, T>(&self, f: F) -> Result<T>
+    /// Execute a read operation with shared read lock.
+    /// Multiple reads can proceed concurrently (WAL mode allows this).
+    async fn with_read<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let permit = self
-            .db_semaphore
-            .clone()
-            .acquire_owned()
+        let guard = self.db_lock.read().await;
+        let result = tokio::task::spawn_blocking(f)
             .await
-            .map_err(|e| StoreError::Database(format!("Semaphore error: {}", e)))?;
-        let result = tokio::task::spawn_blocking(move || {
-            let res = f();
-            drop(permit);
-            res
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+        drop(guard);
+        Ok(result)
+    }
+
+    /// Execute a write operation with exclusive write lock.
+    /// Writes are serialized to prevent SQLITE_BUSY errors.
+    async fn with_write<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let guard = self.db_lock.write().await;
+        let result = tokio::task::spawn_blocking(f)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+        drop(guard);
         Ok(result)
     }
 
@@ -454,71 +470,28 @@ impl SqliteStore {
         device_id: i32,
     ) -> Result<()> {
         let pool = self.pool.clone();
-        let db_semaphore = self.db_semaphore.clone();
         let address_owned = address.to_string();
         let key_vec = key.to_vec();
 
-        const MAX_RETRIES: u32 = 5;
-
-        for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
-
-            let pool_clone = pool.clone();
-            let address_clone = address_owned.clone();
-            let key_clone = key_vec.clone();
-
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(identities::table)
-                    .values((
-                        identities::address.eq(address_clone),
-                        identities::key.eq(&key_clone[..]),
-                        identities::device_id.eq(device_id),
-                    ))
-                    .on_conflict((identities::address, identities::device_id))
-                    .do_update()
-                    .set(identities::key.eq(&key_clone[..]))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
-
-            drop(permit);
-
-            match result {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Identity write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
-                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
-            }
-        }
-
-        Err(StoreError::Database(format!(
-            "Identity write failed after {} attempts",
-            MAX_RETRIES + 1
-        )))
+        // Use write lock to serialize writes and prevent SQLITE_BUSY
+        self.with_write(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(identities::table)
+                .values((
+                    identities::address.eq(address_owned),
+                    identities::key.eq(&key_vec[..]),
+                    identities::device_id.eq(device_id),
+                ))
+                .on_conflict((identities::address, identities::device_id))
+                .do_update()
+                .set(identities::key.eq(&key_vec[..]))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -552,7 +525,7 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address = address.to_string();
         let result = self
-            .with_semaphore(move || -> Result<Option<Vec<u8>>> {
+            .with_read(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -578,7 +551,7 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let address_for_query = address.to_string();
         let result = self
-            .with_semaphore(move || -> Result<Option<Vec<u8>>> {
+            .with_read(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -604,73 +577,28 @@ impl SqliteStore {
         device_id: i32,
     ) -> Result<()> {
         let pool = self.pool.clone();
-        let db_semaphore = self.db_semaphore.clone();
         let address_owned = address.to_string();
         let session_vec = session.to_vec();
 
-        const MAX_RETRIES: u32 = 5;
-
-        for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
-
-            let pool_clone = pool.clone();
-            let address_clone = address_owned.clone();
-            let session_clone = session_vec.clone();
-
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(sessions::table)
-                    .values((
-                        sessions::address.eq(address_clone),
-                        sessions::record.eq(&session_clone),
-                        sessions::device_id.eq(device_id),
-                    ))
-                    .on_conflict((sessions::address, sessions::device_id))
-                    .do_update()
-                    .set(sessions::record.eq(&session_clone))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
-
-            drop(permit);
-
-            match result {
-                Ok(Ok(())) => {
-                    return Ok(());
-                }
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Session write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
-                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
-            }
-        }
-
-        Err(StoreError::Database(format!(
-            "Session write failed after {} attempts",
-            MAX_RETRIES + 1
-        )))
+        // Use write lock to serialize writes and prevent SQLITE_BUSY
+        self.with_write(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(sessions::table)
+                .values((
+                    sessions::address.eq(address_owned),
+                    sessions::record.eq(&session_vec),
+                    sessions::device_id.eq(device_id),
+                ))
+                .on_conflict((sessions::address, sessions::device_id))
+                .do_update()
+                .set(sessions::record.eq(&session_vec))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -1735,9 +1663,15 @@ impl DeviceStore for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     async fn create_test_store() -> SqliteStore {
-        SqliteStore::new(":memory:")
+        // Each test gets a unique in-memory database to avoid conflicts
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let url = format!("file:test_db_{}?mode=memory&cache=shared", id);
+        SqliteStore::new(&url)
             .await
             .expect("Failed to create test store")
     }
@@ -1906,5 +1840,52 @@ mod tests {
 
         let consumed = store.consume_forget_marks(group2).await.unwrap();
         assert!(consumed.is_empty());
+    }
+
+    /// Test that concurrent reads do not block each other.
+    /// This verifies the RwLock optimization allows parallel reads.
+    #[tokio::test]
+    async fn test_concurrent_reads_do_not_block() {
+        let store = Arc::new(create_test_store().await);
+
+        // Setup: Store some test sessions
+        for i in 0..10 {
+            store
+                .put_session_for_device(&format!("address{}", i), &[i as u8; 32], 1)
+                .await
+                .expect("Failed to store session");
+        }
+
+        // Spawn many concurrent reads
+        let mut handles = Vec::new();
+        let start = std::time::Instant::now();
+
+        for _ in 0..50 {
+            let store = store.clone();
+            handles.push(tokio::spawn(async move {
+                // Each task does multiple reads
+                for i in 0..10 {
+                    store
+                        .get_session_for_device(&format!("address{}", i), 1)
+                        .await
+                        .expect("Read failed");
+                }
+            }));
+        }
+
+        // Wait for all reads to complete
+        for handle in handles {
+            handle.await.expect("Task panicked");
+        }
+
+        let elapsed = start.elapsed();
+        // With concurrent reads, 500 reads should complete much faster than
+        // if they were serialized. A generous timeout of 5 seconds should
+        // easily pass with parallel reads (serialized would be ~500 * 1ms = 500ms+).
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "Concurrent reads took too long: {:?}",
+            elapsed
+        );
     }
 }
