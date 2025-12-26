@@ -961,7 +961,7 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_operations() {
-        use wacore::store::traits::BaseKeyStore;
+        use wacore::store::traits::ProtocolStore as _;
 
         let _ = env_logger::builder().is_test(true).try_init();
 
@@ -1009,7 +1009,7 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_upsert() {
-        use wacore::store::traits::BaseKeyStore;
+        use wacore::store::traits::ProtocolStore as _;
 
         let _ = env_logger::builder().is_test(true).try_init();
 
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_multiple_messages() {
-        use wacore::store::traits::BaseKeyStore;
+        use wacore::store::traits::ProtocolStore as _;
 
         let _ = env_logger::builder().is_test(true).try_init();
 

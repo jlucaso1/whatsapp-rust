@@ -22,7 +22,7 @@ impl Client {
     /// with previously learned LID-PN mappings.
     pub(crate) async fn warm_up_lid_pn_cache(&self) -> Result<(), anyhow::Error> {
         let backend = self.persistence_manager.backend();
-        let entries = backend.get_all_lid_pn_mappings().await?;
+        let entries = backend.get_all_lid_mappings().await?;
 
         if entries.is_empty() {
             debug!("LID-PN cache warm-up: no entries found in storage");
@@ -79,7 +79,7 @@ impl Client {
         };
 
         backend
-            .put_lid_pn_mapping(&storage_entry)
+            .put_lid_mapping(&storage_entry)
             .await
             .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
 

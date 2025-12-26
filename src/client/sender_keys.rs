@@ -64,10 +64,13 @@ impl Client {
         }
 
         let backend = self.persistence_manager.backend();
-        backend
-            .mark_forget_sender_keys(group_jid, &filtered)
-            .await
-            .map_err(|e| anyhow!("{e}"))
+        for participant in &filtered {
+            backend
+                .mark_forget_sender_key(group_jid, participant)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+        }
+        Ok(())
     }
 
     /// Get participants marked for fresh SKDM and consume the marks.

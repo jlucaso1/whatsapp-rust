@@ -233,19 +233,14 @@ impl IdentityKeyStore for Device {
         &self,
         address: &ProtocolAddress,
         identity_key: &IdentityKey,
-        direction: Direction,
+        _direction: Direction,
     ) -> SignalResult<bool> {
-        let key_bytes = identity_key.public_key().public_key_bytes();
-        let key_array: [u8; 32] = key_bytes
-            .try_into()
-            .map_err(|_| SignalProtocolError::InvalidArgument("Invalid key length".into()))?;
-
-        self.backend
-            .is_trusted_identity(&address.to_string(), &key_array, direction)
-            .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("backend is_trusted_identity", e.to_string())
-            })
+        // Trust on first use: if we don't have an identity stored, trust this one
+        // If we have one stored, it must match
+        match self.get_identity(address).await? {
+            None => Ok(true), // Trust on first use
+            Some(stored_identity) => Ok(&stored_identity == identity_key),
+        }
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> SignalResult<Option<IdentityKey>> {
@@ -273,7 +268,33 @@ impl PreKeyStore for Device {
         &self,
         prekey_id: u32,
     ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-        self.backend.load_prekey(prekey_id).await
+        use prost::Message;
+        use wacore::libsignal::protocol::KeyPair;
+        use wacore::libsignal::store::record_helpers::new_pre_key_record;
+
+        match self.backend.load_prekey(prekey_id).await {
+            Ok(Some(bytes)) => {
+                // Try new format first (protobuf-encoded PreKeyRecordStructure)
+                if let Ok(record) = PreKeyRecordStructure::decode(bytes.as_slice()) {
+                    return Ok(Some(record));
+                }
+
+                // Fallback: old format stored just the private key bytes (32 bytes)
+                // Reconstruct the full record by deriving the public key
+                if let Ok(private_key) = PrivateKey::deserialize(&bytes)
+                    && let Ok(public_key) = private_key.public_key()
+                {
+                    let key_pair = KeyPair::new(public_key, private_key);
+                    let record = new_pre_key_record(prekey_id, &key_pair);
+                    return Ok(Some(record));
+                }
+
+                // Could not decode in either format
+                Ok(None)
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Box::new(e) as StoreError),
+        }
     }
 
     async fn store_prekey(
@@ -282,15 +303,26 @@ impl PreKeyStore for Device {
         record: PreKeyRecordStructure,
         uploaded: bool,
     ) -> Result<(), StoreError> {
-        self.backend.store_prekey(prekey_id, record, uploaded).await
+        use prost::Message;
+        let bytes = record.encode_to_vec();
+        self.backend
+            .store_prekey(prekey_id, &bytes, uploaded)
+            .await
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
     async fn contains_prekey(&self, prekey_id: u32) -> Result<bool, StoreError> {
-        self.backend.contains_prekey(prekey_id).await
+        match self.backend.load_prekey(prekey_id).await {
+            Ok(opt) => Ok(opt.is_some()),
+            Err(e) => Err(Box::new(e) as StoreError),
+        }
     }
 
     async fn remove_prekey(&self, prekey_id: u32) -> Result<(), StoreError> {
-        self.backend.remove_prekey(prekey_id).await
+        self.backend
+            .remove_prekey(prekey_id)
+            .await
+            .map_err(|e| Box::new(e) as StoreError)
     }
 }
 

@@ -206,49 +206,16 @@ impl Client {
         debug!("Invalidated device cache for user: {} ({:?})", user, lookup);
     }
 
-    /// Background loop to periodically clean up stale device registry entries.
+    /// Background loop placeholder for device registry cleanup.
+    /// Note: Cleanup functionality was removed as part of trait simplification.
+    /// Device registry entries are managed through normal update/get operations.
     pub(super) async fn device_registry_cleanup_loop(&self) {
-        use tokio::time::{Duration, interval};
-
-        const CLEANUP_INTERVAL_HOURS: u64 = 6;
-        const MAX_AGE_DAYS: i64 = 7;
-        const MAX_AGE_SECS: i64 = MAX_AGE_DAYS * 24 * 60 * 60;
-
-        let mut interval = interval(Duration::from_secs(CLEANUP_INTERVAL_HOURS * 60 * 60));
-
-        loop {
-            tokio::select! {
-                biased;
-                _ = self.shutdown_notifier.notified() => {
-                    debug!(
-                        target: "Client/DeviceRegistry",
-                        "Shutdown signaled, exiting cleanup loop"
-                    );
-                    return;
-                }
-                _ = interval.tick() => {
-                    let backend = self.persistence_manager.backend();
-                    match backend.cleanup_stale_entries(MAX_AGE_SECS).await {
-                        Ok(deleted) => {
-                            if deleted > 0 {
-                                info!(
-                                    target: "Client/DeviceRegistry",
-                                    "Cleaned up {} stale device registry entries (older than {} days)",
-                                    deleted, MAX_AGE_DAYS
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                target: "Client/DeviceRegistry",
-                                "Failed to clean up stale device registry entries: {}",
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        // Simply wait for shutdown signal
+        self.shutdown_notifier.notified().await;
+        debug!(
+            target: "Client/DeviceRegistry",
+            "Shutdown signaled, exiting cleanup loop"
+        );
     }
 
     /// Migrate device registry entries from PN key to LID key.
