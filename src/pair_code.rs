@@ -24,7 +24,7 @@
 //! ## Custom Pairing Code
 //!
 //! You can specify your own 8-character code using Crockford Base32 alphabet
-//! (characters: `123456789ABCDEFGHJKLMNPQRSTVWXYZ` - excludes 0, O, I, L):
+//! (characters: `123456789ABCDEFGHJKLMNPQRSTVWXYZ` - excludes 0, I, O, U):
 //!
 //! ```rust,no_run
 //! use whatsapp_rust::pair_code::PairCodeOptions;

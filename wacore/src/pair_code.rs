@@ -45,7 +45,7 @@ const PAIR_CODE_SALT_SIZE: usize = 32;
 const PAIR_CODE_IV_SIZE: usize = 16;
 
 /// Crockford Base32 alphabet used for pair codes.
-/// Excludes 0, O, I, L to prevent visual confusion.
+/// Excludes 0, I, O, U to prevent visual confusion.
 const CROCKFORD_ALPHABET: &[u8; 32] = b"123456789ABCDEFGHJKLMNPQRSTVWXYZ";
 
 /// Validity duration for pair codes (approximately).
@@ -157,7 +157,7 @@ impl PairCodeUtils {
     /// Generates a random 8-character pair code using Crockford Base32.
     ///
     /// The code consists of characters from `123456789ABCDEFGHJKLMNPQRSTVWXYZ`,
-    /// which excludes 0, O, I, and L to prevent visual confusion.
+    /// which excludes 0, I, O, and U to prevent visual confusion.
     pub fn generate_code() -> String {
         let mut bytes = [0u8; 5];
         rand::rng().fill(&mut bytes);
