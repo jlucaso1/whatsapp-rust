@@ -40,6 +40,8 @@ tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
 signal = ["tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 tokio-native = ["tokio/rt-multi-thread"]
+# Enable tokio-console for async profiling: cargo run --features tokio-console
+tokio-console = ["dep:console-subscriber", "dep:tracing-subscriber", "tokio/tracing"]
 
 [dependencies]
 
@@ -73,6 +75,10 @@ waproto = { workspace = true }
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
 whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
 whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
+
+# Async profiling with tokio-console
+console-subscriber = { version = "0.5", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }

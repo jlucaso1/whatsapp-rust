@@ -46,6 +46,13 @@ impl Client {
             let interval = Duration::from_millis(interval_ms as u64);
 
             tokio::select! {
+                // Prioritize shutdown signal for clean exit
+                biased;
+
+                _ = self.shutdown_notifier.notified() => {
+                    debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
+                    return;
+                }
                 _ = tokio::time::sleep(interval) => {
                     if !self.is_connected() {
                         debug!(target: "Client/Keepalive", "Not connected, exiting keepalive loop.");
@@ -74,10 +81,6 @@ impl Client {
                             return;
                         }
                     }
-                },
-                _ = self.shutdown_notifier.notified() => {
-                    debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
-                    return;
                 }
             }
         }

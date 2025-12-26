@@ -164,28 +164,48 @@ impl TokioWebSocketTransport {
         while let Some(cmd) = send_job_rx.recv().await {
             match cmd {
                 SenderCommand::Send(job) => {
-                    debug!("--> Sending {} bytes", job.data.len());
-                    let result = sink
-                        .send(Message::binary(job.data))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("WebSocket send error: {}", e));
+                    // OPTIMIZATION: Batch drain - process all available jobs in one wake
+                    let mut jobs = vec![job];
+                    while let Ok(cmd) = send_job_rx.try_recv() {
+                        match cmd {
+                            SenderCommand::Send(j) => jobs.push(j),
+                            SenderCommand::Disconnect(response_tx) => {
+                                // Process pending sends first, then disconnect
+                                for job in jobs {
+                                    let result =
+                                        sink.send(Message::binary(job.data)).await.map_err(|e| {
+                                            anyhow::anyhow!("WebSocket send error: {}", e)
+                                        });
+                                    let _ = job.response_tx.send(result);
+                                }
+                                if let Err(e) = sink.close().await {
+                                    error!("Error closing WebSocket: {}", e);
+                                }
+                                let _ = response_tx.send(());
+                                return;
+                            }
+                        }
+                    }
 
-                    // Send result back to caller. Ignore error if receiver was dropped.
-                    let _ = job.response_tx.send(result);
+                    // Send all batched messages
+                    for job in jobs {
+                        debug!("--> Sending {} bytes", job.data.len());
+                        let result = sink
+                            .send(Message::binary(job.data))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("WebSocket send error: {}", e));
+                        let _ = job.response_tx.send(result);
+                    }
                 }
                 SenderCommand::Disconnect(response_tx) => {
                     if let Err(e) = sink.close().await {
                         error!("Error closing WebSocket: {}", e);
                     }
-                    // Signal completion
                     let _ = response_tx.send(());
-                    // Exit the task after disconnect
                     break;
                 }
             }
         }
-
-        // Channel closed - transport was dropped, task exits naturally
     }
 }
 
@@ -279,8 +299,8 @@ impl TransportFactory for TokioWebSocketTransportFactory {
 
         let (sink, stream) = client.split();
 
-        // Create event channel
-        let (event_tx, event_rx) = async_channel::bounded(10000);
+        // Create event channel - 256 provides good throughput with backpressure
+        let (event_tx, event_rx) = async_channel::bounded(256);
 
         // Create transport - just a simple byte pipe
         let transport = Arc::new(TokioWebSocketTransport::new(sink));
@@ -303,11 +323,13 @@ async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<Transpo
         match stream.next().await {
             Some(Ok(msg)) => {
                 if msg.is_binary() {
-                    let data = msg.as_payload();
-                    debug!("<-- Received WebSocket data: {} bytes", data.len());
-                    // Just forward the raw bytes - no framing logic
+                    // OPTIMIZATION: Use into_payload() + From<Payload> for zero-copy
+                    // conversion instead of Bytes::copy_from_slice()
+                    let payload = msg.into_payload();
+                    debug!("<-- Received WebSocket data: {} bytes", payload.len());
+                    // Zero-copy: Payload -> Bytes (just moves the internal Bytes)
                     if event_tx
-                        .send(TransportEvent::DataReceived(Bytes::copy_from_slice(data)))
+                        .send(TransportEvent::DataReceived(Bytes::from(payload)))
                         .await
                         .is_err()
                     {

@@ -193,17 +193,25 @@ impl NoiseSocket {
 
         loop {
             tokio::select! {
+                // OPTIMIZATION: biased; checks branches in order, reducing poll overhead.
+                // Combined with batch draining below, this significantly reduces wakeups.
+                biased;
+
                 // Receive new jobs and forward to workers
                 job = job_rx.recv() => {
                     match job {
                         Some(job) => {
                             if worker_tx.send(job).await.is_err() {
-                                // All workers died, exit
                                 break;
+                            }
+                            // OPTIMIZATION: Batch drain - process all available jobs in one wake
+                            while let Ok(job) = job_rx.try_recv() {
+                                if worker_tx.send(job).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                         None => {
-                            // encrypt_and_send channel closed, start shutdown
                             break;
                         }
                     }
@@ -213,6 +221,12 @@ impl NoiseSocket {
                     // Insert into reorder buffer and send any consecutive ready frames
                     for ready_frame in reorder_buffer.insert(frame) {
                         Self::send_frame(&transport, ready_frame).await;
+                    }
+                    // OPTIMIZATION: Batch drain - process all available frames in one wake
+                    while let Ok(frame) = encrypted_rx.try_recv() {
+                        for ready_frame in reorder_buffer.insert(frame) {
+                            Self::send_frame(&transport, ready_frame).await;
+                        }
                     }
                 }
             }

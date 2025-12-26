@@ -535,22 +535,12 @@ impl Client {
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
                                     if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
-                                        // Handle critical nodes synchronously to avoid race conditions.
-                                        // <success> must be processed inline to ensure is_logged_in state
-                                        // is set before checking expected_disconnect or spawning other tasks.
-                                        let is_critical = matches!(node.tag.as_str(), "success" | "failure" | "stream:error");
-
-                                        if is_critical {
-                                            // Process critical nodes inline
-                                            self.process_decrypted_node(node).await;
-                                        } else {
-                                            // Spawn non-critical node processing as a separate task
-                                            // to allow concurrent handling (Signal protocol work, etc.)
-                                            let client = self.clone();
-                                            tokio::spawn(async move {
-                                                client.process_decrypted_node(node).await;
-                                            });
-                                        }
+                                        // OPTIMIZATION: Process all nodes inline instead of spawning per-node.
+                                        // Handlers are designed to be quick - they enqueue work to their
+                                        // own task queues internally (e.g., MessageHandler spawns workers).
+                                        // The previous per-node spawn created 1632-byte tasks with only
+                                        // 20-70µs of actual work, wasting memory and scheduler cycles.
+                                        self.process_decrypted_node(node).await;
                                     }
 
                                     // Check if we should exit after processing (e.g., after 515 stream error)
