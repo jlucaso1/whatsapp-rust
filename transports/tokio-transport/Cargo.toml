@@ -1,6 +1,6 @@
 [package]
 name = "whatsapp-rust-tokio-transport"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
@@ -39,5 +39,5 @@ tokio-websockets = { version = "0.13.0", features = [
     "rand",
     "ring",
 ] }
-wacore = { path = "../../wacore", version = "0.1.0" }
+wacore = { path = "../../wacore", version = "0.2.0" }
 webpki-roots = "1.0.4"
