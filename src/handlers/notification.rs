@@ -94,6 +94,11 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // These are sent when a user adds, removes, or updates a device
             handle_devices_notification(client, node).await;
         }
+        "link_code_companion_reg" => {
+            // Handle pair code notification (stage 2 of pair code authentication)
+            // This is sent when the user enters the code on their phone
+            crate::pair_code::handle_pair_code_notification(client, node).await;
+        }
         _ => {
             warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
             client

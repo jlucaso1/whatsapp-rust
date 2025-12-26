@@ -153,6 +153,10 @@ pub struct Client {
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 
+    /// State machine for pair code authentication flow.
+    /// Tracks the pending pair code request and ephemeral keys.
+    pub(crate) pair_code_state: Arc<Mutex<wacore::pair_code::PairCodeState>>,
+
     pub(crate) send_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 
     /// Custom handlers for encrypted message types
@@ -267,6 +271,7 @@ impl Client {
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
+            pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
             send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),

@@ -15,7 +15,7 @@ aes-gcm = { version = "0.10.2", features = [
 ], default-features = false }
 anyhow = { version = "1.0", default-features = false }
 async-channel = { version = "2.5.0", default-features = false }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.5", default-features = false }
 
@@ -24,6 +24,7 @@ chrono = { version = "0.4", features = [
     "now",
     "serde",
 ], default-features = false }
+ctr = { version = "0.9", default-features = false }
 flate2 = { workspace = true, features = ["zlib-rs"], default-features = false }
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 hkdf = "0.12.3"
@@ -31,6 +32,9 @@ hmac = { version = "0.12.1", features = ["reset"] }
 log = "0.4.29"
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
+
+# Pair code authentication
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 prost = { version = "0.14.1", default-features = false }
 protobuf = { version = "3", default-features = false }
 

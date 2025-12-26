@@ -120,9 +120,13 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 }
 
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
+    // Cancel QR code rotation if active
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
         let _ = tx.send(());
     }
+
+    // Clear pair code state if active
+    *client.pair_code_state.lock().await = wacore::pair_code::PairCodeState::Completed;
 
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),

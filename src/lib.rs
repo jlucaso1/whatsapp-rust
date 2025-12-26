@@ -13,6 +13,7 @@ pub mod keepalive;
 pub mod mediaconn;
 pub mod message;
 pub mod pair;
+pub mod pair_code;
 pub mod request;
 pub mod send;
 pub mod session;
