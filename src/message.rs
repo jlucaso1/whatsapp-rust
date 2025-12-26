@@ -1177,10 +1177,7 @@ impl Client {
                     timestamp: components.timestamp,
                 };
 
-                if let Err(e) = key_store
-                    .set_app_state_sync_key(components.key_id, new_key)
-                    .await
-                {
+                if let Err(e) = key_store.set_sync_key(components.key_id, new_key).await {
                     log::error!(
                         "Failed to store app state sync key {:?}: {:?}",
                         hex::encode(components.key_id),

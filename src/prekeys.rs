@@ -121,10 +121,17 @@ impl Client {
 
         // Find the highest existing pre-key ID to start from
         for id in 1..=16777215u32 {
-            if backend.contains_prekey(id).await.unwrap_or(false) {
-                highest_existing_id = id;
-            } else {
-                break; // Found first gap
+            match backend.load_prekey(id).await {
+                Ok(Some(_)) => {
+                    highest_existing_id = id;
+                }
+                Ok(None) => {
+                    break; // Found first gap
+                }
+                Err(e) => {
+                    // Don't silently ignore DB errors - could lead to ID collisions
+                    return Err(anyhow::anyhow!("Failed to load prekey {}: {}", id, e));
+                }
             }
         }
 
@@ -191,7 +198,9 @@ impl Client {
         // Step 5: Store the new pre-keys using existing backend interface
         for (id, record) in keys_to_upload {
             // Mark as uploaded since the IQ was successful
-            if let Err(e) = backend.store_prekey(id, record, true).await {
+            use prost::Message;
+            let record_bytes = record.encode_to_vec();
+            if let Err(e) = backend.store_prekey(id, &record_bytes, true).await {
                 log::warn!("Failed to store prekey id {}: {:?}", id, e);
             }
         }

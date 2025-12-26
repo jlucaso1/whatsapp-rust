@@ -39,7 +39,7 @@ impl AppStateProcessor {
         if let Some(cached) = self.key_cache.lock().await.get(&id_b64).cloned() {
             return Ok(cached);
         }
-        let key_opt = self.backend.get_app_state_sync_key(key_id).await?;
+        let key_opt = self.backend.get_sync_key(key_id).await?;
         let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
         let expanded: ExpandedAppStateKeys = expand_app_state_keys(&key.key_data);
         self.key_cache.lock().await.insert(id_b64, expanded.clone());
@@ -84,7 +84,7 @@ impl AppStateProcessor {
         // Pre-fetch all keys we'll need
         self.prefetch_keys(&pl).await?;
 
-        let mut state = self.backend.get_app_state_version(pl.name.as_str()).await?;
+        let mut state = self.backend.get_version(pl.name.as_str()).await?;
         let mut new_mutations: Vec<Mutation> = Vec::new();
         let collection_name = pl.name.as_str();
 
@@ -118,15 +118,11 @@ impl AppStateProcessor {
 
             // Persist state and MACs
             self.backend
-                .set_app_state_version(collection_name, state.clone())
+                .set_version(collection_name, state.clone())
                 .await?;
             if !result.mutation_macs.is_empty() {
                 self.backend
-                    .put_app_state_mutation_macs(
-                        collection_name,
-                        state.version,
-                        &result.mutation_macs,
-                    )
+                    .put_mutation_macs(collection_name, state.version, &result.mutation_macs)
                     .await?;
             }
         }
@@ -151,7 +147,7 @@ impl AppStateProcessor {
             for index_mac in need_db_lookup {
                 if let Some(mac) = self
                     .backend
-                    .get_app_state_mutation_mac(collection_name, &index_mac)
+                    .get_mutation_mac(collection_name, &index_mac)
                     .await?
                 {
                     db_prev.insert(index_mac, mac);
@@ -190,16 +186,16 @@ impl AppStateProcessor {
 
             // Persist state and MACs
             self.backend
-                .set_app_state_version(collection_name, state.clone())
+                .set_version(collection_name, state.clone())
                 .await?;
             if !result.removed_index_macs.is_empty() {
                 self.backend
-                    .delete_app_state_mutation_macs(collection_name, &result.removed_index_macs)
+                    .delete_mutation_macs(collection_name, &result.removed_index_macs)
                     .await?;
             }
             if !result.added_macs.is_empty() {
                 self.backend
-                    .put_app_state_mutation_macs(collection_name, state.version, &result.added_macs)
+                    .put_mutation_macs(collection_name, state.version, &result.added_macs)
                     .await?;
             }
         }
@@ -207,7 +203,7 @@ impl AppStateProcessor {
         // Handle case where we only have a snapshot and no patches
         if pl.patches.is_empty() && pl.snapshot.is_some() {
             self.backend
-                .set_app_state_version(collection_name, state.clone())
+                .set_version(collection_name, state.clone())
                 .await?;
         }
 
@@ -218,7 +214,7 @@ impl AppStateProcessor {
         let key_ids = collect_key_ids_from_patch_list(pl.snapshot.as_ref(), &pl.patches);
         let mut missing = Vec::new();
         for id in key_ids {
-            if self.backend.get_app_state_sync_key(&id).await?.is_none() {
+            if self.backend.get_sync_key(&id).await?.is_none() {
                 missing.push(id);
             }
         }
@@ -238,7 +234,7 @@ impl AppStateProcessor {
     {
         let mut all = Vec::new();
         loop {
-            let state = self.backend.get_app_state_version(name.as_str()).await?;
+            let state = self.backend.get_version(name.as_str()).await?;
             let node = driver.fetch_collection(name, state.version).await?;
             let (mut muts, _new_state, list) = self
                 .decode_patch_list(&node, &download, validate_macs)
@@ -260,7 +256,6 @@ pub trait AppStateSyncDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::traits::AppStateStore;
     use prost::Message;
     use std::collections::HashMap;
     use wacore::appstate::WAPATCH_INTEGRITY;
@@ -270,8 +265,10 @@ mod tests {
     use wacore::appstate::processor::AppStateMutationMAC;
     use wacore::libsignal::crypto::aes_256_cbc_encrypt_into;
     use wacore::store::error::Result as StoreResult;
-    use wacore::store::traits::AppStateKeyStore as _;
-    use wacore::store::traits::AppStateSyncKey;
+    use wacore::store::traits::{
+        AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
+        ProtocolStore, SignalStore,
+    };
 
     type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
 
@@ -282,94 +279,18 @@ mod tests {
         keys: Arc<Mutex<HashMap<Vec<u8>, AppStateSyncKey>>>,
     }
 
+    // Implement SignalStore - Signal protocol cryptographic operations
     #[async_trait]
-    impl AppStateStore for MockBackend {
-        async fn get_app_state_version(&self, name: &str) -> StoreResult<HashState> {
-            Ok(self
-                .versions
-                .lock()
-                .await
-                .get(name)
-                .cloned()
-                .unwrap_or_default())
-        }
-        async fn set_app_state_version(&self, name: &str, state: HashState) -> StoreResult<()> {
-            self.versions.lock().await.insert(name.to_string(), state);
-            Ok(())
-        }
-        async fn get_app_state_mutation_mac(
-            &self,
-            name: &str,
-            index_mac: &[u8],
-        ) -> StoreResult<Option<Vec<u8>>> {
-            Ok(self
-                .macs
-                .lock()
-                .await
-                .get(&(name.to_string(), index_mac.to_vec()))
-                .cloned())
-        }
-        async fn put_app_state_mutation_macs(
-            &self,
-            name: &str,
-            _version: u64,
-            mutations: &[AppStateMutationMAC],
-        ) -> StoreResult<()> {
-            let mut macs = self.macs.lock().await;
-            for m in mutations {
-                macs.insert((name.to_string(), m.index_mac.clone()), m.value_mac.clone());
-            }
-            Ok(())
-        }
-        async fn delete_app_state_mutation_macs(
-            &self,
-            _name: &str,
-            _index_macs: &[Vec<u8>],
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl crate::store::traits::AppStateKeyStore for MockBackend {
-        async fn get_app_state_sync_key(
-            &self,
-            key_id: &[u8],
-        ) -> StoreResult<Option<AppStateSyncKey>> {
-            Ok(self.keys.lock().await.get(key_id).cloned())
-        }
-        async fn set_app_state_sync_key(
-            &self,
-            key_id: &[u8],
-            key: AppStateSyncKey,
-        ) -> StoreResult<()> {
-            self.keys.lock().await.insert(key_id.to_vec(), key);
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl crate::store::traits::IdentityStore for MockBackend {
+    impl SignalStore for MockBackend {
         async fn put_identity(&self, _: &str, _: [u8; 32]) -> StoreResult<()> {
             Ok(())
-        }
-        async fn delete_identity(&self, _: &str) -> StoreResult<()> {
-            Ok(())
-        }
-        async fn is_trusted_identity(
-            &self,
-            _: &str,
-            _: &[u8; 32],
-            _: wacore::libsignal::protocol::Direction,
-        ) -> StoreResult<bool> {
-            Ok(true)
         }
         async fn load_identity(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
             Ok(None)
         }
-    }
-    #[async_trait]
-    impl crate::store::traits::SessionStore for MockBackend {
+        async fn delete_identity(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
         async fn get_session(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
             Ok(None)
         }
@@ -379,83 +300,27 @@ mod tests {
         async fn delete_session(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
-        async fn has_session(&self, _: &str) -> StoreResult<bool> {
-            Ok(false)
-        }
-    }
-    #[async_trait]
-    impl wacore::libsignal::store::PreKeyStore for MockBackend {
-        async fn load_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<
-            Option<wa::PreKeyRecordStructure>,
-            Box<dyn std::error::Error + Send + Sync>,
-        > {
-            Ok(None)
-        }
-        async fn store_prekey(
-            &self,
-            _: u32,
-            _: wa::PreKeyRecordStructure,
-            _: bool,
-        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        async fn store_prekey(&self, _: u32, _: &[u8], _: bool) -> StoreResult<()> {
             Ok(())
         }
-        async fn contains_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(false)
-        }
-        async fn remove_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            Ok(())
-        }
-    }
-    #[async_trait]
-    impl wacore::libsignal::store::SignedPreKeyStore for MockBackend {
-        async fn load_signed_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<
-            Option<wa::SignedPreKeyRecordStructure>,
-            Box<dyn std::error::Error + Send + Sync>,
-        > {
+        async fn load_prekey(&self, _: u32) -> StoreResult<Option<Vec<u8>>> {
             Ok(None)
         }
-        async fn load_signed_prekeys(
-            &self,
-        ) -> std::result::Result<
-            Vec<wa::SignedPreKeyRecordStructure>,
-            Box<dyn std::error::Error + Send + Sync>,
-        > {
+        async fn remove_prekey(&self, _: u32) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn store_signed_prekey(&self, _: u32, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn load_signed_prekey(&self, _: u32) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn load_all_signed_prekeys(&self) -> StoreResult<Vec<(u32, Vec<u8>)>> {
             Ok(vec![])
         }
-        async fn store_signed_prekey(
-            &self,
-            _: u32,
-            _: wa::SignedPreKeyRecordStructure,
-        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        async fn remove_signed_prekey(&self, _: u32) -> StoreResult<()> {
             Ok(())
         }
-        async fn contains_signed_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(false)
-        }
-        async fn remove_signed_prekey(
-            &self,
-            _: u32,
-        ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            Ok(())
-        }
-    }
-    #[async_trait]
-    impl crate::store::traits::SenderKeyStoreHelper for MockBackend {
         async fn put_sender_key(&self, _: &str, _: &[u8]) -> StoreResult<()> {
             Ok(())
         }
@@ -467,169 +332,119 @@ mod tests {
         }
     }
 
+    // Implement AppSyncStore - WhatsApp app state synchronization
     #[async_trait]
-    impl wacore::store::traits::SenderKeyDistributionStore for MockBackend {
-        async fn get_skdm_recipients(&self, _group_jid: &str) -> StoreResult<Vec<String>> {
-            Ok(vec![])
+    impl AppSyncStore for MockBackend {
+        async fn get_sync_key(&self, key_id: &[u8]) -> StoreResult<Option<AppStateSyncKey>> {
+            Ok(self.keys.lock().await.get(key_id).cloned())
         }
-        async fn add_skdm_recipients(
-            &self,
-            _group_jid: &str,
-            _device_jids: &[String],
-        ) -> StoreResult<()> {
+        async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> StoreResult<()> {
+            self.keys.lock().await.insert(key_id.to_vec(), key);
             Ok(())
         }
-        async fn clear_skdm_recipients(&self, _group_jid: &str) -> StoreResult<()> {
+        async fn get_version(&self, name: &str) -> StoreResult<HashState> {
+            Ok(self
+                .versions
+                .lock()
+                .await
+                .get(name)
+                .cloned()
+                .unwrap_or_default())
+        }
+        async fn set_version(&self, name: &str, state: HashState) -> StoreResult<()> {
+            self.versions.lock().await.insert(name.to_string(), state);
+            Ok(())
+        }
+        async fn put_mutation_macs(
+            &self,
+            name: &str,
+            _version: u64,
+            mutations: &[AppStateMutationMAC],
+        ) -> StoreResult<()> {
+            let mut macs = self.macs.lock().await;
+            for m in mutations {
+                macs.insert((name.to_string(), m.index_mac.clone()), m.value_mac.clone());
+            }
+            Ok(())
+        }
+        async fn get_mutation_mac(
+            &self,
+            name: &str,
+            index_mac: &[u8],
+        ) -> StoreResult<Option<Vec<u8>>> {
+            Ok(self
+                .macs
+                .lock()
+                .await
+                .get(&(name.to_string(), index_mac.to_vec()))
+                .cloned())
+        }
+        async fn delete_mutation_macs(&self, _: &str, _: &[Vec<u8>]) -> StoreResult<()> {
             Ok(())
         }
     }
 
+    // Implement ProtocolStore - WhatsApp Web protocol alignment
     #[async_trait]
-    impl crate::store::traits::DevicePersistence for MockBackend {
-        async fn save_device_data(&self, _device_data: &wacore::store::Device) -> StoreResult<()> {
+    impl ProtocolStore for MockBackend {
+        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn add_skdm_recipients(&self, _: &str, _: &[String]) -> StoreResult<()> {
             Ok(())
         }
-
-        async fn save_device_data_for_device(
-            &self,
-            _device_id: i32,
-            _device_data: &wacore::store::Device,
-        ) -> StoreResult<()> {
+        async fn clear_skdm_recipients(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
+        async fn get_lid_mapping(&self, _: &str) -> StoreResult<Option<LidPnMappingEntry>> {
+            Ok(None)
+        }
+        async fn get_pn_mapping(&self, _: &str) -> StoreResult<Option<LidPnMappingEntry>> {
+            Ok(None)
+        }
+        async fn put_lid_mapping(&self, _: &LidPnMappingEntry) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_all_lid_mappings(&self) -> StoreResult<Vec<LidPnMappingEntry>> {
+            Ok(vec![])
+        }
+        async fn save_base_key(&self, _: &str, _: &str, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn has_same_base_key(&self, _: &str, _: &str, _: &[u8]) -> StoreResult<bool> {
+            Ok(false)
+        }
+        async fn delete_base_key(&self, _: &str, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn update_device_list(&self, _: DeviceListRecord) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_devices(&self, _: &str) -> StoreResult<Option<DeviceListRecord>> {
+            Ok(None)
+        }
+        async fn mark_forget_sender_key(&self, _: &str, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn consume_forget_marks(&self, _: &str) -> StoreResult<Vec<String>> {
+            Ok(vec![])
+        }
+    }
 
-        async fn load_device_data(&self) -> StoreResult<Option<wacore::store::Device>> {
+    // Implement DeviceStore - Device persistence
+    #[async_trait]
+    impl DeviceStore for MockBackend {
+        async fn save(&self, _: &wacore::store::Device) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn load(&self) -> StoreResult<Option<wacore::store::Device>> {
             Ok(Some(wacore::store::Device::new()))
         }
-
-        async fn load_device_data_for_device(
-            &self,
-            _device_id: i32,
-        ) -> StoreResult<Option<wacore::store::Device>> {
-            Ok(Some(wacore::store::Device::new()))
-        }
-
-        async fn device_exists(&self, _device_id: i32) -> StoreResult<bool> {
+        async fn exists(&self) -> StoreResult<bool> {
             Ok(true)
         }
-
-        async fn create_new_device(&self) -> StoreResult<i32> {
+        async fn create(&self) -> StoreResult<i32> {
             Ok(1)
-        }
-    }
-
-    #[async_trait]
-    impl wacore::store::traits::LidPnMappingStore for MockBackend {
-        async fn get_lid_pn_mapping_by_lid(
-            &self,
-            _lid: &str,
-        ) -> StoreResult<Option<wacore::store::traits::LidPnMappingEntry>> {
-            Ok(None)
-        }
-
-        async fn get_lid_pn_mapping_by_phone(
-            &self,
-            _phone: &str,
-        ) -> StoreResult<Option<wacore::store::traits::LidPnMappingEntry>> {
-            Ok(None)
-        }
-
-        async fn put_lid_pn_mapping(
-            &self,
-            _entry: &wacore::store::traits::LidPnMappingEntry,
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn get_all_lid_pn_mappings(
-            &self,
-        ) -> StoreResult<Vec<wacore::store::traits::LidPnMappingEntry>> {
-            Ok(vec![])
-        }
-
-        async fn delete_lid_pn_mapping(&self, _lid: &str) -> StoreResult<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl wacore::store::traits::BaseKeyStore for MockBackend {
-        async fn save_base_key(
-            &self,
-            _address: &str,
-            _message_id: &str,
-            _base_key: &[u8],
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn has_same_base_key(
-            &self,
-            _address: &str,
-            _message_id: &str,
-            _current_base_key: &[u8],
-        ) -> StoreResult<bool> {
-            Ok(false)
-        }
-
-        async fn delete_base_key(&self, _address: &str, _message_id: &str) -> StoreResult<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl wacore::store::traits::DeviceRegistryStore for MockBackend {
-        async fn update_device_list(
-            &self,
-            _record: wacore::store::traits::DeviceListRecord,
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn has_device(&self, _user: &str, _device_id: u32) -> StoreResult<bool> {
-            Ok(true)
-        }
-
-        async fn get_devices(
-            &self,
-            _user: &str,
-        ) -> StoreResult<Option<wacore::store::traits::DeviceListRecord>> {
-            Ok(None)
-        }
-
-        async fn cleanup_stale_entries(&self, _max_age_secs: i64) -> StoreResult<u64> {
-            Ok(0)
-        }
-    }
-
-    #[async_trait]
-    impl wacore::store::traits::SenderKeyStatusStore for MockBackend {
-        async fn mark_forget_sender_key(
-            &self,
-            _group_jid: &str,
-            _participant: &str,
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn mark_forget_sender_keys(
-            &self,
-            _group_jid: &str,
-            _participants: &[String],
-        ) -> StoreResult<()> {
-            Ok(())
-        }
-
-        async fn consume_forget_marks(&self, _group_jid: &str) -> StoreResult<Vec<String>> {
-            Ok(vec![])
-        }
-
-        async fn needs_fresh_skdm(
-            &self,
-            _group_jid: &str,
-            _participant: &str,
-        ) -> StoreResult<bool> {
-            Ok(false)
         }
     }
 
@@ -682,7 +497,7 @@ mod tests {
             ..Default::default()
         };
         backend
-            .set_app_state_sync_key(&key_id_bytes, sync_key)
+            .set_sync_key(&key_id_bytes, sync_key)
             .await
             .expect("test backend should accept sync key");
 
@@ -710,7 +525,7 @@ mod tests {
             initial_state.update_hash(std::slice::from_ref(&original_mutation), |_, _| Ok(None));
         assert!(res.is_ok() && warnings.is_empty());
         backend
-            .set_app_state_version(collection_name.as_str(), initial_state.clone())
+            .set_version(collection_name.as_str(), initial_state.clone())
             .await
             .expect("test backend should accept app state version");
 
@@ -723,7 +538,7 @@ mod tests {
             .expect("value should have blob");
         let original_value_mac = original_value_blob[original_value_blob.len() - 32..].to_vec();
         backend
-            .put_app_state_mutation_macs(
+            .put_mutation_macs(
                 collection_name.as_str(),
                 1,
                 &[AppStateMutationMAC {

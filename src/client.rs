@@ -1163,7 +1163,7 @@ impl Client {
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
-        let mut state = backend.get_app_state_version(name.as_str()).await?;
+        let mut state = backend.get_version(name.as_str()).await?;
         if state.version == 0 {
             full_sync = true;
         }
@@ -1273,9 +1273,7 @@ impl Client {
             debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
         }
 
-        backend
-            .set_app_state_version(name.as_str(), state.clone())
-            .await?;
+        backend.set_version(name.as_str(), state.clone()).await?;
 
         debug!(target: "Client/AppState", "Completed and saved app state sync for {:?} (final version={})", name, state.version);
         Ok(())

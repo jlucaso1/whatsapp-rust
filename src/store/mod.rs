@@ -7,17 +7,7 @@ pub mod traits;
 
 // Re-export from the sqlite-storage crate when the feature is enabled
 #[cfg(feature = "sqlite-storage")]
-pub use whatsapp_rust_sqlite_storage::{DeviceAwareSqliteStore, SqliteStore};
-
-// Placeholder modules for when sqlite-storage feature is disabled
-#[cfg(not(feature = "sqlite-storage"))]
-pub mod sqlite_store {}
-
-#[cfg(not(feature = "sqlite-storage"))]
-pub mod device_aware_store {}
-
-#[cfg(not(feature = "sqlite-storage"))]
-pub mod schema {}
+pub use whatsapp_rust_sqlite_storage::SqliteStore;
 
 pub use crate::store::traits::*;
 use std::ops::{Deref, DerefMut};
