@@ -121,10 +121,17 @@ impl Client {
 
         // Find the highest existing pre-key ID to start from
         for id in 1..=16777215u32 {
-            if backend.load_prekey(id).await.unwrap_or(None).is_some() {
-                highest_existing_id = id;
-            } else {
-                break; // Found first gap
+            match backend.load_prekey(id).await {
+                Ok(Some(_)) => {
+                    highest_existing_id = id;
+                }
+                Ok(None) => {
+                    break; // Found first gap
+                }
+                Err(e) => {
+                    // Don't silently ignore DB errors - could lead to ID collisions
+                    return Err(anyhow::anyhow!("Failed to load prekey {}: {}", id, e));
+                }
             }
         }
 

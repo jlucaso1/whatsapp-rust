@@ -169,7 +169,6 @@ impl Bot {
 pub struct BotBuilder {
     event_handler: Option<EventHandlerCallback>,
     custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
-    device_id: Option<i32>,
     // The only way to configure storage
     backend: Option<Arc<dyn Backend>>,
     transport_factory: Option<Arc<dyn crate::transport::TransportFactory>>,
@@ -184,7 +183,6 @@ impl BotBuilder {
         Self {
             event_handler: None,
             custom_enc_handlers: HashMap::new(),
-            device_id: None,
             backend: None,
             transport_factory: None,
             http_client: None,
@@ -219,13 +217,6 @@ impl BotBuilder {
     {
         self.custom_enc_handlers
             .insert(enc_type.into(), Arc::new(handler));
-        self
-    }
-
-    /// Specify which device ID to use for multi-account scenarios.
-    /// If not specified, single device mode will be used.
-    pub fn for_device(mut self, device_id: i32) -> Self {
-        self.device_id = Some(device_id);
         self
     }
 
@@ -416,9 +407,6 @@ impl BotBuilder {
 
         // Note: For multi-account mode, create the backend with SqliteStore::new_for_device()
         // before passing it to with_backend()
-        if self.device_id.is_some() {
-            info!("Multi-account mode: device_id should be set at SqliteStore construction level");
-        }
         let persistence_manager = Arc::new(
             PersistenceManager::new(backend)
                 .await
