@@ -55,7 +55,7 @@ fn main() {
         .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
-        let backend = match SqliteStore::new("whatsapp2.db").await {
+        let backend = match SqliteStore::new("whatsapp.db").await {
             Ok(store) => Arc::new(store),
             Err(e) => {
                 error!("Failed to create SQLite backend: {}", e);

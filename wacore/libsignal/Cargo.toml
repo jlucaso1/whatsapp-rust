@@ -13,7 +13,7 @@ aes-gcm = { version = "0.10.2", features = [
   "aes",
 ], default-features = false }
 arrayref = "0.3.9"
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 cbc = { version = "0.1.2", features = ["alloc"] }
 chrono = { version = "0.4", features = [
   "now",
