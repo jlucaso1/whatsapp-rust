@@ -98,6 +98,9 @@ impl PersistenceManager {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    // Prioritize immediate save requests over interval timer
+                    biased;
+
                     _ = self.save_notify.notified() => {
                         debug!("Save notification received.");
                     }

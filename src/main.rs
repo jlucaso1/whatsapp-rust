@@ -1,4 +1,6 @@
-use chrono::{Local, Utc};
+#[cfg(not(feature = "tokio-console"))]
+use chrono::Local;
+use chrono::Utc;
 use log::{error, info};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -21,6 +23,10 @@ use whatsapp_rust_ureq_http_client::UreqHttpClient;
 //   cargo run -- -p 15551234567                    # Short form
 //   cargo run -- -p 15551234567 --code MYCODE12    # Custom 8-char pair code
 //   cargo run -- -p 15551234567 -c MYCODE12        # Short form
+//
+// With tokio-console profiling:
+//   cargo run -r --features tokio-console
+//   # Then in another terminal: tokio-console
 
 fn main() {
     // Parse CLI arguments for phone number and optional custom code
@@ -35,6 +41,8 @@ fn main() {
         }
         eprintln!("Will use pair code authentication (concurrent with QR)");
     }
+
+    #[cfg(not(feature = "tokio-console"))]
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
             use std::io::Write;
@@ -53,6 +61,17 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime");
+
+    // With tokio-console: init subscriber inside runtime context
+    #[cfg(feature = "tokio-console")]
+    {
+        let _guard = rt.enter();
+        console_subscriber::ConsoleLayer::builder()
+            .server_addr(([127, 0, 0, 1], 6669))
+            .init();
+        eprintln!("tokio-console server started on http://127.0.0.1:6669");
+        eprintln!("Run `tokio-console` in another terminal to connect.");
+    }
 
     rt.block_on(async {
         let backend = match SqliteStore::new("whatsapp.db").await {

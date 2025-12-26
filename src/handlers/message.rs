@@ -60,8 +60,8 @@ impl StanzaHandler for MessageHandler {
             .message_queues
             .get_with_by_ref(&chat_id, async {
                 // Create a channel with backpressure
-                // Increased capacity to handle high message rates without blocking
-                let (tx, mut rx) = mpsc::channel::<Arc<Node>>(10000);
+                // Capacity of 256 provides good throughput while enabling backpressure
+                let (tx, mut rx) = mpsc::channel::<Arc<Node>>(256);
 
                 let client_for_worker = client.clone();
 
@@ -70,12 +70,14 @@ impl StanzaHandler for MessageHandler {
                 let queues_for_cleanup = client.message_queues.clone();
 
                 // Spawn a worker task that processes messages sequentially for this chat
+                // OPTIMIZATION: Box the future to reduce task stack frame size
+                // (handle_encrypted_message has large crypto buffers)
                 tokio::spawn(async move {
                     while let Some(msg_node) = rx.recv().await {
-                        client_for_worker
-                            .clone()
-                            .handle_encrypted_message(msg_node)
-                            .await;
+                        let client = client_for_worker.clone();
+                        // Box::pin reduces the spawned task size by moving the large
+                        // handle_encrypted_message future to the heap
+                        Box::pin(client.handle_encrypted_message(msg_node)).await;
                     }
                     // Clean up when channel closes to prevent memory leaks
                     queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;
