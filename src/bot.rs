@@ -126,33 +126,34 @@ impl Bot {
         });
         self.client.core.event_bus.add_handler(handler);
 
-        // If pair code options are set, spawn a task to request pair code after connecting
+        // If pair code options are set, spawn a task to request pair code after socket is ready
         if let Some(options) = self.pair_code_options.take() {
             let client_for_pair = self.client.clone();
             tokio::spawn(async move {
-                // Wait for connection to be established
-                // We'll try up to 30 seconds for the connection
-                for _ in 0..60 {
-                    if client_for_pair.is_connected() {
-                        // Check if already logged in
-                        if client_for_pair.is_logged_in() {
-                            info!(target: "Bot/PairCode", "Already logged in, skipping pair code request");
-                            return;
-                        }
-                        // Request pair code
-                        match client_for_pair.pair_with_code(options).await {
-                            Ok(code) => {
-                                info!(target: "Bot/PairCode", "Pair code generated: {}", code);
-                            }
-                            Err(e) => {
-                                warn!(target: "Bot/PairCode", "Failed to request pair code: {}", e);
-                            }
-                        }
-                        return;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // Wait for socket to be ready (before login) with 30 second timeout
+                if let Err(e) = client_for_pair
+                    .wait_for_socket(std::time::Duration::from_secs(30))
+                    .await
+                {
+                    warn!(target: "Bot/PairCode", "Timeout waiting for socket: {}", e);
+                    return;
                 }
-                warn!(target: "Bot/PairCode", "Timeout waiting for connection to request pair code");
+
+                // Check if already logged in (paired via QR or existing session)
+                if client_for_pair.is_logged_in() {
+                    info!(target: "Bot/PairCode", "Already logged in, skipping pair code request");
+                    return;
+                }
+
+                // Request pair code
+                match client_for_pair.pair_with_code(options).await {
+                    Ok(code) => {
+                        info!(target: "Bot/PairCode", "Pair code generated: {}", code);
+                    }
+                    Err(e) => {
+                        warn!(target: "Bot/PairCode", "Failed to request pair code: {}", e);
+                    }
+                }
             });
         }
 

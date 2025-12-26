@@ -150,6 +150,12 @@ pub struct Client {
     pub(crate) offline_sync_notifier: Arc<Notify>,
     /// Flag indicating offline sync has completed (received ib offline stanza).
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
+    /// Notifier for when the noise socket is established (before login).
+    /// Use this to wait for the socket to be ready for sending messages.
+    pub(crate) socket_ready_notifier: Arc<Notify>,
+    /// Notifier for when the client is fully connected and logged in.
+    /// Triggered after Event::Connected is dispatched.
+    pub(crate) connected_notifier: Arc<Notify>,
     pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
     pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
 
@@ -269,6 +275,8 @@ impl Client {
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             offline_sync_notifier: Arc::new(Notify::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
+            socket_ready_notifier: Arc::new(Notify::new()),
+            connected_notifier: Arc::new(Notify::new()),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
@@ -464,6 +472,9 @@ impl Client {
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
         *self.noise_socket.lock().await = Some(noise_socket);
+
+        // Notify waiters that socket is ready (before login)
+        self.socket_ready_notifier.notify_waiters();
 
         let client_clone = self.clone();
         tokio::spawn(async move { client_clone.keepalive_loop().await });
@@ -1028,6 +1039,7 @@ impl Client {
                 .core
                 .event_bus
                 .dispatch(&Event::Connected(crate::types::events::Connected));
+            client_clone.connected_notifier.notify_waiters();
 
             check_generation!();
 
@@ -1587,6 +1599,59 @@ impl Client {
 
     pub fn is_logged_in(&self) -> bool {
         self.is_logged_in.load(Ordering::Relaxed)
+    }
+
+    /// Waits for the noise socket to be established.
+    ///
+    /// Returns `Ok(())` when the socket is ready, or `Err` on timeout.
+    /// This is useful for code that needs to send messages before login,
+    /// such as requesting a pair code during initial pairing.
+    ///
+    /// If the socket is already connected, returns immediately.
+    pub async fn wait_for_socket(&self, timeout: std::time::Duration) -> Result<(), anyhow::Error> {
+        // Fast path: already connected
+        if self.is_connected() {
+            return Ok(());
+        }
+
+        // Register waiter and re-check to avoid race condition:
+        // If socket becomes ready between checks, the notified future captures it.
+        let notified = self.socket_ready_notifier.notified();
+        if self.is_connected() {
+            return Ok(());
+        }
+
+        tokio::time::timeout(timeout, notified)
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout waiting for socket"))
+    }
+
+    /// Waits for the client to establish a connection and complete login.
+    ///
+    /// Returns `Ok(())` when connected, or `Err` on timeout.
+    /// This is useful for code that needs to run after connection is established
+    /// and authentication is complete.
+    ///
+    /// If the client is already connected and logged in, returns immediately.
+    pub async fn wait_for_connected(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(), anyhow::Error> {
+        // Fast path: already connected and logged in
+        if self.is_connected() && self.is_logged_in() {
+            return Ok(());
+        }
+
+        // Register waiter and re-check to avoid race condition:
+        // If connection completes between checks, the notified future captures it.
+        let notified = self.connected_notifier.notified();
+        if self.is_connected() && self.is_logged_in() {
+            return Ok(());
+        }
+
+        tokio::time::timeout(timeout, notified)
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout waiting for connection"))
     }
 
     /// Get access to the PersistenceManager for this client.
