@@ -23,11 +23,11 @@ members = [
 ]
 
 [workspace.dependencies]
-flate2 = { version = "1.1.4", default-features = false, features = ["zlib-rs"] }
+flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
 rand = "0.9"
 rand_core = "0.9"
 thiserror = "2.0.17"
-tokio = { version = "1.47.1", default-features = false }
+tokio = { version = "1.48.0", default-features = false }
 wacore-appstate = { path = "./wacore/appstate", version = "0.1.0" }
 wacore-binary = { path = "./wacore/binary", version = "0.1.0" }
 waproto = { path = "./waproto", version = "0.1.0" }
@@ -45,7 +45,7 @@ tokio-native = ["tokio/rt-multi-thread"]
 
 anyhow = { version = "1.0", default-features = false }
 async-channel = "2.5.0"
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.5", default-features = false }
 
@@ -54,9 +54,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 dashmap = "6.1.0"
 env_logger = { version = "0.11", default-features = false }
 hex = { version = "0.4", features = ["alloc"], default-features = false }
-indexmap = { version = "2.7", features = ["serde"] }
+indexmap = { version = "2.12.1", features = ["serde"] }
 log = "0.4.27"
-moka = { version = "0.12", features = ["future"] }
+moka = { version = "0.12.12", features = ["future"] }
 prost = { version = "0.14.1", default-features = false }
 
 # Cryptography

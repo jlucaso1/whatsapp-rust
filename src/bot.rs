@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::pair_code::PairCodeOptions;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::store::traits::Backend;
 use crate::types::enc_handler::EncHandler;
@@ -68,6 +69,7 @@ pub struct Bot {
     client: Arc<Client>,
     sync_task_receiver: Option<mpsc::Receiver<crate::sync_task::MajorSyncTask>>,
     event_handler: Option<EventHandlerCallback>,
+    pair_code_options: Option<PairCodeOptions>,
 }
 
 impl std::fmt::Debug for Bot {
@@ -76,6 +78,7 @@ impl std::fmt::Debug for Bot {
             .field("client", &"<Client>")
             .field("sync_task_receiver", &self.sync_task_receiver.is_some())
             .field("event_handler", &self.event_handler.is_some())
+            .field("pair_code_options", &self.pair_code_options.is_some())
             .finish()
     }
 }
@@ -123,6 +126,37 @@ impl Bot {
         });
         self.client.core.event_bus.add_handler(handler);
 
+        // If pair code options are set, spawn a task to request pair code after socket is ready
+        if let Some(options) = self.pair_code_options.take() {
+            let client_for_pair = self.client.clone();
+            tokio::spawn(async move {
+                // Wait for socket to be ready (before login) with 30 second timeout
+                if let Err(e) = client_for_pair
+                    .wait_for_socket(std::time::Duration::from_secs(30))
+                    .await
+                {
+                    warn!(target: "Bot/PairCode", "Timeout waiting for socket: {}", e);
+                    return;
+                }
+
+                // Check if already logged in (paired via QR or existing session)
+                if client_for_pair.is_logged_in() {
+                    info!(target: "Bot/PairCode", "Already logged in, skipping pair code request");
+                    return;
+                }
+
+                // Request pair code
+                match client_for_pair.pair_with_code(options).await {
+                    Ok(code) => {
+                        info!(target: "Bot/PairCode", "Pair code generated: {}", code);
+                    }
+                    Err(e) => {
+                        warn!(target: "Bot/PairCode", "Failed to request pair code: {}", e);
+                    }
+                }
+            });
+        }
+
         let client_for_run = self.client.clone();
         let client_handle = tokio::spawn(async move {
             client_for_run.run().await;
@@ -142,6 +176,7 @@ pub struct BotBuilder {
     http_client: Option<Arc<dyn crate::http::HttpClient>>,
     override_version: Option<(u32, u32, u32)>,
     os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
+    pair_code_options: Option<PairCodeOptions>,
 }
 
 impl BotBuilder {
@@ -155,6 +190,7 @@ impl BotBuilder {
             http_client: None,
             override_version: None,
             os_info: None,
+            pair_code_options: None,
         }
     }
 
@@ -321,6 +357,46 @@ impl BotBuilder {
         self
     }
 
+    /// Configure pair code authentication to run automatically after connecting.
+    ///
+    /// When set, the pair code request will be sent automatically after establishing
+    /// a connection, and the pairing code will be dispatched via `Event::PairingCode`.
+    /// This runs concurrently with QR code pairing - whichever completes first wins.
+    ///
+    /// # Arguments
+    /// * `options` - Configuration for pair code authentication
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+    ///
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_transport_factory(transport)
+    ///     .with_http_client(http_client)
+    ///     .with_pair_code(PairCodeOptions {
+    ///         phone_number: "15551234567".to_string(),
+    ///         show_push_notification: true,
+    ///         custom_code: Some("ABCD1234".to_string()),
+    ///         platform_id: PlatformId::Chrome,
+    ///         platform_display: "Chrome (Linux)".to_string(),
+    ///     })
+    ///     .on_event(|event, client| async move {
+    ///         match event {
+    ///             Event::PairingCode { code, timeout } => {
+    ///                 println!("Enter this code on your phone: {}", code);
+    ///             }
+    ///             _ => {}
+    ///         }
+    ///     })
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_pair_code(mut self, options: PairCodeOptions) -> Self {
+        self.pair_code_options = Some(options);
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -392,6 +468,7 @@ impl BotBuilder {
             client,
             sync_task_receiver: Some(sync_task_receiver),
             event_handler: self.event_handler,
+            pair_code_options: self.pair_code_options,
         })
     }
 }

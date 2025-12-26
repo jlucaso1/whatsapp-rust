@@ -225,6 +225,14 @@ pub enum Event {
         code: String,
         timeout: std::time::Duration,
     },
+    /// Generated pair code for phone number linking.
+    /// User should enter this code on their phone in WhatsApp > Linked Devices.
+    PairingCode {
+        /// The 8-character pairing code to display.
+        code: String,
+        /// Approximate validity duration (~180 seconds).
+        timeout: std::time::Duration,
+    },
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 

@@ -11,6 +11,7 @@ pub use wacore_libsignal as libsignal;
 pub mod messages;
 pub mod net;
 pub mod pair;
+pub mod pair_code;
 pub mod prekeys;
 pub mod proto_helpers;
 pub mod reporting_token;
