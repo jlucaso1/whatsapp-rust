@@ -34,8 +34,8 @@ pub mod usync;
 pub mod features;
 pub use features::{
     Blocking, BlocklistEntry, ChatStateType, Chatstate, ContactInfo, Contacts, GroupMetadata,
-    GroupParticipant, Groups, IsOnWhatsAppResult, Presence, PresenceStatus, ProfilePicture,
-    UserInfo,
+    GroupParticipant, Groups, IsOnWhatsAppResult, Mex, MexError, MexErrorExtensions,
+    MexGraphQLError, MexRequest, MexResponse, Presence, PresenceStatus, ProfilePicture, UserInfo,
 };
 
 pub mod bot;
