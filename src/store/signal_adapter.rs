@@ -243,7 +243,15 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
             .await
             .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
         {
-            Some(data) => Ok(Some(SenderKeyRecord::deserialize(&data)?)),
+            Some(data) => {
+                let record = SenderKeyRecord::deserialize(&data)?;
+                // Match Device::load_sender_key behavior: return None for empty records
+                if record.serialize()?.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(record))
+                }
+            }
             None => Ok(None),
         }
     }
