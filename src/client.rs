@@ -1,3 +1,4 @@
+mod call_crypto;
 mod context_impl;
 mod device_registry;
 mod lid_pn;

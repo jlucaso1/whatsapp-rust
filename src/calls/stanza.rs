@@ -623,6 +623,172 @@ impl ParsedCallStanza {
     }
 }
 
+use super::encryption::EncryptedCallKey;
+
+/// Parameters for PREACCEPT stanza.
+#[derive(Debug, Clone)]
+pub struct PreacceptParams {
+    /// Audio codec (e.g., "opus")
+    pub audio_codec: String,
+    /// Audio sample rate (e.g., 16000)
+    pub audio_rate: u32,
+    /// Key generation version (typically 2)
+    pub keygen: u8,
+    /// Capability bytes (7 bytes: 0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07)
+    pub capability: Vec<u8>,
+}
+
+impl Default for PreacceptParams {
+    fn default() -> Self {
+        Self {
+            audio_codec: "opus".to_string(),
+            audio_rate: 16000,
+            keygen: 2,
+            // Default capability bytes from real WhatsApp Web logs
+            capability: vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07],
+        }
+    }
+}
+
+/// Relay latency measurement for outgoing RELAYLATENCY stanza.
+#[derive(Debug, Clone)]
+pub struct RelayLatencyMeasurement {
+    /// Relay server name (e.g., "for2c02")
+    pub relay_name: String,
+    /// Measured latency in milliseconds
+    pub latency_ms: u32,
+    /// Relay token bytes (from offer's relay tokens)
+    pub token: Vec<u8>,
+    /// IPv4 address if available
+    pub ipv4: Option<String>,
+    /// Port (default 3480)
+    pub port: u16,
+}
+
+impl RelayLatencyMeasurement {
+    /// Encode the latency value for the stanza.
+    /// Format: 0x2000000 + latency_ms
+    pub fn encode_latency(&self) -> u32 {
+        0x2000000 + self.latency_ms
+    }
+
+    /// Encode the address bytes for the te element content.
+    /// Format: 4 bytes IPv4 + 2 bytes port (big-endian)
+    pub fn encode_address(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(6);
+        if let Some(ref ipv4) = self.ipv4 {
+            let parts: Vec<u8> = ipv4.split('.').filter_map(|s| s.parse().ok()).collect();
+            if parts.len() == 4 {
+                bytes.extend_from_slice(&parts);
+            } else {
+                bytes.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        } else {
+            bytes.extend_from_slice(&[0, 0, 0, 0]);
+        }
+        bytes.extend_from_slice(&self.port.to_be_bytes());
+        bytes
+    }
+
+    /// Create relay latency measurements from offer's relay data.
+    ///
+    /// This creates measurements for each relay endpoint in the offer.
+    /// The latency values are estimated (for actual measurement, implement UDP ping).
+    ///
+    /// # Arguments
+    /// * `relay_data` - The relay data from the offer stanza
+    /// * `base_latency_ms` - Base latency to use (default ~30ms is reasonable for most connections)
+    pub fn from_relay_data(relay_data: &RelayData, base_latency_ms: u32) -> Vec<Self> {
+        let mut measurements = Vec::new();
+
+        for endpoint in &relay_data.endpoints {
+            // Get the first IPv4 address from the endpoint
+            let (ipv4, port) = endpoint
+                .addresses
+                .iter()
+                .find_map(|addr| addr.ipv4.as_ref().map(|ip| (ip.clone(), addr.port)))
+                .unwrap_or_else(|| ("0.0.0.0".to_string(), 3480));
+
+            // Get token for this endpoint
+            let token = relay_data
+                .relay_tokens
+                .get(endpoint.token_id as usize)
+                .cloned()
+                .unwrap_or_default();
+
+            // Add small variation to latency based on endpoint index to simulate real conditions
+            let latency_ms = base_latency_ms + (measurements.len() as u32 * 5);
+
+            measurements.push(Self {
+                relay_name: endpoint.relay_name.clone(),
+                latency_ms,
+                token,
+                ipv4: Some(ipv4),
+                port,
+            });
+        }
+
+        measurements
+    }
+}
+
+/// Parameters for TRANSPORT stanza.
+#[derive(Debug, Clone, Default)]
+pub struct TransportParams {
+    /// P2P candidate round number
+    pub p2p_cand_round: Option<u32>,
+    /// Transport message type
+    pub transport_message_type: Option<u32>,
+    /// Network protocol (0 = default)
+    pub net_protocol: u8,
+    /// Network medium (2 = WiFi/LAN)
+    pub net_medium: u8,
+}
+
+impl TransportParams {
+    /// Create default transport params.
+    pub fn new() -> Self {
+        Self {
+            net_protocol: 0,
+            net_medium: 2,
+            ..Default::default()
+        }
+    }
+}
+
+/// Audio codec parameters for building accept stanzas.
+#[derive(Debug, Clone)]
+pub struct AcceptAudioParams {
+    /// Codec name (e.g., "opus")
+    pub codec: String,
+    /// Sample rate (e.g., 16000)
+    pub rate: u32,
+}
+
+impl Default for AcceptAudioParams {
+    fn default() -> Self {
+        Self {
+            codec: "opus".to_string(),
+            rate: 16000,
+        }
+    }
+}
+
+/// Video codec parameters for building accept stanzas.
+#[derive(Debug, Clone)]
+pub struct AcceptVideoParams {
+    /// Codec name (e.g., "vp8", "h264")
+    pub codec: String,
+}
+
+impl Default for AcceptVideoParams {
+    fn default() -> Self {
+        Self {
+            codec: "vp8".to_string(),
+        }
+    }
+}
+
 /// Builder for call stanzas.
 pub struct CallStanzaBuilder {
     call_id: String,
@@ -633,6 +799,24 @@ pub struct CallStanzaBuilder {
     group_jid: Option<Jid>,
     payload: Option<Vec<u8>>,
     extra_attrs: HashMap<String, String>,
+    /// Encrypted call key for offer/accept stanzas.
+    encrypted_key: Option<EncryptedCallKey>,
+    /// Audio parameters for accept stanzas.
+    audio_params: Option<AcceptAudioParams>,
+    /// Video parameters for accept stanzas (only if video call).
+    video_params: Option<AcceptVideoParams>,
+    /// Parameters for PREACCEPT stanza.
+    preaccept_params: Option<PreacceptParams>,
+    /// Relay latency measurements for RELAYLATENCY stanza.
+    relay_latency_measurements: Vec<RelayLatencyMeasurement>,
+    /// Transport parameters for TRANSPORT stanza.
+    transport_params: Option<TransportParams>,
+    /// Mute state for MUTE_V2 stanza (false = unmuted, true = muted).
+    mute_state: Option<bool>,
+    /// Network medium for ACCEPT stanza (default 2).
+    net_medium: Option<u8>,
+    /// Encryption key generation version for ACCEPT stanza (default 2).
+    encopt_keygen: Option<u8>,
 }
 
 impl CallStanzaBuilder {
@@ -651,6 +835,15 @@ impl CallStanzaBuilder {
             group_jid: None,
             payload: None,
             extra_attrs: HashMap::new(),
+            encrypted_key: None,
+            audio_params: None,
+            video_params: None,
+            preaccept_params: None,
+            relay_latency_measurements: Vec::new(),
+            transport_params: None,
+            mute_state: None,
+            net_medium: None,
+            encopt_keygen: None,
         }
     }
 
@@ -674,6 +867,78 @@ impl CallStanzaBuilder {
         self
     }
 
+    /// Set the encrypted call key for offer/accept stanzas.
+    ///
+    /// This adds an `<enc type="msg|pkmsg" v="2">ciphertext</enc>` element.
+    pub fn encrypted_key(mut self, key: EncryptedCallKey) -> Self {
+        self.encrypted_key = Some(key);
+        self
+    }
+
+    /// Set audio codec parameters for accept stanzas.
+    ///
+    /// This adds an `<audio enc="opus" rate="16000"/>` element.
+    pub fn audio(mut self, params: AcceptAudioParams) -> Self {
+        self.audio_params = Some(params);
+        self
+    }
+
+    /// Set video codec parameters for accept stanzas.
+    ///
+    /// This adds an `<video enc="vp8"/>` element with codec info.
+    pub fn video_params(mut self, params: AcceptVideoParams) -> Self {
+        self.video_params = Some(params);
+        self
+    }
+
+    /// Set PREACCEPT parameters.
+    ///
+    /// This adds `<audio>`, `<encopt>`, and `<capability>` elements.
+    pub fn preaccept_params(mut self, params: PreacceptParams) -> Self {
+        self.preaccept_params = Some(params);
+        self
+    }
+
+    /// Add relay latency measurements for RELAYLATENCY stanza.
+    ///
+    /// This adds `<te latency="..." relay_name="...">` elements.
+    pub fn relay_latency(mut self, measurements: Vec<RelayLatencyMeasurement>) -> Self {
+        self.relay_latency_measurements = measurements;
+        self
+    }
+
+    /// Set TRANSPORT parameters.
+    ///
+    /// This adds attributes and `<net>` element.
+    pub fn transport_params(mut self, params: TransportParams) -> Self {
+        self.transport_params = Some(params);
+        self
+    }
+
+    /// Set mute state for MUTE_V2 stanza.
+    ///
+    /// This adds `mute-state="0|1"` attribute.
+    pub fn mute_state(mut self, muted: bool) -> Self {
+        self.mute_state = Some(muted);
+        self
+    }
+
+    /// Set network medium for ACCEPT stanza.
+    ///
+    /// This adds `<net medium="2"/>` element.
+    pub fn net_medium(mut self, medium: u8) -> Self {
+        self.net_medium = Some(medium);
+        self
+    }
+
+    /// Set encryption key generation version for ACCEPT stanza.
+    ///
+    /// This adds `<encopt keygen="2"/>` element.
+    pub fn encopt_keygen(mut self, keygen: u8) -> Self {
+        self.encopt_keygen = Some(keygen);
+        self
+    }
+
     pub fn build(self) -> Node {
         // Build signaling child node
         let mut sig_builder = NodeBuilder::new(self.signaling_type.tag_name())
@@ -684,13 +949,139 @@ impl CallStanzaBuilder {
             sig_builder = sig_builder.attr("group-jid", group_jid.to_string());
         }
 
+        // Add MUTE_V2 mute-state attribute
+        if self.signaling_type == SignalingType::MuteV2
+            && let Some(muted) = self.mute_state
+        {
+            sig_builder = sig_builder.attr("mute-state", if muted { "1" } else { "0" });
+        }
+
+        // Add TRANSPORT attributes
+        if self.signaling_type == SignalingType::Transport
+            && let Some(ref params) = self.transport_params
+        {
+            if let Some(round) = params.p2p_cand_round {
+                sig_builder = sig_builder.attr("p2p-cand-round", round.to_string());
+            }
+            if let Some(msg_type) = params.transport_message_type {
+                sig_builder = sig_builder.attr("transport-message-type", msg_type.to_string());
+            }
+        }
+
         for (k, v) in &self.extra_attrs {
             sig_builder = sig_builder.attr(k.clone(), v.clone());
         }
 
-        // Add <video/> child if video call
+        // Collect children to add
+        let mut children: Vec<Node> = Vec::new();
+
+        // Add <enc> element if encrypted key present (for Accept)
+        if let Some(ref enc_key) = self.encrypted_key {
+            let enc_node = NodeBuilder::new("enc")
+                .attr("type", enc_key.enc_type.as_str())
+                .attr("v", "2")
+                .bytes(enc_key.ciphertext.clone())
+                .build();
+            children.push(enc_node);
+        }
+
+        // Handle PREACCEPT stanza elements
+        if self.signaling_type == SignalingType::PreAccept
+            && let Some(ref params) = self.preaccept_params
+        {
+            // Add <audio enc="opus" rate="16000" />
+            let audio_node = NodeBuilder::new("audio")
+                .attr("enc", &params.audio_codec)
+                .attr("rate", params.audio_rate.to_string())
+                .build();
+            children.push(audio_node);
+
+            // Add <encopt keygen="2" />
+            let encopt_node = NodeBuilder::new("encopt")
+                .attr("keygen", params.keygen.to_string())
+                .build();
+            children.push(encopt_node);
+
+            // Add <capability ver="1">hex_bytes</capability>
+            // Convert capability bytes to hex string
+            let hex_capability: String = params
+                .capability
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect();
+            let capability_node = NodeBuilder::new("capability")
+                .attr("ver", "1")
+                .string_content(&hex_capability)
+                .build();
+            children.push(capability_node);
+        }
+
+        // Handle RELAYLATENCY stanza elements
+        if self.signaling_type == SignalingType::RelayLatency {
+            for measurement in &self.relay_latency_measurements {
+                // Add <te latency="..." relay_name="...">address_bytes</te>
+                let te_node = NodeBuilder::new("te")
+                    .attr("latency", measurement.encode_latency().to_string())
+                    .attr("relay_name", &measurement.relay_name)
+                    .bytes(measurement.encode_address())
+                    .build();
+                children.push(te_node);
+            }
+        }
+
+        // Handle TRANSPORT stanza net element
+        if self.signaling_type == SignalingType::Transport
+            && let Some(ref params) = self.transport_params
+        {
+            let net_node = NodeBuilder::new("net")
+                .attr("protocol", params.net_protocol.to_string())
+                .attr("medium", params.net_medium.to_string())
+                .build();
+            children.push(net_node);
+        }
+
+        // Add <audio> element if params present (for Accept)
+        if self.signaling_type == SignalingType::Accept {
+            if let Some(ref audio) = self.audio_params {
+                let audio_node = NodeBuilder::new("audio")
+                    .attr("enc", &audio.codec)
+                    .attr("rate", audio.rate.to_string())
+                    .build();
+                children.push(audio_node);
+            }
+
+            // Add <net medium="2" /> for Accept
+            if let Some(medium) = self.net_medium {
+                let net_node = NodeBuilder::new("net")
+                    .attr("medium", medium.to_string())
+                    .build();
+                children.push(net_node);
+            }
+
+            // Add <encopt keygen="2" /> for Accept
+            if let Some(keygen) = self.encopt_keygen {
+                let encopt_node = NodeBuilder::new("encopt")
+                    .attr("keygen", keygen.to_string())
+                    .build();
+                children.push(encopt_node);
+            }
+        }
+
+        // Add <video> element
         if self.is_video {
-            sig_builder = sig_builder.children(std::iter::once(NodeBuilder::new("video").build()));
+            if let Some(ref video) = self.video_params {
+                // Video with codec info
+                let video_node = NodeBuilder::new("video").attr("enc", &video.codec).build();
+                children.push(video_node);
+            } else {
+                // Plain video indicator
+                children.push(NodeBuilder::new("video").build());
+            }
+        }
+
+        // Add children to signaling node
+        if !children.is_empty() {
+            sig_builder = sig_builder.children(children);
         }
 
         // Add payload if present
@@ -1499,5 +1890,341 @@ mod tests {
         let has_ipv6 = ep.addresses.iter().any(|a| a.ipv6.is_some());
         assert!(has_ipv4, "Should have IPv4 address");
         assert!(has_ipv6, "Should have IPv6 address");
+    }
+
+    /// Test building accept stanza with encrypted key, audio, and video params.
+    #[test]
+    fn test_build_accept_stanza_with_all_params() {
+        use crate::calls::encryption::{EncType, EncryptedCallKey};
+
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let encrypted_key = EncryptedCallKey {
+            ciphertext: vec![0xAA, 0xBB, 0xCC, 0xDD],
+            enc_type: EncType::Msg,
+        };
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Accept)
+                .video(true)
+                .encrypted_key(encrypted_key)
+                .audio(AcceptAudioParams {
+                    codec: "opus".to_string(),
+                    rate: 16000,
+                })
+                .video_params(AcceptVideoParams {
+                    codec: "vp8".to_string(),
+                })
+                .build();
+
+        assert_eq!(node.tag, "call");
+
+        let children = node.children().unwrap();
+        assert_eq!(children.len(), 1);
+
+        let accept_node = &children[0];
+        assert_eq!(accept_node.tag, "accept");
+
+        let accept_children = accept_node.children().unwrap();
+
+        // Should have enc, audio, video children
+        let enc_node = accept_children.iter().find(|c| c.tag == "enc");
+        assert!(enc_node.is_some(), "Should have <enc> element");
+        let enc_node = enc_node.unwrap();
+        let mut enc_attrs = enc_node.attrs();
+        assert_eq!(enc_attrs.string("type"), "msg");
+        assert_eq!(enc_attrs.string("v"), "2");
+
+        let audio_node = accept_children.iter().find(|c| c.tag == "audio");
+        assert!(audio_node.is_some(), "Should have <audio> element");
+        let audio_node = audio_node.unwrap();
+        let mut audio_attrs = audio_node.attrs();
+        assert_eq!(audio_attrs.string("enc"), "opus");
+        assert_eq!(audio_attrs.string("rate"), "16000");
+
+        let video_node = accept_children.iter().find(|c| c.tag == "video");
+        assert!(video_node.is_some(), "Should have <video> element");
+        let video_node = video_node.unwrap();
+        let mut video_attrs = video_node.attrs();
+        assert_eq!(video_attrs.string("enc"), "vp8");
+    }
+
+    /// Test building accept stanza without optional params falls back to defaults.
+    #[test]
+    fn test_build_accept_stanza_minimal() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        // Build with only audio params (no enc key, no video params)
+        let node = CallStanzaBuilder::new(call_id, creator, to, SignalingType::Accept)
+            .audio(AcceptAudioParams::default())
+            .build();
+
+        let children = node.children().unwrap();
+        let accept_node = &children[0];
+        let accept_children = accept_node.children().unwrap();
+
+        // Should have audio but not enc or video
+        assert!(accept_children.iter().any(|c| c.tag == "audio"));
+        assert!(!accept_children.iter().any(|c| c.tag == "enc"));
+        assert!(!accept_children.iter().any(|c| c.tag == "video"));
+    }
+
+    /// Test default audio/video params.
+    #[test]
+    fn test_default_accept_params() {
+        let audio = AcceptAudioParams::default();
+        assert_eq!(audio.codec, "opus");
+        assert_eq!(audio.rate, 16000);
+
+        let video = AcceptVideoParams::default();
+        assert_eq!(video.codec, "vp8");
+    }
+
+    /// Test PREACCEPT stanza building.
+    #[test]
+    fn test_build_preaccept_stanza() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let node = CallStanzaBuilder::new(
+            call_id,
+            creator.clone(),
+            to.clone(),
+            SignalingType::PreAccept,
+        )
+        .preaccept_params(PreacceptParams::default())
+        .build();
+
+        assert_eq!(node.tag, "call");
+        let children = node.children().unwrap();
+        assert_eq!(children.len(), 1);
+
+        let preaccept_node = &children[0];
+        assert_eq!(preaccept_node.tag, "preaccept");
+
+        let mut attrs = preaccept_node.attrs();
+        assert_eq!(attrs.string("call-id"), call_id);
+        assert_eq!(attrs.string("call-creator"), creator.to_string());
+
+        let preaccept_children = preaccept_node.children().unwrap();
+
+        // Should have audio, encopt, capability
+        let audio = preaccept_children.iter().find(|c| c.tag == "audio");
+        assert!(audio.is_some(), "Should have <audio> element");
+        let mut audio_attrs = audio.unwrap().attrs();
+        assert_eq!(audio_attrs.string("enc"), "opus");
+        assert_eq!(audio_attrs.string("rate"), "16000");
+
+        let encopt = preaccept_children.iter().find(|c| c.tag == "encopt");
+        assert!(encopt.is_some(), "Should have <encopt> element");
+        let mut encopt_attrs = encopt.unwrap().attrs();
+        assert_eq!(encopt_attrs.string("keygen"), "2");
+
+        let capability = preaccept_children.iter().find(|c| c.tag == "capability");
+        assert!(capability.is_some(), "Should have <capability> element");
+        let mut cap_attrs = capability.unwrap().attrs();
+        assert_eq!(cap_attrs.string("ver"), "1");
+    }
+
+    /// Test RELAYLATENCY stanza building.
+    #[test]
+    fn test_build_relaylatency_stanza() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let measurements = vec![RelayLatencyMeasurement {
+            relay_name: "for2c02".to_string(),
+            latency_ms: 45,
+            token: vec![],
+            ipv4: Some("57.144.165.54".to_string()),
+            port: 3480,
+        }];
+
+        let node = CallStanzaBuilder::new(
+            call_id,
+            creator.clone(),
+            to.clone(),
+            SignalingType::RelayLatency,
+        )
+        .relay_latency(measurements)
+        .build();
+
+        assert_eq!(node.tag, "call");
+        let children = node.children().unwrap();
+        let relaylatency_node = &children[0];
+        assert_eq!(relaylatency_node.tag, "relaylatency");
+
+        let te_nodes: Vec<_> = relaylatency_node
+            .children()
+            .unwrap()
+            .iter()
+            .filter(|c| c.tag == "te")
+            .collect();
+        assert_eq!(te_nodes.len(), 1);
+
+        let mut te_attrs = te_nodes[0].attrs();
+        assert_eq!(te_attrs.string("relay_name"), "for2c02");
+        // Latency should be 0x2000000 + 45 = 33554477
+        assert_eq!(te_attrs.string("latency"), "33554477");
+    }
+
+    /// Test relay latency encoding.
+    #[test]
+    fn test_relay_latency_encoding() {
+        let measurement = RelayLatencyMeasurement {
+            relay_name: "test".to_string(),
+            latency_ms: 12,
+            token: vec![],
+            ipv4: Some("192.168.1.1".to_string()),
+            port: 3480,
+        };
+
+        // Base is 0x2000000 = 33554432
+        assert_eq!(measurement.encode_latency(), 33554444);
+
+        // Address should be 6 bytes: IP (4) + port (2 big-endian)
+        let addr = measurement.encode_address();
+        assert_eq!(addr.len(), 6);
+        assert_eq!(addr[0..4], [192, 168, 1, 1]);
+        assert_eq!(addr[4..6], [0x0D, 0x98]); // 3480 in big-endian
+    }
+
+    /// Test TRANSPORT stanza building.
+    #[test]
+    fn test_build_transport_stanza() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let params = TransportParams {
+            p2p_cand_round: Some(1),
+            transport_message_type: Some(0),
+            net_protocol: 0,
+            net_medium: 2,
+        };
+
+        let node = CallStanzaBuilder::new(
+            call_id,
+            creator.clone(),
+            to.clone(),
+            SignalingType::Transport,
+        )
+        .transport_params(params)
+        .build();
+
+        assert_eq!(node.tag, "call");
+        let children = node.children().unwrap();
+        let transport_node = &children[0];
+        assert_eq!(transport_node.tag, "transport");
+
+        let mut attrs = transport_node.attrs();
+        assert_eq!(attrs.optional_string("p2p-cand-round"), Some("1"));
+        assert_eq!(attrs.optional_string("transport-message-type"), Some("0"));
+
+        // Should have net element
+        let transport_children = transport_node.children().unwrap();
+        let net_node = transport_children.iter().find(|c| c.tag == "net");
+        assert!(net_node.is_some(), "Should have <net> element");
+        let mut net_attrs = net_node.unwrap().attrs();
+        assert_eq!(net_attrs.string("protocol"), "0");
+        assert_eq!(net_attrs.string("medium"), "2");
+    }
+
+    /// Test MUTE_V2 stanza building.
+    #[test]
+    fn test_build_mute_v2_stanza() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        // Test unmuted
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::MuteV2)
+                .mute_state(false)
+                .build();
+
+        let children = node.children().unwrap();
+        let mute_node = &children[0];
+        assert_eq!(mute_node.tag, "mute_v2");
+
+        let mut attrs = mute_node.attrs();
+        assert_eq!(attrs.string("mute-state"), "0");
+
+        // Test muted
+        let node_muted =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::MuteV2)
+                .mute_state(true)
+                .build();
+
+        let children_muted = node_muted.children().unwrap();
+        let mute_node_muted = &children_muted[0];
+        let mut attrs_muted = mute_node_muted.attrs();
+        assert_eq!(attrs_muted.string("mute-state"), "1");
+    }
+
+    /// Test ACCEPT stanza with net and encopt elements.
+    #[test]
+    fn test_build_accept_with_net_encopt() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Accept)
+                .audio(AcceptAudioParams::default())
+                .net_medium(2)
+                .encopt_keygen(2)
+                .build();
+
+        let children = node.children().unwrap();
+        let accept_node = &children[0];
+        assert_eq!(accept_node.tag, "accept");
+
+        let accept_children = accept_node.children().unwrap();
+
+        // Should have audio, net, encopt
+        assert!(
+            accept_children.iter().any(|c| c.tag == "audio"),
+            "Should have <audio>"
+        );
+
+        let net = accept_children.iter().find(|c| c.tag == "net");
+        assert!(net.is_some(), "Should have <net> element");
+        let mut net_attrs = net.unwrap().attrs();
+        assert_eq!(net_attrs.string("medium"), "2");
+
+        let encopt = accept_children.iter().find(|c| c.tag == "encopt");
+        assert!(encopt.is_some(), "Should have <encopt> element");
+        let mut encopt_attrs = encopt.unwrap().attrs();
+        assert_eq!(encopt_attrs.string("keygen"), "2");
+    }
+
+    /// Test default PreacceptParams.
+    #[test]
+    fn test_default_preaccept_params() {
+        let params = PreacceptParams::default();
+        assert_eq!(params.audio_codec, "opus");
+        assert_eq!(params.audio_rate, 16000);
+        assert_eq!(params.keygen, 2);
+        assert_eq!(
+            params.capability,
+            vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07]
+        );
+    }
+
+    /// Test TransportParams default/new.
+    #[test]
+    fn test_transport_params() {
+        let params = TransportParams::new();
+        assert_eq!(params.net_protocol, 0);
+        assert_eq!(params.net_medium, 2);
+        assert!(params.p2p_cand_round.is_none());
+        assert!(params.transport_message_type.is_none());
     }
 }

@@ -46,9 +46,10 @@ pub use handler::CallHandler;
 pub use manager::{CallManager, CallManagerConfig, CallMediaCallback, CallOptions};
 pub use signaling::{ResponseType, SignalingType};
 pub use stanza::{
-    AudioParams, CallStanzaBuilder, EncRekeyData, MediaParams, OfferEncData, ParsedCallStanza,
-    RelayAddress, RelayData, RelayEndpoint, RelayLatencyData, VideoParams, build_call_ack,
-    build_call_receipt,
+    AcceptAudioParams, AcceptVideoParams, AudioParams, CallStanzaBuilder, EncRekeyData,
+    MediaParams, OfferEncData, ParsedCallStanza, PreacceptParams, RelayAddress, RelayData,
+    RelayEndpoint, RelayLatencyData, RelayLatencyMeasurement, TransportParams, VideoParams,
+    build_call_ack, build_call_receipt,
 };
 pub use state::{CallEncryption, CallInfo, CallState, CallTransition, InvalidTransition};
 pub use transport::{

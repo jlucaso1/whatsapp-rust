@@ -1,10 +1,13 @@
 //! Call manager for orchestrating call lifecycle.
 
 use super::encryption::DerivedCallKeys;
+use super::encryption::EncryptedCallKey;
 use super::error::CallError;
 use super::signaling::SignalingType;
 use super::stanza::{
-    CallStanzaBuilder, MediaParams, OfferEncData, ParsedCallStanza, RelayData, RelayLatencyData,
+    AcceptAudioParams, AcceptVideoParams, CallStanzaBuilder, MediaParams, OfferEncData,
+    ParsedCallStanza, PreacceptParams, RelayData, RelayLatencyData, RelayLatencyMeasurement,
+    TransportParams,
 };
 use super::state::{CallInfo, CallTransition};
 use super::transport::TransportPayload;
@@ -203,10 +206,16 @@ impl CallManager {
             call_id.clone(),
             parsed.from.clone(),
             parsed.call_creator.clone(),
+            parsed.caller_pn.clone(),
             media_type,
         );
         info.is_offline = parsed.is_offline;
         info.group_jid.clone_from(&parsed.group_jid);
+
+        // Store offer data for later use when accepting the call
+        info.offer_relay_data.clone_from(&parsed.relay_data);
+        info.offer_media_params.clone_from(&parsed.media_params);
+        info.offer_enc_data.clone_from(&parsed.offer_enc_data);
 
         let mut calls = self.calls.write().await;
         calls.insert(call_id.as_str().to_string(), info);
@@ -214,8 +223,42 @@ impl CallManager {
         Ok(())
     }
 
-    /// Accept an incoming call.
+    /// Accept an incoming call (basic stanza without encrypted key).
+    ///
+    /// For a fully functional accept, use `accept_call_with_key` instead which
+    /// includes the encrypted call key required for media connection.
     pub async fn accept_call(&self, call_id: &CallId) -> Result<Node, CallError> {
+        self.accept_call_with_key(call_id, None).await
+    }
+
+    /// Accept an incoming call with an encrypted call key.
+    ///
+    /// This builds a complete accept stanza with:
+    /// - Encrypted call key (`<enc type="msg" v="2">...`)
+    /// - Audio codec parameters (`<audio enc="opus" rate="16000">`)
+    /// - Video codec parameters if video call (`<video enc="vp8">`)
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to accept
+    /// * `encrypted_key` - The encrypted call key (encrypted using Signal protocol
+    ///   for the call creator). If None, builds a basic accept stanza.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Generate and encrypt call key
+    /// let call_key = CallEncryptionKey::generate();
+    /// let encrypted = encrypt_call_key(&mut session_store, &mut identity_store,
+    ///                                   &peer_jid, &call_key).await?;
+    ///
+    /// // Build accept stanza with encrypted key
+    /// let stanza = call_manager.accept_call_with_key(&call_id, Some(encrypted)).await?;
+    /// client.send_node(stanza).await?;
+    /// ```
+    pub async fn accept_call_with_key(
+        &self,
+        call_id: &CallId,
+        encrypted_key: Option<EncryptedCallKey>,
+    ) -> Result<Node, CallError> {
         let mut calls = self.calls.write().await;
         let info = calls
             .get_mut(call_id.as_str())
@@ -232,16 +275,145 @@ impl CallManager {
 
         info.apply_transition(CallTransition::LocalAccepted)?;
 
-        let stanza = CallStanzaBuilder::new(
+        let is_video = info.media_type == CallMediaType::Video;
+
+        let mut builder = CallStanzaBuilder::new(
             call_id.as_str(),
             info.call_creator.clone(),
             info.peer_jid.clone(),
             SignalingType::Accept,
         )
-        .video(info.media_type == CallMediaType::Video)
-        .build();
+        .video(is_video);
 
-        Ok(stanza)
+        // Add encrypted key if provided
+        if let Some(key) = encrypted_key {
+            builder = builder.encrypted_key(key);
+        }
+
+        // Add audio params (use offer params or default)
+        let audio = if let Some(ref mp) = info.offer_media_params
+            && let Some(first_audio) = mp.audio.first()
+        {
+            AcceptAudioParams {
+                codec: first_audio.codec.clone(),
+                rate: first_audio.rate,
+            }
+        } else {
+            AcceptAudioParams::default()
+        };
+        builder = builder.audio(audio);
+
+        // Add video params if video call
+        if is_video {
+            let video = if let Some(ref mp) = info.offer_media_params
+                && let Some(ref vp) = mp.video
+                && let Some(ref codec) = vp.codec
+            {
+                AcceptVideoParams {
+                    codec: codec.clone(),
+                }
+            } else {
+                AcceptVideoParams::default()
+            };
+            builder = builder.video_params(video);
+        }
+
+        // Add net and encopt elements (required for proper call acceptance)
+        builder = builder.net_medium(2).encopt_keygen(2);
+
+        Ok(builder.build())
+    }
+
+    /// Send PREACCEPT to acknowledge incoming call (shows "ringing" to caller).
+    ///
+    /// Should be called immediately after receiving OFFER.
+    /// This tells the caller that we're ringing and processing their call.
+    pub async fn send_preaccept(&self, call_id: &CallId) -> Result<Node, CallError> {
+        let calls = self.calls.read().await;
+        let info = calls
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let builder = CallStanzaBuilder::new(
+            call_id.as_str(),
+            info.call_creator.clone(),
+            info.peer_jid.clone(),
+            SignalingType::PreAccept,
+        )
+        .preaccept_params(PreacceptParams::default());
+
+        Ok(builder.build())
+    }
+
+    /// Send relay latency measurements to the caller.
+    ///
+    /// Should be called after measuring latency to relay servers from the offer.
+    /// The caller uses these measurements for relay selection.
+    pub async fn send_relay_latency(
+        &self,
+        call_id: &CallId,
+        measurements: Vec<RelayLatencyMeasurement>,
+    ) -> Result<Node, CallError> {
+        let calls = self.calls.read().await;
+        let info = calls
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let builder = CallStanzaBuilder::new(
+            call_id.as_str(),
+            info.call_creator.clone(),
+            info.peer_jid.clone(),
+            SignalingType::RelayLatency,
+        )
+        .relay_latency(measurements);
+
+        Ok(builder.build())
+    }
+
+    /// Send TRANSPORT stanza in response to received transport.
+    ///
+    /// This "echoes" the transport message back to the caller for P2P negotiation.
+    pub async fn send_transport(
+        &self,
+        call_id: &CallId,
+        params: TransportParams,
+    ) -> Result<Node, CallError> {
+        let calls = self.calls.read().await;
+        let info = calls
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let builder = CallStanzaBuilder::new(
+            call_id.as_str(),
+            info.call_creator.clone(),
+            info.peer_jid.clone(),
+            SignalingType::Transport,
+        )
+        .transport_params(params);
+
+        Ok(builder.build())
+    }
+
+    /// Send mute state to peer (should be sent before ACCEPT).
+    ///
+    /// # Arguments
+    /// * `call_id` - The call ID
+    /// * `muted` - true if audio is muted, false otherwise
+    pub async fn send_mute_state(&self, call_id: &CallId, muted: bool) -> Result<Node, CallError> {
+        let calls = self.calls.read().await;
+        let info = calls
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let builder = CallStanzaBuilder::new(
+            call_id.as_str(),
+            info.call_creator.clone(),
+            info.peer_jid.clone(),
+            SignalingType::MuteV2,
+        )
+        .mute_state(muted);
+
+        Ok(builder.build())
     }
 
     /// Reject an incoming call.

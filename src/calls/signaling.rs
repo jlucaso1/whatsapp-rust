@@ -101,11 +101,15 @@ pub enum SignalingType {
     /// Incoming call notification (push notification trigger).
     /// Special notification for waking up receiving client.
     OfferNotice = 25,
+
+    /// Mute state v2 (newer mute signaling format).
+    /// Contains mute-state attribute (0=unmuted, 1=muted).
+    MuteV2 = 26,
 }
 
 impl SignalingType {
     /// All signaling types in order.
-    pub const ALL: [SignalingType; 26] = [
+    pub const ALL: [SignalingType; 27] = [
         Self::None,
         Self::Offer,
         Self::OfferReceipt,
@@ -132,6 +136,7 @@ impl SignalingType {
         Self::AcceptAck,
         Self::GroupUpdate,
         Self::OfferNotice,
+        Self::MuteV2,
     ];
 
     /// Get the tag name used in binary protocol stanzas.
@@ -163,6 +168,7 @@ impl SignalingType {
             Self::AcceptAck => "accept_ack",
             Self::GroupUpdate => "group_update",
             Self::OfferNotice => "offer_notice",
+            Self::MuteV2 => "mute_v2",
         }
     }
 
@@ -195,6 +201,7 @@ impl SignalingType {
             "accept_ack" => Some(Self::AcceptAck),
             "group_update" => Some(Self::GroupUpdate),
             "offer_notice" => Some(Self::OfferNotice),
+            "mute_v2" => Some(Self::MuteV2),
             _ => None,
         }
     }
@@ -281,7 +288,7 @@ mod tests {
             let parsed = SignalingType::from_u8(i as u8).unwrap();
             assert_eq!(*st, parsed);
         }
-        assert!(SignalingType::from_u8(26).is_none());
+        assert!(SignalingType::from_u8(27).is_none());
     }
 
     #[test]
@@ -380,8 +387,11 @@ mod tests {
         assert_eq!(SignalingType::GroupUpdate as u8, 24);
         assert_eq!(SignalingType::OfferNotice as u8, 25);
 
-        // Verify we have exactly 26 types (MAX in JS)
-        assert_eq!(SignalingType::ALL.len(), 26);
+        // MuteV2 is a Rust-only addition beyond MAX in JS
+        assert_eq!(SignalingType::MuteV2 as u8, 26);
+
+        // Verify we have 27 types (26 from JS + MuteV2)
+        assert_eq!(SignalingType::ALL.len(), 27);
     }
 
     /// Test tag names match binary protocol dictionary tokens.
@@ -403,6 +413,9 @@ mod tests {
 
         // relaylatency has no underscore (matches binary dictionary)
         assert_eq!(SignalingType::RelayLatency.tag_name(), "relaylatency");
+
+        // mute_v2 has underscore
+        assert_eq!(SignalingType::MuteV2.tag_name(), "mute_v2");
     }
 
     /// Test call flow signaling types for outgoing call.

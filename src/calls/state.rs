@@ -6,6 +6,7 @@ use wacore::types::call::{CallDirection, CallId, CallMediaType, CallType, EndCal
 use wacore_binary::jid::Jid;
 
 use super::encryption::{CallEncryptionKey, DerivedCallKeys, derive_call_keys};
+use super::stanza::{MediaParams, OfferEncData, RelayData, TransportParams};
 
 /// Current state of a call.
 #[derive(Debug, Clone, Serialize, Default)]
@@ -111,8 +112,23 @@ pub struct CallInfo {
     pub created_at: DateTime<Utc>,
     pub group_jid: Option<Jid>,
     pub is_offline: bool,
+    /// Caller phone number JID (for Signal encryption).
+    /// Signal sessions are tied to phone numbers, not LIDs.
+    pub caller_pn: Option<Jid>,
     #[serde(skip)]
     pub encryption: Option<CallEncryption>,
+    /// Relay data from the offer (for incoming calls).
+    #[serde(skip)]
+    pub offer_relay_data: Option<RelayData>,
+    /// Media parameters from the offer (for incoming calls).
+    #[serde(skip)]
+    pub offer_media_params: Option<MediaParams>,
+    /// Encrypted call key from the offer (for incoming calls).
+    #[serde(skip)]
+    pub offer_enc_data: Option<OfferEncData>,
+    /// Transport parameters received from peer (for echo response).
+    #[serde(skip)]
+    pub received_transport: Option<TransportParams>,
 }
 
 impl CallInfo {
@@ -133,7 +149,12 @@ impl CallInfo {
             created_at: Utc::now(),
             group_jid: None,
             is_offline: false,
+            caller_pn: None,
             encryption: None,
+            offer_relay_data: None,
+            offer_media_params: None,
+            offer_enc_data: None,
+            received_transport: None,
         }
     }
 
@@ -141,6 +162,7 @@ impl CallInfo {
         call_id: CallId,
         peer_jid: Jid,
         call_creator: Jid,
+        caller_pn: Option<Jid>,
         media_type: CallMediaType,
     ) -> Self {
         Self {
@@ -157,7 +179,12 @@ impl CallInfo {
             created_at: Utc::now(),
             group_jid: None,
             is_offline: false,
+            caller_pn,
             encryption: None,
+            offer_relay_data: None,
+            offer_media_params: None,
+            offer_enc_data: None,
+            received_transport: None,
         }
     }
 
@@ -343,6 +370,7 @@ mod tests {
             CallId::new("BC5BD1EDE9BBE601F408EF3795479E93"),
             "236395184570386@lid".parse().unwrap(),
             "236395184570386@lid".parse().unwrap(),
+            None, // caller_pn
             CallMediaType::Video,
         )
     }
