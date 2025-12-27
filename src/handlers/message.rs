@@ -72,10 +72,8 @@ impl StanzaHandler for MessageHandler {
                 // Spawn a worker task that processes messages sequentially for this chat
                 tokio::spawn(async move {
                     while let Some(msg_node) = rx.recv().await {
-                        client_for_worker
-                            .clone()
-                            .handle_encrypted_message(msg_node)
-                            .await;
+                        let client = client_for_worker.clone();
+                        Box::pin(client.handle_encrypted_message(msg_node)).await;
                     }
                     // Clean up when channel closes to prevent memory leaks
                     queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;

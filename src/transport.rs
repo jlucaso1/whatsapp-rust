@@ -18,7 +18,7 @@ pub mod mock {
 
     #[async_trait]
     impl Transport for MockTransport {
-        async fn send(&self, _data: &[u8]) -> Result<(), anyhow::Error> {
+        async fn send(&self, _data: Vec<u8>) -> Result<(), anyhow::Error> {
             Ok(())
         }
 

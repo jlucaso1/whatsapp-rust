@@ -163,7 +163,9 @@ pub struct Client {
     /// Tracks the pending pair code request and ephemeral keys.
     pub(crate) pair_code_state: Arc<Mutex<wacore::pair_code::PairCodeState>>,
 
-    pub(crate) send_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Pool for reusing plaintext marshal buffers.
+    /// Note: encrypted buffers are not pooled since they're moved to transport (zero-copy).
+    pub(crate) plaintext_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
@@ -280,7 +282,7 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            send_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
+            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
             device_registry_cache: Cache::builder()
@@ -1715,51 +1717,43 @@ impl Client {
         };
 
         info!(target: "Client/Send", "{}", DisplayableNode(&node));
-        let mut pool_guard = self.send_buffer_pool.lock().await;
-        let mut plaintext_buf = pool_guard.pop().unwrap_or_else(|| Vec::with_capacity(1024));
-        let mut encrypted_buf = pool_guard.pop().unwrap_or_else(|| Vec::with_capacity(1024));
-        drop(pool_guard);
 
+        let mut plaintext_buf = {
+            let mut pool = self.plaintext_buffer_pool.lock().await;
+            pool.pop().unwrap_or_else(|| Vec::with_capacity(1024))
+        };
         plaintext_buf.clear();
-        encrypted_buf.clear();
 
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
-            let mut g = self.send_buffer_pool.lock().await;
+            let mut pool = self.plaintext_buffer_pool.lock().await;
             if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                g.push(plaintext_buf);
-            }
-            if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                g.push(encrypted_buf);
+                pool.push(plaintext_buf);
             }
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
-        let (plaintext_buf, encrypted_buf) = match noise_socket
+        // Size based on plaintext + encryption overhead (16 byte tag + 3 byte frame header)
+        let encrypted_buf = Vec::with_capacity(plaintext_buf.len() + 32);
+
+        let (plaintext_buf, _) = match noise_socket
             .encrypt_and_send(plaintext_buf, encrypted_buf)
             .await
         {
             Ok(bufs) => bufs,
             Err(mut e) => {
                 let p_buf = std::mem::take(&mut e.plaintext_buf);
-                let o_buf = std::mem::take(&mut e.out_buf);
-                let mut g = self.send_buffer_pool.lock().await;
+                let mut pool = self.plaintext_buffer_pool.lock().await;
                 if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                    g.push(p_buf);
-                }
-                if o_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-                    g.push(o_buf);
+                    pool.push(p_buf);
                 }
                 return Err(e.into());
             }
         };
 
-        let mut g = self.send_buffer_pool.lock().await;
+        let mut pool = self.plaintext_buffer_pool.lock().await;
         if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-            g.push(plaintext_buf);
-        }
-        if encrypted_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
-            g.push(encrypted_buf);
+            pool.push(plaintext_buf);
         }
         Ok(())
     }
@@ -1922,7 +1916,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_buffer_pool_reuses_both_buffers() {
+    async fn test_plaintext_buffer_pool_reuses_buffers() {
         let backend = Arc::new(
             crate::store::SqliteStore::new(":memory:")
                 .await
@@ -1943,7 +1937,7 @@ mod tests {
 
         // Check initial pool size
         let initial_pool_size = {
-            let pool = client.send_buffer_pool.lock().await;
+            let pool = client.plaintext_buffer_pool.lock().await;
             pool.len()
         };
 
@@ -1955,20 +1949,17 @@ mod tests {
         // After the send attempt, the pool should have the same or more buffers
         // (depending on whether buffers were consumed and returned)
         let final_pool_size = {
-            let pool = client.send_buffer_pool.lock().await;
+            let pool = client.plaintext_buffer_pool.lock().await;
             pool.len()
         };
 
-        // The key assertion: we should not be leaking buffers
-        // If the fix works, buffers should be returned to the pool
-        // (or at least not allocating new ones unnecessarily)
         assert!(
             final_pool_size >= initial_pool_size,
-            "Buffer pool should not shrink after send operations"
+            "Plaintext buffer pool should not shrink after send operations"
         );
 
         info!(
-            "✅ test_send_buffer_pool_reuses_both_buffers passed: Buffer pool properly manages buffers"
+            "✅ test_plaintext_buffer_pool_reuses_buffers passed: Buffer pool properly manages plaintext buffers"
         );
     }
 
