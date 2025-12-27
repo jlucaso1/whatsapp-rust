@@ -165,12 +165,11 @@ impl NoiseSocket {
             }
         }
 
-        if let Err(e) = transport.send(&out_buf).await {
-            return Err(EncryptSendError::transport(e, plaintext_buf, out_buf));
+        if let Err(e) = transport.send(out_buf).await {
+            return Err(EncryptSendError::transport(e, plaintext_buf, Vec::new()));
         }
 
-        out_buf.clear();
-        Ok((plaintext_buf, out_buf))
+        Ok((plaintext_buf, Vec::new()))
     }
 
     pub async fn encrypt_and_send(&self, plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> SendResult {
@@ -243,11 +242,10 @@ mod tests {
         let plaintext_buf = Vec::with_capacity(1024);
         let encrypted_buf = Vec::with_capacity(1024);
 
-        // Store the capacities for verification
+        // Store the capacity for verification
         let plaintext_capacity = plaintext_buf.capacity();
-        let encrypted_capacity = encrypted_buf.capacity();
 
-        // Call encrypt_and_send - this should return both buffers
+        // Call encrypt_and_send - plaintext buffer is returned, encrypted is moved to transport
         let result = socket.encrypt_and_send(plaintext_buf, encrypted_buf).await;
 
         assert!(result.is_ok(), "encrypt_and_send should succeed");
@@ -255,26 +253,23 @@ mod tests {
         let (returned_plaintext, returned_encrypted) =
             result.expect("encrypt_and_send result should unwrap after is_ok check");
 
-        // Verify both buffers are returned
+        // Verify plaintext buffer is returned with capacity preserved
         assert_eq!(
             returned_plaintext.capacity(),
             plaintext_capacity,
             "Plaintext buffer should maintain its capacity"
         );
-        assert_eq!(
-            returned_encrypted.capacity(),
-            encrypted_capacity,
-            "Encrypted buffer should maintain its capacity"
+
+        // Encrypted buffer is moved to transport for zero-copy, so we get an empty Vec back
+        assert!(
+            returned_encrypted.is_empty(),
+            "Encrypted buffer is moved to transport (zero-copy)"
         );
 
-        // Verify buffers are cleared
+        // Verify plaintext buffer is cleared
         assert!(
             returned_plaintext.is_empty(),
             "Returned plaintext buffer should be cleared"
-        );
-        assert!(
-            returned_encrypted.is_empty(),
-            "Returned encrypted buffer should be cleared"
         );
     }
 
@@ -294,7 +289,7 @@ mod tests {
 
         #[async_trait]
         impl crate::transport::Transport for RecordingTransport {
-            async fn send(&self, data: &[u8]) -> std::result::Result<(), anyhow::Error> {
+            async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 // Decrypt the data to extract the index (first byte of plaintext)
                 if data.len() > 16 {
                     // Skip the noise frame header (3 bytes for length)

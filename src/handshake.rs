@@ -76,7 +76,7 @@ pub async fn do_handshake(
     // First message includes the WA connection header (with optional edge routing)
     let framed = wacore::framing::encode_frame(&client_hello_bytes, Some(&header))
         .map_err(HandshakeError::Transport)?;
-    transport.send(&framed).await?;
+    transport.send(framed).await?;
 
     // Wait for server response frame
     let resp_frame = loop {
@@ -114,7 +114,7 @@ pub async fn do_handshake(
     // Subsequent messages don't need the header
     let framed = wacore::framing::encode_frame(&client_finish_bytes, None)
         .map_err(HandshakeError::Transport)?;
-    transport.send(&framed).await?;
+    transport.send(framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
     info!(target: "Client", "Handshake complete, switching to encrypted communication");

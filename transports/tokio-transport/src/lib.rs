@@ -136,14 +136,14 @@ impl TokioWebSocketTransport {
 impl Transport for TokioWebSocketTransport {
     /// Sends raw data through the WebSocket.
     /// The caller is responsible for any framing.
-    async fn send(&self, data: &[u8]) -> Result<(), anyhow::Error> {
+    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let mut sink_guard = self.ws_sink.lock().await;
         let sink = sink_guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Socket is closed"))?;
 
         debug!("--> Sending {} bytes", data.len());
-        sink.send(Message::binary(data.to_vec()))
+        sink.send(Message::binary(data))
             .await
             .map_err(|e| anyhow::anyhow!("WebSocket send error: {}", e))?;
         Ok(())
@@ -228,11 +228,10 @@ async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<Transpo
         match stream.next().await {
             Some(Ok(msg)) => {
                 if msg.is_binary() {
-                    let data = msg.as_payload();
-                    debug!("<-- Received WebSocket data: {} bytes", data.len());
-                    // Just forward the raw bytes - no framing logic
+                    let payload = msg.into_payload();
+                    debug!("<-- Received WebSocket data: {} bytes", payload.len());
                     if event_tx
-                        .send(TransportEvent::DataReceived(Bytes::copy_from_slice(data)))
+                        .send(TransportEvent::DataReceived(Bytes::from(payload)))
                         .await
                         .is_err()
                     {

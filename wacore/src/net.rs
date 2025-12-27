@@ -20,7 +20,7 @@ pub enum TransportEvent {
 #[async_trait]
 pub trait Transport: Send + Sync {
     /// Sends raw data to the server.
-    async fn send(&self, data: &[u8]) -> Result<(), anyhow::Error>;
+    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
 
     /// Closes the connection.
     async fn disconnect(&self);
