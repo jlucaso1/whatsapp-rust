@@ -2357,6 +2357,7 @@ dependencies = [
  "whatsapp-rust-sqlite-storage",
  "whatsapp-rust-tokio-transport",
  "whatsapp-rust-ureq-http-client",
+ "zeroize",
 ]
 
 [[package]]

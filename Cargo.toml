@@ -73,6 +73,7 @@ waproto = { workspace = true }
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
 whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
 whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
+zeroize = { version = "1.8.2", features = ["derive"] }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }

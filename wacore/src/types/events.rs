@@ -1,3 +1,4 @@
+use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
@@ -265,6 +266,9 @@ pub enum Event {
 
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
+
+    /// Incoming call offer received
+    CallOffer(CallOffer),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -640,4 +644,19 @@ pub struct NewsletterLiveUpdate {
     pub jid: Jid,
     pub time: DateTime<Utc>,
     pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+}
+
+/// Incoming call offer event.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallOffer {
+    /// Basic call metadata (from, timestamp, call_id, call_creator)
+    pub meta: BasicCallMeta,
+    /// Media type (audio or video)
+    pub media_type: CallMediaType,
+    /// Whether this was delivered while offline
+    pub is_offline: bool,
+    /// Remote peer metadata (platform, version)
+    pub remote_meta: CallRemoteMeta,
+    /// Group JID if this is a group call
+    pub group_jid: Option<Jid>,
 }

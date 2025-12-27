@@ -349,6 +349,7 @@ impl Client {
 
     /// Create and configure the stanza router with all the handlers.
     fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
+        use crate::calls::CallHandler;
         use crate::handlers::{
             basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
             ib::IbHandler,
@@ -372,9 +373,9 @@ impl Client {
         router.register(Arc::new(IbHandler));
         router.register(Arc::new(NotificationHandler));
         router.register(Arc::new(AckHandler));
+        router.register(Arc::new(CallHandler));
 
         // Register unimplemented handlers
-        router.register(Arc::new(UnimplementedHandler::for_call()));
         router.register(Arc::new(UnimplementedHandler::for_presence()));
         router.register(Arc::new(UnimplementedHandler::for_chatstate()));
 

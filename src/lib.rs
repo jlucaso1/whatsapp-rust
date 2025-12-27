@@ -28,6 +28,7 @@ pub mod receipt;
 pub mod retry;
 
 pub mod appstate_sync;
+pub mod calls;
 pub mod history_sync;
 pub mod usync;
 
