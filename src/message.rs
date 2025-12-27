@@ -220,7 +220,7 @@ impl Client {
 
     pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
         let info = match self.parse_message_info(&node).await {
-            Ok(info) => info,
+            Ok(info) => Arc::new(info),
             Err(e) => {
                 log::warn!("Failed to parse message info: {e:?}");
                 return;
@@ -383,16 +383,15 @@ impl Client {
         for &enc_node in &all_enc_nodes {
             let enc_type = enc_node.attrs().string("type");
 
-            // First check for custom handlers
             if let Some(handler) = self.custom_enc_handlers.get(&enc_type) {
                 let handler_clone = handler.clone();
                 let client_clone = self.clone();
-                let info_clone = info.clone();
+                let info_arc = Arc::clone(&info);
                 let enc_node_clone = Arc::new(enc_node.clone());
 
                 tokio::spawn(async move {
                     if let Err(e) = handler_clone
-                        .handle(client_clone, &enc_node_clone, &info_clone)
+                        .handle(client_clone, &enc_node_clone, &info_arc)
                         .await
                     {
                         log::warn!("Custom handler for enc type '{}' failed: {e:?}", enc_type);

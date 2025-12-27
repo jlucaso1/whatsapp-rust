@@ -1718,19 +1718,14 @@ impl Client {
 
         info!(target: "Client/Send", "{}", DisplayableNode(&node));
 
-        // Get plaintext buffer from pool (reusable)
         let mut plaintext_buf = {
             let mut pool = self.plaintext_buffer_pool.lock().await;
             pool.pop().unwrap_or_else(|| Vec::with_capacity(1024))
         };
         plaintext_buf.clear();
 
-        // Encrypted buffer is created fresh each time (moved to transport for zero-copy)
-        let encrypted_buf = Vec::with_capacity(1024);
-
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
-            // Return plaintext buffer to pool
             let mut pool = self.plaintext_buffer_pool.lock().await;
             if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
                 pool.push(plaintext_buf);
@@ -1738,13 +1733,15 @@ impl Client {
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
+        // Size based on plaintext + encryption overhead (16 byte tag + 3 byte frame header)
+        let encrypted_buf = Vec::with_capacity(plaintext_buf.len() + 32);
+
         let (plaintext_buf, _) = match noise_socket
             .encrypt_and_send(plaintext_buf, encrypted_buf)
             .await
         {
             Ok(bufs) => bufs,
             Err(mut e) => {
-                // Return plaintext buffer to pool on error
                 let p_buf = std::mem::take(&mut e.plaintext_buf);
                 let mut pool = self.plaintext_buffer_pool.lock().await;
                 if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
@@ -1754,7 +1751,6 @@ impl Client {
             }
         };
 
-        // Return plaintext buffer to pool
         let mut pool = self.plaintext_buffer_pool.lock().await;
         if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
             pool.push(plaintext_buf);
@@ -1957,8 +1953,6 @@ mod tests {
             pool.len()
         };
 
-        // The key assertion: we should not be leaking plaintext buffers
-        // Note: encrypted buffers are not pooled (they're moved to transport for zero-copy)
         assert!(
             final_pool_size >= initial_pool_size,
             "Plaintext buffer pool should not shrink after send operations"
