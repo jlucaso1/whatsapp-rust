@@ -1,9 +1,14 @@
 //! Call manager for orchestrating call lifecycle.
 
+use super::encryption::DerivedCallKeys;
 use super::error::CallError;
 use super::signaling::SignalingType;
-use super::stanza::{CallStanzaBuilder, ParsedCallStanza};
+use super::stanza::{
+    CallStanzaBuilder, MediaParams, OfferEncData, ParsedCallStanza, RelayData, RelayLatencyData,
+};
 use super::state::{CallInfo, CallTransition};
+use super::transport::TransportPayload;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -11,13 +16,64 @@ use wacore::types::call::{CallId, CallMediaType, EndCallReason};
 use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
 
+/// Callback trait for media protocol events.
+///
+/// External media handlers (e.g., UI packages, WebRTC implementations) implement
+/// this trait to receive parsed protocol data from call signaling.
+///
+/// This is the primary integration point between whatsapp-rust protocol layer
+/// and external media handling code.
+#[async_trait]
+pub trait CallMediaCallback: Send + Sync {
+    /// Called when an offer is received with full relay/media data.
+    ///
+    /// This provides all the data needed to set up a media connection:
+    /// - Relay endpoints with tokens and addresses
+    /// - Audio/video codec parameters
+    /// - Encrypted call key for SRTP
+    async fn on_offer_received(
+        &self,
+        call_id: &str,
+        relay_data: &RelayData,
+        media_params: &MediaParams,
+        enc_data: &OfferEncData,
+    );
+
+    /// Called when transport candidates are received.
+    ///
+    /// The raw_data can be passed directly to WASM/WebRTC for processing.
+    async fn on_transport_received(&self, call_id: &str, transport: &TransportPayload);
+
+    /// Called when relay latency measurement is received.
+    ///
+    /// Used for relay selection - choose the relay with lowest latency.
+    async fn on_relay_latency(&self, call_id: &str, latency: &[RelayLatencyData]);
+
+    /// Called when enc_rekey is received (new SRTP keys).
+    ///
+    /// The derived keys should be used to update SRTP encryption.
+    async fn on_enc_rekey(&self, call_id: &str, keys: &DerivedCallKeys);
+}
+
 /// Configuration for the call manager.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CallManagerConfig {
     /// Maximum concurrent calls allowed.
     pub max_concurrent_calls: usize,
     /// Ring timeout in seconds before auto-rejecting.
     pub ring_timeout_secs: u64,
+    /// Optional media callback for external handlers.
+    pub media_callback: Option<Arc<dyn CallMediaCallback>>,
+}
+
+impl std::fmt::Debug for CallManagerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallManagerConfig")
+            .field("max_concurrent_calls", &self.max_concurrent_calls)
+            .field("ring_timeout_secs", &self.ring_timeout_secs)
+            .field("media_callback", &self.media_callback.is_some())
+            .finish()
+    }
 }
 
 impl Default for CallManagerConfig {
@@ -25,6 +81,7 @@ impl Default for CallManagerConfig {
         Self {
             max_concurrent_calls: 1,
             ring_timeout_secs: 45,
+            media_callback: None,
         }
     }
 }
@@ -93,7 +150,9 @@ impl CallManager {
         }
 
         let mut calls = self.calls.write().await;
-        if calls.len() >= self.config.max_concurrent_calls {
+        // Count only active (non-ended) calls against the limit
+        let active_count = calls.values().filter(|c| !c.state.is_ended()).count();
+        if active_count >= self.config.max_concurrent_calls {
             return Err(CallError::AlreadyExists(
                 "max concurrent calls reached".into(),
             ));

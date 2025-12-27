@@ -28,8 +28,80 @@ pub struct OfferEncData {
     pub version: u32,
 }
 
-/// Relay data from offer stanzas.
+/// Audio codec parameters from offer/accept stanzas.
 #[derive(Debug, Clone)]
+pub struct AudioParams {
+    /// Codec name (e.g., "opus")
+    pub codec: String,
+    /// Sample rate (e.g., 16000, 8000)
+    pub rate: u32,
+}
+
+/// Video codec parameters from offer/accept stanzas.
+#[derive(Debug, Clone)]
+pub struct VideoParams {
+    /// Codec name (e.g., "vp8", "h264")
+    pub codec: Option<String>,
+}
+
+/// Media parameters from offer/accept stanzas.
+#[derive(Debug, Clone, Default)]
+pub struct MediaParams {
+    /// Audio codec options (may have multiple e.g., opus 16kHz and 8kHz)
+    pub audio: Vec<AudioParams>,
+    /// Video parameters if video call
+    pub video: Option<VideoParams>,
+}
+
+/// Relay latency measurement from a relaylatency stanza.
+#[derive(Debug, Clone)]
+pub struct RelayLatencyData {
+    /// Relay server name
+    pub relay_name: String,
+    /// Latency in milliseconds (extracted from raw value)
+    pub latency_ms: u32,
+    /// Raw latency value as received (contains flags in upper bits)
+    pub raw_latency: u32,
+    /// IPv4 address if present
+    pub ipv4: Option<String>,
+    /// IPv6 address if present
+    pub ipv6: Option<String>,
+    /// Port
+    pub port: Option<u16>,
+}
+
+/// Relay endpoint address information.
+#[derive(Debug, Clone, Default)]
+pub struct RelayAddress {
+    /// IPv4 address
+    pub ipv4: Option<String>,
+    /// IPv6 address
+    pub ipv6: Option<String>,
+    /// Port for IPv4
+    pub port: u16,
+    /// Port for IPv6 (if different)
+    pub port_v6: Option<u16>,
+    /// Protocol (0 = default)
+    pub protocol: u8,
+}
+
+/// Relay endpoint with tokens and addresses.
+#[derive(Debug, Clone)]
+pub struct RelayEndpoint {
+    /// Relay server ID
+    pub relay_id: u32,
+    /// Relay server name
+    pub relay_name: String,
+    /// Index into relay_tokens array
+    pub token_id: u32,
+    /// Index into auth_tokens array
+    pub auth_token_id: u32,
+    /// Available addresses for this relay
+    pub addresses: Vec<RelayAddress>,
+}
+
+/// Relay data from offer stanzas.
+#[derive(Debug, Clone, Default)]
 pub struct RelayData {
     /// Hop-by-hop SRTP key material (30 bytes: 16-byte key + 14-byte salt)
     pub hbh_key: Option<Vec<u8>>,
@@ -41,6 +113,12 @@ pub struct RelayData {
     pub self_pid: Option<u32>,
     /// Peer participant ID
     pub peer_pid: Option<u32>,
+    /// Relay tokens (indexed by token_id)
+    pub relay_tokens: Vec<Vec<u8>>,
+    /// Auth tokens (indexed by auth_token_id)
+    pub auth_tokens: Vec<Vec<u8>>,
+    /// Relay endpoints from <te2> elements
+    pub endpoints: Vec<RelayEndpoint>,
 }
 
 /// Parsed call stanza.
@@ -80,6 +158,10 @@ pub struct ParsedCallStanza {
     pub offer_enc_data: Option<OfferEncData>,
     /// Relay information from offer
     pub relay_data: Option<RelayData>,
+    /// Media parameters from offer/accept (audio/video codec info)
+    pub media_params: Option<MediaParams>,
+    /// Relay latency measurements from relaylatency stanzas
+    pub relay_latency: Vec<RelayLatencyData>,
 }
 
 impl ParsedCallStanza {
@@ -158,6 +240,21 @@ impl ParsedCallStanza {
             None
         };
 
+        // Parse media parameters from offer/accept stanzas
+        let media_params = if matches!(signaling_type, SignalingType::Offer | SignalingType::Accept)
+        {
+            Self::parse_media_params(signaling_node)
+        } else {
+            None
+        };
+
+        // Parse relay latency data from relaylatency stanzas
+        let relay_latency = if signaling_type == SignalingType::RelayLatency {
+            Self::parse_relay_latency(signaling_node)
+        } else {
+            Vec::new()
+        };
+
         if call_id.is_empty() {
             return Err(CallError::MissingAttribute("call-id"));
         }
@@ -180,6 +277,8 @@ impl ParsedCallStanza {
             enc_rekey_data,
             offer_enc_data,
             relay_data,
+            media_params,
+            relay_latency,
         })
     }
 
@@ -281,6 +380,9 @@ impl ParsedCallStanza {
         // offer structure: <offer><relay uuid="..." self_pid="3" peer_pid="1">
         //   <key>base64</key>
         //   <hbh_key>base64</hbh_key>
+        //   <token id="0">binary</token>
+        //   <auth_token id="0">binary</auth_token>
+        //   <te2 relay_id="0" relay_name="..." token_id="0" auth_token_id="0">binary</te2>
         //   ...
         // </relay></offer>
         let children = signaling_node.children()?;
@@ -310,13 +412,214 @@ impl ParsedCallStanza {
             .find(|c| c.tag == "key")
             .and_then(|node| Self::decode_base64_content(&node.content));
 
+        // Parse tokens - collect into a Vec indexed by id
+        let mut relay_tokens: Vec<Vec<u8>> = Vec::new();
+        for node in relay_children.iter().filter(|c| c.tag == "token") {
+            if let Some(NodeContent::Bytes(bytes)) = &node.content {
+                let id = node
+                    .attrs()
+                    .optional_string("id")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(relay_tokens.len());
+                // Ensure vector is large enough
+                if id >= relay_tokens.len() {
+                    relay_tokens.resize(id + 1, Vec::new());
+                }
+                relay_tokens[id] = bytes.clone();
+            }
+        }
+
+        // Parse auth_tokens
+        let mut auth_tokens: Vec<Vec<u8>> = Vec::new();
+        for node in relay_children.iter().filter(|c| c.tag == "auth_token") {
+            if let Some(NodeContent::Bytes(bytes)) = &node.content {
+                let id = node
+                    .attrs()
+                    .optional_string("id")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(auth_tokens.len());
+                if id >= auth_tokens.len() {
+                    auth_tokens.resize(id + 1, Vec::new());
+                }
+                auth_tokens[id] = bytes.clone();
+            }
+        }
+
+        // Parse te2 elements - each contains endpoint address info
+        // Binary format: 6 bytes = IPv4 (4 bytes IP + 2 bytes port)
+        //               18 bytes = IPv6 (16 bytes IP + 2 bytes port)
+        let mut endpoints_map: HashMap<(u32, String), RelayEndpoint> = HashMap::new();
+        for node in relay_children.iter().filter(|c| c.tag == "te2") {
+            let mut te2_attrs = node.attrs();
+            let relay_id = te2_attrs
+                .optional_string("relay_id")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let relay_name = te2_attrs
+                .optional_string("relay_name")
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let token_id = te2_attrs
+                .optional_string("token_id")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let auth_token_id = te2_attrs
+                .optional_string("auth_token_id")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let protocol = te2_attrs
+                .optional_string("protocol")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+
+            // Parse address from binary content
+            if let Some(NodeContent::Bytes(bytes)) = &node.content {
+                let address = Self::parse_te2_address(bytes, protocol);
+                if let Some(addr) = address {
+                    let key = (relay_id, relay_name.clone());
+                    let endpoint = endpoints_map.entry(key).or_insert_with(|| RelayEndpoint {
+                        relay_id,
+                        relay_name: relay_name.clone(),
+                        token_id,
+                        auth_token_id,
+                        addresses: Vec::new(),
+                    });
+                    endpoint.addresses.push(addr);
+                }
+            }
+        }
+
+        let endpoints: Vec<RelayEndpoint> = endpoints_map.into_values().collect();
+
         Some(RelayData {
             hbh_key,
             relay_key,
             uuid,
             self_pid,
             peer_pid,
+            relay_tokens,
+            auth_tokens,
+            endpoints,
         })
+    }
+
+    fn parse_media_params(signaling_node: &Node) -> Option<MediaParams> {
+        // Parse <audio enc="opus" rate="16000"/> and <video enc="vp8"/> from offer/accept
+        let children = signaling_node.children()?;
+
+        let mut audio = Vec::new();
+        let mut video = None;
+
+        for child in children.iter() {
+            if child.tag == "audio" {
+                let mut attrs = child.attrs();
+                let codec = attrs
+                    .optional_string("enc")
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "opus".to_string());
+                let rate = attrs
+                    .optional_string("rate")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(16000);
+                audio.push(AudioParams { codec, rate });
+            } else if child.tag == "video" {
+                let mut attrs = child.attrs();
+                let codec = attrs.optional_string("enc").map(|s| s.to_string());
+                video = Some(VideoParams { codec });
+            }
+        }
+
+        if audio.is_empty() && video.is_none() {
+            return None;
+        }
+
+        Some(MediaParams { audio, video })
+    }
+
+    fn parse_relay_latency(signaling_node: &Node) -> Vec<RelayLatencyData> {
+        // Parse <te latency="33554444" relay_name="fimp3c01"><!-- 6 bytes --></te>
+        // Latency format: upper byte is type/flags, lower 24 bits is latency in ms
+        let Some(children) = signaling_node.children() else {
+            return Vec::new();
+        };
+
+        let mut result = Vec::new();
+        for child in children.iter().filter(|c| c.tag == "te") {
+            let mut attrs = child.attrs();
+            let relay_name = attrs
+                .optional_string("relay_name")
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let raw_latency = attrs
+                .optional_string("latency")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            // Extract actual latency (lower 24 bits)
+            let latency_ms = raw_latency & 0x00FFFFFF;
+
+            // Parse address from binary content
+            let (ipv4, ipv6, port) = match &child.content {
+                Some(NodeContent::Bytes(bytes)) if bytes.len() == 6 => {
+                    let ip = format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]);
+                    let port = u16::from_be_bytes([bytes[4], bytes[5]]);
+                    (Some(ip), None, Some(port))
+                }
+                Some(NodeContent::Bytes(bytes)) if bytes.len() == 18 => {
+                    let mut ipv6_bytes = [0u8; 16];
+                    ipv6_bytes.copy_from_slice(&bytes[0..16]);
+                    let ipv6_addr = std::net::Ipv6Addr::from(ipv6_bytes);
+                    let port = u16::from_be_bytes([bytes[16], bytes[17]]);
+                    (None, Some(ipv6_addr.to_string()), Some(port))
+                }
+                _ => (None, None, None),
+            };
+
+            result.push(RelayLatencyData {
+                relay_name,
+                latency_ms,
+                raw_latency,
+                ipv4,
+                ipv6,
+                port,
+            });
+        }
+
+        result
+    }
+
+    /// Parse binary address from te2 element content.
+    /// 6 bytes = IPv4 address (4 bytes) + port (2 bytes big-endian)
+    /// 18 bytes = IPv6 address (16 bytes) + port (2 bytes big-endian)
+    fn parse_te2_address(bytes: &[u8], protocol: u8) -> Option<RelayAddress> {
+        match bytes.len() {
+            6 => {
+                // IPv4: 4 bytes IP + 2 bytes port (big-endian)
+                let ip = format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]);
+                let port = u16::from_be_bytes([bytes[4], bytes[5]]);
+                Some(RelayAddress {
+                    ipv4: Some(ip),
+                    ipv6: None,
+                    port,
+                    port_v6: None,
+                    protocol,
+                })
+            }
+            18 => {
+                // IPv6: 16 bytes IP + 2 bytes port (big-endian)
+                let mut ipv6_bytes = [0u8; 16];
+                ipv6_bytes.copy_from_slice(&bytes[0..16]);
+                let ipv6_addr = std::net::Ipv6Addr::from(ipv6_bytes);
+                let port = u16::from_be_bytes([bytes[16], bytes[17]]);
+                Some(RelayAddress {
+                    ipv4: None,
+                    ipv6: Some(ipv6_addr.to_string()),
+                    port,
+                    port_v6: Some(port),
+                    protocol,
+                })
+            }
+            _ => None,
+        }
     }
 }
 

@@ -16,12 +16,22 @@
 //! </call>
 //! ```
 //!
-//! # Phase 2 Integration
+//! # Architecture
 //!
-//! This module provides foundational types for Phase 2 WebRTC/ICE integration.
-//! The actual ICE candidate handling will be implemented using the `webrtc` crate.
+//! The transport payload is typically binary data passed to the WASM module.
+//! This module provides:
+//! - Raw byte storage for passthrough to external media handlers
+//! - Port constants for WhatsApp relay servers
+//! - ICE candidate types for future WebRTC integration
 
 use super::error::CallError;
+use serde::{Deserialize, Serialize};
+
+/// WhatsApp relay server port (SCTP over DTLS)
+pub const WHATSAPP_RELAY_PORT: u16 = 3480;
+
+/// Standard TURN server port
+pub const TURN_RELAY_PORT: u16 = 3478;
 
 /// An ICE candidate received from or to be sent to a peer.
 ///
@@ -69,9 +79,32 @@ impl IceCandidate {
     }
 }
 
+/// JSON representation of transport data (for potential JSON payloads).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ufrag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<TransportCandidateJson>,
+}
+
+/// JSON representation of an ICE candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportCandidateJson {
+    pub candidate: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdp_mid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdp_m_line_index: Option<u16>,
+}
+
 /// Parsed transport payload containing ICE candidates.
 #[derive(Debug, Clone, Default)]
 pub struct TransportPayload {
+    /// Raw binary payload (for passthrough to external media handler)
+    pub raw_data: Vec<u8>,
     /// ICE candidates from the transport stanza
     pub candidates: Vec<IceCandidate>,
     /// ICE username fragment (local ufrag)
@@ -84,6 +117,36 @@ impl TransportPayload {
     /// Create an empty transport payload.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a transport payload from raw bytes.
+    pub fn from_raw(data: Vec<u8>) -> Self {
+        let mut payload = Self {
+            raw_data: data.clone(),
+            ..Default::default()
+        };
+        // Try to parse as JSON if it looks like JSON
+        if data.first() == Some(&b'{')
+            && let Ok(json) = serde_json::from_slice::<TransportJson>(&data)
+        {
+            payload.ufrag = json.ufrag;
+            payload.pwd = json.pwd;
+            payload.candidates = json
+                .candidates
+                .into_iter()
+                .map(|c| {
+                    let mut candidate = IceCandidate::new(c.candidate);
+                    if let Some(mid) = c.sdp_mid {
+                        candidate = candidate.with_sdp_mid(mid);
+                    }
+                    if let Some(idx) = c.sdp_m_line_index {
+                        candidate = candidate.with_sdp_m_line_index(idx);
+                    }
+                    candidate
+                })
+                .collect();
+        }
+        payload
     }
 
     /// Add an ICE candidate.
@@ -99,31 +162,57 @@ impl TransportPayload {
 
     /// Parse transport payload from binary data.
     ///
-    /// The actual binary format will be determined through reverse engineering.
-    /// This is a placeholder that returns an empty payload.
+    /// The transport payload is stored as raw bytes for passthrough to external
+    /// media handlers (WASM/WebRTC). If the data appears to be JSON, it will
+    /// also attempt to parse ICE candidates.
     ///
     /// # Arguments
-    /// * `_data` - The binary payload from the transport stanza
+    /// * `data` - The binary payload from the transport stanza
     ///
     /// # Returns
-    /// The parsed transport payload (currently empty - Phase 2 implementation)
-    pub fn parse(_data: &[u8]) -> Result<Self, CallError> {
-        // TODO: Implement actual parsing when binary format is understood
-        // The transport payload format needs to be reverse engineered from
-        // WhatsApp Web's VoIP implementation
-        Ok(Self::new())
+    /// The parsed transport payload with raw_data preserved
+    pub fn parse(data: &[u8]) -> Result<Self, CallError> {
+        Ok(Self::from_raw(data.to_vec()))
     }
 
     /// Serialize transport payload to binary data.
     ///
-    /// The actual binary format will be determined through reverse engineering.
-    /// This is a placeholder that returns an empty vector.
+    /// If raw_data is present, returns it directly. Otherwise serializes
+    /// ICE candidates as JSON.
     ///
     /// # Returns
-    /// The serialized binary payload (currently empty - Phase 2 implementation)
+    /// The serialized binary payload
     pub fn serialize(&self) -> Vec<u8> {
-        // TODO: Implement actual serialization when binary format is understood
-        Vec::new()
+        // If we have raw data, return it
+        if !self.raw_data.is_empty() {
+            return self.raw_data.clone();
+        }
+
+        // Otherwise serialize as JSON
+        let json = TransportJson {
+            ufrag: self.ufrag.clone(),
+            pwd: self.pwd.clone(),
+            candidates: self
+                .candidates
+                .iter()
+                .map(|c| TransportCandidateJson {
+                    candidate: c.candidate.clone(),
+                    sdp_mid: c.sdp_mid.clone(),
+                    sdp_m_line_index: c.sdp_m_line_index,
+                })
+                .collect(),
+        };
+        serde_json::to_vec(&json).unwrap_or_default()
+    }
+
+    /// Get the raw data for passthrough to external media handler.
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw_data
+    }
+
+    /// Check if payload has raw data.
+    pub fn has_raw_data(&self) -> bool {
+        !self.raw_data.is_empty()
     }
 }
 
