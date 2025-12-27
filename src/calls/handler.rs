@@ -1,7 +1,8 @@
 //! Call stanza handler.
 
 use super::signaling::{ResponseType, SignalingType};
-use super::stanza::{ParsedCallStanza, build_call_ack, build_call_receipt};
+use super::stanza::{OfferEncData, ParsedCallStanza, build_call_ack, build_call_receipt};
+use super::transport::TransportPayload;
 use crate::client::Client;
 use crate::handlers::traits::StanzaHandler;
 use async_trait::async_trait;
@@ -57,11 +58,10 @@ impl StanzaHandler for CallHandler {
                 self.handle_terminate(&client, &parsed).await;
             }
             SignalingType::Transport => {
-                debug!(
-                    "Received transport (ICE candidates) for call {}",
-                    parsed.call_id
-                );
-                // Phase 2: Handle ICE candidates
+                self.handle_transport(&client, &parsed).await;
+            }
+            SignalingType::RelayLatency => {
+                self.handle_relay_latency(&client, &parsed).await;
             }
             SignalingType::EncRekey => {
                 if let Some(enc_data) = &parsed.enc_rekey_data {
@@ -71,6 +71,7 @@ impl StanzaHandler for CallHandler {
                         enc_data.enc_type,
                         enc_data.ciphertext.len()
                     );
+                    // TODO: Decrypt and derive keys, then notify callback via notify_enc_rekey
                 } else {
                     warn!(
                         "Received enc_rekey for call {} but failed to parse enc data",
@@ -162,14 +163,41 @@ impl CallHandler {
 
         if let Some(relay) = &parsed.relay_data {
             debug!(
-                "Call {} relay: uuid={:?}, self_pid={:?}, peer_pid={:?}, hbh_key={} bytes, relay_key={} bytes",
+                "Call {} relay: uuid={:?}, self_pid={:?}, peer_pid={:?}, hbh_key={} bytes, relay_key={} bytes, endpoints={}",
                 parsed.call_id,
                 relay.uuid,
                 relay.self_pid,
                 relay.peer_pid,
                 relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
                 relay.relay_key.as_ref().map(|k| k.len()).unwrap_or(0),
+                relay.endpoints.len(),
             );
+        }
+
+        // Register the call with CallManager
+        let call_manager = client.get_call_manager().await;
+        if let Err(e) = call_manager.register_incoming_call(parsed).await {
+            warn!("Failed to register incoming call {}: {}", parsed.call_id, e);
+        }
+
+        // Notify callback with parsed offer data
+        if parsed.offer_enc_data.is_some() || parsed.relay_data.is_some() {
+            let relay_data = parsed.relay_data.as_ref().cloned().unwrap_or_default();
+            let media_params = parsed.media_params.as_ref().cloned().unwrap_or_default();
+            let enc_data =
+                parsed
+                    .offer_enc_data
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| OfferEncData {
+                        enc_type: super::encryption::EncType::Msg,
+                        ciphertext: Vec::new(),
+                        version: 0,
+                    });
+
+            call_manager
+                .notify_offer_received(&parsed.call_id, &relay_data, &media_params, &enc_data)
+                .await;
         }
 
         // Emit CallOffer event
@@ -181,6 +209,57 @@ impl CallHandler {
             group_jid: parsed.group_jid.clone(),
         });
         client.core.event_bus.dispatch(&event);
+    }
+
+    async fn handle_transport(&self, client: &Client, parsed: &ParsedCallStanza) {
+        debug!(
+            "Received transport (ICE candidates) for call {}",
+            parsed.call_id
+        );
+
+        // Parse transport payload if present
+        if let Some(payload_bytes) = &parsed.payload {
+            let transport = TransportPayload::from_raw(payload_bytes.clone());
+            debug!(
+                "Call {} transport: {} candidates, ufrag={:?}, raw_bytes={}",
+                parsed.call_id,
+                transport.candidates.len(),
+                transport.ufrag,
+                transport.raw_data.len(),
+            );
+
+            // Notify callback
+            let call_manager = client.get_call_manager().await;
+            call_manager
+                .notify_transport_received(&parsed.call_id, &transport)
+                .await;
+        }
+    }
+
+    async fn handle_relay_latency(&self, client: &Client, parsed: &ParsedCallStanza) {
+        if parsed.relay_latency.is_empty() {
+            debug!("Received empty relay latency for call {}", parsed.call_id);
+            return;
+        }
+
+        debug!(
+            "Received relay latency for call {}: {} measurements",
+            parsed.call_id,
+            parsed.relay_latency.len()
+        );
+
+        for lat in &parsed.relay_latency {
+            debug!(
+                "  Relay {}: {}ms (raw={}, ipv4={:?}, ipv6={:?})",
+                lat.relay_name, lat.latency_ms, lat.raw_latency, lat.ipv4, lat.ipv6
+            );
+        }
+
+        // Notify callback
+        let call_manager = client.get_call_manager().await;
+        call_manager
+            .notify_relay_latency(&parsed.call_id, &parsed.relay_latency)
+            .await;
     }
 
     async fn handle_accept(&self, client: &Client, parsed: &ParsedCallStanza) {

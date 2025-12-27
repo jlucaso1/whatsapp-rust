@@ -1075,7 +1075,7 @@ mod tests {
             .attr("uuid", "test-uuid-1234")
             .attr("self_pid", "3")
             .attr("peer_pid", "1")
-            .children([hbh_key_node, key_node].into_iter())
+            .children([hbh_key_node, key_node])
             .build();
 
         let offer_node = NodeBuilder::new("offer")
@@ -1128,13 +1128,13 @@ mod tests {
             .attr("uuid", "imyXpkD6QxOkfQw6")
             .attr("self_pid", "3")
             .attr("peer_pid", "1")
-            .children([hbh_key_node, key_node].into_iter())
+            .children([hbh_key_node, key_node])
             .build();
 
         let offer_node = NodeBuilder::new("offer")
             .attr("call-id", "3C28C0EE16982D87B95CF55638E8F3AD")
             .attr("call-creator", "39492358562039@lid")
-            .children([enc_node, relay_node].into_iter())
+            .children([enc_node, relay_node])
             .build();
 
         let call_node = NodeBuilder::new("call")
@@ -1198,7 +1198,7 @@ mod tests {
             .attr("uuid", "ObFOZDJieY45504Q")
             .attr("self_pid", "3")
             .attr("peer_pid", "1")
-            .children([hbh_key_node, key_node].into_iter())
+            .children([hbh_key_node, key_node])
             .build();
 
         let offer_node = NodeBuilder::new("offer")
@@ -1229,5 +1229,275 @@ mod tests {
         // Verify actual decoded values match
         assert_eq!(hbh_key, STANDARD.decode(hbh_key_b64).unwrap());
         assert_eq!(relay_key, STANDARD.decode(relay_key_b64).unwrap());
+    }
+
+    /// Test parsing te2 IPv4 address (6 bytes: 4 IP + 2 port)
+    #[test]
+    fn test_parse_te2_ipv4_address() {
+        // 192.168.1.100:3480 = [192, 168, 1, 100, 0x0D, 0x98]
+        let bytes = [192, 168, 1, 100, 0x0D, 0x98];
+        let addr = ParsedCallStanza::parse_te2_address(&bytes, 0).unwrap();
+
+        assert_eq!(addr.ipv4, Some("192.168.1.100".to_string()));
+        assert_eq!(addr.ipv6, None);
+        assert_eq!(addr.port, 3480);
+        assert_eq!(addr.protocol, 0);
+    }
+
+    /// Test parsing te2 IPv6 address (18 bytes: 16 IP + 2 port)
+    #[test]
+    fn test_parse_te2_ipv6_address() {
+        // ::1 with port 3480
+        let mut bytes = [0u8; 18];
+        bytes[15] = 1; // ::1
+        bytes[16] = 0x0D;
+        bytes[17] = 0x98; // 3480 in big-endian
+        let addr = ParsedCallStanza::parse_te2_address(&bytes, 1).unwrap();
+
+        assert_eq!(addr.ipv4, None);
+        assert_eq!(addr.ipv6, Some("::1".to_string()));
+        assert_eq!(addr.port, 3480);
+        assert_eq!(addr.port_v6, Some(3480));
+        assert_eq!(addr.protocol, 1);
+    }
+
+    /// Test te2 address with invalid length returns None
+    #[test]
+    fn test_parse_te2_invalid_length() {
+        assert!(ParsedCallStanza::parse_te2_address(&[1, 2, 3, 4, 5], 0).is_none()); // 5 bytes
+        assert!(ParsedCallStanza::parse_te2_address(&[1, 2, 3, 4, 5, 6, 7], 0).is_none()); // 7 bytes
+        assert!(ParsedCallStanza::parse_te2_address(&[], 0).is_none()); // 0 bytes
+    }
+
+    /// Test parsing relay latency with bitmask extraction
+    #[test]
+    fn test_parse_relay_latency_bitmask() {
+        // Raw value 33554444 = 0x0200000C, lower 24 bits = 12ms
+        let te_node = NodeBuilder::new("te")
+            .attr("relay_name", "relay1")
+            .attr("latency", "33554444")
+            .bytes(vec![192, 168, 1, 1, 0x0D, 0x98]) // 192.168.1.1:3480
+            .build();
+
+        let relaylatency_node = NodeBuilder::new("relaylatency")
+            .attr("call-id", "TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(te_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(relaylatency_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert_eq!(parsed.relay_latency.len(), 1);
+        let lat = &parsed.relay_latency[0];
+        assert_eq!(lat.relay_name, "relay1");
+        assert_eq!(lat.raw_latency, 33554444);
+        assert_eq!(lat.latency_ms, 12); // Lower 24 bits
+        assert_eq!(lat.ipv4, Some("192.168.1.1".to_string()));
+        assert_eq!(lat.port, Some(3480));
+    }
+
+    /// Test parsing media params from offer
+    #[test]
+    fn test_parse_media_params() {
+        let audio_node = NodeBuilder::new("audio")
+            .attr("enc", "opus")
+            .attr("rate", "16000")
+            .build();
+
+        let video_node = NodeBuilder::new("video").attr("enc", "vp8").build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children([audio_node, video_node])
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert!(parsed.media_params.is_some());
+        let params = parsed.media_params.unwrap();
+
+        assert_eq!(params.audio.len(), 1);
+        assert_eq!(params.audio[0].codec, "opus");
+        assert_eq!(params.audio[0].rate, 16000);
+
+        assert!(params.video.is_some());
+        assert_eq!(params.video.unwrap().codec, Some("vp8".to_string()));
+    }
+
+    /// Test parsing offer with te2 endpoints
+    #[test]
+    fn test_parse_offer_with_te2_endpoints() {
+        let te2_node = NodeBuilder::new("te2")
+            .attr("relay_id", "1")
+            .attr("relay_name", "relay.whatsapp.net")
+            .attr("token_id", "0")
+            .attr("auth_token_id", "0")
+            .bytes(vec![10, 0, 0, 1, 0x0D, 0x98]) // 10.0.0.1:3480
+            .build();
+
+        let token_node = NodeBuilder::new("token")
+            .attr("id", "0")
+            .bytes(vec![0xAA, 0xBB, 0xCC])
+            .build();
+
+        let auth_token_node = NodeBuilder::new("auth_token")
+            .attr("id", "0")
+            .bytes(vec![0xDD, 0xEE, 0xFF])
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "test-uuid")
+            .attr("self_pid", "3")
+            .attr("peer_pid", "1")
+            .children([te2_node, token_node, auth_token_node])
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert!(parsed.relay_data.is_some());
+        let relay = parsed.relay_data.unwrap();
+
+        // Check tokens
+        assert_eq!(relay.relay_tokens.len(), 1);
+        assert_eq!(relay.relay_tokens[0], vec![0xAA, 0xBB, 0xCC]);
+        assert_eq!(relay.auth_tokens.len(), 1);
+        assert_eq!(relay.auth_tokens[0], vec![0xDD, 0xEE, 0xFF]);
+
+        // Check endpoints
+        assert_eq!(relay.endpoints.len(), 1);
+        let ep = &relay.endpoints[0];
+        assert_eq!(ep.relay_id, 1);
+        assert_eq!(ep.relay_name, "relay.whatsapp.net");
+        assert_eq!(ep.token_id, 0);
+        assert_eq!(ep.auth_token_id, 0);
+        assert_eq!(ep.addresses.len(), 1);
+        assert_eq!(ep.addresses[0].ipv4, Some("10.0.0.1".to_string()));
+        assert_eq!(ep.addresses[0].port, 3480);
+    }
+
+    /// Test handling of sparse token IDs (non-sequential)
+    #[test]
+    fn test_parse_sparse_token_ids() {
+        // Token with id="2" and auth_token with id="0" - should create sparse arrays
+        let token_node = NodeBuilder::new("token")
+            .attr("id", "2")
+            .bytes(vec![0xAA, 0xBB])
+            .build();
+
+        let auth_token_node = NodeBuilder::new("auth_token")
+            .attr("id", "0")
+            .bytes(vec![0xCC, 0xDD])
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "test-uuid")
+            .children([token_node, auth_token_node])
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+        let relay = parsed.relay_data.unwrap();
+
+        // relay_tokens should have 3 entries: [empty, empty, actual]
+        assert_eq!(relay.relay_tokens.len(), 3);
+        assert!(relay.relay_tokens[0].is_empty());
+        assert!(relay.relay_tokens[1].is_empty());
+        assert_eq!(relay.relay_tokens[2], vec![0xAA, 0xBB]);
+
+        // auth_tokens should have 1 entry
+        assert_eq!(relay.auth_tokens.len(), 1);
+        assert_eq!(relay.auth_tokens[0], vec![0xCC, 0xDD]);
+    }
+
+    /// Test multiple te2 endpoints for same relay are grouped
+    #[test]
+    fn test_multiple_te2_addresses_grouped() {
+        let te2_ipv4 = NodeBuilder::new("te2")
+            .attr("relay_id", "1")
+            .attr("relay_name", "relay1")
+            .attr("token_id", "0")
+            .attr("auth_token_id", "0")
+            .bytes(vec![10, 0, 0, 1, 0x0D, 0x98]) // IPv4
+            .build();
+
+        // Different te2 with IPv6 for same relay
+        let mut ipv6_bytes = vec![0u8; 18];
+        ipv6_bytes[15] = 1; // ::1
+        ipv6_bytes[16] = 0x0D;
+        ipv6_bytes[17] = 0x98;
+        let te2_ipv6 = NodeBuilder::new("te2")
+            .attr("relay_id", "1")
+            .attr("relay_name", "relay1")
+            .attr("token_id", "0")
+            .attr("auth_token_id", "0")
+            .bytes(ipv6_bytes)
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "test-uuid")
+            .children([te2_ipv4, te2_ipv6])
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+        let relay = parsed.relay_data.unwrap();
+
+        // Should have 1 endpoint with 2 addresses
+        assert_eq!(relay.endpoints.len(), 1);
+        let ep = &relay.endpoints[0];
+        assert_eq!(ep.addresses.len(), 2);
+
+        // Check both addresses are present
+        let has_ipv4 = ep.addresses.iter().any(|a| a.ipv4.is_some());
+        let has_ipv6 = ep.addresses.iter().any(|a| a.ipv6.is_some());
+        assert!(has_ipv4, "Should have IPv4 address");
+        assert!(has_ipv6, "Should have IPv6 address");
     }
 }

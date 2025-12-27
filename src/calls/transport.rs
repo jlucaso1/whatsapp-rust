@@ -301,4 +301,53 @@ mod tests {
         assert_eq!(CandidateType::PeerReflexive.as_str(), "prflx");
         assert_eq!(CandidateType::Relay.as_str(), "relay");
     }
+
+    #[test]
+    fn test_transport_json_parsing() {
+        let json = r#"{"ufrag":"abc123","pwd":"secret456","candidates":[{"candidate":"candidate:1 1 UDP 2130706431 192.168.1.1 8888 typ host","sdp_mid":"0","sdp_m_line_index":0}]}"#;
+        let payload = TransportPayload::from_raw(json.as_bytes().to_vec());
+
+        assert_eq!(payload.ufrag, Some("abc123".to_string()));
+        assert_eq!(payload.pwd, Some("secret456".to_string()));
+        assert_eq!(payload.candidates.len(), 1);
+        assert!(payload.candidates[0].candidate.contains("192.168.1.1"));
+        assert_eq!(payload.candidates[0].sdp_mid, Some("0".to_string()));
+        assert_eq!(payload.candidates[0].sdp_m_line_index, Some(0));
+    }
+
+    #[test]
+    fn test_transport_json_roundtrip() {
+        let mut payload = TransportPayload::new();
+        payload.set_credentials("ufrag_test".to_string(), "pwd_test".to_string());
+        payload.add_candidate(
+            IceCandidate::new("candidate:1 1 UDP 2130706431 10.0.0.1 3480 typ host")
+                .with_sdp_mid("audio")
+                .with_sdp_m_line_index(0),
+        );
+
+        let serialized = payload.serialize();
+        let reparsed = TransportPayload::from_raw(serialized);
+
+        assert_eq!(reparsed.ufrag, Some("ufrag_test".to_string()));
+        assert_eq!(reparsed.pwd, Some("pwd_test".to_string()));
+        assert_eq!(reparsed.candidates.len(), 1);
+        assert!(reparsed.candidates[0].candidate.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn test_transport_non_json_passthrough() {
+        // Non-JSON binary data should be stored as raw_data
+        let binary = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
+        let payload = TransportPayload::from_raw(binary.clone());
+
+        assert!(payload.candidates.is_empty());
+        assert_eq!(payload.raw_data, binary);
+        assert!(payload.has_raw_data());
+    }
+
+    #[test]
+    fn test_port_constants() {
+        assert_eq!(WHATSAPP_RELAY_PORT, 3480);
+        assert_eq!(TURN_RELAY_PORT, 3478);
+    }
 }

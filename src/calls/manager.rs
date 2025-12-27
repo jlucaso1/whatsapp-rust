@@ -113,7 +113,6 @@ pub struct CallManager {
     /// Our JID.
     our_jid: Jid,
     /// Configuration.
-    #[allow(dead_code)]
     config: CallManagerConfig,
     /// Active calls indexed by call ID.
     calls: RwLock<HashMap<String, CallInfo>>,
@@ -375,5 +374,45 @@ impl CallManager {
             .await
             .values()
             .any(|c| c.state.is_ringing())
+    }
+
+    /// Get the media callback if configured.
+    pub fn media_callback(&self) -> Option<&Arc<dyn CallMediaCallback>> {
+        self.config.media_callback.as_ref()
+    }
+
+    /// Notify callback about an incoming offer.
+    pub async fn notify_offer_received(
+        &self,
+        call_id: &str,
+        relay_data: &RelayData,
+        media_params: &MediaParams,
+        enc_data: &OfferEncData,
+    ) {
+        if let Some(cb) = &self.config.media_callback {
+            cb.on_offer_received(call_id, relay_data, media_params, enc_data)
+                .await;
+        }
+    }
+
+    /// Notify callback about transport data.
+    pub async fn notify_transport_received(&self, call_id: &str, transport: &TransportPayload) {
+        if let Some(cb) = &self.config.media_callback {
+            cb.on_transport_received(call_id, transport).await;
+        }
+    }
+
+    /// Notify callback about relay latency measurements.
+    pub async fn notify_relay_latency(&self, call_id: &str, latency: &[RelayLatencyData]) {
+        if let Some(cb) = &self.config.media_callback {
+            cb.on_relay_latency(call_id, latency).await;
+        }
+    }
+
+    /// Notify callback about enc_rekey (new SRTP keys).
+    pub async fn notify_enc_rekey(&self, call_id: &str, keys: &DerivedCallKeys) {
+        if let Some(cb) = &self.config.media_callback {
+            cb.on_enc_rekey(call_id, keys).await;
+        }
     }
 }
