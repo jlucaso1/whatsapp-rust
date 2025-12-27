@@ -3,6 +3,42 @@ use serde::Serialize;
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
+/// Maximum retry attempts per message (matches WhatsApp Web's MAX_RETRY = 5).
+/// After this many retries, we stop sending retry receipts and rely solely on PDO.
+pub const MAX_DECRYPT_RETRIES: u8 = 5;
+
+/// Retry count threshold for logging high retry warnings.
+/// WhatsApp Web logs metrics when retry count exceeds this value.
+pub const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
+
+/// Retry reason codes matching WhatsApp Web's RetryReason enum.
+/// These are included in the retry receipt to help the sender understand
+/// why the message couldn't be decrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RetryReason {
+    /// Unknown or unspecified error
+    UnknownError = 0,
+    /// No session exists with the sender (SessionNotFound)
+    NoSession = 1,
+    /// Invalid key in the message
+    InvalidKey = 2,
+    /// PreKey ID not found (InvalidPreKeyId)
+    InvalidKeyId = 3,
+    /// Invalid message format or content (InvalidMessage)
+    InvalidMessage = 4,
+    /// Invalid signature
+    InvalidSignature = 5,
+    /// Message from the future (timestamp issue)
+    FutureMessage = 6,
+    /// MAC verification failed (bad MAC)
+    BadMac = 7,
+    /// Invalid session state
+    InvalidSession = 8,
+    /// Invalid message key
+    InvalidMsgKey = 9,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum AddressingMode {
     Pn,
