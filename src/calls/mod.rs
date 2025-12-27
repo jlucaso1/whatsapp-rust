@@ -26,11 +26,19 @@ mod manager;
 mod signaling;
 mod stanza;
 mod state;
+mod transport;
 
-pub use encryption::{CallEncryption, CallEncryptionKey};
+pub use encryption::{
+    CallEncryptionKey, DerivedCallKeys, EncType, EncryptedCallKey, SrtpKeyingMaterial,
+    decrypt_call_key, derive_call_keys, derive_srtp_keys, encrypt_call_key,
+};
 pub use error::CallError;
 pub use handler::CallHandler;
 pub use manager::{CallManager, CallManagerConfig, CallOptions};
 pub use signaling::{ResponseType, SignalingType};
-pub use stanza::{CallStanzaBuilder, ParsedCallStanza, build_call_ack, build_call_receipt};
-pub use state::{CallInfo, CallState, CallTransition, InvalidTransition};
+pub use stanza::{
+    CallStanzaBuilder, EncRekeyData, OfferEncData, ParsedCallStanza, RelayData, build_call_ack,
+    build_call_receipt,
+};
+pub use state::{CallEncryption, CallInfo, CallState, CallTransition, InvalidTransition};
+pub use transport::{CandidateType, IceCandidate, TransportPayload};

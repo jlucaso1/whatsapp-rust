@@ -7,7 +7,7 @@ use crate::handlers::traits::StanzaHandler;
 use async_trait::async_trait;
 use log::{debug, warn};
 use std::sync::Arc;
-use wacore::types::events::{CallOffer, Event};
+use wacore::types::events::{CallAccepted, CallEnded, CallOffer, CallRejected, Event};
 use wacore_binary::node::Node;
 
 /// Handler for `<call>` stanzas.
@@ -20,7 +20,10 @@ impl StanzaHandler for CallHandler {
         "call"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, cancelled: &mut bool) -> bool {
+        // Cancel the deferred ack - we send our own typed ack/receipt in send_response()
+        *cancelled = true;
+
         let parsed = match ParsedCallStanza::parse(&node) {
             Ok(p) => p,
             Err(e) => {
@@ -61,8 +64,25 @@ impl StanzaHandler for CallHandler {
                 // Phase 2: Handle ICE candidates
             }
             SignalingType::EncRekey => {
-                debug!("Received enc_rekey for call {}", parsed.call_id);
-                // Phase 2: Handle encryption key exchange
+                if let Some(enc_data) = &parsed.enc_rekey_data {
+                    debug!(
+                        "Received enc_rekey for call {} (type: {:?}, {} bytes)",
+                        parsed.call_id,
+                        enc_data.enc_type,
+                        enc_data.ciphertext.len()
+                    );
+                } else {
+                    warn!(
+                        "Received enc_rekey for call {} but failed to parse enc data",
+                        parsed.call_id
+                    );
+                }
+            }
+            SignalingType::PreAccept => {
+                debug!(
+                    "Received preaccept for call {} (peer is preparing to answer)",
+                    parsed.call_id
+                );
             }
             SignalingType::Mute => {
                 debug!("Received mute state change for call {}", parsed.call_id);
@@ -131,6 +151,27 @@ impl CallHandler {
             parsed.is_offline
         );
 
+        if let Some(enc_data) = &parsed.offer_enc_data {
+            debug!(
+                "Call {} has encrypted key: type={:?}, {} bytes",
+                parsed.call_id,
+                enc_data.enc_type,
+                enc_data.ciphertext.len()
+            );
+        }
+
+        if let Some(relay) = &parsed.relay_data {
+            debug!(
+                "Call {} relay: uuid={:?}, self_pid={:?}, peer_pid={:?}, hbh_key={} bytes, relay_key={} bytes",
+                parsed.call_id,
+                relay.uuid,
+                relay.self_pid,
+                relay.peer_pid,
+                relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
+                relay.relay_key.as_ref().map(|k| k.len()).unwrap_or(0),
+            );
+        }
+
         // Emit CallOffer event
         let event = Event::CallOffer(CallOffer {
             meta: parsed.basic_meta(),
@@ -142,18 +183,27 @@ impl CallHandler {
         client.core.event_bus.dispatch(&event);
     }
 
-    async fn handle_accept(&self, _client: &Client, parsed: &ParsedCallStanza) {
+    async fn handle_accept(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} accepted", parsed.call_id);
-        // TODO: Emit CallAccepted event when we add it to Event enum
+        let event = Event::CallAccepted(CallAccepted {
+            meta: parsed.basic_meta(),
+        });
+        client.core.event_bus.dispatch(&event);
     }
 
-    async fn handle_reject(&self, _client: &Client, parsed: &ParsedCallStanza) {
+    async fn handle_reject(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} rejected", parsed.call_id);
-        // TODO: Emit CallRejected event when we add it to Event enum
+        let event = Event::CallRejected(CallRejected {
+            meta: parsed.basic_meta(),
+        });
+        client.core.event_bus.dispatch(&event);
     }
 
-    async fn handle_terminate(&self, _client: &Client, parsed: &ParsedCallStanza) {
+    async fn handle_terminate(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} terminated", parsed.call_id);
-        // TODO: Emit CallEnded event when we add it to Event enum
+        let event = Event::CallEnded(CallEnded {
+            meta: parsed.basic_meta(),
+        });
+        client.core.event_bus.dispatch(&event);
     }
 }

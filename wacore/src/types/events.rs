@@ -269,6 +269,12 @@ pub enum Event {
 
     /// Incoming call offer received
     CallOffer(CallOffer),
+    /// Call accepted by remote party
+    CallAccepted(CallAccepted),
+    /// Call rejected by remote party
+    CallRejected(CallRejected),
+    /// Call ended/terminated
+    CallEnded(CallEnded),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -659,4 +665,25 @@ pub struct CallOffer {
     pub remote_meta: CallRemoteMeta,
     /// Group JID if this is a group call
     pub group_jid: Option<Jid>,
+}
+
+/// Call accepted event - the remote party accepted our outgoing call.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallAccepted {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
+}
+
+/// Call rejected event - the remote party rejected the call.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallRejected {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
+}
+
+/// Call ended event - the call was terminated.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallEnded {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
 }

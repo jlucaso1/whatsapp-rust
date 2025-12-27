@@ -5,6 +5,8 @@ use serde::Serialize;
 use wacore::types::call::{CallDirection, CallId, CallMediaType, CallType, EndCallReason};
 use wacore_binary::jid::Jid;
 
+use super::encryption::{CallEncryptionKey, DerivedCallKeys, derive_call_keys};
+
 /// Current state of a call.
 #[derive(Debug, Clone, Serialize, Default)]
 pub enum CallState {
@@ -80,6 +82,22 @@ pub enum CallTransition {
     VideoStateChanged { off: bool },
 }
 
+/// Encryption state for a call.
+#[derive(Clone)]
+pub struct CallEncryption {
+    pub master_key: CallEncryptionKey,
+    pub derived_keys: DerivedCallKeys,
+}
+
+impl std::fmt::Debug for CallEncryption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallEncryption")
+            .field("master_key", &self.master_key)
+            .field("derived_keys", &self.derived_keys)
+            .finish()
+    }
+}
+
 /// Full call session information.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallInfo {
@@ -93,6 +111,8 @@ pub struct CallInfo {
     pub created_at: DateTime<Utc>,
     pub group_jid: Option<Jid>,
     pub is_offline: bool,
+    #[serde(skip)]
+    pub encryption: Option<CallEncryption>,
 }
 
 impl CallInfo {
@@ -113,6 +133,7 @@ impl CallInfo {
             created_at: Utc::now(),
             group_jid: None,
             is_offline: false,
+            encryption: None,
         }
     }
 
@@ -136,7 +157,20 @@ impl CallInfo {
             created_at: Utc::now(),
             group_jid: None,
             is_offline: false,
+            encryption: None,
         }
+    }
+
+    pub fn set_encryption_key(&mut self, key: CallEncryptionKey) {
+        let derived_keys = derive_call_keys(&key);
+        self.encryption = Some(CallEncryption {
+            master_key: key,
+            derived_keys,
+        });
+    }
+
+    pub fn is_initiator(&self) -> bool {
+        self.direction == CallDirection::Outgoing
     }
 
     /// Apply a state transition. Returns error if transition is invalid.

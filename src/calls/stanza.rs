@@ -2,6 +2,7 @@
 //!
 //! Handles `<call>` stanzas according to the WhatsApp binary protocol.
 
+use super::encryption::EncType;
 use super::error::CallError;
 use super::signaling::SignalingType;
 use chrono::{DateTime, TimeZone, Utc};
@@ -10,6 +11,37 @@ use wacore::types::call::{BasicCallMeta, CallMediaType, CallPlatform, CallRemote
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::{Node, NodeContent};
+
+/// Parsed enc_rekey data from an enc_rekey stanza.
+#[derive(Debug, Clone)]
+pub struct EncRekeyData {
+    pub enc_type: EncType,
+    pub ciphertext: Vec<u8>,
+    pub count: u32,
+}
+
+/// Encrypted call key data from offer/accept stanzas.
+#[derive(Debug, Clone)]
+pub struct OfferEncData {
+    pub enc_type: EncType,
+    pub ciphertext: Vec<u8>,
+    pub version: u32,
+}
+
+/// Relay data from offer stanzas.
+#[derive(Debug, Clone)]
+pub struct RelayData {
+    /// Hop-by-hop SRTP key material (30 bytes: 16-byte key + 14-byte salt)
+    pub hbh_key: Option<Vec<u8>>,
+    /// Relay session key (16 bytes)
+    pub relay_key: Option<Vec<u8>>,
+    /// Relay UUID
+    pub uuid: Option<String>,
+    /// Self participant ID
+    pub self_pid: Option<u32>,
+    /// Peer participant ID
+    pub peer_pid: Option<u32>,
+}
 
 /// Parsed call stanza.
 #[derive(Debug, Clone)]
@@ -40,8 +72,14 @@ pub struct ParsedCallStanza {
     pub caller_pn: Option<Jid>,
     /// Caller username/push name
     pub caller_username: Option<String>,
-    /// Raw payload data (for transport, enc_rekey, etc.)
+    /// Raw payload data (for transport, etc.)
     pub payload: Option<Vec<u8>>,
+    /// Parsed enc_rekey data if this is an enc_rekey stanza
+    pub enc_rekey_data: Option<EncRekeyData>,
+    /// Encrypted call key from offer/accept (Signal-encrypted)
+    pub offer_enc_data: Option<OfferEncData>,
+    /// Relay information from offer
+    pub relay_data: Option<RelayData>,
 }
 
 impl ParsedCallStanza {
@@ -98,6 +136,28 @@ impl ParsedCallStanza {
             _ => None,
         };
 
+        // Parse enc_rekey data if this is an enc_rekey stanza
+        let enc_rekey_data = if signaling_type == SignalingType::EncRekey {
+            Self::parse_enc_rekey_data(signaling_node)
+        } else {
+            None
+        };
+
+        // Parse offer enc data (encrypted call key) from offer/accept stanzas
+        let offer_enc_data =
+            if matches!(signaling_type, SignalingType::Offer | SignalingType::Accept) {
+                Self::parse_offer_enc_data(signaling_node)
+            } else {
+                None
+            };
+
+        // Parse relay data from offer stanzas
+        let relay_data = if signaling_type == SignalingType::Offer {
+            Self::parse_relay_data(signaling_node)
+        } else {
+            None
+        };
+
         if call_id.is_empty() {
             return Err(CallError::MissingAttribute("call-id"));
         }
@@ -117,6 +177,9 @@ impl ParsedCallStanza {
             caller_pn,
             caller_username,
             payload,
+            enc_rekey_data,
+            offer_enc_data,
+            relay_data,
         })
     }
 
@@ -146,6 +209,114 @@ impl ParsedCallStanza {
         } else {
             CallMediaType::Audio
         }
+    }
+
+    fn parse_enc_rekey_data(signaling_node: &Node) -> Option<EncRekeyData> {
+        // enc_rekey structure: <enc_rekey><enc type="msg|pkmsg" count="1">ciphertext</enc></enc_rekey>
+        let children = signaling_node.children()?;
+        let enc_node = children.iter().find(|c| c.tag == "enc")?;
+
+        let mut attrs = enc_node.attrs();
+        let enc_type_str = attrs.optional_string("type")?;
+        let enc_type: EncType = enc_type_str.parse().ok()?;
+        let count = attrs
+            .optional_string("count")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let ciphertext = match &enc_node.content {
+            Some(NodeContent::Bytes(b)) => b.clone(),
+            _ => return None,
+        };
+
+        Some(EncRekeyData {
+            enc_type,
+            ciphertext,
+            count,
+        })
+    }
+
+    fn parse_offer_enc_data(signaling_node: &Node) -> Option<OfferEncData> {
+        // offer/accept structure: <offer><enc type="pkmsg" v="2">ciphertext</enc></offer>
+        let children = signaling_node.children()?;
+        let enc_node = children.iter().find(|c| c.tag == "enc")?;
+
+        let mut attrs = enc_node.attrs();
+        let enc_type_str = attrs.optional_string("type")?;
+        let enc_type: EncType = enc_type_str.parse().ok()?;
+        let version = attrs
+            .optional_string("v")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2);
+
+        let ciphertext = match &enc_node.content {
+            Some(NodeContent::Bytes(b)) => b.clone(),
+            _ => return None,
+        };
+
+        Some(OfferEncData {
+            enc_type,
+            ciphertext,
+            version,
+        })
+    }
+
+    fn decode_base64_content(content: &Option<NodeContent>) -> Option<Vec<u8>> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        match content {
+            Some(NodeContent::String(s)) => STANDARD.decode(s).ok(),
+            Some(NodeContent::Bytes(b)) => {
+                // Try to decode as base64 string (Android sends base64 as bytes)
+                std::str::from_utf8(b)
+                    .ok()
+                    .and_then(|s| STANDARD.decode(s).ok())
+                    // Fallback: use raw bytes if not valid base64
+                    .or_else(|| Some(b.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_relay_data(signaling_node: &Node) -> Option<RelayData> {
+        // offer structure: <offer><relay uuid="..." self_pid="3" peer_pid="1">
+        //   <key>base64</key>
+        //   <hbh_key>base64</hbh_key>
+        //   ...
+        // </relay></offer>
+        let children = signaling_node.children()?;
+        let relay_node = children.iter().find(|c| c.tag == "relay")?;
+
+        let mut attrs = relay_node.attrs();
+        let uuid = attrs.optional_string("uuid").map(|s| s.to_string());
+        let self_pid = attrs
+            .optional_string("self_pid")
+            .and_then(|s| s.parse().ok());
+        let peer_pid = attrs
+            .optional_string("peer_pid")
+            .and_then(|s| s.parse().ok());
+
+        let relay_children = relay_node.children()?;
+
+        // Parse hbh_key (base64 encoded, 30 bytes when decoded)
+        // Handle both String and Bytes content - Android sends as Bytes, iPhone as String
+        let hbh_key = relay_children
+            .iter()
+            .find(|c| c.tag == "hbh_key")
+            .and_then(|node| Self::decode_base64_content(&node.content));
+
+        // Parse relay key (base64 encoded, 16 bytes when decoded)
+        let relay_key = relay_children
+            .iter()
+            .find(|c| c.tag == "key")
+            .and_then(|node| Self::decode_base64_content(&node.content));
+
+        Some(RelayData {
+            hbh_key,
+            relay_key,
+            uuid,
+            self_pid,
+            peer_pid,
+        })
     }
 }
 
@@ -480,5 +651,280 @@ mod tests {
             ))
             .build();
         assert!(ParsedCallStanza::parse(&unknown_type).is_err());
+    }
+
+    #[test]
+    fn test_parse_enc_rekey_stanza() {
+        let ciphertext = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .attr("count", "1")
+            .bytes(ciphertext.clone())
+            .build();
+
+        let enc_rekey_node = NodeBuilder::new("enc_rekey")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(enc_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza789")
+            .attr("from", "456@lid")
+            .children(std::iter::once(enc_rekey_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert_eq!(parsed.signaling_type, SignalingType::EncRekey);
+        assert!(parsed.enc_rekey_data.is_some());
+
+        let enc_data = parsed.enc_rekey_data.unwrap();
+        assert_eq!(enc_data.enc_type, EncType::Msg);
+        assert_eq!(enc_data.ciphertext, ciphertext);
+        assert_eq!(enc_data.count, 1);
+    }
+
+    #[test]
+    fn test_parse_enc_rekey_pkmsg() {
+        let ciphertext = vec![0xAA, 0xBB, 0xCC];
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "pkmsg")
+            .attr("count", "2")
+            .bytes(ciphertext.clone())
+            .build();
+
+        let enc_rekey_node = NodeBuilder::new("enc_rekey")
+            .attr("call-id", "ABCDABCDABCDABCDABCDABCDABCDABCD")
+            .attr("call-creator", "789@lid")
+            .children(std::iter::once(enc_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanzaXYZ")
+            .attr("from", "789@lid")
+            .children(std::iter::once(enc_rekey_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        let enc_data = parsed.enc_rekey_data.unwrap();
+        assert_eq!(enc_data.enc_type, EncType::PkMsg);
+        assert_eq!(enc_data.count, 2);
+    }
+
+    #[test]
+    fn test_parse_offer_with_enc_data() {
+        let ciphertext = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "pkmsg")
+            .attr("v", "2")
+            .bytes(ciphertext.clone())
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(enc_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert_eq!(parsed.signaling_type, SignalingType::Offer);
+        assert!(parsed.offer_enc_data.is_some());
+
+        let enc_data = parsed.offer_enc_data.unwrap();
+        assert_eq!(enc_data.enc_type, EncType::PkMsg);
+        assert_eq!(enc_data.ciphertext, ciphertext);
+        assert_eq!(enc_data.version, 2);
+    }
+
+    #[test]
+    fn test_parse_offer_with_relay_data() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        // hbh_key is 30 bytes (16-byte key + 14-byte salt)
+        let hbh_key_raw = vec![0u8; 30];
+        let hbh_key_b64 = STANDARD.encode(&hbh_key_raw);
+
+        // relay key is 16 bytes
+        let relay_key_raw = vec![1u8; 16];
+        let relay_key_b64 = STANDARD.encode(&relay_key_raw);
+
+        let hbh_key_node = NodeBuilder::new("hbh_key")
+            .string_content(&hbh_key_b64)
+            .build();
+
+        let key_node = NodeBuilder::new("key")
+            .string_content(&relay_key_b64)
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "test-uuid-1234")
+            .attr("self_pid", "3")
+            .attr("peer_pid", "1")
+            .children([hbh_key_node, key_node].into_iter())
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "ABCDABCDABCDABCDABCDABCDABCDABCD")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza456")
+            .attr("from", "789@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert!(parsed.relay_data.is_some());
+
+        let relay = parsed.relay_data.unwrap();
+        assert_eq!(relay.uuid, Some("test-uuid-1234".to_string()));
+        assert_eq!(relay.self_pid, Some(3));
+        assert_eq!(relay.peer_pid, Some(1));
+        assert_eq!(relay.hbh_key, Some(hbh_key_raw));
+        assert_eq!(relay.relay_key, Some(relay_key_raw));
+    }
+
+    #[test]
+    fn test_parse_real_world_offer() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        // Simulate real-world data from captured log
+        let hbh_key_b64 = "JbP13zz3zr7KgLkcbpfwnAFbFwM/A8dqhj06EeUD";
+        let relay_key_b64 = "mUE7+M4ONPvG8cvyhwYRHQ==";
+
+        let hbh_key_node = NodeBuilder::new("hbh_key")
+            .string_content(hbh_key_b64)
+            .build();
+
+        let key_node = NodeBuilder::new("key")
+            .string_content(relay_key_b64)
+            .build();
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "pkmsg")
+            .attr("v", "2")
+            .bytes(vec![0u8; 230])
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "imyXpkD6QxOkfQw6")
+            .attr("self_pid", "3")
+            .attr("peer_pid", "1")
+            .children([hbh_key_node, key_node].into_iter())
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "3C28C0EE16982D87B95CF55638E8F3AD")
+            .attr("call-creator", "39492358562039@lid")
+            .children([enc_node, relay_node].into_iter())
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "1766798782-379")
+            .attr("from", "39492358562039@lid")
+            .attr("t", "1766838524")
+            .attr("platform", "iphone")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert_eq!(parsed.call_id, "3C28C0EE16982D87B95CF55638E8F3AD");
+        assert_eq!(parsed.signaling_type, SignalingType::Offer);
+        assert_eq!(parsed.platform, Some(CallPlatform::IOS));
+
+        // Check enc data
+        assert!(parsed.offer_enc_data.is_some());
+        let enc_data = parsed.offer_enc_data.unwrap();
+        assert_eq!(enc_data.enc_type, EncType::PkMsg);
+        assert_eq!(enc_data.version, 2);
+        assert_eq!(enc_data.ciphertext.len(), 230);
+
+        // Check relay data
+        assert!(parsed.relay_data.is_some());
+        let relay = parsed.relay_data.unwrap();
+        assert_eq!(relay.uuid, Some("imyXpkD6QxOkfQw6".to_string()));
+        assert_eq!(relay.self_pid, Some(3));
+        assert_eq!(relay.peer_pid, Some(1));
+
+        // Verify decoded keys
+        let hbh_key = relay.hbh_key.unwrap();
+        assert_eq!(hbh_key.len(), 30); // 16-byte key + 14-byte salt
+
+        let relay_key = relay.relay_key.unwrap();
+        assert_eq!(relay_key.len(), 16);
+
+        // Verify actual decoded values
+        assert_eq!(hbh_key, STANDARD.decode(hbh_key_b64).unwrap());
+        assert_eq!(relay_key, STANDARD.decode(relay_key_b64).unwrap());
+    }
+
+    #[test]
+    fn test_parse_android_offer_with_bytes_base64() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        // Android sends base64 as NodeContent::Bytes, not String
+        let hbh_key_b64 = "k/RqBHV7RGJatNYU1tV/enPmLxa9DM5G5ksi7mCt";
+        let relay_key_b64 = "xTHBglrIlsSV7ewbKun27w==";
+
+        // Create nodes with bytes content (simulating Android behavior)
+        let hbh_key_node = NodeBuilder::new("hbh_key")
+            .bytes(hbh_key_b64.as_bytes().to_vec())
+            .build();
+
+        let key_node = NodeBuilder::new("key")
+            .bytes(relay_key_b64.as_bytes().to_vec())
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "ObFOZDJieY45504Q")
+            .attr("self_pid", "3")
+            .attr("peer_pid", "1")
+            .children([hbh_key_node, key_node].into_iter())
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "ACBCE0CD41E4B7F1513EB665509E8A7E")
+            .attr("call-creator", "119009819262985@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "E9457605BF5A89B6A81693B2FE7CE734")
+            .attr("from", "119009819262985@lid")
+            .attr("platform", "android")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+
+        assert!(parsed.relay_data.is_some());
+        let relay = parsed.relay_data.unwrap();
+
+        // Verify keys are decoded correctly even when sent as bytes
+        let hbh_key = relay.hbh_key.unwrap();
+        assert_eq!(hbh_key.len(), 30); // 16-byte key + 14-byte salt
+
+        let relay_key = relay.relay_key.unwrap();
+        assert_eq!(relay_key.len(), 16);
+
+        // Verify actual decoded values match
+        assert_eq!(hbh_key, STANDARD.decode(hbh_key_b64).unwrap());
+        assert_eq!(relay_key, STANDARD.decode(relay_key_b64).unwrap());
     }
 }
