@@ -20,7 +20,7 @@ base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.5", default-features = false }
 
 # Time handling
-chrono = { version = "0.4", features = [
+chrono = { version = "0.4.39", features = [
     "now",
     "serde",
 ], default-features = false }
