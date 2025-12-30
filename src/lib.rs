@@ -1,4 +1,5 @@
 pub use wacore::{proto_helpers, store::traits};
+pub use waproto;
 
 pub mod http;
 pub mod types;
