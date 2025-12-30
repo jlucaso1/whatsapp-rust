@@ -332,6 +332,7 @@ impl Client {
             false,
             true, // is_retry: includes fresh SKDM for groups
             None,
+            vec![], // Extra nodes not preserved on retry - caller must resend with options if needed
         )
         .await?;
 
