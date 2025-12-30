@@ -5,8 +5,7 @@ use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::JidExt as _;
-
+use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::Node;
 
 impl Client {
@@ -99,6 +98,90 @@ impl Client {
 
         if let Err(e) = self.send_node(receipt_node).await {
             log::warn!(target: "Client/Receipt", "Failed to send delivery receipt for message {}: {:?}", info.id, e);
+        }
+    }
+
+    /// Sends read receipts to mark messages as read.
+    ///
+    /// This function batches multiple message IDs for the same sender and sends
+    /// a single receipt stanza per sender. This is used when a user opens a chat
+    /// and views messages.
+    ///
+    /// # Arguments
+    /// * `chat_jid` - The JID of the chat (group or individual)
+    /// * `messages` - List of (message_id, sender_jid) tuples to mark as read
+    pub async fn send_read_receipts(&self, chat_jid: &Jid, messages: &[(String, Jid)]) {
+        use wacore_binary::jid::STATUS_BROADCAST_USER;
+
+        // Don't send receipts for status broadcasts
+        if chat_jid.user == STATUS_BROADCAST_USER {
+            return;
+        }
+
+        if messages.is_empty() {
+            return;
+        }
+
+        let is_group = chat_jid.is_group();
+
+        // Group messages by sender for batching
+        let mut by_sender: HashMap<Jid, Vec<String>> = HashMap::new();
+        for (msg_id, sender) in messages {
+            by_sender
+                .entry(sender.clone())
+                .or_default()
+                .push(msg_id.clone());
+        }
+
+        // Send one receipt per sender
+        for (sender, msg_ids) in by_sender {
+            if msg_ids.is_empty() {
+                continue;
+            }
+
+            // First message ID goes in the 'id' attribute
+            let first_id = msg_ids[0].clone();
+            let additional_ids: Vec<_> = msg_ids.into_iter().skip(1).collect();
+
+            let mut attrs = HashMap::new();
+            attrs.insert("id".to_string(), first_id.clone());
+            attrs.insert("to".to_string(), chat_jid.to_string());
+            attrs.insert("type".to_string(), "read".to_string());
+
+            // For group messages, include the participant (original sender)
+            if is_group {
+                attrs.insert("participant".to_string(), sender.to_string());
+            }
+
+            // Build the receipt node
+            let mut builder = NodeBuilder::new("receipt").attrs(attrs);
+
+            // If there are additional message IDs, add them in a <list> element
+            if !additional_ids.is_empty() {
+                let items: Vec<Node> = additional_ids
+                    .iter()
+                    .map(|id: &String| NodeBuilder::new("item").attr("id", id.clone()).build())
+                    .collect();
+                let list_node = NodeBuilder::new("list").children(items).build();
+                builder = builder.children(vec![list_node]);
+            }
+
+            let receipt_node = builder.build();
+
+            let total_count = 1 + additional_ids.len();
+            info!(
+                target: "Client/Receipt",
+                "Sending read receipt for {} message(s) in {} (sender: {})",
+                total_count, chat_jid, sender
+            );
+
+            if let Err(e) = self.send_node(receipt_node).await {
+                log::warn!(
+                    target: "Client/Receipt",
+                    "Failed to send read receipt for {} messages: {:?}",
+                    total_count, e
+                );
+            }
         }
     }
 }

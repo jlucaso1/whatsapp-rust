@@ -1,0 +1,99 @@
+//! Chat list item component
+
+use gpui::{Entity, SharedString, div, prelude::*, px, rgb};
+
+use crate::app::WhatsAppApp;
+use crate::state::Chat;
+use crate::theme::{colors, layout};
+
+use super::Avatar;
+
+/// Render a single chat item in the list
+pub fn render_chat_item(
+    chat: Chat,
+    is_selected: bool,
+    jid: String,
+    entity: Entity<WhatsAppApp>,
+) -> impl IntoElement {
+    // Use SharedString to avoid extra allocations
+    let name: SharedString = chat.name.into();
+    let last_message: SharedString = chat
+        .last_message
+        .unwrap_or_else(|| "No messages".to_string())
+        .into();
+    let unread = chat.unread_count;
+    let initial = name.chars().next().unwrap_or('?');
+
+    div()
+        .id(SharedString::from(format!("chat-{}", jid)))
+        .w_full()
+        .h(px(layout::CHAT_ITEM_HEIGHT))
+        .flex()
+        .items_center()
+        .px_3()
+        .gap_3()
+        .cursor_pointer()
+        .bg(if is_selected {
+            rgb(colors::BG_SELECTED)
+        } else {
+            rgb(colors::BG_SECONDARY)
+        })
+        // Only show hover effect when not selected
+        .when(!is_selected, |el| el.hover(|s| s.bg(rgb(colors::BG_HOVER))))
+        .on_click(move |_, _, cx| {
+            entity.update(cx, |this, cx| {
+                this.select_chat(jid.clone(), cx);
+            });
+        })
+        // Avatar
+        .child(Avatar::from_initial(initial, layout::AVATAR_SIZE_LARGE))
+        // Chat info
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .overflow_hidden()
+                // Name row
+                .child(
+                    div().flex().justify_between().child(
+                        div()
+                            .text_color(rgb(colors::TEXT_PRIMARY))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(name),
+                    ),
+                )
+                // Last message row
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_color(rgb(colors::TEXT_SECONDARY))
+                                .text_sm()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .max_w(px(200.))
+                                .child(last_message),
+                        )
+                        .when(unread > 0, |el| {
+                            el.child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_full()
+                                    .bg(rgb(colors::ACCENT_GREEN))
+                                    .text_color(rgb(colors::WHITE))
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(unread.to_string()),
+                            )
+                        }),
+                ),
+        )
+}

@@ -1,8 +1,8 @@
 //! Call manager for orchestrating call lifecycle.
 
-use super::encryption::DerivedCallKeys;
-use super::encryption::EncryptedCallKey;
+use super::encryption::{CallEncryptionKey, DerivedCallKeys, EncryptedCallKey};
 use super::error::CallError;
+use super::media::{CallMediaTransport, MediaTransportConfig, RelayLatency};
 use super::signaling::SignalingType;
 use super::stanza::{
     AcceptAudioParams, AcceptVideoParams, CallStanzaBuilder, MediaParams, OfferEncData,
@@ -12,6 +12,7 @@ use super::stanza::{
 use super::state::{CallInfo, CallTransition};
 use super::transport::TransportPayload;
 use async_trait::async_trait;
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -56,6 +57,12 @@ pub trait CallMediaCallback: Send + Sync {
     ///
     /// The derived keys should be used to update SRTP encryption.
     async fn on_enc_rekey(&self, call_id: &str, keys: &DerivedCallKeys);
+
+    /// Called when the call is accepted by the remote peer.
+    ///
+    /// For outgoing calls, this is when the callee accepts.
+    /// This is the signal to start connecting to the relay for media.
+    async fn on_call_accepted(&self, call_id: &str);
 }
 
 /// Configuration for the call manager.
@@ -119,6 +126,12 @@ pub struct CallManager {
     config: CallManagerConfig,
     /// Active calls indexed by call ID.
     calls: RwLock<HashMap<String, CallInfo>>,
+    /// Pre-bound transports for calls (bound early after ACK, before peer accepts).
+    /// Indexed by call ID.
+    bound_transports: RwLock<HashMap<String, Arc<CallMediaTransport>>>,
+    /// Elected relay indices from RELAY_ELECTION stanzas.
+    /// Indexed by call ID.
+    elected_relays: RwLock<HashMap<String, u32>>,
 }
 
 impl CallManager {
@@ -128,6 +141,8 @@ impl CallManager {
             our_jid,
             config,
             calls: RwLock::new(HashMap::new()),
+            bound_transports: RwLock::new(HashMap::new()),
+            elected_relays: RwLock::new(HashMap::new()),
         })
     }
 
@@ -137,6 +152,9 @@ impl CallManager {
         peer_jid: Jid,
         options: CallOptions,
     ) -> Result<CallId, CallError> {
+        // Clean up ended calls before checking limits
+        self.cleanup_ended_calls().await;
+
         let call_id = CallId::generate();
         let media_type = if options.video {
             CallMediaType::Video
@@ -164,12 +182,48 @@ impl CallManager {
         Ok(call_id)
     }
 
-    /// Build an offer stanza for an outgoing call.
+    /// Build an offer stanza for an outgoing call (basic, without encrypted key).
+    ///
+    /// For a fully functional offer, use `build_offer_stanza_with_key` instead which
+    /// includes the encrypted call key required for media connection.
     pub async fn build_offer_stanza(&self, call_id: &CallId) -> Result<Node, CallError> {
+        self.build_offer_stanza_with_key(call_id, None).await
+    }
+
+    /// Build an offer stanza for an outgoing call with an encrypted call key.
+    ///
+    /// This builds a complete offer stanza with:
+    /// - Encrypted call key (`<enc type="msg|pkmsg" v="2">...`)
+    /// - Audio codec parameters (`<audio enc="opus" rate="16000">`)
+    /// - Video codec parameters if video call (`<video enc="vp8">`)
+    /// - Network medium (`<net medium="2"/>`)
+    /// - Encryption key generation (`<encopt keygen="2"/>`)
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to build the offer for
+    /// * `encrypted_key` - The encrypted call key (encrypted using Signal protocol
+    ///   for the recipient). If None, builds a basic offer stanza.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Generate and encrypt call key for the recipient
+    /// let (call_key, encrypted) = client.encrypt_call_key_for(&peer_jid).await?;
+    ///
+    /// // Build offer stanza with encrypted key
+    /// let stanza = call_manager.build_offer_stanza_with_key(&call_id, Some(encrypted)).await?;
+    /// client.send_node(stanza).await?;
+    /// ```
+    pub async fn build_offer_stanza_with_key(
+        &self,
+        call_id: &CallId,
+        encrypted_key: Option<EncryptedCallKey>,
+    ) -> Result<Node, CallError> {
         let calls = self.calls.read().await;
         let info = calls
             .get(call_id.as_str())
             .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let is_video = info.media_type == CallMediaType::Video;
 
         let mut builder = CallStanzaBuilder::new(
             call_id.as_str(),
@@ -177,11 +231,27 @@ impl CallManager {
             info.peer_jid.clone(),
             SignalingType::Offer,
         )
-        .video(info.media_type == CallMediaType::Video);
+        .video(is_video);
 
         if let Some(ref group_jid) = info.group_jid {
             builder = builder.group(group_jid.clone());
         }
+
+        // Add encrypted key if provided
+        if let Some(key) = encrypted_key {
+            builder = builder.encrypted_key(key);
+        }
+
+        // Add audio params (default codec settings)
+        builder = builder.audio(AcceptAudioParams::default());
+
+        // Add video params if video call
+        if is_video {
+            builder = builder.video_params(AcceptVideoParams::default());
+        }
+
+        // Add net and encopt elements (required for proper call initiation)
+        builder = builder.net_medium(2).encopt_keygen(2);
 
         Ok(builder.build())
     }
@@ -586,5 +656,232 @@ impl CallManager {
         if let Some(cb) = &self.config.media_callback {
             cb.on_enc_rekey(call_id, keys).await;
         }
+    }
+
+    /// Notify callback that the call was accepted.
+    ///
+    /// For outgoing calls, this indicates the callee has accepted and
+    /// media connection should be established.
+    pub async fn notify_call_accepted(&self, call_id: &str) {
+        if let Some(cb) = &self.config.media_callback {
+            cb.on_call_accepted(call_id).await;
+        }
+    }
+
+    /// Get relay data for a call.
+    ///
+    /// Returns the relay data from the offer (for incoming calls) or from
+    /// the offer ACK (for outgoing calls, must be stored after receiving ACK).
+    pub async fn get_relay_data(&self, call_id: &CallId) -> Option<RelayData> {
+        self.calls
+            .read()
+            .await
+            .get(call_id.as_str())
+            .and_then(|info| info.offer_relay_data.clone())
+    }
+
+    /// Store relay data from an offer ACK (for outgoing calls).
+    ///
+    /// When we send an offer, the server allocates relays and returns them
+    /// in the ACK response. This method stores that data in the call info.
+    pub async fn store_relay_data(
+        &self,
+        call_id: &CallId,
+        relay_data: RelayData,
+    ) -> Result<(), CallError> {
+        let mut calls = self.calls.write().await;
+        let info = calls
+            .get_mut(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        info.offer_relay_data = Some(relay_data);
+        Ok(())
+    }
+
+    /// Bind to relays immediately after receiving ACK (early binding).
+    ///
+    /// This performs STUN binding to measure actual latency and keeps the
+    /// connections alive for when the peer accepts. This prevents token
+    /// expiration issues that occur when binding is delayed.
+    ///
+    /// Returns the measured latencies for each relay, which should be sent
+    /// in RELAYLATENCY stanzas.
+    ///
+    /// The bound transport is stored internally and can be retrieved later
+    /// with `get_bound_transport()`.
+    pub async fn bind_relays_early(
+        &self,
+        call_id: &CallId,
+        relay_data: &RelayData,
+    ) -> Result<Vec<RelayLatency>, CallError> {
+        info!(
+            "Early binding to {} relay endpoints for call {}",
+            relay_data.endpoints.len(),
+            call_id
+        );
+
+        // Create transport and connect (performs STUN binding)
+        let transport = Arc::new(CallMediaTransport::new(MediaTransportConfig::default()));
+
+        match transport.connect(relay_data).await {
+            Ok(active_relay) => {
+                info!(
+                    "Early binding successful for call {}: connected to {} (RTT: {:?})",
+                    call_id, active_relay.relay.relay_name, active_relay.latency
+                );
+
+                // Get all relay latencies
+                let latencies = transport.relay_latencies().await;
+                debug!(
+                    "Call {}: measured {} relay latencies",
+                    call_id,
+                    latencies.len()
+                );
+
+                // Store the bound transport
+                self.bound_transports
+                    .write()
+                    .await
+                    .insert(call_id.to_string(), transport);
+
+                Ok(latencies)
+            }
+            Err(e) => {
+                warn!("Early binding failed for call {}: {}", call_id, e);
+                // Return the actual error - don't hide binding failures
+                Err(CallError::Transport(format!("Relay binding failed: {}", e)))
+            }
+        }
+    }
+
+    /// Get a pre-bound transport for a call.
+    ///
+    /// Returns the transport that was bound during early binding (after ACK).
+    /// This should be used when the peer accepts to avoid re-binding.
+    pub async fn get_bound_transport(&self, call_id: &CallId) -> Option<Arc<CallMediaTransport>> {
+        self.bound_transports
+            .read()
+            .await
+            .get(call_id.as_str())
+            .cloned()
+    }
+
+    /// Remove and return a pre-bound transport for a call.
+    ///
+    /// This takes ownership of the transport, removing it from storage.
+    pub async fn take_bound_transport(&self, call_id: &CallId) -> Option<Arc<CallMediaTransport>> {
+        self.bound_transports.write().await.remove(call_id.as_str())
+    }
+
+    /// Create relay latency measurements from offer relay data.
+    ///
+    /// This creates measurements for each relay endpoint. For actual latency
+    /// measurement, use `bind_relays_early()` which performs STUN
+    /// binding and returns real RTT values.
+    ///
+    /// This is a convenience method that creates placeholder measurements
+    /// for cases where actual measurement is not needed.
+    pub async fn create_relay_latency_measurements(
+        &self,
+        call_id: &CallId,
+    ) -> Result<Vec<RelayLatencyMeasurement>, CallError> {
+        let calls = self.calls.read().await;
+        let info = calls
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        let relay_data = info
+            .offer_relay_data
+            .as_ref()
+            .ok_or_else(|| CallError::Parse("no relay data available".into()))?;
+
+        // Use 30ms as base latency (reasonable for most connections)
+        Ok(RelayLatencyMeasurement::from_relay_data(relay_data, 30))
+    }
+
+    /// Get the derived call encryption keys for a call.
+    ///
+    /// Returns None if no encryption key has been set for this call.
+    pub async fn get_derived_keys(&self, call_id: &CallId) -> Option<DerivedCallKeys> {
+        self.calls
+            .read()
+            .await
+            .get(call_id.as_str())
+            .and_then(|info| info.encryption.as_ref())
+            .map(|enc| enc.derived_keys.clone())
+    }
+
+    /// Check if this call was initiated by us (outgoing call).
+    pub async fn is_initiator(&self, call_id: &CallId) -> Option<bool> {
+        self.calls
+            .read()
+            .await
+            .get(call_id.as_str())
+            .map(|info| info.is_initiator())
+    }
+
+    /// Get the full call info for a call.
+    pub async fn get_call_info(&self, call_id: &CallId) -> Option<CallInfo> {
+        self.calls.read().await.get(call_id.as_str()).cloned()
+    }
+
+    /// Store the encryption key for an outgoing call.
+    ///
+    /// This should be called after generating and encrypting the call key,
+    /// before sending the offer stanza. The key will be used to derive SRTP
+    /// keys when the call is accepted.
+    ///
+    /// # Returns
+    /// `Ok(())` if the key was stored successfully.
+    /// `Err(CallError::NotFound)` if the call doesn't exist.
+    pub async fn store_encryption_key(
+        &self,
+        call_id: &CallId,
+        key: CallEncryptionKey,
+    ) -> Result<(), CallError> {
+        let mut calls = self.calls.write().await;
+        let info = calls
+            .get_mut(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(call_id.to_string()))?;
+
+        info.set_encryption_key(key);
+        log::debug!("Stored encryption key for call {}", call_id);
+        Ok(())
+    }
+
+    /// Store the elected relay index from a RELAY_ELECTION stanza.
+    ///
+    /// The server sends this to tell both peers which relay to use.
+    pub async fn store_elected_relay(
+        &self,
+        call_id: &CallId,
+        elected_relay_idx: u32,
+    ) -> Result<(), CallError> {
+        // Verify the call exists
+        if !self.calls.read().await.contains_key(call_id.as_str()) {
+            return Err(CallError::NotFound(call_id.to_string()));
+        }
+
+        self.elected_relays
+            .write()
+            .await
+            .insert(call_id.to_string(), elected_relay_idx);
+
+        info!(
+            "Stored elected relay index {} for call {}",
+            elected_relay_idx, call_id
+        );
+        Ok(())
+    }
+
+    /// Get the elected relay index for a call.
+    ///
+    /// Returns None if no RELAY_ELECTION has been received yet.
+    pub async fn get_elected_relay(&self, call_id: &CallId) -> Option<u32> {
+        self.elected_relays
+            .read()
+            .await
+            .get(call_id.as_str())
+            .copied()
     }
 }

@@ -32,6 +32,7 @@ mod encryption;
 mod error;
 mod handler;
 mod manager;
+pub mod media;
 mod signaling;
 mod stanza;
 mod state;
@@ -48,8 +49,8 @@ pub use signaling::{ResponseType, SignalingType};
 pub use stanza::{
     AcceptAudioParams, AcceptVideoParams, AudioParams, CallStanzaBuilder, EncRekeyData,
     MediaParams, OfferEncData, ParsedCallStanza, PreacceptParams, RelayAddress, RelayData,
-    RelayEndpoint, RelayLatencyData, RelayLatencyMeasurement, TransportParams, VideoParams,
-    build_call_ack, build_call_receipt,
+    RelayElectionData, RelayEndpoint, RelayLatencyData, RelayLatencyMeasurement, TransportParams,
+    VideoParams, build_call_ack, build_call_receipt, parse_relay_data_from_ack,
 };
 pub use state::{CallEncryption, CallInfo, CallState, CallTransition, InvalidTransition};
 pub use transport::{

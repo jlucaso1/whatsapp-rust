@@ -20,6 +20,7 @@ members = [
     "wacore/binary",
     "wacore/libsignal",
     "waproto",
+    "whatsapp-ui",
 ]
 
 [workspace.dependencies]
@@ -76,6 +77,11 @@ whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "
 whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
 whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
 zeroize = { version = "1.8.2", features = ["derive"] }
+aes = "0.8.4"
+ctr = "0.9.2"
+hmac = "0.12.1"
+sha1 = "0.10.6"
+crc = "3.4.0"
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
@@ -95,4 +101,35 @@ inherits = "release"
 lto = "thin"
 debug = 1
 strip = false
+
+# Profiling profile: optimized with debug symbols for heaptrack/valgrind
+[profile.profiling]
+inherits = "release"
+debug = 2          # Full debug info for stack traces
+strip = false      # Keep symbols
+lto = false        # Disable LTO for faster builds and better traces
+opt-level = 2      # Still optimized but not aggressive
+
+# Patch gpui to use forked version with YUV surface support
+# This ensures gpui-component uses the same gpui version as whatsapp-ui
+[patch.crates-io]
+gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
+# Also patch gpui-component to use main branch which may have newer GPUI API support
+gpui-component = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git" }
+
+# Patch zed-industries/zed to use our forked version (for gpui-component's git dependency)
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
+collections = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "collections" }
+util = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "util" }
+util_macros = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "util_macros" }
+sum_tree = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "sum_tree" }
+refineable = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "refineable" }
+derive_refineable = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "derive_refineable" }
+gpui_macros = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui_macros" }
+http_client = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "http_client" }
+perf = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "perf" }
+zlog = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "zlog" }
+ztracing = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "ztracing" }
 

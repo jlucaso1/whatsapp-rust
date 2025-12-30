@@ -376,7 +376,13 @@ impl Client {
             .lid
             .clone()
             .or_else(|| device.pn.clone())
-            .unwrap_or_else(|| "0@lid".parse().unwrap());
+            .unwrap_or_else(|| {
+                // Fallback JID for when device has no LID or phone number yet
+                // This is a compile-time constant that is guaranteed to parse
+                "0@lid"
+                    .parse()
+                    .expect("fallback JID '0@lid' is a valid constant")
+            });
 
         let manager =
             crate::calls::CallManager::new(our_jid, crate::calls::CallManagerConfig::default());

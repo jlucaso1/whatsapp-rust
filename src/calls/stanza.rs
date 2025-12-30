@@ -53,6 +53,13 @@ pub struct MediaParams {
     pub video: Option<VideoParams>,
 }
 
+/// Relay election data from a relay_election stanza.
+#[derive(Debug, Clone)]
+pub struct RelayElectionData {
+    /// Index of the elected relay in the endpoints array.
+    pub elected_relay_idx: u32,
+}
+
 /// Relay latency measurement from a relaylatency stanza.
 #[derive(Debug, Clone)]
 pub struct RelayLatencyData {
@@ -98,6 +105,8 @@ pub struct RelayEndpoint {
     pub auth_token_id: u32,
     /// Available addresses for this relay
     pub addresses: Vec<RelayAddress>,
+    /// Server-estimated client-to-relay RTT in milliseconds (from c2r_rtt attribute)
+    pub c2r_rtt_ms: Option<u32>,
 }
 
 /// Relay data from offer stanzas.
@@ -162,6 +171,8 @@ pub struct ParsedCallStanza {
     pub media_params: Option<MediaParams>,
     /// Relay latency measurements from relaylatency stanzas
     pub relay_latency: Vec<RelayLatencyData>,
+    /// Relay election data from relay_election stanzas
+    pub relay_election: Option<RelayElectionData>,
 }
 
 impl ParsedCallStanza {
@@ -182,10 +193,10 @@ impl ParsedCallStanza {
             .and_then(|t| t.parse::<i64>().ok())
             .and_then(|t| Utc.timestamp_opt(t, 0).single())
             .unwrap_or_else(Utc::now);
-        let is_offline = attrs
-            .optional_string("offline")
-            .map(|s| s == "true")
-            .unwrap_or(false);
+        // Presence of the `offline` attribute indicates this stanza was delivered
+        // during offline sync (i.e., the call happened while we were disconnected).
+        // The value can be "0", "true", or other - any presence means offline.
+        let is_offline = attrs.optional_string("offline").is_some();
         let platform = attrs.optional_string("platform").map(CallPlatform::from);
         let version = attrs.optional_string("version").map(|s| s.to_string());
 
@@ -255,6 +266,13 @@ impl ParsedCallStanza {
             Vec::new()
         };
 
+        // Parse relay election data from relay_election stanzas
+        let relay_election = if signaling_type == SignalingType::RelayElection {
+            Self::parse_relay_election(signaling_node)
+        } else {
+            None
+        };
+
         if call_id.is_empty() {
             return Err(CallError::MissingAttribute("call-id"));
         }
@@ -279,6 +297,7 @@ impl ParsedCallStanza {
             relay_data,
             media_params,
             relay_latency,
+            relay_election,
         })
     }
 
@@ -471,6 +490,10 @@ impl ParsedCallStanza {
                 .optional_string("protocol")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
+            // Server-estimated client-to-relay RTT in milliseconds
+            let c2r_rtt_ms = te2_attrs
+                .optional_string("c2r_rtt")
+                .and_then(|s| s.parse().ok());
 
             // Parse address from binary content
             if let Some(NodeContent::Bytes(bytes)) = &node.content {
@@ -483,6 +506,7 @@ impl ParsedCallStanza {
                         token_id,
                         auth_token_id,
                         addresses: Vec::new(),
+                        c2r_rtt_ms,
                     });
                     endpoint.addresses.push(addr);
                 }
@@ -587,6 +611,53 @@ impl ParsedCallStanza {
         result
     }
 
+    fn parse_relay_election(signaling_node: &Node) -> Option<RelayElectionData> {
+        // Parse relay_election stanza
+        // The elected relay index might be in an attribute or binary payload
+        let mut attrs = signaling_node.attrs();
+
+        // Try to get from attribute
+        if let Some(idx_str) = attrs.optional_string("elected_relay_idx")
+            && let Ok(idx) = idx_str.parse::<u32>()
+        {
+            return Some(RelayElectionData {
+                elected_relay_idx: idx,
+            });
+        }
+
+        // Try to get from relay_id attribute
+        if let Some(idx_str) = attrs.optional_string("relay_id")
+            && let Ok(idx) = idx_str.parse::<u32>()
+        {
+            return Some(RelayElectionData {
+                elected_relay_idx: idx,
+            });
+        }
+
+        // Try to parse from binary payload (first 4 bytes as u32)
+        if let Some(NodeContent::Bytes(bytes)) = &signaling_node.content {
+            if bytes.len() >= 4 {
+                let idx = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                return Some(RelayElectionData {
+                    elected_relay_idx: idx,
+                });
+            } else if !bytes.is_empty() {
+                // Single byte index
+                return Some(RelayElectionData {
+                    elected_relay_idx: bytes[0] as u32,
+                });
+            }
+        }
+
+        // Fallback: log for debugging and return None
+        log::debug!(
+            "Could not parse relay_election: attrs={:?}, content={:?}",
+            signaling_node.attrs,
+            signaling_node.content
+        );
+        None
+    }
+
     /// Parse binary address from te2 element content.
     /// 6 bytes = IPv4 address (4 bytes) + port (2 bytes big-endian)
     /// 18 bytes = IPv6 address (16 bytes) + port (2 bytes big-endian)
@@ -620,6 +691,18 @@ impl ParsedCallStanza {
             }
             _ => None,
         }
+    }
+
+    /// Parse relay data from any node that has a `<relay>` child.
+    ///
+    /// This is a public method that can be used to extract relay data from:
+    /// - ACK nodes (server response to offer with relay allocation)
+    /// - Call stanza nodes (offer, accept)
+    ///
+    /// Returns `None` if no relay data is found.
+    pub fn parse_relay_data_from_node(node: &Node) -> Option<RelayData> {
+        // The relay data could be a direct child or nested in a signaling node
+        Self::parse_relay_data(node)
     }
 }
 
@@ -799,6 +882,8 @@ pub struct CallStanzaBuilder {
     group_jid: Option<Jid>,
     payload: Option<Vec<u8>>,
     extra_attrs: HashMap<String, String>,
+    /// Stanza ID for the outer `<call>` element (for routing and acks).
+    stanza_id: Option<String>,
     /// Encrypted call key for offer/accept stanzas.
     encrypted_key: Option<EncryptedCallKey>,
     /// Audio parameters for accept stanzas.
@@ -835,6 +920,7 @@ impl CallStanzaBuilder {
             group_jid: None,
             payload: None,
             extra_attrs: HashMap::new(),
+            stanza_id: None,
             encrypted_key: None,
             audio_params: None,
             video_params: None,
@@ -845,6 +931,15 @@ impl CallStanzaBuilder {
             net_medium: None,
             encopt_keygen: None,
         }
+    }
+
+    /// Set the stanza ID for the outer `<call>` element.
+    ///
+    /// This ID is used for routing and acknowledgment tracking.
+    /// If not set, a random ID will be generated.
+    pub fn stanza_id(mut self, id: impl Into<String>) -> Self {
+        self.stanza_id = Some(id.into());
+        self
     }
 
     pub fn video(mut self, is_video: bool) -> Self {
@@ -975,8 +1070,12 @@ impl CallStanzaBuilder {
         // Collect children to add
         let mut children: Vec<Node> = Vec::new();
 
-        // Add <enc> element if encrypted key present (for Accept)
-        if let Some(ref enc_key) = self.encrypted_key {
+        // Add <enc> element if encrypted key present (for Offer/Accept)
+        if matches!(
+            self.signaling_type,
+            SignalingType::Offer | SignalingType::Accept
+        ) && let Some(ref enc_key) = self.encrypted_key
+        {
             let enc_node = NodeBuilder::new("enc")
                 .attr("type", enc_key.enc_type.as_str())
                 .attr("v", "2")
@@ -1040,8 +1139,11 @@ impl CallStanzaBuilder {
             children.push(net_node);
         }
 
-        // Add <audio> element if params present (for Accept)
-        if self.signaling_type == SignalingType::Accept {
+        // Add <audio> element if params present (for Offer/Accept)
+        if matches!(
+            self.signaling_type,
+            SignalingType::Offer | SignalingType::Accept
+        ) {
             if let Some(ref audio) = self.audio_params {
                 let audio_node = NodeBuilder::new("audio")
                     .attr("enc", &audio.codec)
@@ -1050,7 +1152,7 @@ impl CallStanzaBuilder {
                 children.push(audio_node);
             }
 
-            // Add <net medium="2" /> for Accept
+            // Add <net medium="2" /> for Offer/Accept
             if let Some(medium) = self.net_medium {
                 let net_node = NodeBuilder::new("net")
                     .attr("medium", medium.to_string())
@@ -1058,7 +1160,7 @@ impl CallStanzaBuilder {
                 children.push(net_node);
             }
 
-            // Add <encopt keygen="2" /> for Accept
+            // Add <encopt keygen="2" /> for Offer/Accept
             if let Some(keygen) = self.encopt_keygen {
                 let encopt_node = NodeBuilder::new("encopt")
                     .attr("keygen", keygen.to_string())
@@ -1091,9 +1193,19 @@ impl CallStanzaBuilder {
 
         let signaling_node = sig_builder.build();
 
-        // Build outer call stanza
+        // Generate stanza ID if not provided
+        let stanza_id = self.stanza_id.unwrap_or_else(|| {
+            // Generate a random 32-character hex ID (similar to WhatsApp format)
+            use rand::Rng;
+            let mut rng = rand::rng();
+            let bytes: [u8; 16] = rng.random();
+            bytes.iter().map(|b| format!("{:02X}", b)).collect()
+        });
+
+        // Build outer call stanza with id attribute
         NodeBuilder::new("call")
             .attr("to", self.to.to_string())
+            .attr("id", stanza_id)
             .children(std::iter::once(signaling_node))
             .build()
     }
@@ -1129,6 +1241,30 @@ pub fn build_call_ack(stanza_id: &str, to: &Jid, signaling_type: SignalingType) 
         .attr("class", "call")
         .attr("type", signaling_type.tag_name())
         .build()
+}
+
+/// Parse relay data from an ACK node.
+///
+/// When we send an offer for an outgoing call, the server responds with an ACK
+/// that contains relay allocation data. This function extracts that data from
+/// the ACK node.
+///
+/// # ACK Structure
+///
+/// ```xml
+/// <ack to="..." id="..." class="call" type="offer">
+///   <relay uuid="..." self_pid="3" peer_pid="1">
+///     <key>base64</key>
+///     <hbh_key>base64</hbh_key>
+///     <token id="0">binary</token>
+///     <auth_token id="0">binary</auth_token>
+///     <te2 relay_id="0" relay_name="for2c02" token_id="0" auth_token_id="0">binary</te2>
+///   </relay>
+/// </ack>
+/// ```
+pub fn parse_relay_data_from_ack(ack_node: &Node) -> Option<RelayData> {
+    // ACK node has relay as a direct child
+    ParsedCallStanza::parse_relay_data_from_node(ack_node)
 }
 
 #[cfg(test)]
@@ -1789,6 +1925,89 @@ mod tests {
         assert_eq!(ep.addresses.len(), 1);
         assert_eq!(ep.addresses[0].ipv4, Some("10.0.0.1".to_string()));
         assert_eq!(ep.addresses[0].port, 3480);
+        // No c2r_rtt was specified in this test
+        assert_eq!(ep.c2r_rtt_ms, None);
+    }
+
+    /// Test parsing c2r_rtt (server-estimated RTT) from te2 elements
+    #[test]
+    fn test_parse_te2_c2r_rtt() {
+        // Create te2 nodes with c2r_rtt attributes like the real WhatsApp ACK
+        let te2_node1 = NodeBuilder::new("te2")
+            .attr("relay_id", "0")
+            .attr("relay_name", "fbss1c01")
+            .attr("token_id", "0")
+            .attr("auth_token_id", "0")
+            .attr("c2r_rtt", "5")
+            .bytes(vec![10, 0, 0, 1, 0x0D, 0x98]) // 10.0.0.1:3480
+            .build();
+
+        let te2_node2 = NodeBuilder::new("te2")
+            .attr("relay_id", "1")
+            .attr("relay_name", "for2c01")
+            .attr("token_id", "1")
+            .attr("auth_token_id", "1")
+            .attr("protocol", "1")
+            .attr("c2r_rtt", "27")
+            .bytes(vec![10, 0, 0, 2, 0x0D, 0x98]) // 10.0.0.2:3480
+            .build();
+
+        let te2_node3 = NodeBuilder::new("te2")
+            .attr("relay_id", "2")
+            .attr("relay_name", "bsb1c01")
+            .attr("token_id", "2")
+            .attr("auth_token_id", "1")
+            .attr("protocol", "1")
+            .attr("c2r_rtt", "21")
+            .bytes(vec![10, 0, 0, 3, 0x0D, 0x98]) // 10.0.0.3:3480
+            .build();
+
+        let token_node = NodeBuilder::new("token")
+            .attr("id", "0")
+            .bytes(vec![0xAA, 0xBB, 0xCC])
+            .build();
+
+        let relay_node = NodeBuilder::new("relay")
+            .attr("uuid", "test-uuid")
+            .children([te2_node1, te2_node2, te2_node3, token_node])
+            .build();
+
+        let offer_node = NodeBuilder::new("offer")
+            .attr("call-id", "TEST1234TEST1234TEST1234TEST1234")
+            .attr("call-creator", "123@lid")
+            .children(std::iter::once(relay_node))
+            .build();
+
+        let call_node = NodeBuilder::new("call")
+            .attr("id", "stanza123")
+            .attr("from", "456@lid")
+            .children(std::iter::once(offer_node))
+            .build();
+
+        let parsed = ParsedCallStanza::parse(&call_node).unwrap();
+        let relay = parsed.relay_data.unwrap();
+
+        // Find endpoints by name and verify c2r_rtt values
+        let fbss = relay
+            .endpoints
+            .iter()
+            .find(|e| e.relay_name == "fbss1c01")
+            .unwrap();
+        assert_eq!(fbss.c2r_rtt_ms, Some(5));
+
+        let for2 = relay
+            .endpoints
+            .iter()
+            .find(|e| e.relay_name == "for2c01")
+            .unwrap();
+        assert_eq!(for2.c2r_rtt_ms, Some(27));
+
+        let bsb = relay
+            .endpoints
+            .iter()
+            .find(|e| e.relay_name == "bsb1c01")
+            .unwrap();
+        assert_eq!(bsb.c2r_rtt_ms, Some(21));
     }
 
     /// Test handling of sparse token IDs (non-sequential)

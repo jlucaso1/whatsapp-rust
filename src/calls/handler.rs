@@ -1,12 +1,13 @@
 //! Call stanza handler.
 
+use super::encryption::derive_call_keys;
 use super::signaling::{ResponseType, SignalingType};
 use super::stanza::{OfferEncData, ParsedCallStanza, build_call_ack, build_call_receipt};
 use super::transport::TransportPayload;
 use crate::client::Client;
 use crate::handlers::traits::StanzaHandler;
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::types::events::{CallAccepted, CallEnded, CallOffer, CallRejected, Event};
 use wacore_binary::node::Node;
@@ -63,21 +64,11 @@ impl StanzaHandler for CallHandler {
             SignalingType::RelayLatency => {
                 self.handle_relay_latency(&client, &parsed).await;
             }
+            SignalingType::RelayElection => {
+                self.handle_relay_election(&client, &parsed).await;
+            }
             SignalingType::EncRekey => {
-                if let Some(enc_data) = &parsed.enc_rekey_data {
-                    debug!(
-                        "Received enc_rekey for call {} (type: {:?}, {} bytes)",
-                        parsed.call_id,
-                        enc_data.enc_type,
-                        enc_data.ciphertext.len()
-                    );
-                    // TODO: Decrypt and derive keys, then notify callback via notify_enc_rekey
-                } else {
-                    warn!(
-                        "Received enc_rekey for call {} but failed to parse enc data",
-                        parsed.call_id
-                    );
-                }
+                self.handle_enc_rekey(&client, &parsed).await;
             }
             SignalingType::PreAccept => {
                 debug!(
@@ -174,9 +165,14 @@ impl CallHandler {
             );
         }
 
-        // Register the call with CallManager
+        // Register the call with CallManager (skip offline calls as they're stale)
         let call_manager = client.get_call_manager().await;
-        if let Err(e) = call_manager.register_incoming_call(parsed).await {
+        if parsed.is_offline {
+            debug!(
+                "Skipping registration of offline call {} (stale)",
+                parsed.call_id
+            );
+        } else if let Err(e) = call_manager.register_incoming_call(parsed).await {
             warn!("Failed to register incoming call {}: {}", parsed.call_id, e);
         }
 
@@ -263,7 +259,18 @@ impl CallHandler {
     }
 
     async fn handle_accept(&self, client: &Client, parsed: &ParsedCallStanza) {
-        debug!("Call {} accepted", parsed.call_id);
+        debug!("Call {} accepted by peer", parsed.call_id);
+
+        // Update call state in manager
+        let call_manager = client.get_call_manager().await;
+        if let Err(e) = call_manager.handle_remote_accept(parsed).await {
+            warn!("Failed to update call state for accept: {}", e);
+        }
+
+        // Notify callback that the call was accepted (so media connection can start)
+        call_manager.notify_call_accepted(&parsed.call_id).await;
+
+        // Emit CallAccepted event for UI
         let event = Event::CallAccepted(CallAccepted {
             meta: parsed.basic_meta(),
         });
@@ -284,5 +291,129 @@ impl CallHandler {
             meta: parsed.basic_meta(),
         });
         client.core.event_bus.dispatch(&event);
+    }
+
+    async fn handle_relay_election(&self, client: &Client, parsed: &ParsedCallStanza) {
+        if let Some(election) = &parsed.relay_election {
+            log::info!(
+                "Received relay_election for call {}: elected_relay_idx={}",
+                parsed.call_id,
+                election.elected_relay_idx
+            );
+
+            let call_manager = client.get_call_manager().await;
+            let call_id = wacore::types::call::CallId::new(&parsed.call_id);
+
+            // Store the elected relay index
+            if let Err(e) = call_manager
+                .store_elected_relay(&call_id, election.elected_relay_idx)
+                .await
+            {
+                warn!(
+                    "Failed to store elected relay for call {}: {}",
+                    parsed.call_id, e
+                );
+            }
+
+            // If we have a bound transport, switch it to the elected relay NOW
+            // This ensures we're on the right relay before the peer accepts
+            if let Some(transport) = call_manager.get_bound_transport(&call_id).await {
+                if transport
+                    .select_relay_by_id(election.elected_relay_idx)
+                    .await
+                {
+                    log::info!(
+                        "Switched to elected relay {} for call {}",
+                        election.elected_relay_idx,
+                        parsed.call_id
+                    );
+                } else {
+                    warn!(
+                        "Could not switch to elected relay {} for call {} (not connected to it)",
+                        election.elected_relay_idx, parsed.call_id
+                    );
+                }
+            } else {
+                debug!(
+                    "No bound transport for call {} yet, will use elected relay when connected",
+                    parsed.call_id
+                );
+            }
+        } else {
+            debug!(
+                "Received relay_election for call {} but failed to parse election data",
+                parsed.call_id
+            );
+        }
+    }
+
+    /// Handle enc_rekey signaling (SRTP key rotation).
+    ///
+    /// The enc_rekey stanza contains a Signal-encrypted call key that we need to:
+    /// 1. Decrypt using Signal Protocol
+    /// 2. Derive new SRTP keys from the master key
+    /// 3. Notify the media session via callback to rotate keys
+    async fn handle_enc_rekey(&self, client: &Client, parsed: &ParsedCallStanza) {
+        let enc_data = match &parsed.enc_rekey_data {
+            Some(data) => data,
+            None => {
+                warn!(
+                    "Received enc_rekey for call {} but failed to parse enc data",
+                    parsed.call_id
+                );
+                return;
+            }
+        };
+
+        debug!(
+            "Processing enc_rekey for call {} (type: {:?}, {} bytes)",
+            parsed.call_id,
+            enc_data.enc_type,
+            enc_data.ciphertext.len()
+        );
+
+        // Decrypt the call key using Signal Protocol
+        let call_key = match client
+            .decrypt_call_key_from(
+                &parsed.call_creator,
+                &enc_data.ciphertext,
+                enc_data.enc_type,
+            )
+            .await
+        {
+            Ok(key) => {
+                info!(
+                    "Successfully decrypted enc_rekey for call {} (generation={})",
+                    parsed.call_id, key.generation
+                );
+                key
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to decrypt enc_rekey for call {}: {}",
+                    parsed.call_id, e
+                );
+                return;
+            }
+        };
+
+        // Derive SRTP keys from the master key
+        let derived_keys = derive_call_keys(&call_key);
+
+        debug!(
+            "Derived new SRTP keys for call {} from enc_rekey",
+            parsed.call_id
+        );
+
+        // Notify callback to rotate keys in the media session
+        let call_manager = client.get_call_manager().await;
+        call_manager
+            .notify_enc_rekey(&parsed.call_id, &derived_keys)
+            .await;
+
+        info!(
+            "Completed enc_rekey processing for call {} - keys rotated",
+            parsed.call_id
+        );
     }
 }

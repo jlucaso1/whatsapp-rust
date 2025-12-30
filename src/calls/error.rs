@@ -27,4 +27,7 @@ pub enum CallError {
 
     #[error("not connected")]
     NotConnected,
+
+    #[error("transport error: {0}")]
+    Transport(String),
 }
