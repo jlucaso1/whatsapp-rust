@@ -1313,6 +1313,7 @@ impl Client {
                 true,
                 false,
                 None,
+                vec![],
             )
             .await
         {
@@ -1703,6 +1704,7 @@ impl Client {
             false,
             false,
             Some(crate::types::message::EditAttribute::MessageEdit),
+            vec![], // TODO: Support extra nodes for edit messages if needed
         )
         .await?;
 
