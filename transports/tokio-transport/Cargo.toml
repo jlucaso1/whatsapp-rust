@@ -40,4 +40,4 @@ tokio-websockets = { version = "0.13.0", features = [
     "ring",
 ] }
 wacore = { path = "../../wacore", version = "0.2.0" }
-webpki-roots = "1.0.4"
+webpki-roots = "1.0.5"
