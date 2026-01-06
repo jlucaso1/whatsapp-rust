@@ -18,7 +18,7 @@ pub mod pair;
 pub mod pair_code;
 pub mod request;
 pub mod send;
-pub use send::SendOptions;
+pub use send::{RevokeType, SendOptions};
 pub mod session;
 pub mod socket;
 pub mod store;

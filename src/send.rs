@@ -15,6 +15,17 @@ pub struct SendOptions {
     pub extra_stanza_nodes: Vec<Node>,
 }
 
+/// Specifies who is revoking (deleting) the message.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RevokeType {
+    /// The message sender deleting their own message.
+    #[default]
+    Sender,
+    /// A group admin deleting another user's message.
+    /// The JID is the original sender of the message being deleted.
+    Admin { sender: Jid },
+}
+
 impl Client {
     pub async fn send_message(
         &self,
@@ -44,6 +55,79 @@ impl Client {
         )
         .await?;
         Ok(request_id)
+    }
+
+    /// Delete a message for everyone in the chat (revoke).
+    ///
+    /// This sends a revoke protocol message that removes the message for all participants.
+    /// The message will show as "This message was deleted" for recipients.
+    ///
+    /// # Arguments
+    /// * `to` - The chat JID (DM or group)
+    /// * `message_id` - The ID of the message to delete
+    /// * `revoke_type` - Use `RevokeType::Sender` to delete your own message,
+    ///   or `RevokeType::Admin { sender }` to delete another user's message as group admin
+    pub async fn revoke_message(
+        &self,
+        to: Jid,
+        message_id: String,
+        revoke_type: RevokeType,
+    ) -> Result<(), anyhow::Error> {
+        let own_jid = self
+            .get_pn()
+            .await
+            .ok_or_else(|| anyhow!("Not logged in"))?;
+
+        let (from_me, participant, edit_attr) = match &revoke_type {
+            RevokeType::Sender => {
+                let participant = if to.is_group() {
+                    Some(own_jid.to_non_ad().to_string())
+                } else {
+                    None
+                };
+                (
+                    true,
+                    participant,
+                    crate::types::message::EditAttribute::SenderRevoke,
+                )
+            }
+            RevokeType::Admin { sender } => {
+                // Admin revoke requires group context
+                if !to.is_group() {
+                    return Err(anyhow!("Admin revoke is only valid for group chats"));
+                }
+                (
+                    false,
+                    Some(sender.to_non_ad().to_string()),
+                    crate::types::message::EditAttribute::AdminRevoke,
+                )
+            }
+        };
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant,
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        self.send_message_impl(
+            to,
+            &revoke_message,
+            Some(message_id),
+            false,
+            false,
+            Some(edit_attr),
+            vec![],
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
