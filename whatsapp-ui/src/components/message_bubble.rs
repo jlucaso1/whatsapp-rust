@@ -16,7 +16,7 @@ use gpui_component::{Disableable, Icon};
 use crate::app::WhatsAppApp;
 use crate::state::{ChatMessage, MediaType};
 use crate::theme::{colors, layout};
-use crate::utils::mime_to_image_format;
+use crate::utils::{format_time_local, mime_to_image_format};
 use crate::video::VideoPlayerState;
 
 /// Render a single message bubble
@@ -45,7 +45,7 @@ pub fn render_message_bubble(
     let message_id = message.id.clone();
     // Use SharedString to avoid allocation for text content
     let content: SharedString = message.content.clone().into();
-    let time: SharedString = message.timestamp.format("%H:%M").to_string().into();
+    let time: SharedString = format_time_local(&message.timestamp).into();
     // Clone the Arc, not the underlying data - this is cheap
     let media = message.media.clone();
     // Clone content for clipboard
