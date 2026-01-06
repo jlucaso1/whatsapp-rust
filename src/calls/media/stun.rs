@@ -36,7 +36,7 @@ const STUN_FINGERPRINT_XOR: u32 = 0x5354554e;
 /// CRC-32 calculator for FINGERPRINT (ISO HDLC / CRC-32).
 const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-/// STUN message types (RFC 5389 + RFC 5766 TURN).
+/// STUN message types (RFC 5389 + RFC 5766 TURN + WhatsApp custom).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum StunMessageType {
@@ -56,6 +56,10 @@ pub enum StunMessageType {
     RefreshRequest = 0x0004,
     /// Refresh Response Success (0x0104)
     RefreshResponse = 0x0104,
+    /// WhatsApp Ping/Indication (0x0801) - Custom keepalive
+    WhatsAppPing = 0x0801,
+    /// WhatsApp Pong/Response (0x0802) - Custom keepalive response
+    WhatsAppPong = 0x0802,
 }
 
 impl TryFrom<u16> for StunMessageType {
@@ -71,12 +75,14 @@ impl TryFrom<u16> for StunMessageType {
             0x0113 => Ok(Self::AllocateErrorResponse),
             0x0004 => Ok(Self::RefreshRequest),
             0x0104 => Ok(Self::RefreshResponse),
+            0x0801 => Ok(Self::WhatsAppPing),
+            0x0802 => Ok(Self::WhatsAppPong),
             _ => Err(StunError::InvalidMessageType(value)),
         }
     }
 }
 
-/// STUN attribute types (RFC 5389 + RFC 5766 TURN + RFC 8445 ICE).
+/// STUN attribute types (RFC 5389 + RFC 5766 TURN + RFC 8445 ICE + WhatsApp custom).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum StunAttributeType {
@@ -104,6 +110,12 @@ pub enum StunAttributeType {
     Priority = 0x0024,
     /// USE-CANDIDATE (0x0025) - RFC 8445 ICE controlling agent nomination
     UseCandidate = 0x0025,
+    /// WhatsApp SenderSubscriptions (0x4000) - Custom protobuf-encoded stream subscriptions
+    SenderSubscriptions = 0x4000,
+    /// WhatsApp ReceiverSubscription (0x4001) - Custom receiver subscription
+    ReceiverSubscription = 0x4001,
+    /// WhatsApp SubscriptionAck (0x4002) - Custom subscription acknowledgment
+    SubscriptionAck = 0x4002,
     /// SOFTWARE (0x8022) - Software description
     Software = 0x8022,
     /// FINGERPRINT (0x8028) - CRC32 checksum
@@ -131,6 +143,9 @@ impl TryFrom<u16> for StunAttributeType {
             0x0020 => Ok(Self::XorMappedAddress),
             0x0024 => Ok(Self::Priority),
             0x0025 => Ok(Self::UseCandidate),
+            0x4000 => Ok(Self::SenderSubscriptions),
+            0x4001 => Ok(Self::ReceiverSubscription),
+            0x4002 => Ok(Self::SubscriptionAck),
             0x8022 => Ok(Self::Software),
             0x8028 => Ok(Self::Fingerprint),
             0x8029 => Ok(Self::IceControlled),
@@ -181,6 +196,12 @@ pub enum StunAttribute {
     IceControlling(u64),
     /// SOFTWARE description
     Software(String),
+    /// WhatsApp SenderSubscriptions (0x4000) - raw protobuf bytes
+    SenderSubscriptions(Vec<u8>),
+    /// WhatsApp ReceiverSubscription (0x4001) - raw protobuf bytes
+    ReceiverSubscription(Vec<u8>),
+    /// WhatsApp SubscriptionAck (0x4002) - raw bytes
+    SubscriptionAck(Vec<u8>),
     /// Unknown attribute
     Unknown { attr_type: u16, data: Vec<u8> },
 }
@@ -275,6 +296,22 @@ impl StunMessage {
         }
     }
 
+    /// Create a WhatsApp Ping message (0x0801).
+    ///
+    /// This is a custom STUN-like keepalive message used by WhatsApp Web.
+    /// The relay responds with a Pong (0x0802).
+    pub fn whatsapp_ping(transaction_id: [u8; 12]) -> Self {
+        Self {
+            msg_type: StunMessageType::WhatsAppPing,
+            transaction_id,
+            attributes: Vec::new(),
+            integrity_key: None,
+            include_fingerprint: false, // WhatsApp ping has no attributes
+            ice_priority: None,
+            ice_role: None,
+        }
+    }
+
     /// Enable or disable FINGERPRINT attribute.
     pub fn with_fingerprint(mut self, include: bool) -> Self {
         self.include_fingerprint = include;
@@ -300,6 +337,25 @@ impl StunMessage {
     /// computed as HMAC-SHA1 over the message using this key.
     pub fn with_integrity_key(mut self, key: &[u8]) -> Self {
         self.integrity_key = Some(key.to_vec());
+        self
+    }
+
+    /// Add WhatsApp SenderSubscriptions attribute (0x4000).
+    ///
+    /// This contains protobuf-encoded stream subscription information that tells
+    /// the relay what streams we're sending and want to receive.
+    pub fn with_sender_subscriptions(mut self, data: Vec<u8>) -> Self {
+        self.attributes
+            .push(StunAttribute::SenderSubscriptions(data));
+        self
+    }
+
+    /// Add WhatsApp ReceiverSubscription attribute (0x4001).
+    ///
+    /// This contains receiver subscription information.
+    pub fn with_receiver_subscription(mut self, data: Vec<u8>) -> Self {
+        self.attributes
+            .push(StunAttribute::ReceiverSubscription(data));
         self
     }
 
@@ -399,6 +455,30 @@ impl StunMessage {
                         &mut attrs_buf,
                         StunAttributeType::UseCandidate as u16,
                         &[],
+                    );
+                }
+                StunAttribute::SenderSubscriptions(data) => {
+                    // WhatsApp SenderSubscriptions (0x4000) - raw protobuf bytes
+                    self.encode_attribute(
+                        &mut attrs_buf,
+                        StunAttributeType::SenderSubscriptions as u16,
+                        data,
+                    );
+                }
+                StunAttribute::ReceiverSubscription(data) => {
+                    // WhatsApp ReceiverSubscription (0x4001) - raw bytes
+                    self.encode_attribute(
+                        &mut attrs_buf,
+                        StunAttributeType::ReceiverSubscription as u16,
+                        data,
+                    );
+                }
+                StunAttribute::SubscriptionAck(data) => {
+                    // WhatsApp SubscriptionAck (0x4002) - raw bytes
+                    self.encode_attribute(
+                        &mut attrs_buf,
+                        StunAttributeType::SubscriptionAck as u16,
+                        data,
                     );
                 }
                 _ => {
@@ -881,7 +961,18 @@ impl StunMessage {
             StunMessageType::BindingResponse
                 | StunMessageType::AllocateResponse
                 | StunMessageType::RefreshResponse
+                | StunMessageType::WhatsAppPong
         )
+    }
+
+    /// Check if this is a WhatsApp Ping message.
+    pub fn is_ping(&self) -> bool {
+        self.msg_type == StunMessageType::WhatsAppPing
+    }
+
+    /// Check if this is a WhatsApp Pong message.
+    pub fn is_pong(&self) -> bool {
+        self.msg_type == StunMessageType::WhatsAppPong
     }
 }
 
@@ -1291,6 +1382,30 @@ impl StunBinder {
     /// Check if a packet is any kind of STUN message.
     pub fn is_stun_packet(data: &[u8]) -> bool {
         Self::classify_packet(data).is_some()
+    }
+
+    /// Check if a packet is a WhatsApp Ping message (0x0801).
+    pub fn is_ping_packet(data: &[u8]) -> bool {
+        matches!(
+            Self::classify_packet(data),
+            Some(StunMessageType::WhatsAppPing)
+        )
+    }
+
+    /// Check if a packet is a WhatsApp Pong message (0x0802).
+    pub fn is_pong_packet(data: &[u8]) -> bool {
+        matches!(
+            Self::classify_packet(data),
+            Some(StunMessageType::WhatsAppPong)
+        )
+    }
+
+    /// Check if a packet is a WhatsApp Ping or Pong message.
+    pub fn is_ping_pong_packet(data: &[u8]) -> bool {
+        matches!(
+            Self::classify_packet(data),
+            Some(StunMessageType::WhatsAppPing) | Some(StunMessageType::WhatsAppPong)
+        )
     }
 }
 

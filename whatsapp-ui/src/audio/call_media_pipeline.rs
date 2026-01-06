@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{debug, info, warn};
 use tokio::sync::mpsc;
-use whatsapp_rust::calls::media::{RtpSession, SrtpSession, StunMessage};
+use whatsapp_rust::calls::media::{
+    RtpSession, SrtpSession, StunMessage, create_audio_sender_subscriptions,
+};
 use whatsapp_rust::calls::{CallManager, SrtpKeyingMaterial};
 use whatsapp_rust::types::call::CallId;
 
@@ -24,6 +26,7 @@ pub struct CallMediaPipelineHandle {
     _capture_task: tokio::task::JoinHandle<()>,
     _playback_task: tokio::task::JoinHandle<()>,
     _receive_task: tokio::task::JoinHandle<()>,
+    _ping_task: tokio::task::JoinHandle<()>,
     /// Audio capture handle - MUST be kept alive for the duration of the call!
     _audio_capture_handle: AudioCaptureHandle,
     /// Audio playback handle - MUST be kept alive for the duration of the call!
@@ -89,25 +92,40 @@ impl std::error::Error for CallMediaPipelineError {}
 ///
 /// This must be called BEFORE sending media packets. The relay needs this
 /// allocation request to know where to forward packets.
+///
+/// # Arguments
+/// * `ssrc` - Our RTP SSRC for SenderSubscriptions (tells relay what streams we're sending)
 async fn perform_stun_allocate(
     call_manager: &Arc<CallManager>,
     call_id: &str,
     auth_token: &[u8],
     relay_key: &[u8],
+    ssrc: u32,
 ) -> Result<(), CallMediaPipelineError> {
-    info!("Sending STUN Allocate for call {}", call_id);
+    info!("Sending STUN Allocate for call {} with SSRC 0x{:08x}", call_id, ssrc);
 
     // Generate random transaction ID
     let mut transaction_id = [0u8; 12];
     use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut transaction_id);
+    rand::rng().fill_bytes(&mut transaction_id);
 
-    // Create STUN Allocate request with credentials
+    // Create SenderSubscriptions with our SSRC (tells relay what streams we're sending)
+    // This is the WhatsApp 0x4000 attribute - protobuf-encoded stream subscription
+    let sender_subscriptions = create_audio_sender_subscriptions(ssrc);
+    info!(
+        "SenderSubscriptions: {} bytes for SSRC 0x{:08x}",
+        sender_subscriptions.len(),
+        ssrc
+    );
+
+    // Create STUN Allocate request with credentials and SenderSubscriptions
     // USERNAME = auth_token (the base64-decoded token)
     // MESSAGE-INTEGRITY = HMAC-SHA1 using relay_key
+    // 0x4000 = SenderSubscriptions (tells relay what streams we're sending)
     let msg = StunMessage::allocate_request(transaction_id)
         .with_username(auth_token)
-        .with_integrity_key(relay_key);
+        .with_integrity_key(relay_key)
+        .with_sender_subscriptions(sender_subscriptions);
 
     let data = msg.encode();
     info!(
@@ -213,10 +231,17 @@ pub async fn start_call_media_pipeline(
 ) -> Result<CallMediaPipelineHandle, CallMediaPipelineError> {
     info!("Starting call media pipeline for {}", call_id);
 
+    // Generate SSRC early - we need it for both STUN Allocate (SenderSubscriptions) and RTP
+    // The SSRC MUST be consistent: SenderSubscriptions tells relay what SSRC to expect,
+    // and RTP packets must use that same SSRC.
+    let ssrc = config.ssrc.unwrap_or_else(rand::random);
+    info!("Using SSRC 0x{:08x} for call {}", ssrc, call_id);
+
     // STEP 1: Perform STUN Allocate to bind with the relay
     // This MUST happen before sending any media packets!
+    // The SenderSubscriptions (0x4000 attribute) tells the relay what streams we're sending.
     // See docs/wasm-reverse-engineering.md for details.
-    perform_stun_allocate(&call_manager, &call_id, auth_token, relay_key).await?;
+    perform_stun_allocate(&call_manager, &call_id, auth_token, relay_key, ssrc).await?;
 
     // Validate and parse hbh_key (30 bytes: 16-byte key + 14-byte salt)
     if hbh_key.len() != 30 {
@@ -236,9 +261,10 @@ pub async fn start_call_media_pipeline(
     // Symmetric key - same for send and receive (client <-> relay)
     let srtp_session = Arc::new(tokio::sync::Mutex::new(SrtpSession::new(&keying, &keying)));
 
-    // Create RTP session for sending
-    let ssrc = config.ssrc.unwrap_or_else(rand::random);
-    let rtp_session = Arc::new(tokio::sync::Mutex::new(RtpSession::opus_16khz(ssrc)));
+    // Create RTP session for sending (WhatsApp uses PT=120)
+    // Uses the same SSRC we sent in SenderSubscriptions
+    let rtp_session = Arc::new(tokio::sync::Mutex::new(RtpSession::whatsapp_opus(ssrc)));
+    info!("Using WhatsApp RTP session with SSRC=0x{:08x}, PT=120", ssrc);
 
     // Stop signal
     let stop_signal = Arc::new(AtomicBool::new(false));
@@ -418,6 +444,54 @@ pub async fn start_call_media_pipeline(
         info!("Playback pipeline stopped for call {}", playback_call_id);
     });
 
+    // Ping task: Send periodic pings to keep the connection alive
+    let ping_stop = stop_signal.clone();
+    let ping_call_id = call_id.clone();
+    let ping_call_manager = call_manager.clone();
+
+    let ping_task = tokio::spawn(async move {
+        info!("Ping task started for call {}", ping_call_id);
+        let mut ping_count = 0u64;
+
+        // WhatsApp sends pings approximately every 5 seconds
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+        while !ping_stop.load(Ordering::Relaxed) {
+            interval.tick().await;
+
+            if ping_stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Generate random transaction ID for ping
+            let mut transaction_id = [0u8; 12];
+            use rand::RngCore;
+            rand::rng().fill_bytes(&mut transaction_id);
+
+            // Create WhatsApp ping message (0x0801)
+            let ping_msg = StunMessage::whatsapp_ping(transaction_id);
+            let ping_data = ping_msg.encode();
+
+            // Send via DataChannel
+            if let Err(e) = ping_call_manager
+                .send_via_webrtc(&CallId::from(ping_call_id.clone()), &ping_data)
+                .await
+            {
+                debug!("Failed to send ping for call {}: {}", ping_call_id, e);
+            } else {
+                ping_count += 1;
+                if ping_count % 10 == 0 {
+                    debug!("Sent {} pings for call {}", ping_count, ping_call_id);
+                }
+            }
+        }
+
+        info!(
+            "Ping task stopped for call {} ({} pings sent)",
+            ping_call_id, ping_count
+        );
+    });
+
     info!("Call media pipeline started successfully for {}", call_id);
 
     Ok(CallMediaPipelineHandle {
@@ -425,6 +499,7 @@ pub async fn start_call_media_pipeline(
         _capture_task: capture_task,
         _playback_task: playback_task,
         _receive_task: receive_task,
+        _ping_task: ping_task,
         _audio_capture_handle: audio_capture_handle,
         _audio_playback_handle: audio_playback_handle,
     })

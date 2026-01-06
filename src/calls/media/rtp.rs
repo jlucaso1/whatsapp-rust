@@ -21,6 +21,8 @@ pub enum PayloadType {
     Cn = 13,
     /// Dynamic payload type for Opus (typically 111)
     DynamicOpus = 111,
+    /// WhatsApp Opus payload type (120)
+    WhatsAppOpus = 120,
 }
 
 impl TryFrom<u8> for PayloadType {
@@ -33,6 +35,7 @@ impl TryFrom<u8> for PayloadType {
             9 => Ok(Self::G722),
             13 => Ok(Self::Cn),
             111 => Ok(Self::DynamicOpus),
+            120 => Ok(Self::WhatsAppOpus),
             _ => Err(value),
         }
     }
@@ -83,6 +86,12 @@ impl RtpHeader {
     /// Set the marker bit.
     pub fn with_marker(mut self, marker: bool) -> Self {
         self.marker = marker;
+        self
+    }
+
+    /// Set the extension flag.
+    pub fn with_extension(mut self, extension: bool) -> Self {
+        self.extension = extension;
         self
     }
 
@@ -259,6 +268,14 @@ impl RtpSession {
     pub fn opus_16khz(ssrc: u32) -> Self {
         // Opus at 16kHz, 20ms packets = 320 samples
         Self::new(ssrc, PayloadType::DynamicOpus as u8, 16000, 320)
+    }
+
+    /// Create an RTP session for WhatsApp Web VoIP.
+    ///
+    /// Uses PT=120 and extension header like WhatsApp Web does.
+    pub fn whatsapp_opus(ssrc: u32) -> Self {
+        // WhatsApp uses PT=120, 16kHz, 20ms packets = 320 samples
+        Self::new(ssrc, PayloadType::WhatsAppOpus as u8, 16000, 320)
     }
 
     /// Create the next RTP packet with the given payload.

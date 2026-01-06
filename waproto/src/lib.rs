@@ -1,5 +1,5 @@
 // This module contains the auto-generated protobuf definitions.
-// The code is generated from `whatsapp.proto` and checked into version control.
+// The code is generated from `whatsapp.proto` and `voip.proto` and checked into version control.
 // To regenerate it, run `GENERATE_PROTO=1 cargo build -p waproto`.
 // See `build.rs` for more details.
 
@@ -7,4 +7,9 @@
 pub mod whatsapp {
     #[rustfmt::skip]
     include!("whatsapp.rs");
+}
+
+pub mod voip {
+    #[rustfmt::skip]
+    include!("voip.rs");
 }

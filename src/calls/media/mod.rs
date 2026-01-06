@@ -43,6 +43,7 @@ mod jitter;
 mod relay;
 mod rtcp;
 mod rtp;
+mod sender_subscriptions;
 mod session;
 mod srtp;
 mod stun;
@@ -56,6 +57,9 @@ pub use rtcp::{
     RtcpNack, RtcpPayloadType, RtpfbFmt,
 };
 pub use rtp::{PayloadType, RTP_VERSION, RtpHeader, RtpPacket, RtpSession};
+pub use sender_subscriptions::{
+    create_audio_sender_subscriptions, create_audio_sender_subscriptions_with_jid,
+};
 pub use session::{
     MediaSession, MediaSessionBuilder, MediaSessionConfig, MediaSessionError, MediaSessionState,
     MediaSessionStats,
