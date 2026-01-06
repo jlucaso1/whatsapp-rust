@@ -12,6 +12,11 @@ pub struct HashState {
     #[serde(with = "BigArray")]
     pub hash: [u8; 128],
     pub index_value_map: HashMap<String, Vec<u8>>,
+    /// Flag indicating the collection is in MAC mismatch state.
+    /// When true, MAC validation is skipped for this collection.
+    /// This matches WhatsApp Web's `isCollectionInMacMismatchFatal` behavior.
+    #[serde(default)]
+    pub mac_mismatch_fatal: bool,
 }
 
 impl Default for HashState {
@@ -20,6 +25,7 @@ impl Default for HashState {
             version: 0,
             hash: [0; 128],
             index_value_map: HashMap::new(),
+            mac_mismatch_fatal: false,
         }
     }
 }
@@ -67,6 +73,14 @@ impl HashState {
             }
         }
 
+        log::debug!(
+            target: "Client/AppState",
+            "update_hash: mutations={} added={} removed={} version={}",
+            mutations.len(),
+            added.len(),
+            removed.len(),
+            self.version
+        );
         WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &removed, &added);
         (warnings, Ok(()))
     }
@@ -269,5 +283,128 @@ mod tests {
             expected_final_hash.as_slice(),
             "The final hash state after overwrite and remove is incorrect."
         );
+    }
+
+    /// Test content MAC generation against known good values from whatsmeow.
+    /// These values were verified by running identical Go code.
+    #[test]
+    fn test_content_mac_matches_whatsmeow() {
+        use crate::keys::expand_app_state_keys;
+
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id";
+
+        // Test data: 48 bytes (simulated IV + ciphertext)
+        let test_data: Vec<u8> = (0..48).collect();
+
+        // Test SET operation
+        let content_mac = generate_content_mac(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &test_data,
+            key_id,
+            &keys.value_mac,
+        );
+
+        // Expected value verified against whatsmeow Go implementation
+        assert_eq!(
+            hex::encode(&content_mac),
+            "e5560be868de386d31bd936717b9b92eb1866256173d07ac0f718a5615bce43b",
+            "Content MAC for SET operation mismatch"
+        );
+
+        // Test REMOVE operation
+        let content_mac_remove = generate_content_mac(
+            wa::syncd_mutation::SyncdOperation::Remove,
+            &test_data,
+            key_id,
+            &keys.value_mac,
+        );
+
+        // REMOVE should produce different MAC (operation byte is different)
+        assert_ne!(
+            hex::encode(&content_mac),
+            hex::encode(&content_mac_remove),
+            "SET and REMOVE should produce different MACs"
+        );
+    }
+
+    /// Test snapshot MAC generation against known good values from whatsmeow.
+    #[test]
+    fn test_snapshot_mac_matches_whatsmeow() {
+        use crate::keys::expand_app_state_keys;
+
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+
+        // Create a hash state with known values
+        let mut state = HashState::default();
+        for i in 0..128 {
+            state.hash[i] = (i % 256) as u8;
+        }
+        state.version = 28;
+
+        let snapshot_mac = state.generate_snapshot_mac("regular_low", &keys.snapshot_mac);
+
+        // Expected value verified against whatsmeow Go implementation
+        assert_eq!(
+            hex::encode(&snapshot_mac),
+            "ab7a404c7e0a07d1d196c5a9c3750c7e69f918e2cd3005206e6e8032a6fe57ba",
+            "Snapshot MAC mismatch"
+        );
+    }
+
+    /// Test patch MAC generation against known good values from whatsmeow.
+    #[test]
+    fn test_patch_mac_matches_whatsmeow() {
+        use crate::keys::expand_app_state_keys;
+
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+
+        // Use the same snapshot MAC as in the previous test
+        let snapshot_mac =
+            hex::decode("ab7a404c7e0a07d1d196c5a9c3750c7e69f918e2cd3005206e6e8032a6fe57ba")
+                .unwrap();
+
+        // Use the content MAC from the content MAC test
+        let value_mac =
+            hex::decode("e5560be868de386d31bd936717b9b92eb1866256173d07ac0f718a5615bce43b")
+                .unwrap();
+
+        let patch_mac = generate_patch_mac_for_push(
+            &snapshot_mac,
+            &[value_mac],
+            29,
+            "regular_low",
+            &keys.patch_mac,
+        );
+
+        // Expected value verified against whatsmeow Go implementation
+        assert_eq!(
+            hex::encode(&patch_mac),
+            "d5330dc191d518a89eb7394a004464878e852023859f4c13d74b1863774cb9f6",
+            "Patch MAC mismatch"
+        );
+    }
+
+    /// Generate patch MAC for push operations (helper for testing).
+    /// This matches whatsmeow's generatePatchMAC function.
+    fn generate_patch_mac_for_push(
+        snapshot_mac: &[u8],
+        value_macs: &[Vec<u8>],
+        version: u64,
+        name: &str,
+        key: &[u8],
+    ) -> Vec<u8> {
+        let mut mac =
+            CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
+        mac.update(snapshot_mac);
+        for vm in value_macs {
+            mac.update(vm);
+        }
+        mac.update(&u64_to_be(version));
+        mac.update(name.as_bytes());
+        mac.finalize()
     }
 }

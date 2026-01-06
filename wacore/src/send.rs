@@ -505,11 +505,19 @@ where
         .bytes(serialized_bytes)
         .build();
 
+    // Protocol messages (key requests, key shares, etc.) need type="protocol"
+    // Regular peer messages use type="text"
+    let message_type = if message.protocol_message.is_some() {
+        "protocol"
+    } else {
+        "text"
+    };
+
     let stanza = NodeBuilder::new("message")
         .attrs([
             ("to", to_jid.to_string()),
             ("id", request_id),
-            ("type", "text".to_string()),
+            ("type", message_type.to_string()),
             ("category", "peer".to_string()),
         ])
         .children([enc_node])

@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
 use tokio::time::{Duration, sleep};
+use wacore::appstate::hash::HashState;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
@@ -1046,10 +1047,27 @@ impl Client {
             check_generation!();
 
             let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
-            if flag_set || force_initial_sync {
+
+            // Also trigger initial sync if we have no sync keys (database was cleared)
+            let no_sync_keys = client_clone
+                .persistence_manager
+                .backend()
+                .get_latest_sync_key()
+                .await
+                .ok()
+                .flatten()
+                .is_none();
+            if no_sync_keys && !flag_set && !force_initial_sync {
                 info!(
                     target: "Client/AppState",
-                    "Starting Initial App State Sync (flag_set={flag_set}, force={force_initial_sync})"
+                    "No sync keys found in database - will trigger initial sync"
+                );
+            }
+
+            if flag_set || force_initial_sync || no_sync_keys {
+                info!(
+                    target: "Client/AppState",
+                    "Starting Initial App State Sync (flag_set={flag_set}, force={force_initial_sync}, no_keys={no_sync_keys})"
                 );
 
                 if !client_clone
@@ -1130,9 +1148,13 @@ impl Client {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     let es = e.to_string();
-                    if es.contains("app state key not found") && attempt == 1 {
+                    // Check for missing key errors - both old format and new format
+                    let is_missing_key_error = es.contains("app state key not found")
+                        || es.contains("app state key(s)")
+                        || (es.contains("Missing") && es.contains("key"));
+                    if is_missing_key_error && attempt <= 2 {
                         if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
-                            info!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
+                            info!(target: "Client/AppState", "App state key missing for {:?} (attempt {}); waiting up to 10s for key share then retrying", name, attempt);
                             if tokio::time::timeout(
                                 Duration::from_secs(10),
                                 self.initial_keys_synced_notifier.notified(),
@@ -1142,6 +1164,10 @@ impl Client {
                             {
                                 warn!(target: "Client/AppState", "Timeout waiting for key share for {:?}; retrying anyway", name);
                             }
+                        } else {
+                            // Keys received but still got error - wait a bit and retry
+                            info!(target: "Client/AppState", "Keys received but still missing for {:?}; waiting 2s then retrying", name);
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                         }
                         continue;
                     }
@@ -1164,6 +1190,14 @@ impl Client {
     ) -> anyhow::Result<()> {
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
+
+        // If doing a full sync, reset the state in the database first.
+        // This matches whatsmeow's behavior: DeleteAppStateVersion before fetching.
+        if full_sync {
+            backend
+                .set_version(name.as_str(), HashState::default())
+                .await?;
+        }
 
         let mut state = backend.get_version(name.as_str()).await?;
         if state.version == 0 {
@@ -1230,39 +1264,63 @@ impl Client {
             };
 
             let proc = self.get_app_state_processor().await;
-            let (mutations, new_state, list) =
-                proc.decode_patch_list(&resp, &download, true).await?;
-            let decode_elapsed = _decode_start.elapsed();
-            if decode_elapsed.as_millis() > 500 {
-                debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
-            }
 
-            let missing = match proc.get_missing_key_ids(&list).await {
+            // WhatsApp Web behavior: Check for missing keys BEFORE attempting decode.
+            // Parse the patch list first (without decrypting) to extract key IDs.
+            let parsed_list = proc
+                .parse_patch_list_without_decode(&resp, &download)
+                .await?;
+
+            // Check for missing keys
+            let missing = match proc.get_missing_key_ids(&parsed_list).await {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("Failed to get missing key IDs for {:?}: {}", name, e);
                     Vec::new()
                 }
             };
+
+            // If we have missing keys, request them and fail (so sync can retry later)
             if !missing.is_empty() {
                 let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                 let mut guard = self.app_state_key_requests.lock().await;
                 let now = std::time::Instant::now();
-                for key_id in missing {
-                    let hex_id = hex::encode(&key_id);
+                for key_id in &missing {
+                    let hex_id = hex::encode(key_id);
                     let should = guard
                         .get(&hex_id)
                         .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
                         .unwrap_or(true);
                     if should {
                         guard.insert(hex_id, now);
-                        to_request.push(key_id);
+                        to_request.push(key_id.clone());
                     }
                 }
                 drop(guard);
                 if !to_request.is_empty() {
+                    info!(
+                        target: "Client/AppState",
+                        "Missing {} key(s) for {:?}, requesting from phone: {:?}",
+                        to_request.len(),
+                        name,
+                        to_request.iter().map(hex::encode).collect::<Vec<_>>()
+                    );
                     self.request_app_state_keys(&to_request).await;
                 }
+                // Return error so sync will be retried after keys arrive
+                return Err(anyhow::anyhow!(
+                    "Missing {} app state key(s) for {:?} - requested from phone",
+                    missing.len(),
+                    name
+                ));
+            }
+
+            // No missing keys - proceed with full decode
+            let (mutations, new_state, list) =
+                proc.decode_patch_list(&resp, &download, true).await?;
+            let decode_elapsed = _decode_start.elapsed();
+            if decode_elapsed.as_millis() > 500 {
+                debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
             }
 
             for m in mutations {
@@ -1287,10 +1345,21 @@ impl Client {
             return;
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid = match device_snapshot.pn.clone() {
+        let phone_number = match device_snapshot.pn.clone() {
             Some(j) => j,
             None => return,
         };
+
+        // Send to primary phone (device 0), not to ourselves
+        // The primary phone has device ID 0 in the peer JID format
+        let primary_phone_jid = Jid {
+            user: phone_number.user.clone(),
+            server: phone_number.server.clone(),
+            device: 0, // Primary phone device
+            agent: 0,
+            integrator: 0,
+        };
+
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
             .map(|k| wa::message::AppStateSyncKeyId {
@@ -1305,9 +1374,16 @@ impl Client {
             })),
             ..Default::default()
         };
+
+        info!(
+            target: "Client/AppState",
+            "Sending key request to primary phone: {}",
+            primary_phone_jid
+        );
+
         if let Err(e) = self
             .send_message_impl(
-                own_jid,
+                primary_phone_jid,
                 &msg,
                 Some(self.generate_message_id().await),
                 true,

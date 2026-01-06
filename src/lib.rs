@@ -32,6 +32,7 @@ pub mod retry;
 
 pub mod appstate_sync;
 pub mod history_sync;
+pub mod sync_actions;
 pub mod usync;
 
 pub mod features;
@@ -48,6 +49,10 @@ pub mod sync_task;
 pub mod version;
 
 pub use spam_report::{SpamFlow, SpamReportRequest, SpamReportResult};
+pub use sync_actions::{
+    ArchiveChatAction, DeleteMessageForMeAction, MarkChatAsReadAction, MuteChatAction,
+    PinChatAction, StarMessageAction, SyncAction, SyncCollection, SyncError,
+};
 
 #[cfg(test)]
 pub mod test_utils;

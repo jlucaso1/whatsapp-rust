@@ -403,4 +403,68 @@ impl Client {
         // Network send happens with NO lock held
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
     }
+
+    /// Archive a chat.
+    pub async fn archive_chat(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::ArchiveChatAction;
+        self.push_sync_action(ArchiveChatAction::archive(chat))
+            .await
+    }
+
+    /// Unarchive a chat.
+    pub async fn unarchive_chat(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::ArchiveChatAction;
+        self.push_sync_action(ArchiveChatAction::unarchive(chat))
+            .await
+    }
+
+    /// Pin a chat.
+    pub async fn pin_chat(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::PinChatAction;
+        self.push_sync_action(PinChatAction::pin(chat)).await
+    }
+
+    /// Unpin a chat.
+    pub async fn unpin_chat(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::PinChatAction;
+        self.push_sync_action(PinChatAction::unpin(chat)).await
+    }
+
+    /// Mute a chat for a specified duration.
+    pub async fn mute_chat(
+        &self,
+        chat: Jid,
+        duration: std::time::Duration,
+    ) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::MuteChatAction;
+        self.push_sync_action(MuteChatAction::mute_for(chat, duration))
+            .await
+    }
+
+    /// Mute a chat indefinitely.
+    pub async fn mute_chat_forever(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::MuteChatAction;
+        self.push_sync_action(MuteChatAction::mute_forever(chat))
+            .await
+    }
+
+    /// Unmute a chat.
+    pub async fn unmute_chat(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::MuteChatAction;
+        self.push_sync_action(MuteChatAction::unmute(chat)).await
+    }
+
+    /// Mark a chat as read.
+    pub async fn mark_chat_read(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::MarkChatAsReadAction;
+        self.push_sync_action(MarkChatAsReadAction::mark_read(chat))
+            .await
+    }
+
+    /// Mark a chat as unread.
+    pub async fn mark_chat_unread(&self, chat: Jid) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::MarkChatAsReadAction;
+        self.push_sync_action(MarkChatAsReadAction::mark_unread(chat))
+            .await
+    }
 }

@@ -66,13 +66,55 @@ impl AppStateProcessor {
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
         let mut pl = parse_patch_list(stanza_root)?;
+
+        // Debug: Log what we got from parsing
+        log::debug!(
+            target: "Client/AppState",
+            "decode_patch_list: name={:?} snapshot_ref={} snapshot={} patches={}",
+            pl.name,
+            pl.snapshot_ref.is_some(),
+            pl.snapshot.is_some(),
+            pl.patches.len()
+        );
+
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
-            && let Ok(data) = download(ext)
-            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
         {
-            pl.snapshot = Some(snapshot);
+            match download(ext) {
+                Ok(data) => {
+                    log::debug!(
+                        target: "Client/AppState",
+                        "decode_patch_list: downloaded {} bytes for snapshot",
+                        data.len()
+                    );
+                    match wa::SyncdSnapshot::decode(data.as_slice()) {
+                        Ok(snapshot) => {
+                            log::debug!(
+                                target: "Client/AppState",
+                                "decode_patch_list: decoded snapshot with {} records",
+                                snapshot.records.len()
+                            );
+                            pl.snapshot = Some(snapshot);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                target: "Client/AppState",
+                                "decode_patch_list: failed to decode snapshot: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        target: "Client/AppState",
+                        "decode_patch_list: failed to download snapshot: {}",
+                        e
+                    );
+                }
+            }
         }
+
         self.process_patch_list(pl, validate_macs).await
     }
 
@@ -87,6 +129,19 @@ impl AppStateProcessor {
         let mut state = self.backend.get_version(pl.name.as_str()).await?;
         let mut new_mutations: Vec<Mutation> = Vec::new();
         let collection_name = pl.name.as_str();
+
+        // In-memory cache for MACs - used as fallback for database lookups
+        // This ensures snapshot MACs are immediately available for patch processing
+        let mut mac_cache: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+        log::debug!(
+            target: "Client/AppState",
+            "process_patch_list: name={:?} has_snapshot={} patches={} current_version={}",
+            pl.name,
+            pl.snapshot.is_some(),
+            pl.patches.len(),
+            state.version
+        );
 
         // Process snapshot if present
         if let Some(snapshot) = &pl.snapshot {
@@ -114,13 +169,42 @@ impl AppStateProcessor {
             )
             .map_err(|e| anyhow!("{}", e))?;
 
+            // Log sample of stored index MACs for debugging
+            let sample_indices: Vec<String> = result
+                .mutation_macs
+                .iter()
+                .take(5)
+                .map(|m| hex::encode(&m.index_mac[..std::cmp::min(8, m.index_mac.len())]))
+                .collect();
+            log::debug!(
+                target: "Client/AppState",
+                "process_patch_list: snapshot processed, state_version={} hash[:16]={:02x?} mutations={} macs={} sample_indices={:?}",
+                state.version,
+                &state.hash[..16],
+                result.mutations.len(),
+                result.mutation_macs.len(),
+                sample_indices
+            );
+
             new_mutations.extend(result.mutations);
+
+            // Populate in-memory cache with snapshot MACs
+            for mac in &result.mutation_macs {
+                mac_cache.insert(mac.index_mac.clone(), mac.value_mac.clone());
+            }
 
             // Persist state and MACs
             self.backend
                 .set_version(collection_name, state.clone())
                 .await?;
             if !result.mutation_macs.is_empty() {
+                log::debug!(
+                    target: "Client/AppState",
+                    "process_patch_list: storing {} MACs for snapshot {}, cached {} in memory",
+                    result.mutation_macs.len(),
+                    collection_name,
+                    mac_cache.len()
+                );
                 self.backend
                     .put_mutation_macs(collection_name, state.version, &result.mutation_macs)
                     .await?;
@@ -128,7 +212,29 @@ impl AppStateProcessor {
         }
 
         // Process patches
-        for patch in &pl.patches {
+        for (patch_idx, patch) in pl.patches.iter().enumerate() {
+            let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+            // Count SET vs REMOVE operations
+            let set_count = patch
+                .mutations
+                .iter()
+                .filter(|m| {
+                    m.operation.unwrap_or(0)
+                        == waproto::whatsapp::syncd_mutation::SyncdOperation::Set as i32
+                })
+                .count();
+            let remove_count = patch.mutations.len() - set_count;
+            log::debug!(
+                target: "Client/AppState",
+                "process_patch_list: processing patch {}/{} version={} current_state_version={} mutations={} (SET={} REMOVE={})",
+                patch_idx + 1,
+                pl.patches.len(),
+                patch_version,
+                state.version,
+                patch.mutations.len(),
+                set_count,
+                remove_count
+            );
             // Collect index MACs we need to look up (pre-allocate with upper bound)
             let mut need_db_lookup: Vec<Vec<u8>> = Vec::with_capacity(patch.mutations.len());
             for m in &patch.mutations {
@@ -141,17 +247,41 @@ impl AppStateProcessor {
                 }
             }
 
-            // Batch fetch previous value MACs from database
+            // Batch fetch previous value MACs - first from in-memory cache, then from database
             let mut db_prev: HashMap<Vec<u8>, Vec<u8>> =
                 HashMap::with_capacity(need_db_lookup.len());
-            for index_mac in need_db_lookup {
-                if let Some(mac) = self
+            let mut not_found_indices: Vec<String> = Vec::new();
+            let mut found_in_cache = 0;
+            let mut found_in_db = 0;
+            for index_mac in &need_db_lookup {
+                // First check in-memory cache (snapshot + previous patches)
+                if let Some(mac) = mac_cache.get(index_mac) {
+                    db_prev.insert(index_mac.clone(), mac.clone());
+                    found_in_cache += 1;
+                } else if let Some(mac) = self
                     .backend
-                    .get_mutation_mac(collection_name, &index_mac)
+                    .get_mutation_mac(collection_name, index_mac)
                     .await?
                 {
-                    db_prev.insert(index_mac, mac);
+                    db_prev.insert(index_mac.clone(), mac);
+                    found_in_db += 1;
+                } else {
+                    not_found_indices
+                        .push(hex::encode(&index_mac[..std::cmp::min(8, index_mac.len())]));
                 }
+            }
+            if !db_prev.is_empty() || !not_found_indices.is_empty() {
+                log::debug!(
+                    target: "Client/AppState",
+                    "process_patch_list: patch {} - looked up {} indices, found {} (cache={} db={}), {} not found: {:?}",
+                    patch_idx + 1,
+                    need_db_lookup.len(),
+                    db_prev.len(),
+                    found_in_cache,
+                    found_in_db,
+                    not_found_indices.len(),
+                    not_found_indices
+                );
             }
 
             // Build callbacks for the pure processing function
@@ -180,9 +310,35 @@ impl AppStateProcessor {
                 validate_macs,
                 collection_name,
             )
-            .map_err(|e| anyhow!("{}", e))?;
+            .map_err(|e| {
+                log::debug!(
+                    target: "Client/AppState",
+                    "process_patch_list: patch {} failed - added_macs would be {}, removed_index_macs would be {}",
+                    patch_idx + 1,
+                    0, // can't access result on error
+                    0
+                );
+                anyhow!("{}", e)
+            })?;
+
+            log::debug!(
+                target: "Client/AppState",
+                "process_patch_list: patch {} succeeded - state_version={} added_macs={} removed_index_macs={}",
+                patch_idx + 1,
+                result.state.version,
+                result.added_macs.len(),
+                result.removed_index_macs.len()
+            );
 
             new_mutations.extend(result.mutations);
+
+            // Update in-memory cache
+            for index_mac in &result.removed_index_macs {
+                mac_cache.remove(index_mac);
+            }
+            for mac in &result.added_macs {
+                mac_cache.insert(mac.index_mac.clone(), mac.value_mac.clone());
+            }
 
             // Persist state and MACs
             self.backend
@@ -219,6 +375,28 @@ impl AppStateProcessor {
             }
         }
         Ok(missing)
+    }
+
+    /// Parse a patch list from a stanza without attempting to decode/decrypt records.
+    /// This is used to check for missing keys before attempting a full decode.
+    pub async fn parse_patch_list_without_decode<FDownload>(
+        &self,
+        stanza_root: &Node,
+        download: FDownload,
+    ) -> Result<PatchList>
+    where
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
+        let mut pl = parse_patch_list(stanza_root)?;
+        // Download and parse external snapshot if present, so we can extract key IDs
+        if pl.snapshot.is_none()
+            && let Some(ext) = &pl.snapshot_ref
+            && let Ok(data) = download(ext)
+            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+        {
+            pl.snapshot = Some(snapshot);
+        }
+        Ok(pl)
     }
 
     pub async fn sync_collection<D, FDownload>(
@@ -341,6 +519,14 @@ mod tests {
         async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> StoreResult<()> {
             self.keys.lock().await.insert(key_id.to_vec(), key);
             Ok(())
+        }
+        async fn get_latest_sync_key(&self) -> StoreResult<Option<AppStateSyncKey>> {
+            let keys = self.keys.lock().await;
+            Ok(keys.iter().next().map(|(id, key)| {
+                let mut key = key.clone();
+                key.key_id = Some(id.clone());
+                key
+            }))
         }
         async fn get_version(&self, name: &str) -> StoreResult<HashState> {
             Ok(self

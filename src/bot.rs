@@ -41,6 +41,55 @@ impl MessageContext {
             )
             .await
     }
+
+    /// Delete the current message for yourself only.
+    pub async fn delete_for_me(&self) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::DeleteMessageForMeAction;
+
+        let message_timestamp = self.info.timestamp.timestamp_millis();
+        let action = if self.info.source.is_group {
+            DeleteMessageForMeAction::for_group_message(
+                self.info.source.chat.clone(),
+                self.info.id.clone(),
+                self.info.source.is_from_me,
+                self.info.source.sender.clone(),
+                message_timestamp,
+            )
+        } else {
+            DeleteMessageForMeAction::for_dm_message(
+                self.info.source.chat.clone(),
+                self.info.id.clone(),
+                self.info.source.is_from_me,
+                message_timestamp,
+            )
+        };
+
+        self.client.push_sync_action(action).await
+    }
+
+    /// Star or unstar the current message.
+    pub async fn star(&self, starred: bool) -> Result<(), crate::sync_actions::SyncError> {
+        use crate::sync_actions::StarMessageAction;
+
+        let action = if self.info.source.is_group {
+            StarMessageAction::for_group(
+                self.info.source.chat.clone(),
+                self.info.id.clone(),
+                self.info.source.is_from_me,
+                self.info.source.sender.clone(),
+                starred,
+            )
+        } else {
+            StarMessageAction::for_dm(
+                self.info.source.chat.clone(),
+                self.info.id.clone(),
+                self.info.source.is_from_me,
+                starred,
+            )
+        };
+
+        self.client.push_sync_action(action).await
+    }
 }
 
 type EventHandlerCallback =

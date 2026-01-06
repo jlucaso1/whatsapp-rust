@@ -2190,8 +2190,12 @@ name = "wacore-appstate"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "hex",
  "hkdf",
+ "log",
  "prost",
+ "rand",
  "serde",
  "serde-big-array",
  "serde_json",

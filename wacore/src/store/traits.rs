@@ -20,6 +20,7 @@ use wacore_appstate::processor::AppStateMutationMAC;
 /// App state synchronization key for WhatsApp's app state protocol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppStateSyncKey {
+    pub key_id: Option<Vec<u8>>,
     pub key_data: Vec<u8>,
     pub fingerprint: Vec<u8>,
     pub timestamp: i64,
@@ -150,6 +151,10 @@ pub trait AppSyncStore: Send + Sync {
 
     /// Set an app state sync key.
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
+
+    /// Get the most recent app state sync key.
+    /// Used for pushing sync actions when the key ID is not known.
+    async fn get_latest_sync_key(&self) -> Result<Option<AppStateSyncKey>>;
 
     /// Get the app state version for a collection.
     async fn get_version(&self, name: &str) -> Result<HashState>;

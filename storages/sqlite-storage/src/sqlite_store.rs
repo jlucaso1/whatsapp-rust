@@ -837,6 +837,54 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn get_latest_app_state_sync_key_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Option<AppStateSyncKey>> {
+        let pool = self.pool.clone();
+        let rows: Vec<(Vec<u8>, Vec<u8>)> =
+            tokio::task::spawn_blocking(move || -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let rows: Vec<(Vec<u8>, Vec<u8>)> = app_state_keys::table
+                    .select((app_state_keys::key_id, app_state_keys::key_data))
+                    .filter(app_state_keys::device_id.eq(device_id))
+                    .load(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        // Decode all keys and find the one with the highest timestamp
+        let mut latest: Option<AppStateSyncKey> = None;
+        for (key_id, data) in rows {
+            match bincode::serde::decode_from_slice(&data, bincode::config::standard()) {
+                Ok((mut key, _)) => {
+                    let key: &mut AppStateSyncKey = &mut key;
+                    key.key_id = Some(key_id);
+
+                    match &latest {
+                        None => latest = Some(key.clone()),
+                        Some(current) if key.timestamp > current.timestamp => {
+                            latest = Some(key.clone())
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    // Skip keys with incompatible/corrupted format
+                    warn!(
+                        "Failed to deserialize sync key {:?}: {}. Skipping.",
+                        key_id, e
+                    );
+                }
+            }
+        }
+        Ok(latest)
+    }
+
     pub async fn get_app_state_version_for_device(
         &self,
         name: &str,
@@ -844,6 +892,7 @@ impl SqliteStore {
     ) -> Result<HashState> {
         let pool = self.pool.clone();
         let name = name.to_string();
+        let name_for_closure = name.clone();
         let res: Option<Vec<u8>> =
             tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
@@ -851,7 +900,7 @@ impl SqliteStore {
                     .map_err(|e| StoreError::Connection(e.to_string()))?;
                 let res: Option<Vec<u8>> = app_state_versions::table
                     .select(app_state_versions::state_data)
-                    .filter(app_state_versions::name.eq(name))
+                    .filter(app_state_versions::name.eq(name_for_closure))
                     .filter(app_state_versions::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
@@ -862,9 +911,17 @@ impl SqliteStore {
             .map_err(|e| StoreError::Database(e.to_string()))??;
 
         if let Some(data) = res {
-            let (state, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            Ok(state)
+            match bincode::serde::decode_from_slice(&data, bincode::config::standard()) {
+                Ok((state, _)) => Ok(state),
+                Err(e) => {
+                    // Database might have old/incompatible format - return default and let it re-sync
+                    warn!(
+                        "Failed to deserialize app state version for {}: {}. Using default.",
+                        name, e
+                    );
+                    Ok(HashState::default())
+                }
+            }
         } else {
             Ok(HashState::default())
         }
@@ -1222,6 +1279,11 @@ impl AppSyncStore for SqliteStore {
 
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         self.set_app_state_sync_key_for_device(key_id, key, self.device_id)
+            .await
+    }
+
+    async fn get_latest_sync_key(&self) -> Result<Option<AppStateSyncKey>> {
+        self.get_latest_app_state_sync_key_for_device(self.device_id)
             .await
     }
 

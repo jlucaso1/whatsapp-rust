@@ -2,8 +2,9 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::Event;
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
+use wacore::appstate::patch_decode::WAPatchName;
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{DeviceListUpdate, DeviceListUpdateType};
 use wacore_binary::jid::{Jid, JidExt};
@@ -60,17 +61,85 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         }
         "server_sync" => {
             // Server sync notifications inform us of app state changes from other devices.
-            // For bot use case, we don't need to sync these (pins, mutes, archives, etc.).
-            // Just acknowledge without syncing.
+            // Sync each changed collection to stay in sync.
+            // This matches whatsmeow's handleAppStateNotification behavior.
+            //
+            // Skip during initial sync to avoid racing with the initial sync task.
+            if client
+                .needs_initial_full_sync
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                debug!(
+                    target: "Client/AppState",
+                    "Ignoring server_sync during initial sync phase"
+                );
+                return;
+            }
+
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name = collection_node.attrs().string("name");
+                    let name_str = collection_node.attrs().string("name");
                     let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
+
+                    // Parse the collection name
+                    let patch_name: WAPatchName = name_str.parse().unwrap_or(WAPatchName::Unknown);
+
+                    if matches!(patch_name, WAPatchName::Unknown) {
+                        warn!(
+                            target: "Client/AppState",
+                            "Received server_sync for unknown collection '{}' version {} (skipping)",
+                            name_str, version
+                        );
+                        continue;
+                    }
+
                     debug!(
                         target: "Client/AppState",
-                        "Received server_sync for collection '{}' version {} (not syncing)",
-                        name, version
+                        "Received server_sync for collection '{}' version {} - syncing",
+                        name_str, version
                     );
+
+                    // Spawn a task to sync this collection
+                    let client_clone = client.clone();
+                    tokio::spawn(async move {
+                        // First try incremental sync (full_sync=false)
+                        let result = client_clone
+                            .process_app_state_sync_task(patch_name, false)
+                            .await;
+
+                        if let Err(e) = result {
+                            let err_str = e.to_string();
+                            // Check if it's a MAC mismatch error - indicates local state is stale
+                            let is_mac_mismatch = err_str.contains("MAC mismatch")
+                                || err_str.contains("MismatchingLTHash")
+                                || err_str.contains("mismatching");
+
+                            if is_mac_mismatch {
+                                info!(
+                                    target: "Client/AppState",
+                                    "MAC mismatch for {:?}, retrying with full sync",
+                                    patch_name
+                                );
+                                // Retry with full sync to get a fresh snapshot
+                                if let Err(e2) = client_clone
+                                    .process_app_state_sync_task(patch_name, true)
+                                    .await
+                                {
+                                    error!(
+                                        target: "Client/AppState",
+                                        "Failed to full sync app state {:?} after server_sync notification: {}",
+                                        patch_name, e2
+                                    );
+                                }
+                            } else {
+                                error!(
+                                    target: "Client/AppState",
+                                    "Failed to sync app state {:?} after server_sync notification: {}",
+                                    patch_name, e
+                                );
+                            }
+                        }
+                    });
                 }
             }
         }

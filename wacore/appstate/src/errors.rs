@@ -32,6 +32,8 @@ pub enum AppStateError {
     PatchSnapshotMACMismatch,
     #[error("patch MAC mismatch")]
     PatchMACMismatch,
+    #[error("server returned exit code {code}: {text}")]
+    ServerExitCode { code: u64, text: String },
 }
 
 pub type Result<T> = std::result::Result<T, AppStateError>;

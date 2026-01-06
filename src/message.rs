@@ -967,10 +967,20 @@ impl Client {
                         .await;
                     }
 
-                    if let Some(protocol_msg) = &original_msg.protocol_message
-                        && let Some(keys) = &protocol_msg.app_state_sync_key_share
-                    {
-                        self.handle_app_state_sync_key_share(keys).await;
+                    if let Some(protocol_msg) = &original_msg.protocol_message {
+                        log::debug!(
+                            target: "Client/Message",
+                            "Received protocol message type {:?}",
+                            protocol_msg.r#type
+                        );
+                        if let Some(keys) = &protocol_msg.app_state_sync_key_share {
+                            log::info!(
+                                target: "Client/AppState",
+                                "Received app state sync key share with {} keys",
+                                keys.keys.len()
+                            );
+                            self.handle_app_state_sync_key_share(keys).await;
+                        }
                     }
 
                     // Handle PDO (Peer Data Operation) responses from our primary phone
@@ -1171,6 +1181,7 @@ impl Client {
         for key in &keys.keys {
             if let Some(components) = extract_key_components(key) {
                 let new_key = crate::store::traits::AppStateSyncKey {
+                    key_id: Some(components.key_id.to_vec()),
                     key_data: components.data.to_vec(),
                     fingerprint: components.fingerprint_bytes,
                     timestamp: components.timestamp,

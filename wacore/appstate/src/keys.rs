@@ -44,4 +44,39 @@ mod tests {
         let b = expand_app_state_keys(&key);
         assert_eq!(a, b);
     }
+
+    /// Test key expansion against known good values from whatsmeow.
+    /// These values were verified by running identical Go code.
+    #[test]
+    fn expansion_matches_whatsmeow() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+
+        // Expected values verified against whatsmeow Go implementation
+        assert_eq!(
+            hex::encode(keys.index),
+            "a3c20564c4744dc336223b76a374ac369fb1bc2062969b26bd0104cba5149e7a",
+            "Index key mismatch"
+        );
+        assert_eq!(
+            hex::encode(keys.value_encryption),
+            "28f9ac3865f5c0d77441c361c8eb0c40435487e1fca973df3828cbe320faa07f",
+            "Value encryption key mismatch"
+        );
+        assert_eq!(
+            hex::encode(keys.value_mac),
+            "e2b9c9aaebb04ac52b5c04c449a8af48945e63af3e4b8e2b3f8266753675bc3e",
+            "Value MAC key mismatch"
+        );
+        assert_eq!(
+            hex::encode(keys.snapshot_mac),
+            "c49519c1aa1718c8f1c1f14c546fb2dedfcc58cace2b5fba9de15f9c084bd04b",
+            "Snapshot MAC key mismatch"
+        );
+        assert_eq!(
+            hex::encode(keys.patch_mac),
+            "3b9efe15c717b5da8b85c45200bb6ce8af59c72d62f4c203909c53749b54cd04",
+            "Patch MAC key mismatch"
+        );
+    }
 }
