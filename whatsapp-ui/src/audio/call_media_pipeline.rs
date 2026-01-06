@@ -102,7 +102,10 @@ async fn perform_stun_allocate(
     relay_key: &[u8],
     ssrc: u32,
 ) -> Result<(), CallMediaPipelineError> {
-    info!("Sending STUN Allocate for call {} with SSRC 0x{:08x}", call_id, ssrc);
+    info!(
+        "Sending STUN Allocate for call {} with SSRC 0x{:08x}",
+        call_id, ssrc
+    );
 
     // Generate random transaction ID
     let mut transaction_id = [0u8; 12];
@@ -264,7 +267,10 @@ pub async fn start_call_media_pipeline(
     // Create RTP session for sending (WhatsApp uses PT=120)
     // Uses the same SSRC we sent in SenderSubscriptions
     let rtp_session = Arc::new(tokio::sync::Mutex::new(RtpSession::whatsapp_opus(ssrc)));
-    info!("Using WhatsApp RTP session with SSRC=0x{:08x}, PT=120", ssrc);
+    info!(
+        "Using WhatsApp RTP session with SSRC=0x{:08x}, PT=120",
+        ssrc
+    );
 
     // Stop signal
     let stop_signal = Arc::new(AtomicBool::new(false));

@@ -39,6 +39,7 @@
 //! 6. Buffer incoming packets in jitter buffer for smooth playout
 //! 7. Send RTCP NACK for lost packets, handle retransmission requests
 
+mod ice_interceptor;
 mod jitter;
 mod relay;
 mod rtcp;

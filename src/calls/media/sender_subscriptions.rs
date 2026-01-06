@@ -81,8 +81,14 @@ mod tests {
         let decoded = SenderSubscriptions::decode(data.as_slice()).unwrap();
         assert_eq!(decoded.senders.len(), 1);
         assert_eq!(decoded.senders[0].ssrc, Some(0x12345678));
-        assert_eq!(decoded.senders[0].stream_layer, Some(StreamLayer::Audio.into()));
-        assert_eq!(decoded.senders[0].payload_type, Some(PayloadType::Media.into()));
+        assert_eq!(
+            decoded.senders[0].stream_layer,
+            Some(StreamLayer::Audio.into())
+        );
+        assert_eq!(
+            decoded.senders[0].payload_type,
+            Some(PayloadType::Media.into())
+        );
     }
 
     #[test]

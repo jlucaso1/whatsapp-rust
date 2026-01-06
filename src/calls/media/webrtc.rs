@@ -37,12 +37,15 @@ use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::ice::udp_mux::{UDPMuxDefault, UDPMuxParams};
+use webrtc::ice::udp_network::UDPNetwork;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
+use super::ice_interceptor::InterceptedUdpConn;
 use crate::calls::{RelayData, WHATSAPP_RELAY_PORT};
 
 /// Hardcoded DTLS fingerprint used by WhatsApp Web.
@@ -435,8 +438,33 @@ impl WebRtcTransport {
             relay_info.relay_name, relay_info.ip, relay_info.port
         );
 
-        // Create the WebRTC API
-        let api = Self::create_api_static().await?;
+        // Parse relay address
+        let relay_addr: SocketAddr = format!("{}:{}", relay_info.ip, relay_info.port)
+            .parse()
+            .map_err(|_| WebRtcError::ConnectionFailed)?;
+
+        // Create intercepted UDP connection that fakes STUN Binding responses.
+        // WhatsApp's relay doesn't respond to ICE STUN Binding requests - it expects
+        // DTLS immediately. Our interceptor fakes the binding responses so webrtc-rs
+        // thinks ICE succeeded and proceeds to DTLS.
+        let intercepted_conn = InterceptedUdpConn::new(relay_addr).await.map_err(|e| {
+            warn!("Failed to create intercepted connection: {}", e);
+            WebRtcError::ConnectionFailed
+        })?;
+
+        info!(
+            "Created ICE interceptor for {} (local: {}, remote: {})",
+            relay_info.relay_name,
+            intercepted_conn.local_addr(),
+            intercepted_conn.remote_addr()
+        );
+
+        // Create UDPMux with our intercepted connection
+        // Note: UDPMuxDefault::new returns Arc<UDPMuxDefault>, so no need to wrap in Arc
+        let udp_mux = UDPMuxDefault::new(UDPMuxParams::new(intercepted_conn));
+
+        // Create the WebRTC API with muxed network
+        let api = Self::create_api_with_mux(udp_mux.clone()).await?;
 
         // Create peer connection with empty config (no ICE servers - we inject the relay)
         let config = RTCConfiguration::default();
@@ -578,7 +606,18 @@ impl WebRtcTransport {
     }
 
     /// Create the WebRTC API with appropriate settings (static version for parallel connections).
+    #[allow(dead_code)]
     async fn create_api_static() -> Result<webrtc::api::API, WebRtcError> {
+        Self::create_api_static_with_port(None).await
+    }
+
+    /// Create the WebRTC API with optional port configuration.
+    ///
+    /// If `preferred_port` is Some, we log it for debugging but don't force port reuse
+    /// (webrtc-rs port configuration is complex and pre-bind socket is already closed).
+    async fn create_api_static_with_port(
+        preferred_port: Option<u16>,
+    ) -> Result<webrtc::api::API, WebRtcError> {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
 
@@ -589,6 +628,44 @@ impl WebRtcTransport {
 
         // Disable mDNS candidates (we're injecting relay directly)
         setting_engine.set_ice_multicast_dns_mode(webrtc::ice::mdns::MulticastDnsMode::Disabled);
+
+        // Log preferred port for debugging (actual port reuse would require keeping socket open)
+        if let Some(port) = preferred_port {
+            info!(
+                "Pre-bind used port {} - WebRTC will use different port (pre-bind socket closed)",
+                port
+            );
+        }
+
+        let api = APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .with_setting_engine(setting_engine)
+            .build();
+
+        Ok(api)
+    }
+
+    /// Create the WebRTC API with a UDPMux for intercepted connections.
+    ///
+    /// This allows us to inject our InterceptedUdpConn which fakes STUN Binding
+    /// responses so webrtc-rs proceeds to DTLS without waiting for ICE.
+    async fn create_api_with_mux(
+        udp_mux: Arc<UDPMuxDefault>,
+    ) -> Result<webrtc::api::API, WebRtcError> {
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs()?;
+
+        let mut registry = Registry::new();
+        registry = register_default_interceptors(registry, &mut media_engine)?;
+
+        let mut setting_engine = SettingEngine::default();
+
+        // Disable mDNS candidates (we're injecting relay directly)
+        setting_engine.set_ice_multicast_dns_mode(webrtc::ice::mdns::MulticastDnsMode::Disabled);
+
+        // Use our muxed UDP network with the intercepted connection
+        setting_engine.set_udp_network(UDPNetwork::Muxed(udp_mux));
 
         let api = APIBuilder::new()
             .with_media_engine(media_engine)
