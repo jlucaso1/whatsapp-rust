@@ -41,6 +41,17 @@ impl MessageContext {
             )
             .await
     }
+
+    /// Delete a message for everyone in the chat.
+    pub async fn revoke_message(
+        &self,
+        message_id: String,
+        revoke_type: crate::send::RevokeType,
+    ) -> Result<(), anyhow::Error> {
+        self.client
+            .revoke_message(self.info.source.chat.clone(), message_id, revoke_type)
+            .await
+    }
 }
 
 type EventHandlerCallback =
