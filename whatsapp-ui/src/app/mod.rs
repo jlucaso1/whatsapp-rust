@@ -462,11 +462,6 @@ impl WhatsAppApp {
         self.chat_search_input = Some(search_input);
     }
 
-    /// Check if chat search is active
-    pub fn is_chat_search_active(&self) -> bool {
-        !self.chat_search_query.is_empty()
-    }
-
     // ========== Chat List Navigation ==========
 
     /// Select the next chat in the list (keyboard navigation)
@@ -545,14 +540,6 @@ impl WhatsAppApp {
                 cx.notify();
             });
         }));
-    }
-
-    /// Clear chat search
-    pub fn clear_chat_search(&mut self, cx: &mut Context<Self>) {
-        self.chat_search_task = None;
-        self.chat_search_query.clear();
-        self.invalidate_chat_cache();
-        cx.notify();
     }
 
     // ========== Actions ==========
@@ -1253,10 +1240,8 @@ impl WhatsAppApp {
                     // smol::unblock moves the CPU-intensive work off the main thread
                     // Using StreamingVideoDecoder for memory-efficient on-demand frame decoding
                     // Only 1 frame is kept in memory at a time (~3MB vs ~48MB for 30-frame video)
-                    let decode_result = smol::unblock(move || {
-                        StreamingVideoDecoder::new(&data)
-                    })
-                    .await;
+                    let decode_result =
+                        smol::unblock(move || StreamingVideoDecoder::new(&data)).await;
 
                     // Update UI with decode results
                     let _ = entity.update(cx, |app, cx| {
@@ -1297,31 +1282,25 @@ impl WhatsAppApp {
                                     let _ = entity.update(cx, |app, cx| {
                                         if let Some(player) =
                                             app.video_players.get_mut(&msg_id_for_play)
+                                            && player.state() == VideoPlayerState::Paused
                                         {
-                                            if player.state() == VideoPlayerState::Paused {
-                                                let needs_audio = player.play();
-                                                app.active_media = ActiveMedia::Video {
-                                                    message_id: msg_id_for_play.clone(),
-                                                };
-                                                app.start_video_update_task(cx);
+                                            let needs_audio = player.play();
+                                            app.active_media = ActiveMedia::Video {
+                                                message_id: msg_id_for_play.clone(),
+                                            };
+                                            app.start_video_update_task(cx);
 
-                                                if needs_audio {
-                                                    if let Some(audio) = audio_for_play {
-                                                        info!(
-                                                            "Playing video audio: {} samples at {} Hz",
-                                                            audio.samples.len(),
-                                                            audio.sample_rate
-                                                        );
-                                                        if let Err(e) = app.audio_player.play_samples(
-                                                            audio.samples,
-                                                            audio.sample_rate,
-                                                        ) {
-                                                            warn!(
-                                                                "Failed to play video audio: {}",
-                                                                e
-                                                            );
-                                                        }
-                                                    }
+                                            if needs_audio && let Some(audio) = audio_for_play {
+                                                info!(
+                                                    "Playing video audio: {} samples at {} Hz",
+                                                    audio.samples.len(),
+                                                    audio.sample_rate
+                                                );
+                                                if let Err(e) = app
+                                                    .audio_player
+                                                    .play_samples(audio.samples, audio.sample_rate)
+                                                {
+                                                    warn!("Failed to play video audio: {}", e);
                                                 }
                                             }
                                         }
@@ -1354,13 +1333,6 @@ impl WhatsAppApp {
         .detach();
 
         cx.notify();
-    }
-
-    /// Stop video playback (only if video is currently playing)
-    pub fn stop_video(&mut self, cx: &mut Context<Self>) {
-        if self.active_media.is_video() {
-            self.stop_current_media(cx);
-        }
     }
 
     /// Start the video frame update task

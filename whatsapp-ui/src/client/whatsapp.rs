@@ -281,60 +281,98 @@ impl WhatsAppClient {
 
                 // Check if we have relay data and encryption keys
                 let relay_data = call_manager.get_relay_data(&call_id).await;
-                let is_initiator = call_manager.is_initiator(&call_id).await.unwrap_or(true);
-
-                // Try to get pre-bound transport (from early binding after ACK)
-                let pre_bound_transport = call_manager.take_bound_transport(&call_id).await;
+                let _is_initiator = call_manager.is_initiator(&call_id).await.unwrap_or(true);
 
                 match relay_data {
                     Some(relay) => {
                         info!(
-                            "Starting media connection for call {} ({} endpoints, hbh_key={} bytes, pre-bound={})",
+                            "Starting media connection for call {} ({} endpoints, hbh_key={} bytes)",
                             call_id_str,
                             relay.endpoints.len(),
                             relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
-                            pre_bound_transport.is_some()
                         );
 
-                        // Use pre-bound transport if available, otherwise create new connection
-                        let result = if let Some(transport) = pre_bound_transport {
-                            info!("Using pre-bound transport for call {}", call_id_str);
-                            media_manager
-                                .start_session_with_transport(
-                                    &call_id_str,
-                                    relay,
-                                    transport,
-                                    is_initiator,
-                                )
-                                .await
-                        } else {
-                            warn!(
-                                "No pre-bound transport for call {}, creating new connection",
-                                call_id_str
-                            );
-                            // Get derived keys for fallback (needed for start_session signature, but hbh_key is in relay_data)
-                            if let Some(keys) = call_manager.get_derived_keys(&call_id).await {
-                                media_manager
-                                    .start_session(&call_id_str, relay, keys, is_initiator)
-                                    .await
-                            } else {
-                                warn!(
-                                    "No derived keys for call {}, cannot start media",
-                                    call_id_str
+                        // 1. Connect via WebRTC DataChannel first
+                        match call_manager.connect_relay(&call_id, &relay).await {
+                            Ok(relay_name) => {
+                                info!(
+                                    "Call {} connected to relay {} via WebRTC",
+                                    call_id_str, relay_name
                                 );
-                                Err("No derived keys available".to_string())
-                            }
-                        };
 
-                        match result {
-                            Ok(_session) => {
-                                info!("Call {} media session started successfully", call_id_str);
+                                // 2. Start audio pipeline with hbh_key and STUN credentials
+                                if let Some(hbh_key) = &relay.hbh_key {
+                                    // Get auth_token and relay_key from connected relay info
+                                    let (auth_token_bytes, relay_key_bytes) =
+                                        if let Some(transport) =
+                                            call_manager.get_webrtc_transport(&call_id).await
+                                        {
+                                            if let Some(relay_info) =
+                                                transport.connected_relay().await
+                                            {
+                                                // Decode base64 auth_token
+                                                use base64::Engine;
+                                                let engine =
+                                                    base64::engine::general_purpose::STANDARD;
+                                                let auth = engine
+                                                    .decode(&relay_info.auth_token)
+                                                    .unwrap_or_else(|_| {
+                                                        relay_info.auth_token.as_bytes().to_vec()
+                                                    });
+                                                let key = engine
+                                                    .decode(&relay_info.relay_key)
+                                                    .unwrap_or_else(|_| {
+                                                        relay_info.relay_key.as_bytes().to_vec()
+                                                    });
+                                                (auth, key)
+                                            } else {
+                                                // Fallback to relay_key from relay data
+                                                let auth = relay
+                                                    .auth_tokens
+                                                    .first()
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                let key =
+                                                    relay.relay_key.clone().unwrap_or_default();
+                                                (auth, key)
+                                            }
+                                        } else {
+                                            // Fallback to relay_key from relay data
+                                            let auth = relay
+                                                .auth_tokens
+                                                .first()
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            let key = relay.relay_key.clone().unwrap_or_default();
+                                            (auth, key)
+                                        };
+
+                                    if let Err(e) = media_manager
+                                        .start_webrtc_session(
+                                            call_manager.clone(),
+                                            &call_id_str,
+                                            hbh_key,
+                                            &auth_token_bytes,
+                                            &relay_key_bytes,
+                                        )
+                                        .await
+                                    {
+                                        error!(
+                                            "Failed to start WebRTC audio for call {}: {}",
+                                            call_id_str, e
+                                        );
+                                    } else {
+                                        info!("Call {} WebRTC audio pipeline started", call_id_str);
+                                    }
+                                } else {
+                                    warn!(
+                                        "No hbh_key available for call {} - cannot start audio",
+                                        call_id_str
+                                    );
+                                }
                             }
                             Err(e) => {
-                                error!(
-                                    "Failed to start media session for call {}: {}",
-                                    call_id_str, e
-                                );
+                                error!("Failed to connect WebRTC for call {}: {}", call_id_str, e);
                             }
                         }
                     }
@@ -959,49 +997,104 @@ impl WhatsAppClient {
                                 // Start the media session (same as CallAccepted handler for outgoing calls)
                                 let relay_data = call_manager.get_relay_data(&call_id_obj).await;
                                 let derived_keys = call_manager.get_derived_keys(&call_id_obj).await;
-                                // For incoming calls we accept, we are NOT the initiator
-                                let is_initiator = false;
 
-                                match (relay_data, derived_keys) {
-                                    (Some(relay), Some(keys)) => {
+                                match relay_data {
+                                    Some(relay) => {
                                         info!(
-                                            "Starting media connection for incoming call {} ({} endpoints, hbh_key={} bytes)",
+                                            "Starting WebRTC connection for incoming call {} ({} endpoints, hbh_key={} bytes)",
                                             call_id,
                                             relay.endpoints.len(),
                                             relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0)
                                         );
 
-                                        // Get media manager
-                                        let mm_guard = media_manager_handle.lock().await;
-                                        if let Some(media_manager) = mm_guard.as_ref() {
-                                            match media_manager
-                                                .start_session(&call_id, relay, keys, is_initiator)
-                                                .await
-                                            {
-                                                Ok(_session) => {
-                                                    info!(
-                                                        "Incoming call {} media session started successfully",
+                                        // 1. Connect via WebRTC DataChannel first
+                                        match call_manager.connect_relay(&call_id_obj, &relay).await {
+                                            Ok(relay_name) => {
+                                                info!(
+                                                    "Incoming call {} WebRTC connected to relay {}",
+                                                    call_id, relay_name
+                                                );
+
+                                                // 2. Start audio pipeline with hbh_key and STUN credentials
+                                                if let Some(hbh_key) = &relay.hbh_key {
+                                                    // Get auth_token and relay_key from connected relay info
+                                                    let (auth_token_bytes, relay_key_bytes) =
+                                                        if let Some(transport) =
+                                                            call_manager.get_webrtc_transport(&call_id_obj).await
+                                                        {
+                                                            if let Some(relay_info) =
+                                                                transport.connected_relay().await
+                                                            {
+                                                                // Decode base64 auth_token
+                                                                use base64::Engine;
+                                                                let engine = base64::engine::general_purpose::STANDARD;
+                                                                let auth = engine
+                                                                    .decode(&relay_info.auth_token)
+                                                                    .unwrap_or_else(|_| relay_info.auth_token.as_bytes().to_vec());
+                                                                let key = engine
+                                                                    .decode(&relay_info.relay_key)
+                                                                    .unwrap_or_else(|_| relay_info.relay_key.as_bytes().to_vec());
+                                                                (auth, key)
+                                                            } else {
+                                                                // Fallback to relay_key from relay data
+                                                                let auth = relay.auth_tokens.first().cloned().unwrap_or_default();
+                                                                let key = relay.relay_key.clone().unwrap_or_default();
+                                                                (auth, key)
+                                                            }
+                                                        } else {
+                                                            // Fallback to relay_key from relay data
+                                                            let auth = relay.auth_tokens.first().cloned().unwrap_or_default();
+                                                            let key = relay.relay_key.clone().unwrap_or_default();
+                                                            (auth, key)
+                                                        };
+
+                                                    let media_guard = media_manager_handle.lock().await;
+                                                    if let Some(ref media_manager) = *media_guard {
+                                                        if let Err(e) = media_manager
+                                                            .start_webrtc_session(
+                                                                call_manager.clone(),
+                                                                &call_id,
+                                                                hbh_key,
+                                                                &auth_token_bytes,
+                                                                &relay_key_bytes,
+                                                            )
+                                                            .await
+                                                        {
+                                                            error!(
+                                                                "Failed to start WebRTC audio for incoming call {}: {}",
+                                                                call_id, e
+                                                            );
+                                                        } else {
+                                                            info!(
+                                                                "Incoming call {} WebRTC audio pipeline started",
+                                                                call_id
+                                                            );
+                                                        }
+                                                    } else {
+                                                        error!("Media manager not available for incoming call {}", call_id);
+                                                    }
+                                                } else {
+                                                    warn!(
+                                                        "No hbh_key available for incoming call {} - cannot start audio",
                                                         call_id
                                                     );
                                                 }
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to start media session for incoming call {}: {}",
-                                                        call_id, e
-                                                    );
-                                                }
                                             }
-                                        } else {
-                                            error!("Media manager not available for call {}", call_id);
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to establish WebRTC for incoming call {}: {}",
+                                                    call_id, e
+                                                );
+                                            }
                                         }
                                     }
-                                    (None, _) => {
+                                    None => {
                                         warn!("No relay data available for incoming call {}", call_id);
                                     }
-                                    (_, None) => {
-                                        warn!("No encryption keys available for incoming call {}", call_id);
-                                    }
                                 }
+                                // Note: derived_keys are used for e2e SRTP encryption
+                                // but for relay transport we use hbh_key instead
+                                let _ = derived_keys; // Mark as intentionally unused
                             }
                         }
                         Err(e) => {

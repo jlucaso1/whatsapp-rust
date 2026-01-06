@@ -83,6 +83,11 @@ hmac = "0.12.1"
 sha1 = "0.10.6"
 crc = "3.4.0"
 
+# WebRTC for call media transport
+webrtc = "0.14.0"
+regex = "1.11"
+futures = "0.3.31"
+
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
 

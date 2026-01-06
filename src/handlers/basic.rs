@@ -225,77 +225,32 @@ impl StanzaHandler for AckHandler {
                         }
                     }
 
-                    // Now spawn background task for early binding and keepalives.
-                    // This maintains the relay bindings but doesn't block latency reporting.
+                    // Now spawn background task for early WebRTC connection.
+                    // WebRTC handles ICE keepalives internally.
                     let relay_data_clone = relay_data.clone();
                     let call_id_clone = call_id.clone();
                     let call_manager_clone = Arc::clone(&call_manager);
                     tokio::spawn(async move {
                         info!(
-                            "Starting background early binding for call {} ({} endpoints)",
+                            "Starting background WebRTC connection for call {} ({} endpoints)",
                             call_id_clone,
                             relay_data_clone.endpoints.len()
                         );
 
                         match call_manager_clone
-                            .bind_relays_early(&call_id_clone, &relay_data_clone)
+                            .connect_relay(&call_id_clone, &relay_data_clone)
                             .await
                         {
-                            Ok(latencies) => {
+                            Ok(relay_name) => {
                                 info!(
-                                    "Background binding SUCCESSFUL for call {}: {} relays bound (RTTs: {:?})",
-                                    call_id_clone,
-                                    latencies.len(),
-                                    latencies
-                                        .iter()
-                                        .map(|l| format!("{}={:?}", l.relay_name, l.rtt))
-                                        .collect::<Vec<_>>()
+                                    "Background WebRTC connection SUCCESSFUL for call {}: connected to {}",
+                                    call_id_clone, relay_name
                                 );
-
-                                // Start keepalive loop
-                                if let Some(transport) =
-                                    call_manager_clone.get_bound_transport(&call_id_clone).await
-                                {
-                                    let call_manager_weak = Arc::downgrade(&call_manager_clone);
-                                    let mut interval =
-                                        tokio::time::interval(std::time::Duration::from_secs(3));
-
-                                    loop {
-                                        interval.tick().await;
-
-                                        let Some(cm) = call_manager_weak.upgrade() else {
-                                            debug!(
-                                                "Call manager dropped, stopping keepalive for {}",
-                                                call_id_clone
-                                            );
-                                            break;
-                                        };
-
-                                        if cm.get_bound_transport(&call_id_clone).await.is_none() {
-                                            info!(
-                                                "Transport taken for call {}, stopping keepalives",
-                                                call_id_clone
-                                            );
-                                            break;
-                                        }
-
-                                        match transport.send_keepalives().await {
-                                            Ok(()) => {
-                                                debug!("Keepalive sent for call {}", call_id_clone);
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Keepalive failed for call {}: {}",
-                                                    call_id_clone, e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+                                // WebRTC handles keepalives internally via ICE
                             }
                             Err(e) => {
                                 warn!(
-                                    "Background binding FAILED for call {}: {} - media connection may not work",
+                                    "Background WebRTC connection FAILED for call {}: {} - media connection may not work",
                                     call_id_clone, e
                                 );
                             }

@@ -2,7 +2,10 @@
 
 use super::encryption::{CallEncryptionKey, DerivedCallKeys, EncryptedCallKey};
 use super::error::CallError;
-use super::media::{CallMediaTransport, MediaTransportConfig, RelayLatency};
+use super::media::{
+    CallMediaTransport, MediaTransportConfig, RelayLatency, WebRtcConnectionResult, WebRtcState,
+    WebRtcTransport, WebRtcTransportConfig,
+};
 use super::signaling::SignalingType;
 use super::stanza::{
     AcceptAudioParams, AcceptVideoParams, CallStanzaBuilder, MediaParams, OfferEncData,
@@ -15,6 +18,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use wacore::types::call::{CallId, CallMediaType, EndCallReason};
 use wacore_binary::jid::Jid;
@@ -74,6 +78,10 @@ pub struct CallManagerConfig {
     pub ring_timeout_secs: u64,
     /// Optional media callback for external handlers.
     pub media_callback: Option<Arc<dyn CallMediaCallback>>,
+    /// Transport type for media connections (default: WebRTC).
+    pub transport_type: TransportType,
+    /// WebRTC connection timeout in seconds.
+    pub webrtc_timeout_secs: u64,
 }
 
 impl std::fmt::Debug for CallManagerConfig {
@@ -82,6 +90,8 @@ impl std::fmt::Debug for CallManagerConfig {
             .field("max_concurrent_calls", &self.max_concurrent_calls)
             .field("ring_timeout_secs", &self.ring_timeout_secs)
             .field("media_callback", &self.media_callback.is_some())
+            .field("transport_type", &self.transport_type)
+            .field("webrtc_timeout_secs", &self.webrtc_timeout_secs)
             .finish()
     }
 }
@@ -92,6 +102,9 @@ impl Default for CallManagerConfig {
             max_concurrent_calls: 1,
             ring_timeout_secs: 45,
             media_callback: None,
+            // WebRTC is the recommended transport - it's what WhatsApp Web uses
+            transport_type: TransportType::WebRtc,
+            webrtc_timeout_secs: 30,
         }
     }
 }
@@ -118,6 +131,16 @@ impl CallOptions {
     }
 }
 
+/// Transport type for call media.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransportType {
+    /// Legacy raw UDP STUN transport (may not work with modern relays).
+    #[default]
+    Legacy,
+    /// WebRTC DataChannel transport (WhatsApp Web approach - recommended).
+    WebRtc,
+}
+
 /// Manages active calls and their state transitions.
 pub struct CallManager {
     /// Our JID.
@@ -126,9 +149,12 @@ pub struct CallManager {
     config: CallManagerConfig,
     /// Active calls indexed by call ID.
     calls: RwLock<HashMap<String, CallInfo>>,
-    /// Pre-bound transports for calls (bound early after ACK, before peer accepts).
+    /// Pre-bound legacy transports for calls (bound early after ACK, before peer accepts).
     /// Indexed by call ID.
     bound_transports: RwLock<HashMap<String, Arc<CallMediaTransport>>>,
+    /// WebRTC transports for calls (WhatsApp Web approach).
+    /// Indexed by call ID.
+    webrtc_transports: RwLock<HashMap<String, Arc<WebRtcTransport>>>,
     /// Elected relay indices from RELAY_ELECTION stanzas.
     /// Indexed by call ID.
     elected_relays: RwLock<HashMap<String, u32>>,
@@ -142,6 +168,7 @@ impl CallManager {
             config,
             calls: RwLock::new(HashMap::new()),
             bound_transports: RwLock::new(HashMap::new()),
+            webrtc_transports: RwLock::new(HashMap::new()),
             elected_relays: RwLock::new(HashMap::new()),
         })
     }
@@ -698,7 +725,83 @@ impl CallManager {
         Ok(())
     }
 
-    /// Bind to relays immediately after receiving ACK (early binding).
+    /// Connect to relay using the configured transport type.
+    ///
+    /// This is the **primary method** for establishing relay connections.
+    /// It automatically uses the transport type configured in `CallManagerConfig`:
+    /// - `TransportType::WebRtc` (default): Uses WebRTC DataChannel (WhatsApp Web approach)
+    /// - `TransportType::Legacy`: Uses raw UDP STUN (may not work with modern relays)
+    ///
+    /// For WebRTC transport, this method:
+    /// 1. Creates RTCPeerConnection with unordered DataChannel
+    /// 2. Manipulates SDP to inject relay credentials
+    /// 3. Establishes ICE/DTLS/SCTP connection automatically
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to connect
+    /// * `relay_data` - Relay data from offer ACK
+    ///
+    /// # Returns
+    /// * `Ok(relay_name)` - Name of the connected relay
+    /// * `Err(CallError)` - If connection fails
+    ///
+    /// # Example
+    /// ```ignore
+    /// // After receiving offer ACK
+    /// let relay_data = parse_relay_data_from_ack(&ack_node)?;
+    /// call_manager.store_relay_data(&call_id, relay_data.clone()).await?;
+    ///
+    /// // Connect using configured transport (WebRTC by default)
+    /// let relay_name = call_manager.connect_relay(&call_id, &relay_data).await?;
+    /// println!("Connected to relay: {}", relay_name);
+    /// ```
+    pub async fn connect_relay(
+        &self,
+        call_id: &CallId,
+        relay_data: &RelayData,
+    ) -> Result<String, CallError> {
+        match self.config.transport_type {
+            TransportType::WebRtc => {
+                info!(
+                    "Connecting to relay via WebRTC for call {} ({} endpoints)",
+                    call_id,
+                    relay_data.endpoints.len()
+                );
+
+                let config = WebRtcTransportConfig {
+                    timeout: Duration::from_secs(self.config.webrtc_timeout_secs),
+                    ice_debug: false,
+                };
+
+                let result = self
+                    .connect_webrtc_with_config(call_id, relay_data, config)
+                    .await?;
+
+                Ok(result.relay_info.relay_name)
+            }
+            TransportType::Legacy => {
+                info!(
+                    "Connecting to relay via legacy STUN for call {} ({} endpoints)",
+                    call_id,
+                    relay_data.endpoints.len()
+                );
+
+                let latencies = self.bind_relays_early_legacy(call_id, relay_data).await?;
+                let relay_name = latencies
+                    .first()
+                    .map(|l| l.relay_name.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                Ok(relay_name)
+            }
+        }
+    }
+
+    /// Bind to relays immediately after receiving ACK (legacy STUN approach).
+    ///
+    /// **Note**: This uses the legacy raw UDP STUN approach which may not work
+    /// with modern WhatsApp relays. Consider using `connect_relay()` instead,
+    /// which uses WebRTC by default.
     ///
     /// This performs STUN binding to measure actual latency and keeps the
     /// connections alive for when the peer accepts. This prevents token
@@ -709,13 +812,13 @@ impl CallManager {
     ///
     /// The bound transport is stored internally and can be retrieved later
     /// with `get_bound_transport()`.
-    pub async fn bind_relays_early(
+    pub async fn bind_relays_early_legacy(
         &self,
         call_id: &CallId,
         relay_data: &RelayData,
     ) -> Result<Vec<RelayLatency>, CallError> {
         info!(
-            "Early binding to {} relay endpoints for call {}",
+            "Early binding (legacy STUN) to {} relay endpoints for call {}",
             relay_data.endpoints.len(),
             call_id
         );
@@ -752,6 +855,18 @@ impl CallManager {
                 Err(CallError::Transport(format!("Relay binding failed: {}", e)))
             }
         }
+    }
+
+    /// Bind to relays immediately after receiving ACK.
+    ///
+    /// **Deprecated**: Use `connect_relay()` instead which uses WebRTC by default.
+    #[deprecated(since = "0.2.0", note = "Use connect_relay() instead")]
+    pub async fn bind_relays_early(
+        &self,
+        call_id: &CallId,
+        relay_data: &RelayData,
+    ) -> Result<Vec<RelayLatency>, CallError> {
+        self.bind_relays_early_legacy(call_id, relay_data).await
     }
 
     /// Get a pre-bound transport for a call.
@@ -809,6 +924,18 @@ impl CallManager {
             .get(call_id.as_str())
             .and_then(|info| info.encryption.as_ref())
             .map(|enc| enc.derived_keys.clone())
+    }
+
+    /// Get the master encryption key for a call.
+    ///
+    /// Returns None if no encryption key has been set for this call.
+    pub async fn get_encryption_key(&self, call_id: &CallId) -> Option<CallEncryptionKey> {
+        self.calls
+            .read()
+            .await
+            .get(call_id.as_str())
+            .and_then(|info| info.encryption.as_ref())
+            .map(|enc| enc.master_key.clone())
     }
 
     /// Check if this call was initiated by us (outgoing call).
@@ -883,5 +1010,271 @@ impl CallManager {
             .await
             .get(call_id.as_str())
             .copied()
+    }
+
+    // ==================== WebRTC Transport Methods ====================
+
+    /// Connect to relay using WebRTC DataChannel (WhatsApp Web approach).
+    ///
+    /// This is the **recommended** method for connecting to WhatsApp relays.
+    /// It replicates what WhatsApp Web does:
+    /// 1. Creates RTCPeerConnection with unordered DataChannel
+    /// 2. Generates offer SDP
+    /// 3. Manipulates SDP to inject relay credentials and address
+    /// 4. Sets modified SDP as remote answer
+    /// 5. WebRTC handles ICE/DTLS/SCTP automatically
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to connect
+    /// * `relay_data` - Relay data from offer ACK (contains auth_tokens, relay_key, endpoints)
+    ///
+    /// # Returns
+    /// * `Ok(WebRtcConnectionResult)` - Connection info including relay name and ID
+    /// * `Err(CallError)` - If connection fails
+    ///
+    /// # Example
+    /// ```ignore
+    /// // After receiving offer ACK with relay data
+    /// let relay_data = parse_relay_data_from_ack(&ack_node)?;
+    /// call_manager.store_relay_data(&call_id, relay_data.clone()).await?;
+    ///
+    /// // Connect using WebRTC (recommended)
+    /// let result = call_manager.connect_webrtc(&call_id, &relay_data).await?;
+    /// println!("Connected to relay: {}", result.relay_info.relay_name);
+    /// ```
+    pub async fn connect_webrtc(
+        &self,
+        call_id: &CallId,
+        relay_data: &RelayData,
+    ) -> Result<WebRtcConnectionResult, CallError> {
+        info!(
+            "Connecting to relay via WebRTC for call {} ({} endpoints)",
+            call_id,
+            relay_data.endpoints.len()
+        );
+
+        // Create WebRTC transport with default config
+        let config = WebRtcTransportConfig {
+            timeout: Duration::from_secs(30),
+            ice_debug: false,
+        };
+        let transport = Arc::new(WebRtcTransport::new(config));
+
+        // Connect to relay
+        let result = transport.connect(relay_data).await.map_err(|e| {
+            warn!("WebRTC connection failed for call {}: {}", call_id, e);
+            CallError::Transport(format!("WebRTC connection failed: {}", e))
+        })?;
+
+        info!(
+            "WebRTC connection established for call {}: relay={} (id={})",
+            call_id, result.relay_info.relay_name, result.relay_info.relay_id
+        );
+
+        // Store the transport
+        self.webrtc_transports
+            .write()
+            .await
+            .insert(call_id.to_string(), transport);
+
+        Ok(result)
+    }
+
+    /// Connect to relay using WebRTC with custom configuration.
+    ///
+    /// This will reuse an existing connected transport if available,
+    /// avoiding unnecessary reconnection overhead.
+    pub async fn connect_webrtc_with_config(
+        &self,
+        call_id: &CallId,
+        relay_data: &RelayData,
+        config: WebRtcTransportConfig,
+    ) -> Result<WebRtcConnectionResult, CallError> {
+        // Check if we already have a connected transport for this call
+        if let Some(existing_transport) = self.webrtc_transports.read().await.get(call_id.as_str())
+            && existing_transport.state().await == WebRtcState::Connected
+            && let Some(relay_info) = existing_transport.connected_relay().await
+        {
+            info!(
+                "Reusing existing WebRTC connection for call {}: relay={} (c2r_rtt={}ms)",
+                call_id,
+                relay_info.relay_name,
+                relay_info
+                    .c2r_rtt_ms
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|| "?".to_string())
+            );
+            return Ok(WebRtcConnectionResult {
+                relay_info,
+                local_addr: None,
+            });
+        }
+
+        info!(
+            "Connecting to relay via WebRTC for call {} (timeout: {:?})",
+            call_id, config.timeout
+        );
+
+        let transport = Arc::new(WebRtcTransport::new(config));
+
+        let result = transport.connect(relay_data).await.map_err(|e| {
+            warn!("WebRTC connection failed for call {}: {}", call_id, e);
+            CallError::Transport(format!("WebRTC connection failed: {}", e))
+        })?;
+
+        info!(
+            "WebRTC connection established for call {}: relay={} (c2r_rtt={}ms)",
+            call_id,
+            result.relay_info.relay_name,
+            result
+                .relay_info
+                .c2r_rtt_ms
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "?".to_string())
+        );
+
+        self.webrtc_transports
+            .write()
+            .await
+            .insert(call_id.to_string(), transport);
+
+        Ok(result)
+    }
+
+    /// Get the WebRTC transport for a call.
+    ///
+    /// Returns None if no WebRTC transport has been created for this call.
+    pub async fn get_webrtc_transport(&self, call_id: &CallId) -> Option<Arc<WebRtcTransport>> {
+        self.webrtc_transports
+            .read()
+            .await
+            .get(call_id.as_str())
+            .cloned()
+    }
+
+    /// Remove and return the WebRTC transport for a call.
+    ///
+    /// This takes ownership of the transport, removing it from storage.
+    pub async fn take_webrtc_transport(&self, call_id: &CallId) -> Option<Arc<WebRtcTransport>> {
+        self.webrtc_transports
+            .write()
+            .await
+            .remove(call_id.as_str())
+    }
+
+    /// Send data through the WebRTC DataChannel.
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to send data for
+    /// * `data` - Binary data to send (typically RTP/SRTP packets)
+    ///
+    /// # Returns
+    /// * `Ok(())` - If data was sent successfully
+    /// * `Err(CallError)` - If transport not found or send failed
+    pub async fn send_via_webrtc(&self, call_id: &CallId, data: &[u8]) -> Result<(), CallError> {
+        let transports = self.webrtc_transports.read().await;
+        let transport = transports
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(format!("No WebRTC transport for {}", call_id)))?;
+
+        transport
+            .send(data)
+            .await
+            .map_err(|e| CallError::Transport(format!("WebRTC send failed: {}", e)))
+    }
+
+    /// Receive data from the WebRTC DataChannel.
+    ///
+    /// This is a non-blocking call that returns immediately if no data is available.
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to receive data for
+    ///
+    /// # Returns
+    /// * `Ok(Some(data))` - If data was received
+    /// * `Ok(None)` - If no data available or channel closed
+    /// * `Err(CallError)` - If transport not found
+    pub async fn recv_from_webrtc(&self, call_id: &CallId) -> Result<Option<Vec<u8>>, CallError> {
+        let transports = self.webrtc_transports.read().await;
+        let transport = transports
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(format!("No WebRTC transport for {}", call_id)))?;
+
+        Ok(transport.recv().await)
+    }
+
+    /// Receive data from the WebRTC DataChannel with timeout.
+    ///
+    /// # Arguments
+    /// * `call_id` - The call to receive data for
+    /// * `timeout` - Maximum time to wait for data
+    ///
+    /// # Returns
+    /// * `Ok(data)` - If data was received
+    /// * `Err(CallError)` - If timeout, transport not found, or channel closed
+    pub async fn recv_from_webrtc_timeout(
+        &self,
+        call_id: &CallId,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, CallError> {
+        let transports = self.webrtc_transports.read().await;
+        let transport = transports
+            .get(call_id.as_str())
+            .ok_or_else(|| CallError::NotFound(format!("No WebRTC transport for {}", call_id)))?;
+
+        transport
+            .recv_timeout(timeout)
+            .await
+            .map_err(|e| CallError::Transport(format!("WebRTC recv failed: {}", e)))
+    }
+
+    /// Close the WebRTC transport for a call.
+    ///
+    /// This closes the DataChannel and PeerConnection, releasing all resources.
+    pub async fn close_webrtc_transport(&self, call_id: &CallId) -> Result<(), CallError> {
+        if let Some(transport) = self
+            .webrtc_transports
+            .write()
+            .await
+            .remove(call_id.as_str())
+        {
+            transport
+                .close()
+                .await
+                .map_err(|e| CallError::Transport(format!("WebRTC close failed: {}", e)))?;
+            info!("Closed WebRTC transport for call {}", call_id);
+        }
+        Ok(())
+    }
+
+    /// Check if a call has an active WebRTC transport.
+    pub async fn has_webrtc_transport(&self, call_id: &CallId) -> bool {
+        self.webrtc_transports
+            .read()
+            .await
+            .contains_key(call_id.as_str())
+    }
+
+    /// Cleanup all transports for a call (both legacy and WebRTC).
+    ///
+    /// Should be called when a call ends to release all resources.
+    pub async fn cleanup_call_transports(&self, call_id: &CallId) {
+        // Remove legacy transport
+        self.bound_transports.write().await.remove(call_id.as_str());
+
+        // Close and remove WebRTC transport
+        if let Some(transport) = self
+            .webrtc_transports
+            .write()
+            .await
+            .remove(call_id.as_str())
+        {
+            let _ = transport.close().await;
+        }
+
+        // Remove elected relay
+        self.elected_relays.write().await.remove(call_id.as_str());
+
+        debug!("Cleaned up transports for call {}", call_id);
     }
 }

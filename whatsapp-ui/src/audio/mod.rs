@@ -6,8 +6,10 @@
 //! - Waveform generation for WhatsApp PTT messages
 //! - Audio playback for received voice messages
 //! - Real-time audio for VoIP calls
+//! - Complete call media pipeline with SRTP/RTP
 
 mod call_audio;
+mod call_media_pipeline;
 mod encoder;
 mod player;
 mod recorder;
@@ -15,6 +17,10 @@ mod waveform;
 
 pub use call_audio::{
     AudioCaptureHandle, AudioPlaybackHandle, start_audio_capture, start_audio_playback,
+};
+pub use call_media_pipeline::{
+    CallMediaPipelineConfig, CallMediaPipelineError, CallMediaPipelineHandle,
+    start_call_media_pipeline,
 };
 pub use encoder::encode_to_opus_ogg;
 pub use player::AudioPlayer;

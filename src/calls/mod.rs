@@ -44,7 +44,7 @@ pub use encryption::{
 };
 pub use error::CallError;
 pub use handler::CallHandler;
-pub use manager::{CallManager, CallManagerConfig, CallMediaCallback, CallOptions};
+pub use manager::{CallManager, CallManagerConfig, CallMediaCallback, CallOptions, TransportType};
 pub use signaling::{ResponseType, SignalingType};
 pub use stanza::{
     AcceptAudioParams, AcceptVideoParams, AudioParams, CallStanzaBuilder, EncRekeyData,

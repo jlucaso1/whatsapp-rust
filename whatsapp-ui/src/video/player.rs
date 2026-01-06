@@ -187,20 +187,6 @@ impl VideoPlayer {
         }
     }
 
-    /// Toggle play/pause
-    /// Returns true if audio needs to be started
-    pub fn toggle(&mut self) -> bool {
-        match self.state {
-            VideoPlayerState::Playing => {
-                self.pause();
-                false
-            }
-            VideoPlayerState::Paused => self.play(),
-            VideoPlayerState::Idle => self.play(),
-            _ => false,
-        }
-    }
-
     /// Stop playback and reset
     pub fn stop(&mut self) {
         self.playback_start = None;
@@ -223,11 +209,6 @@ impl VideoPlayer {
         } else {
             self.paused_at.unwrap_or(Duration::ZERO)
         }
-    }
-
-    /// Get video duration
-    pub fn duration(&self) -> Option<Duration> {
-        self.decoder.as_ref().map(|d| d.duration())
     }
 
     /// Update the current frame based on playback time
@@ -296,27 +277,5 @@ impl VideoPlayer {
     /// Get current frame for rendering (YUV format for GPU conversion)
     pub fn current_frame(&self) -> Option<&YuvFrameData> {
         self.current_frame.as_ref()
-    }
-
-    /// Seek to a specific time
-    pub fn seek(&mut self, time: Duration) {
-        if let Some(decoder) = &mut self.decoder {
-            decoder.seek(time);
-            self.paused_at = Some(time);
-            if self.state == VideoPlayerState::Playing {
-                self.playback_start = Some(Instant::now() - time);
-            }
-            self.update_current_frame();
-        }
-    }
-
-    /// Get playback progress as 0.0 to 1.0
-    pub fn progress(&self) -> f32 {
-        if let Some(duration) = self.duration()
-            && duration.as_secs_f32() > 0.0
-        {
-            return (self.current_time().as_secs_f32() / duration.as_secs_f32()).min(1.0);
-        }
-        0.0
     }
 }

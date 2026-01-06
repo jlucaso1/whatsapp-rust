@@ -169,50 +169,50 @@ impl StreamingVideoDecoder {
             sps.as_ref().map(|s| s.len()).unwrap_or(0),
             pps.as_ref().map(|s| s.len()).unwrap_or(0),
         );
-        if let Some(ref sps_data) = sps {
-            if !sps_data.is_empty() {
-                // Log first few bytes of SPS for debugging
-                let preview: Vec<String> = sps_data
-                    .iter()
-                    .take(16)
-                    .map(|b| format!("{:02x}", b))
-                    .collect();
-                log::debug!("SPS data (first 16 bytes): {}", preview.join(" "));
+        if let Some(ref sps_data) = sps
+            && !sps_data.is_empty()
+        {
+            // Log first few bytes of SPS for debugging
+            let preview: Vec<String> = sps_data
+                .iter()
+                .take(16)
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            log::debug!("SPS data (first 16 bytes): {}", preview.join(" "));
 
-                // Parse H.264 profile from SPS (byte 1 after NAL header)
-                // SPS NAL type is 7, so first byte is NAL header, then profile_idc
-                if sps_data.len() >= 4 {
-                    let profile_idc = sps_data[1];
-                    let constraint_flags = sps_data[2];
-                    let level_idc = sps_data[3];
+            // Parse H.264 profile from SPS (byte 1 after NAL header)
+            // SPS NAL type is 7, so first byte is NAL header, then profile_idc
+            if sps_data.len() >= 4 {
+                let profile_idc = sps_data[1];
+                let constraint_flags = sps_data[2];
+                let level_idc = sps_data[3];
 
-                    let profile_name = match profile_idc {
-                        66 => "Baseline",
-                        77 => "Main",
-                        88 => "Extended",
-                        100 => "High",
-                        110 => "High 10",
-                        122 => "High 4:2:2",
-                        244 => "High 4:4:4 Predictive",
-                        _ => "Unknown",
-                    };
+                let profile_name = match profile_idc {
+                    66 => "Baseline",
+                    77 => "Main",
+                    88 => "Extended",
+                    100 => "High",
+                    110 => "High 10",
+                    122 => "High 4:2:2",
+                    244 => "High 4:4:4 Predictive",
+                    _ => "Unknown",
+                };
 
-                    log::info!(
-                        "H.264 Profile: {} (profile_idc={}), Level: {}.{}, Constraints: 0x{:02x}",
-                        profile_name,
-                        profile_idc,
-                        level_idc / 10,
-                        level_idc % 10,
-                        constraint_flags
+                log::info!(
+                    "H.264 Profile: {} (profile_idc={}), Level: {}.{}, Constraints: 0x{:02x}",
+                    profile_name,
+                    profile_idc,
+                    level_idc / 10,
+                    level_idc % 10,
+                    constraint_flags
+                );
+
+                // Warn about potentially problematic profiles
+                if profile_idc >= 100 {
+                    log::warn!(
+                        "Video uses {} profile - OpenH264 may have limited support for advanced features",
+                        profile_name
                     );
-
-                    // Warn about potentially problematic profiles
-                    if profile_idc >= 100 {
-                        log::warn!(
-                            "Video uses {} profile - OpenH264 may have limited support for advanced features",
-                            profile_name
-                        );
-                    }
                 }
             }
         }
@@ -351,10 +351,10 @@ impl StreamingVideoDecoder {
         let mut types = Vec::new();
         let mut i = 0;
         while i + 4 < annexb_data.len() {
-            if annexb_data[i..i + 4] == [0, 0, 0, 1] {
-                if let Some(&byte) = annexb_data.get(i + 4) {
-                    types.push(byte & 0x1F);
-                }
+            if annexb_data[i..i + 4] == [0, 0, 0, 1]
+                && let Some(&byte) = annexb_data.get(i + 4)
+            {
+                types.push(byte & 0x1F);
             }
             i += 1;
         }
@@ -385,16 +385,6 @@ impl StreamingVideoDecoder {
     /// Get video duration
     pub fn duration(&self) -> Duration {
         self.duration
-    }
-
-    /// Get video dimensions
-    pub fn dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
-    /// Get current frame index
-    pub fn current_index(&self) -> usize {
-        self.current_frame.as_ref().map(|f| f.index).unwrap_or(0)
     }
 
     /// Seek to a specific time and decode that frame
@@ -568,7 +558,9 @@ impl StreamingVideoDecoder {
                         4 => "dsDepLayerLost - dependency layer lost",
                         5 => "dsNoParamSets - missing SPS/PPS parameter sets",
                         6 => "dsDataErrorConcealed - error concealed, frame may be corrupted",
-                        16 => "dsInvalidArgument - invalid data passed to decoder (possibly wrong NAL format or corrupted frame)",
+                        16 => {
+                            "dsInvalidArgument - invalid data passed to decoder (possibly wrong NAL format or corrupted frame)"
+                        }
                         32 => "dsInitialOptExpected - initialization option expected",
                         64 => "dsOutOfMemory - decoder ran out of memory",
                         _ => "unknown error code",
@@ -588,7 +580,7 @@ impl StreamingVideoDecoder {
                 );
 
                 // If this is after many consecutive failures, it might indicate a codec issue
-                if index > 0 && index % 100 == 0 {
+                if index > 0 && index.is_multiple_of(100) {
                     log::warn!(
                         "Multiple decode failures - video may use unsupported H.264 features (B-frames, high profile, etc.)"
                     );

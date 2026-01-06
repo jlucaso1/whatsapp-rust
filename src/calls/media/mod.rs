@@ -7,6 +7,7 @@
 //!
 //! - [`MediaSession`]: Complete media session combining all components
 //! - [`CallMediaTransport`]: High-level media transport orchestration
+//! - [`WebRtcTransport`]: WebRTC-based transport (WhatsApp Web approach)
 //! - [`RelayConnection`]: UDP connection to WhatsApp relay servers
 //! - [`StunBinder`]: STUN binding protocol for relay authentication
 //! - [`RtpPacket`], [`RtpSession`]: RTP packet handling
@@ -16,7 +17,21 @@
 //!
 //! # Protocol Overview
 //!
-//! 1. Connect to relay servers via UDP (port 3478)
+//! ## WebRTC Transport (Recommended - WhatsApp Web Approach)
+//!
+//! 1. Create RTCPeerConnection with DataChannel
+//! 2. Generate offer SDP and manipulate it:
+//!    - Replace ice-ufrag with auth_token
+//!    - Replace ice-pwd with relay_key
+//!    - Set hardcoded DTLS fingerprint
+//!    - Inject relay server as ICE candidate
+//! 3. Set manipulated SDP as remote answer
+//! 4. WebRTC handles ICE/DTLS/SCTP automatically
+//! 5. DataChannel opens - ready for media
+//!
+//! ## Raw UDP Transport (Legacy)
+//!
+//! 1. Connect to relay servers via UDP (port 3480)
 //! 2. Send STUN Binding Request with relay token authentication
 //! 3. Receive STUN Binding Response with allocated address
 //! 4. Select best relay based on latency
@@ -32,6 +47,7 @@ mod session;
 mod srtp;
 mod stun;
 mod transport;
+mod webrtc;
 
 pub use jitter::{JitterBuffer, JitterBufferConfig, JitterStats};
 pub use relay::{ConnectedRelay, RelayConnection, RelayConnectionConfig, RelayError, RelayState};
@@ -52,4 +68,8 @@ pub use stun::{
 pub use transport::{
     ActiveRelay, CallMediaTransport, MediaTransportConfig, RelayLatency, TransportError,
     TransportState,
+};
+pub use webrtc::{
+    RelayConnectionInfo, WHATSAPP_DTLS_FINGERPRINT, WebRtcConnectionResult, WebRtcError,
+    WebRtcState, WebRtcTransport, WebRtcTransportConfig, manipulate_sdp,
 };

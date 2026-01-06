@@ -8,15 +8,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use whatsapp_rust::calls::{
-    CallMediaCallback, DerivedCallKeys, MediaParams, OfferEncData, RelayData, RelayLatencyData,
-    TransportPayload,
+    CallManager, CallMediaCallback, DerivedCallKeys, MediaParams, OfferEncData, RelayData,
+    RelayLatencyData, TransportPayload,
     media::{
         CallMediaTransport, MediaSession, MediaSessionBuilder, MediaSessionState, MediaSessionStats,
     },
 };
 
 use crate::audio::{
-    AudioCaptureHandle, AudioPlaybackHandle, start_audio_capture, start_audio_playback,
+    AudioCaptureHandle, AudioPlaybackHandle, CallMediaPipelineConfig, CallMediaPipelineHandle,
+    start_audio_capture, start_audio_playback, start_call_media_pipeline,
 };
 
 /// Active call media session with audio streams.
@@ -47,8 +48,10 @@ impl ActiveMediaSession {
 
 /// Media manager for handling call media sessions.
 pub struct CallMediaManager {
-    /// Active media sessions by call ID.
+    /// Active media sessions by call ID (legacy STUN transport).
     sessions: Mutex<std::collections::HashMap<String, Arc<ActiveMediaSession>>>,
+    /// Active WebRTC media sessions by call ID.
+    webrtc_sessions: Mutex<std::collections::HashMap<String, CallMediaPipelineHandle>>,
 }
 
 impl CallMediaManager {
@@ -56,6 +59,62 @@ impl CallMediaManager {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(std::collections::HashMap::new()),
+            webrtc_sessions: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Start a WebRTC media session for a call.
+    ///
+    /// Uses the WebRTC DataChannel for audio transport instead of legacy STUN.
+    ///
+    /// # Arguments
+    /// * `call_manager` - The call manager for sending/receiving via WebRTC
+    /// * `call_id` - The call identifier
+    /// * `hbh_key` - Hop-by-hop SRTP key (30 bytes: 16-byte key + 14-byte salt)
+    /// * `auth_token` - Authentication token for STUN bind (raw bytes)
+    /// * `relay_key` - Relay key for STUN MESSAGE-INTEGRITY (raw bytes)
+    pub async fn start_webrtc_session(
+        &self,
+        call_manager: Arc<CallManager>,
+        call_id: &str,
+        hbh_key: &[u8],
+        auth_token: &[u8],
+        relay_key: &[u8],
+    ) -> Result<(), String> {
+        info!("Starting WebRTC media session for call {}", call_id);
+
+        // Check if session already exists
+        if self.webrtc_sessions.lock().await.contains_key(call_id) {
+            warn!("WebRTC session for call {} already exists", call_id);
+            return Ok(());
+        }
+
+        // Start the media pipeline with hbh_key and credentials for STUN bind
+        match start_call_media_pipeline(
+            call_manager,
+            call_id.to_string(),
+            hbh_key,
+            auth_token,
+            relay_key,
+            CallMediaPipelineConfig::default(),
+        )
+        .await
+        {
+            Ok(handle) => {
+                info!("WebRTC media pipeline started for call {}", call_id);
+                self.webrtc_sessions
+                    .lock()
+                    .await
+                    .insert(call_id.to_string(), handle);
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "Failed to start WebRTC media pipeline for call {}: {}",
+                    call_id, e
+                );
+                Err(format!("WebRTC media pipeline failed: {}", e))
+            }
         }
     }
 
@@ -381,8 +440,16 @@ impl CallMediaManager {
 
     /// Stop and remove a media session.
     pub async fn stop_session(&self, call_id: &str) {
+        // Stop WebRTC session if present
+        if let Some(handle) = self.webrtc_sessions.lock().await.remove(call_id) {
+            info!("Stopping WebRTC media session for call {}", call_id);
+            handle.stop();
+            info!("WebRTC media session stopped for call {}", call_id);
+        }
+
+        // Stop legacy session if present
         if let Some(session) = self.sessions.lock().await.remove(call_id) {
-            info!("Stopping media session for call {}", call_id);
+            info!("Stopping legacy media session for call {}", call_id);
 
             // Stop audio (handles are dropped, which stops the threads)
             {
@@ -402,7 +469,7 @@ impl CallMediaManager {
 
             // Close the media session
             session.session.close().await;
-            info!("Media session stopped for call {}", call_id);
+            info!("Legacy media session stopped for call {}", call_id);
         }
     }
 
