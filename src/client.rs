@@ -1861,11 +1861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1919,11 +1915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plaintext_buffer_pool_reuses_buffers() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1967,11 +1959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_waiter_resolves() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2037,11 +2025,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_without_matching_waiter() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2080,11 +2064,7 @@ mod tests {
     /// we can reuse the existing LID session instead of creating a new PN session.
     #[tokio::test]
     async fn test_lid_pn_cache_basic_operations() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_lid_cache_basic?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2149,13 +2129,7 @@ mod tests {
     /// When a phone number has multiple LIDs, the most recent one should be returned.
     #[tokio::test]
     async fn test_lid_pn_cache_timestamp_resolution() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_lid_cache_timestamp?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2240,11 +2214,7 @@ mod tests {
     async fn test_get_lid_for_phone_via_send_context_resolver() {
         use wacore::client::context::SendContextResolver;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_get_lid_for_phone?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2302,13 +2272,7 @@ mod tests {
     /// Test that wait_for_offline_delivery_end returns immediately when the flag is already set.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_returns_immediately_when_flag_set() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_sync_flag_set?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2346,13 +2310,7 @@ mod tests {
     /// This verifies the 10-second timeout is working.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_times_out_when_flag_not_set() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_sync_timeout?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2397,11 +2355,7 @@ mod tests {
     /// Test that wait_for_offline_delivery_end returns when notified.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_returns_on_notify() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_offline_notify?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2445,13 +2399,7 @@ mod tests {
     /// Test that the offline_sync_completed flag starts as false.
     #[tokio::test]
     async fn test_offline_sync_flag_initially_false() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_flag_initial?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2484,11 +2432,7 @@ mod tests {
     async fn test_offline_sync_lifecycle() {
         use std::sync::atomic::Ordering;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_offline_lifecycle?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2541,11 +2485,7 @@ mod tests {
     /// This verifies the "not logged in" guard works.
     #[tokio::test]
     async fn test_establish_primary_phone_session_fails_without_pn() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_no_pn?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2585,11 +2525,7 @@ mod tests {
         use std::sync::atomic::Ordering;
         use wacore_binary::jid::Jid;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_ensure_e2e_waits?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2669,11 +2605,7 @@ mod tests {
         use std::sync::atomic::Ordering;
         use wacore_binary::jid::Jid;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_immediate_no_wait?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend.clone())
                 .await

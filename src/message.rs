@@ -1308,9 +1308,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::test_utils::MockHttpClient;
+    use crate::test_utils::{MockHttpClient, create_test_backend};
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
     use wacore_binary::jid::{Jid, SERVER_JID};
@@ -1326,11 +1325,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_message_info_for_status_broadcast() {
         // 1. Setup
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_status_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1383,11 +1378,7 @@ mod tests {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
         // 1. Setup
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_graceful_fail?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1453,11 +1444,7 @@ mod tests {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
         // 1. Setup
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_skip_skmsg_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1533,7 +1520,6 @@ mod tests {
     /// 3. Attempting retrieval with LID address (the fix) - should succeed
     #[tokio::test]
     async fn test_self_sent_lid_group_message_sender_key_mismatch() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             SenderKeyStore, create_sender_key_distribution_message,
@@ -1542,11 +1528,7 @@ mod tests {
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
 
         // Setup
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1654,7 +1636,6 @@ mod tests {
     /// sender key stored under their LID address, not mixed up with phone numbers.
     #[tokio::test]
     async fn test_multiple_lid_participants_sender_key_isolation() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             SenderKeyStore, create_sender_key_distribution_message,
@@ -1662,11 +1643,7 @@ mod tests {
         };
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_multi_lid_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1869,15 +1846,10 @@ mod tests {
     /// - Mixed addressing modes
     #[tokio::test]
     async fn test_parse_message_info_sender_alt_extraction() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_sender_alt_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2127,16 +2099,11 @@ mod tests {
     /// regardless of what JID is used for E2E session decryption
     #[tokio::test]
     async fn test_sender_key_always_uses_display_jid() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{SenderKeyStore, create_sender_key_distribution_message};
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_display_jid_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2217,7 +2184,6 @@ mod tests {
     /// causing it to skip skmsg decryption for all messages after the first.
     #[tokio::test]
     async fn test_second_message_with_only_skmsg_decrypts() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{
             create_sender_key_distribution_message, process_sender_key_distribution_message,
@@ -2225,11 +2191,7 @@ mod tests {
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_second_msg_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2333,15 +2295,10 @@ mod tests {
     /// 5. The bot continues processing instead of propagating the error
     #[tokio::test]
     async fn test_untrusted_identity_error_is_caught_and_handled() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
 
         // Setup
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_untrusted_identity_caught?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2406,14 +2363,9 @@ mod tests {
     /// other messages in the batch.
     #[tokio::test]
     async fn test_untrusted_identity_does_not_break_batch_processing() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_untrusted_batch?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2480,14 +2432,9 @@ mod tests {
     /// they should be handled per-sender without affecting other group members.
     #[tokio::test]
     async fn test_untrusted_identity_in_group_context() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_untrusted_group?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2552,15 +2499,10 @@ mod tests {
     /// 3. Decryption uses own PN via the is_from_me fallback path
     #[tokio::test]
     async fn test_parse_message_info_self_sent_dm_via_lid() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_self_dm_lid_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2646,15 +2588,10 @@ mod tests {
     /// 3. Decryption uses sender_alt for session lookup
     #[tokio::test]
     async fn test_parse_message_info_dm_from_other_via_lid() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_other_dm_lid_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2744,15 +2681,10 @@ mod tests {
     /// This is the original bug case that was fixed earlier.
     #[tokio::test]
     async fn test_parse_message_info_dm_to_self() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_dm_to_self_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2839,11 +2771,7 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_populated_on_message_with_sender_lid() {
         // Setup client
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_lid_cache_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2908,11 +2836,7 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_not_populated_without_sender_lid() {
         // Setup client
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_no_lid_cache_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2962,11 +2886,7 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_populated_for_lid_sender_with_participant_pn() {
         // Setup client
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_lid_sender_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3032,11 +2952,7 @@ mod tests {
     #[tokio::test]
     async fn test_lid_pn_cache_handles_repeated_messages() {
         // Setup client
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_repeated_msg_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3102,15 +3018,10 @@ mod tests {
     #[tokio::test]
     async fn test_pn_message_uses_lid_for_session_lookup_when_mapping_known() {
         use crate::lid_pn_cache::LidPnEntry;
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::types::jid::JidExt;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_pn_to_lid_session_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3240,15 +3151,10 @@ mod tests {
     #[tokio::test]
     async fn test_pn_message_uses_cached_lid_without_sender_lid_attribute() {
         use crate::lid_pn_cache::LidPnEntry;
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::types::jid::JidExt;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_cached_lid_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3352,15 +3258,10 @@ mod tests {
     /// the PN address for session lookup.
     #[tokio::test]
     async fn test_pn_message_uses_pn_when_no_lid_mapping() {
-        use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::types::jid::JidExt;
 
-        let backend = Arc::new(
-            SqliteStore::new("file:memdb_no_lid_mapping_test?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create test backend"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3486,24 +3387,9 @@ mod tests {
         }
     }
 
-    /// Helper to create a test client for retry tests with a unique database
-    async fn create_test_client_for_retry_with_id(test_id: &str) -> Arc<Client> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let db_name = format!(
-            "file:memdb_retry_{}_{}_{}?mode=memory&cache=shared",
-            test_id,
-            unique_id,
-            std::process::id()
-        );
-
-        let backend = Arc::new(
-            SqliteStore::new(&db_name)
-                .await
-                .expect("Failed to create test backend"),
-        );
+    /// Helper to create a test client for retry tests
+    async fn create_test_client_for_retry() -> Arc<Client> {
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3515,7 +3401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_increment_retry_count_starts_at_one() {
-        let client = create_test_client_for_retry_with_id("starts_at_one").await;
+        let client = create_test_client_for_retry().await;
 
         let cache_key = "test_chat:msg123:sender456";
 
@@ -3530,7 +3416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_increment_retry_count_increments_correctly() {
-        let client = create_test_client_for_retry_with_id("increments").await;
+        let client = create_test_client_for_retry().await;
 
         let cache_key = "test_chat:msg456:sender789";
 
@@ -3546,7 +3432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_increment_retry_count_respects_max_retries() {
-        let client = create_test_client_for_retry_with_id("max_retries").await;
+        let client = create_test_client_for_retry().await;
 
         let cache_key = "test_chat:msg_max:sender_max";
 
@@ -3570,7 +3456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_count_different_messages_are_independent() {
-        let client = create_test_client_for_retry_with_id("independent").await;
+        let client = create_test_client_for_retry().await;
 
         let key1 = "chat1:msg1:sender1";
         let key2 = "chat1:msg2:sender1"; // Same chat and sender, different message
@@ -3630,7 +3516,7 @@ mod tests {
     async fn test_concurrent_retry_increments() {
         use tokio::task::JoinSet;
 
-        let client = create_test_client_for_retry_with_id("concurrent").await;
+        let client = create_test_client_for_retry().await;
         let cache_key = "concurrent_test:msg:sender";
 
         // Spawn 10 concurrent increment tasks
@@ -3727,7 +3613,7 @@ mod tests {
     #[tokio::test]
     async fn test_retry_count_cache_expiration() {
         // Note: This test verifies cache configuration, not actual TTL (which would be slow)
-        let client = create_test_client_for_retry_with_id("expiration").await;
+        let client = create_test_client_for_retry().await;
 
         // The cache should have a TTL of 5 minutes (300 seconds) as configured in client.rs
         // We can verify entries are being stored and the cache is functional
@@ -3749,7 +3635,7 @@ mod tests {
         // This is an integration test that verifies spawn_retry_receipt
         // doesn't panic and updates the retry count correctly
 
-        let client = create_test_client_for_retry_with_id("spawn_basic").await;
+        let client = create_test_client_for_retry().await;
         let info = create_test_message_info(
             "120363021033254949@g.us",
             "SPAWN_TEST_MSG",
@@ -3777,7 +3663,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_retry_receipt_respects_max_retries() {
-        let client = create_test_client_for_retry_with_id("spawn_max").await;
+        let client = create_test_client_for_retry().await;
         let info = create_test_message_info(
             "120363021033254949@g.us",
             "MAX_RETRY_TEST",
@@ -3840,7 +3726,7 @@ mod tests {
         // In a group, multiple senders could theoretically have the same message ID
         // (unlikely but the system should handle it)
 
-        let client = create_test_client_for_retry_with_id("multi_sender").await;
+        let client = create_test_client_for_retry().await;
 
         let group = "120363021033254949@g.us";
         let msg_id = "SAME_MSG_ID";
