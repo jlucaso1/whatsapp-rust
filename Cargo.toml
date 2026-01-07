@@ -13,6 +13,7 @@ description = "Rust client for WhatsApp Web"
 members = [
     ".",
     "http_clients/ureq-client",
+    "storages/redb-storage",
     "storages/sqlite-storage",
     "transports/tokio-transport",
     "wacore",
@@ -34,11 +35,12 @@ waproto = { path = "./waproto", version = "0.2.0" }
 
 [features]
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
-default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
+default = ["redb-storage", "tokio-transport", "ureq-client", "tokio-native"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
 signal = ["tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
+redb-storage = ["whatsapp-rust-redb-storage"]
 tokio-native = ["tokio/rt-multi-thread"]
 
 [dependencies]
@@ -70,12 +72,29 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 wacore = { path = "./wacore", version = "0.2.0" }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
+whatsapp-rust-redb-storage = { path = "./storages/redb-storage", version = "0.2.0", optional = true }
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
 whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
 whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
+
+# Examples
+[[example]]
+name = "basic_bot"
+path = "examples/basic_bot.rs"
+
+[[example]]
+name = "multi_account"
+path = "examples/multi_account.rs"
+
+[[example]]
+name = "media_handler"
+path = "examples/media_handler.rs"
+
+# custom_backend is a reference implementation (requires sqlx, not compiled by default)
+# To use it, copy the code to your project and add sqlx to your dependencies
 
 [profile.release]
 opt-level = "z"

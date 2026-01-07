@@ -9,6 +9,10 @@ pub mod traits;
 #[cfg(feature = "sqlite-storage")]
 pub use whatsapp_rust_sqlite_storage::SqliteStore;
 
+// Re-export from the redb-storage crate when the feature is enabled
+#[cfg(feature = "redb-storage")]
+pub use whatsapp_rust_redb_storage::RedbStore;
+
 pub use crate::store::traits::*;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
