@@ -88,6 +88,17 @@ impl RedbStore {
         })
     }
 
+    pub fn in_memory_for_device(device_id: i32) -> Result<Self> {
+        let db = Builder::new()
+            .create_with_backend(InMemoryBackend::new())
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(Self {
+            db: Arc::new(db),
+            device_id,
+        })
+    }
+
     pub fn device_id(&self) -> i32 {
         self.device_id
     }
@@ -1065,9 +1076,7 @@ impl ProtocolStore for RedbStore {
             let read_txn = db
                 .begin_read()
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            let table = read_txn
-                .open_table(BASE_KEYS)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let table = open_table_or_default!(read_txn, BASE_KEYS, false);
 
             match table.get(key_str.as_str()) {
                 Ok(Some(guard)) => Ok(guard.value() == current_base_key.as_slice()),
