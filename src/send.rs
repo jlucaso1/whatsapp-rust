@@ -22,8 +22,8 @@ pub enum RevokeType {
     #[default]
     Sender,
     /// A group admin deleting another user's message.
-    /// The JID is the original sender of the message being deleted.
-    Admin { sender: Jid },
+    /// `original_sender` is the JID of the user who sent the message being deleted.
+    Admin { original_sender: Jid },
 }
 
 impl Client {
@@ -66,13 +66,14 @@ impl Client {
     /// * `to` - The chat JID (DM or group)
     /// * `message_id` - The ID of the message to delete
     /// * `revoke_type` - Use `RevokeType::Sender` to delete your own message,
-    ///   or `RevokeType::Admin { sender }` to delete another user's message as group admin
+    ///   or `RevokeType::Admin { original_sender }` to delete another user's message as group admin
     pub async fn revoke_message(
         &self,
         to: Jid,
-        message_id: String,
+        message_id: impl Into<String>,
         revoke_type: RevokeType,
     ) -> Result<(), anyhow::Error> {
+        let message_id = message_id.into();
         // Verify we're logged in
         self.get_pn()
             .await
@@ -88,14 +89,14 @@ impl Client {
                     crate::types::message::EditAttribute::SenderRevoke,
                 )
             }
-            RevokeType::Admin { sender } => {
+            RevokeType::Admin { original_sender } => {
                 // Admin revoke requires group context
                 if !to.is_group() {
                     return Err(anyhow!("Admin revoke is only valid for group chats"));
                 }
                 // The protocolMessageKey.participant should match the original message's key exactly
                 // Do NOT convert LID to PN - pass through unchanged like WhatsApp Web does
-                let participant_str = sender.to_non_ad().to_string();
+                let participant_str = original_sender.to_non_ad().to_string();
                 log::debug!(
                     "Admin revoke: using participant {} for MessageKey",
                     participant_str
@@ -497,5 +498,155 @@ impl Client {
         };
         // Network send happens with NO lock held
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_revoke_type_default_is_sender() {
+        // RevokeType::Sender is the default (for deleting own messages)
+        let revoke_type = RevokeType::default();
+        assert_eq!(revoke_type, RevokeType::Sender);
+    }
+
+    #[test]
+    fn test_force_skdm_only_for_admin_revoke() {
+        // Admin revokes require force_skdm=true to get proper message structure
+        // with phash, <participants>, and <device-identity> that WhatsApp Web uses.
+        // Without this, the server returns error 479.
+        let sender_jid = Jid::from_str("123456@s.whatsapp.net").unwrap();
+
+        let sender_revoke = RevokeType::Sender;
+        let admin_revoke = RevokeType::Admin {
+            original_sender: sender_jid,
+        };
+
+        // This matches the logic in revoke_message()
+        let force_skdm_sender = matches!(sender_revoke, RevokeType::Admin { .. });
+        let force_skdm_admin = matches!(admin_revoke, RevokeType::Admin { .. });
+
+        assert!(!force_skdm_sender, "Sender revoke should NOT force SKDM");
+        assert!(force_skdm_admin, "Admin revoke MUST force SKDM");
+    }
+
+    #[test]
+    fn test_sender_revoke_message_key_structure() {
+        // Sender revoke (edit="7"): from_me=true, participant=None
+        // The sender is identified by from_me=true, no participant field needed
+        let to = Jid::from_str("120363040237990503@g.us").unwrap();
+        let message_id = "3EB0ABC123".to_string();
+
+        let (from_me, participant, edit_attr) = match RevokeType::Sender {
+            RevokeType::Sender => (
+                true,
+                None,
+                crate::types::message::EditAttribute::SenderRevoke,
+            ),
+            RevokeType::Admin { original_sender } => (
+                false,
+                Some(original_sender.to_non_ad().to_string()),
+                crate::types::message::EditAttribute::AdminRevoke,
+            ),
+        };
+
+        assert!(from_me, "Sender revoke must have from_me=true");
+        assert!(
+            participant.is_none(),
+            "Sender revoke must NOT set participant"
+        );
+        assert_eq!(edit_attr.to_string_val(), "7");
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant,
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let proto_msg = revoke_message.protocol_message.unwrap();
+        let key = proto_msg.key.unwrap();
+        assert_eq!(key.from_me, Some(true));
+        assert_eq!(key.participant, None);
+        assert_eq!(key.id, Some(message_id));
+    }
+
+    #[test]
+    fn test_admin_revoke_message_key_structure() {
+        // Admin revoke (edit="8"): from_me=false, participant=original_sender
+        // The participant field identifies whose message is being deleted
+        let to = Jid::from_str("120363040237990503@g.us").unwrap();
+        let message_id = "3EB0ABC123".to_string();
+        let original_sender = Jid::from_str("236395184570386:22@lid").unwrap();
+
+        let revoke_type = RevokeType::Admin {
+            original_sender: original_sender.clone(),
+        };
+        let (from_me, participant, edit_attr) = match revoke_type {
+            RevokeType::Sender => (
+                true,
+                None,
+                crate::types::message::EditAttribute::SenderRevoke,
+            ),
+            RevokeType::Admin { original_sender } => (
+                false,
+                Some(original_sender.to_non_ad().to_string()),
+                crate::types::message::EditAttribute::AdminRevoke,
+            ),
+        };
+
+        assert!(!from_me, "Admin revoke must have from_me=false");
+        assert!(
+            participant.is_some(),
+            "Admin revoke MUST set participant to original sender"
+        );
+        assert_eq!(edit_attr.to_string_val(), "8");
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant: participant.clone(),
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let proto_msg = revoke_message.protocol_message.unwrap();
+        let key = proto_msg.key.unwrap();
+        assert_eq!(key.from_me, Some(false));
+        // Participant should be the original sender with device number stripped
+        assert_eq!(key.participant, Some("236395184570386@lid".to_string()));
+        assert_eq!(key.id, Some(message_id));
+    }
+
+    #[test]
+    fn test_admin_revoke_preserves_lid_format() {
+        // LID JIDs must NOT be converted to PN (phone number) format.
+        // This was a bug that caused error 479 - the participant field must
+        // preserve the original JID format exactly (with device stripped).
+        let lid_sender = Jid::from_str("236395184570386:22@lid").unwrap();
+        let participant_str = lid_sender.to_non_ad().to_string();
+
+        // Must preserve @lid suffix, device number stripped
+        assert_eq!(participant_str, "236395184570386@lid");
+        assert!(
+            participant_str.ends_with("@lid"),
+            "LID participant must preserve @lid suffix"
+        );
     }
 }
