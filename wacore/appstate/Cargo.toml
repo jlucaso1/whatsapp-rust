@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = { workspace = true }
+bytemuck = { workspace = true }
 hkdf = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }

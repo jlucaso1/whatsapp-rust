@@ -71,17 +71,12 @@ impl GcmGhash {
         let full_blocks = msg.len() / 16;
         let leftover = msg.len() - 16 * full_blocks;
         assert!(leftover < TAG_SIZE);
-        if full_blocks > 0 {
-            // Transmute [u8] to [[u8; 16]], like slice::as_chunks.
-            // Then transmute [[u8; 16]] to [GenericArray<U16>], per repr(transparent).
-            let blocks = unsafe {
-                std::slice::from_raw_parts(msg[..16 * full_blocks].as_ptr().cast(), full_blocks)
-            };
-            assert_eq!(
-                std::mem::size_of_val(blocks) + leftover,
-                std::mem::size_of_val(msg)
-            );
-            self.ghash.update(blocks);
+
+        let (chunks, _) = msg[..16 * full_blocks].as_chunks::<16>();
+        for chunk in chunks {
+            #[allow(deprecated)]
+            self.ghash
+                .update(std::slice::from_ref(ghash::Block::from_slice(chunk)));
         }
 
         self.msg_buf[0..leftover].copy_from_slice(&msg[full_blocks * 16..]);

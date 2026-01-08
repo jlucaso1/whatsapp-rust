@@ -331,7 +331,7 @@ impl<W: Write> Encoder<W> {
             let (chunk, rest) = input_bytes.split_at(16);
             let input = u8x16::from_slice(chunk);
 
-            let mut nibbles = if data_type == token::NIBBLE_8 {
+            let nibbles = if data_type == token::NIBBLE_8 {
                 let indices = input.saturating_sub(Simd::splat(b'-'));
                 const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
                 Simd::from_array(LOOKUP).swizzle_dyn(indices)
@@ -345,11 +345,6 @@ impl<W: Write> Encoder<W> {
                 let is_letter = input.simd_ge(ascii_a);
                 is_letter.select(letter_vals, digit_vals)
             };
-
-            if data_type == token::NIBBLE_8 {
-                let pad_mask = input.simd_eq(Simd::splat(b'\x00'));
-                nibbles = pad_mask.select(Simd::splat(15), nibbles);
-            }
 
             let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
             let packed = (evens << Simd::splat(4)) | odds;

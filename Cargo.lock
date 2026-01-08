@@ -8042,6 +8042,7 @@ name = "wacore-appstate"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "hkdf",
  "prost",
  "serde",

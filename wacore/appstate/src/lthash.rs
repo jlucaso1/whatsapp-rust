@@ -46,40 +46,25 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
     let (base_chunks, base_remainder) = base.as_chunks_mut::<16>();
     let (input_chunks, input_remainder) = input.as_chunks::<16>();
 
-    if subtract {
-        for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-            // Safety: [u8; 16] and [u16; 8] have the same size and alignment.
-            // On little-endian systems, this is equivalent to from_le_bytes for each pair.
-            let base_u16: [u16; 8] = unsafe { core::mem::transmute(*base_chunk) };
-            let input_u16: [u16; 8] = unsafe { core::mem::transmute(*input_chunk) };
+    for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
+        let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
+        let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
 
-            let base_simd = u16x8::from_array(base_u16);
-            let input_simd = u16x8::from_array(input_u16);
-            let result_simd = base_simd - input_simd;
+        let result_simd = if subtract {
+            base_simd - input_simd
+        } else {
+            base_simd + input_simd
+        };
 
-            *base_chunk =
-                unsafe { core::mem::transmute::<[u16; 8], [u8; 16]>(result_simd.to_array()) };
-        }
-    } else {
-        for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-            // Safety: [u8; 16] and [u16; 8] have the same size and alignment.
-            // On little-endian systems, this is equivalent to from_le_bytes for each pair.
-            let base_u16: [u16; 8] = unsafe { core::mem::transmute(*base_chunk) };
-            let input_u16: [u16; 8] = unsafe { core::mem::transmute(*input_chunk) };
-
-            let base_simd = u16x8::from_array(base_u16);
-            let input_simd = u16x8::from_array(input_u16);
-            let result_simd = base_simd + input_simd;
-
-            *base_chunk =
-                unsafe { core::mem::transmute::<[u16; 8], [u8; 16]>(result_simd.to_array()) };
-        }
+        *base_chunk = bytemuck::cast(result_simd.to_array());
     }
 
-    let mut i = 0;
-    while i < base_remainder.len() {
-        let x = u16::from_le_bytes([base_remainder[i], base_remainder[i + 1]]);
-        let y = u16::from_le_bytes([input_remainder[i], input_remainder[i + 1]]);
+    for (base_pair, input_pair) in base_remainder
+        .chunks_exact_mut(2)
+        .zip(input_remainder.chunks_exact(2))
+    {
+        let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
+        let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
 
         let result = if subtract {
             x.wrapping_sub(y)
@@ -87,9 +72,8 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
             x.wrapping_add(y)
         };
         let bytes = result.to_le_bytes();
-        base_remainder[i] = bytes[0];
-        base_remainder[i + 1] = bytes[1];
-        i += 2;
+        base_pair[0] = bytes[0];
+        base_pair[1] = bytes[1];
     }
 }
 
