@@ -380,6 +380,11 @@ impl Client {
         router
     }
 
+    /// Registers an external event handler to the core event bus.
+    pub fn register_handler(&self, handler: Arc<dyn wacore::types::events::EventHandler>) {
+        self.core.event_bus.add_handler(handler);
+    }
+
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
             warn!("Client `run` method called while already running.");
