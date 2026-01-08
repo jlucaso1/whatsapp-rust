@@ -745,12 +745,14 @@ pub async fn prepare_group_stanza<
 
     let skmsg_ciphertext = skmsg.serialized().to_vec();
 
-    // Add decrypt-fail="hide" for edited group messages too
+    // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
+    // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
     let mut sk_enc_attrs = Attrs::new();
     sk_enc_attrs.insert("v".to_string(), "2".to_string());
     sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
+        && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
     {
         sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
     }
@@ -770,11 +772,13 @@ pub async fn prepare_group_stanza<
         stanza_attrs.insert("addressing_mode".to_string(), "lid".to_string());
     }
 
-    if let Some(edit_attr) = edit
-        && edit_attr != crate::types::message::EditAttribute::Empty
+    if let Some(edit_attr) = &edit
+        && *edit_attr != crate::types::message::EditAttribute::Empty
     {
         stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
     }
+    // NOTE: WhatsApp Web does NOT include participant attribute on initial admin revoke send
+    // The participant attribute only appears on retry/fanout messages
 
     message_children.push(content_node);
 
