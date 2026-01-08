@@ -83,9 +83,12 @@ impl<W: Write> Encoder<W> {
     }
 
     fn write_u20_be(&mut self, value: u32) -> Result<()> {
-        self.writer.write_all(&[((value >> 16) & 0x0F) as u8])?;
-        self.writer.write_all(&[((value >> 8) & 0xFF) as u8])?;
-        self.writer.write_all(&[(value & 0xFF) as u8])?;
+        let bytes = [
+            ((value >> 16) & 0x0F) as u8,
+            ((value >> 8) & 0xFF) as u8,
+            (value & 0xFF) as u8,
+        ];
+        self.writer.write_all(&bytes)?;
         Ok(())
     }
 
