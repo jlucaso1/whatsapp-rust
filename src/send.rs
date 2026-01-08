@@ -73,21 +73,18 @@ impl Client {
         message_id: String,
         revoke_type: RevokeType,
     ) -> Result<(), anyhow::Error> {
-        let own_jid = self
-            .get_pn()
+        // Verify we're logged in
+        self.get_pn()
             .await
             .ok_or_else(|| anyhow!("Not logged in"))?;
 
         let (from_me, participant, edit_attr) = match &revoke_type {
             RevokeType::Sender => {
-                let participant = if to.is_group() {
-                    Some(own_jid.to_non_ad().to_string())
-                } else {
-                    None
-                };
+                // For sender revoke, participant is NOT set (from_me=true identifies it)
+                // This matches whatsmeow's BuildMessageKey behavior
                 (
                     true,
-                    participant,
+                    None,
                     crate::types::message::EditAttribute::SenderRevoke,
                 )
             }
@@ -96,9 +93,16 @@ impl Client {
                 if !to.is_group() {
                     return Err(anyhow!("Admin revoke is only valid for group chats"));
                 }
+                // The protocolMessageKey.participant should match the original message's key exactly
+                // Do NOT convert LID to PN - pass through unchanged like WhatsApp Web does
+                let participant_str = sender.to_non_ad().to_string();
+                log::debug!(
+                    "Admin revoke: using participant {} for MessageKey",
+                    participant_str
+                );
                 (
                     false,
-                    Some(sender.to_non_ad().to_string()),
+                    Some(participant_str),
                     crate::types::message::EditAttribute::AdminRevoke,
                 )
             }
@@ -118,12 +122,19 @@ impl Client {
             ..Default::default()
         };
 
+        // The revoke message stanza needs a NEW unique ID, not the message ID being revoked
+        // The message_id being revoked is already in protocolMessage.key.id
+        // Passing None generates a fresh stanza ID
+        //
+        // For admin revokes, force SKDM distribution to get the proper message structure
+        // with phash, <participants>, and <device-identity> that WhatsApp Web uses
+        let force_skdm = matches!(revoke_type, RevokeType::Admin { .. });
         self.send_message_impl(
             to,
             &revoke_message,
-            Some(message_id),
+            None,
             false,
-            false,
+            force_skdm,
             Some(edit_attr),
             vec![],
         )
