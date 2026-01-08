@@ -25,19 +25,10 @@ jobs:
         with:
           toolchain: nightly-2025-12-19
 
-      - name: Install protoc
+      - name: Install tools (protoc, valgrind, iai-callgrind-runner)
         uses: taiki-e/install-action@v2
         with:
-          tool: protoc@${{ env.PROTOC_VERSION }}
-
-      - name: Install Valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
-
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.16.4
-
-      - name: Install iai-callgrind-runner
-        run: cargo binstall --no-confirm iai-callgrind-runner@0.16.1
+          tool: protoc@${{ env.PROTOC_VERSION }},valgrind,iai-callgrind-runner@0.16.1
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
