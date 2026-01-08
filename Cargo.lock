@@ -785,8 +785,7 @@ dependencies = [
 [[package]]
 name = "blade-graphics"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4deb8f595ce7f00dee3543ebf6fd9a20ea86fc421ab79600dac30876250bdae"
+source = "git+https://github.com/kvark/blade?rev=e3cf011ca18a6dfd907d1dedd93e85e21f005fe3#e3cf011ca18a6dfd907d1dedd93e85e21f005fe3"
 dependencies = [
  "ash",
  "ash-window",
@@ -820,8 +819,7 @@ dependencies = [
 [[package]]
 name = "blade-macros"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27142319e2f4c264581067eaccb9f80acccdde60d8b4bf57cc50cd3152f109ca"
+source = "git+https://github.com/kvark/blade?rev=e3cf011ca18a6dfd907d1dedd93e85e21f005fe3#e3cf011ca18a6dfd907d1dedd93e85e21f005fe3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -831,8 +829,7 @@ dependencies = [
 [[package]]
 name = "blade-util"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a6be3a82c001ba7a17b6f8e413ede5d1004e6047213f8efaf0ffc15b5c4904c"
+source = "git+https://github.com/kvark/blade?rev=e3cf011ca18a6dfd907d1dedd93e85e21f005fe3#e3cf011ca18a6dfd907d1dedd93e85e21f005fe3"
 dependencies = [
  "blade-graphics",
  "bytemuck",
@@ -1210,7 +1207,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.1",
@@ -1847,7 +1844,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1932,13 +1929,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
+]
+
+[[package]]
 name = "dirs-sys"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b1d1d91c932ef41c0f2663aa8b0ca0342d444d842c06914aa0a7e352d0bada6"
 dependencies = [
  "libc",
- "redox_users",
+ "redox_users 0.4.6",
  "winapi",
 ]
 
@@ -1950,8 +1956,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2887,7 +2905,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -2959,6 +2977,7 @@ dependencies = [
  "stacksafe",
  "strum 0.27.2",
  "sum_tree",
+ "swash",
  "taffy",
  "thiserror 2.0.17",
  "usvg",
@@ -2987,7 +3006,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component.git#b79da3c394154116d3f2c25e5582f8d008a5330f"
+source = "git+https://github.com/longbridge/gpui-component.git#919c2a0b72e6c5ac0feaa789e4b4b509cc792fcc"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3025,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component.git#b79da3c394154116d3f2c25e5582f8d008a5330f"
+source = "git+https://github.com/longbridge/gpui-component.git#919c2a0b72e6c5ac0feaa789e4b4b509cc792fcc"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3035,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component.git#b79da3c394154116d3f2c25e5582f8d008a5330f"
+source = "git+https://github.com/longbridge/gpui-component.git#919c2a0b72e6c5ac0feaa789e4b4b509cc792fcc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3057,7 +3076,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3223,7 +3242,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -3651,9 +3670,9 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jiff"
-version = "0.2.17"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a87d9b8105c23642f50cbbae03d1f75d8422c5cb98ce7ee9271f7ff7505be6b8"
+checksum = "e67e8da4c49d6d9909fe03361f9b620f58898859f5c7aded68351e85e71ecf50"
 dependencies = [
  "jiff-static",
  "log",
@@ -3664,9 +3683,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.17"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b787bebb543f8969132630c51fd0afab173a86c6abae56ff3b9e5e3e3f9f6e58"
+checksum = "e0c84ee7f197eca9a86c6fd6cb771e55eb991632f15f2bc3ca6ec838929e6e78"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3797,9 +3816,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.179"
+version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a2d376baa530d1238d133232d15e239abad80d05838b4b59354e5268af431f"
+checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -4072,7 +4091,7 @@ checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -4817,9 +4836,9 @@ dependencies = [
 
 [[package]]
 name = "openh264"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "593512cbb853b55069ce9c667a9d12850407554185b65c0c9b4ee8cad37471c5"
+checksum = "63c9c38f992322e3c8c604571d084d418fde947e720f3f88302eb842c0834c93"
 dependencies = [
  "openh264-sys2",
  "wide",
@@ -4827,9 +4846,9 @@ dependencies = [
 
 [[package]]
 name = "openh264-sys2"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a824aad95720f5f7ad1bb646d6815d5b7e2fd0e3c5c3b4ad3dfc29575f5381"
+checksum = "a32dbe0b018f9f9e09e056ecef5a162d42be4ba03242c460fa9d7a10cb1760da"
 dependencies = [
  "cc",
  "nasm-rs",
@@ -4844,12 +4863,11 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "opus"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6526409b274a7e98e55ff59d96aafd38e6cd34d46b7dbbc32ce126dffcd75e8e"
+checksum = "4d3809943dff6fbad5f0484449ea26bdb9cb7d8efdf26ed50d3c7f227f69eb5c"
 dependencies = [
  "audiopus_sys",
- "libc",
 ]
 
 [[package]]
@@ -4990,7 +5008,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "collections",
  "serde",
@@ -5481,9 +5499,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.37.5"
+version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
 ]
@@ -5730,6 +5748,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+dependencies = [
+ "getrandom 0.2.16",
+ "libredox",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5752,7 +5781,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "derive_refineable",
 ]
@@ -6224,9 +6253,9 @@ dependencies = [
 
 [[package]]
 name = "self_cell"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16c2f82143577edb4921b71ede051dac62ca3c16084e918bf7b40c96ae10eb33"
+checksum = "b12e76d157a900eb52e81bc6e9f3069344290341720e9178cde2407113ac8d89"
 
 [[package]]
 name = "semver"
@@ -6421,7 +6450,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b1fdf65dd6331831494dd616b30351c38e96e45921a27745cf98490458b90bb"
 dependencies = [
- "dirs 5.0.1",
+ "dirs 6.0.0",
 ]
 
 [[package]]
@@ -6791,7 +6820,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "arrayvec",
  "log",
@@ -7067,7 +7096,7 @@ dependencies = [
  "memchr",
  "ntapi",
  "rayon",
- "windows 0.54.0",
+ "windows 0.57.0",
 ]
 
 [[package]]
@@ -7623,9 +7652,9 @@ dependencies = [
 
 [[package]]
 name = "unicase"
-version = "2.8.1"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b844d17643ee918803943289730bec8aac480150456169e647ed0b576ba539"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-bidi"
@@ -7825,7 +7854,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -7861,7 +7890,7 @@ dependencies = [
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "perf",
  "quote",
@@ -8180,9 +8209,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-backend"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673a33c33048a5ade91a6b139580fa174e19fb0d23f396dca9fa15f2e1e49b35"
+checksum = "fee64194ccd96bf648f42a65a7e589547096dfa702f7cadef84347b66ad164f9"
 dependencies = [
  "cc",
  "downcast-rs 1.2.1",
@@ -8194,9 +8223,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-client"
-version = "0.31.11"
+version = "0.31.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c66a47e840dc20793f2264eb4b3e4ecb4b75d91c0dd4af04b456128e0bdd449d"
+checksum = "b8e6faa537fbb6c186cb9f1d41f2f811a4120d1b57ec61f50da451a0c5122bec"
 dependencies = [
  "bitflags 2.10.0",
  "rustix 1.1.3",
@@ -8206,9 +8235,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-cursor"
-version = "0.31.11"
+version = "0.31.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "447ccc440a881271b19e9989f75726d60faa09b95b0200a9b7eb5cc47c3eeb29"
+checksum = "5864c4b5b6064b06b1e8b74ead4a98a6c45a285fe7a0e784d24735f011fdb078"
 dependencies = [
  "rustix 1.1.3",
  "wayland-client",
@@ -8217,9 +8246,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-protocols"
-version = "0.32.9"
+version = "0.32.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efa790ed75fbfd71283bd2521a1cfdc022aabcc28bdcff00851f9e4ae88d9901"
+checksum = "baeda9ffbcfc8cd6ddaade385eaf2393bd2115a69523c735f12242353c3df4f3"
 dependencies = [
  "bitflags 2.10.0",
  "wayland-backend",
@@ -8229,9 +8258,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-protocols-plasma"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a07a14257c077ab3279987c4f8bb987851bf57081b93710381daea94f2c2c032"
+checksum = "aa98634619300a535a9a97f338aed9a5ff1e01a461943e8346ff4ae26007306b"
 dependencies = [
  "bitflags 2.10.0",
  "wayland-backend",
@@ -8242,9 +8271,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-protocols-wlr"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efd94963ed43cf9938a090ca4f7da58eb55325ec8200c3848963e98dc25b78ec"
+checksum = "e9597cdf02cf0c34cd5823786dce6b5ae8598f05c2daf5621b6e178d4f7345f3"
 dependencies = [
  "bitflags 2.10.0",
  "wayland-backend",
@@ -8255,20 +8284,20 @@ dependencies = [
 
 [[package]]
 name = "wayland-scanner"
-version = "0.31.7"
+version = "0.31.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54cb1e9dc49da91950bdfd8b848c49330536d9d1fb03d4bfec8cae50caa50ae3"
+checksum = "5423e94b6a63e68e439803a3e153a9252d5ead12fd853334e2ad33997e3889e3"
 dependencies = [
  "proc-macro2",
- "quick-xml 0.37.5",
+ "quick-xml 0.38.4",
  "quote",
 ]
 
 [[package]]
 name = "wayland-sys"
-version = "0.31.7"
+version = "0.31.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34949b42822155826b41db8e5d0c1be3a2bd296c747577a43a3e6daefc296142"
+checksum = "1e6dbfc3ac5ef974c92a2235805cc0114033018ae1290a72e474aa8b28cbbdfd"
 dependencies = [
  "dlib",
  "log",
@@ -8659,6 +8688,16 @@ dependencies = [
 
 [[package]]
 name = "windows"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12342cb4d8e3b046f3d80effd474a7a02447231330ef77d71daa6fbc40681143"
+dependencies = [
+ "windows-core 0.57.0",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows"
 version = "0.61.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
@@ -8704,12 +8743,24 @@ dependencies = [
 
 [[package]]
 name = "windows-core"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2ed2439a290666cd67ecce2b0ffaad89c2a56b976b736e6ece670297897832d"
+dependencies = [
+ "windows-implement 0.57.0",
+ "windows-interface 0.57.0",
+ "windows-result 0.1.2",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-core"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.60.2",
+ "windows-interface 0.59.3",
  "windows-link 0.1.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
@@ -8721,8 +8772,8 @@ version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.60.2",
+ "windows-interface 0.59.3",
  "windows-link 0.2.1",
  "windows-result 0.4.1",
  "windows-strings 0.5.1",
@@ -8741,9 +8792,31 @@ dependencies = [
 
 [[package]]
 name = "windows-implement"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9107ddc059d5b6fbfbffdfa7a7fe3e22a226def0b2608f72e9d552763d3e1ad7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "windows-implement"
 version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29bee4b38ea3cde66011baa44dba677c432a78593e202392d1e9070cf2a7fca7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9278,9 +9351,9 @@ dependencies = [
 
 [[package]]
 name = "xcb"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f07c123b796139bfe0603e654eaf08e132e52387ba95b252c78bad3640ba37ea"
+checksum = "ee4c580d8205abb0a5cf4eb7e927bd664e425b6c3263f9c5310583da96970cf6"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
@@ -9640,7 +9713,7 @@ checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9657,7 +9730,7 @@ checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -9668,7 +9741,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#fd41a31c4b3a088d7f9e847a53408889eeab190f"
+source = "git+https://github.com/jlucaso1/zed.git?branch=gpui-yuv-surface-linux-windows#43c76426b0df9a113f0edbeff3eb6f35e2a150ca"
 
 [[package]]
 name = "zune-core"
