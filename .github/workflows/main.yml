@@ -33,6 +33,11 @@ jobs:
         with:
           toolchain: nightly-2025-12-19
           components: clippy
+      - name: Install system dependencies (cached)
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libasound2-dev libxkbcommon-dev libwayland-dev
+          version: 1.0
       - name: Install protoc
         uses: taiki-e/install-action@v2
         with:
@@ -50,6 +55,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-12-19
+      - name: Install system dependencies (cached)
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libasound2-dev libxkbcommon-dev libwayland-dev
+          version: 1.0
       - name: Install protoc
         uses: taiki-e/install-action@v2
         with:

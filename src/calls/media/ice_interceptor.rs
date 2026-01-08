@@ -453,8 +453,8 @@ mod tests {
         request[3] = 0x00; // Length = 0
         request[4..8].copy_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
         // Transaction ID (12 bytes)
-        for i in 8..20 {
-            request[i] = i as u8;
+        for (i, byte) in request[8..20].iter_mut().enumerate() {
+            *byte = (i + 8) as u8;
         }
 
         let source = "192.168.1.100:12345".parse().unwrap();

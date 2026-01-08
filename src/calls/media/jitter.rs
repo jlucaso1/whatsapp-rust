@@ -318,8 +318,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_push_and_pop() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(0); // No initial delay for testing
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(0), // No initial delay for testing
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -346,8 +348,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_reordering() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(0);
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(0),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -364,8 +368,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_duplicate_detection() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(0);
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(0),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -379,9 +385,11 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_max_packets() {
-        let mut config = JitterBufferConfig::default();
-        config.max_packets = 5;
-        config.target_delay = Duration::from_millis(0);
+        let config = JitterBufferConfig {
+            max_packets: 5,
+            target_delay: Duration::from_millis(0),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -396,8 +404,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_gap_handling() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(0);
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(0),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -415,8 +425,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_stats() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(0);
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(0),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
@@ -447,8 +459,10 @@ mod tests {
 
     #[test]
     fn test_jitter_buffer_initial_delay() {
-        let mut config = JitterBufferConfig::default();
-        config.target_delay = Duration::from_millis(100);
+        let config = JitterBufferConfig {
+            target_delay: Duration::from_millis(100),
+            ..Default::default()
+        };
 
         let mut buffer = JitterBuffer::new(config, 16000);
 
