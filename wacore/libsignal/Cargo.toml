@@ -34,3 +34,11 @@ thiserror = { workspace = true }
 uuid = { version = "1.18.1", default-features = false }
 waproto = { workspace = true }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+iai-callgrind = { workspace = true }
+
+[[bench]]
+name = "libsignal_benchmark"
+harness = false
