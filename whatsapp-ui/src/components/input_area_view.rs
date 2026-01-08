@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{Entity, EventEmitter, Task, WeakEntity, Window, div, prelude::*, px, rgb};
 use gpui_component::{
-    Icon, IconName,
+    ActiveTheme, Icon, IconName,
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
 };
@@ -186,21 +186,22 @@ impl Render for InputAreaView {
         let is_recording = self.is_recording;
         let entity = cx.entity().clone();
 
+        let muted_fg = cx.theme().muted_foreground;
+
         div()
             .h(px(layout::INPUT_AREA_HEIGHT))
             .flex()
             .items_center()
             .px_4()
             .gap_3()
-            .bg(rgb(colors::BG_SECONDARY))
+            .bg(cx.theme().background)
             .border_t_1()
-            .border_color(rgb(colors::BORDER))
+            .border_color(cx.theme().border)
             .child(div().flex_1().child(Input::new(&self.input).w_full()))
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    // PTT button
                     .child(
                         Button::new("ptt")
                             .icon(if is_recording {
@@ -208,9 +209,7 @@ impl Render for InputAreaView {
                                     .path("icons/stop.svg")
                                     .text_color(rgb(colors::WHITE))
                             } else {
-                                Icon::default()
-                                    .path("icons/mic.svg")
-                                    .text_color(rgb(colors::TEXT_SECONDARY))
+                                Icon::default().path("icons/mic.svg").text_color(muted_fg)
                             })
                             .when(is_recording, |btn| btn.danger())
                             .when(!is_recording, |btn| btn.ghost())
@@ -223,7 +222,6 @@ impl Render for InputAreaView {
                                 }
                             }),
                     )
-                    // Send button
                     .child(
                         Button::new("send")
                             .icon(IconName::ArrowRight)
@@ -231,7 +229,6 @@ impl Render for InputAreaView {
                             .on_click({
                                 move |_, window, cx| {
                                     entity.update(cx, |view, cx| {
-                                        // Simulate Enter press
                                         let text = view.input.read(cx).text().to_string();
                                         if !text.trim().is_empty() {
                                             view.input.update(cx, |state, cx| {

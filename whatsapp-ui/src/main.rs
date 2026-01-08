@@ -17,6 +17,7 @@ use gpui::{
     App, AppContext, Application, Bounds, SharedString, WindowBounds, WindowOptions, px, size,
 };
 use gpui_component::Root;
+use gpui_component::theme::{Theme, ThemeMode};
 
 use crate::app::{WhatsAppApp, init_chat_list_bindings};
 
@@ -32,10 +33,8 @@ fn main() {
     Application::new()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
-            // Initialize gpui-component theme
             gpui_component::init(cx);
-
-            // Initialize chat list keyboard bindings
+            Theme::change(ThemeMode::Dark, None, cx);
             init_chat_list_bindings(cx);
 
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
@@ -50,9 +49,7 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    // Create the app view
                     let view = cx.new(WhatsAppApp::new);
-                    // Wrap in Root component (required for Input and other gpui-component features)
                     cx.new(|cx| Root::new(view, window, cx))
                 },
             )

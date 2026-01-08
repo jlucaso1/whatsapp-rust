@@ -117,10 +117,12 @@ pub fn render_message_bubble(
                                         sticker_image.clone(),
                                     )
                                 })
-                                // Render text content if not empty
                                 .when(!content.is_empty(), |el| {
                                     el.child(
-                                        div().text_color(rgb(colors::TEXT_PRIMARY)).child(content),
+                                        div()
+                                            .overflow_hidden()
+                                            .text_color(rgb(colors::TEXT_PRIMARY))
+                                            .child(content),
                                     )
                                 })
                                 // Time and copy button row
