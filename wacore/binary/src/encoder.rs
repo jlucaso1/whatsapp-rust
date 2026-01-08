@@ -4,9 +4,103 @@ use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
-use crate::jid;
-use crate::node::{Attrs, AttrsRef, Node, NodeContent, NodeContentRef, NodeRef};
+use crate::jid::{self, JidRef};
+use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, ValueRef};
 use crate::token;
+
+/// Trait for encoding node structures (both owned Node and borrowed NodeRef).
+/// All encoding logic lives in the trait implementation, keeping
+/// the Encoder simple and focused on low-level byte writing.
+pub(crate) trait EncodeNode {
+    fn tag(&self) -> &str;
+    fn attrs_len(&self) -> usize;
+    fn has_content(&self) -> bool;
+
+    /// Encode all attributes to the encoder
+    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()>;
+
+    /// Encode content (string, bytes, or child nodes) to the encoder
+    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()>;
+}
+
+impl EncodeNode for Node {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn attrs_len(&self) -> usize {
+        self.attrs.len()
+    }
+
+    fn has_content(&self) -> bool {
+        self.content.is_some()
+    }
+
+    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+        for (k, v) in &self.attrs {
+            encoder.write_string(k)?;
+            encoder.write_string(v)?;
+        }
+        Ok(())
+    }
+
+    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+        if let Some(content) = &self.content {
+            match content {
+                NodeContent::String(s) => encoder.write_string(s)?,
+                NodeContent::Bytes(b) => encoder.write_bytes_with_len(b)?,
+                NodeContent::Nodes(nodes) => {
+                    encoder.write_list_start(nodes.len())?;
+                    for node in nodes {
+                        encoder.write_node(node)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EncodeNode for NodeRef<'_> {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn attrs_len(&self) -> usize {
+        self.attrs.len()
+    }
+
+    fn has_content(&self) -> bool {
+        self.content.is_some()
+    }
+
+    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+        for (k, v) in &self.attrs {
+            encoder.write_string(k)?;
+            match v {
+                ValueRef::String(s) => encoder.write_string(s)?,
+                ValueRef::Jid(jid) => encoder.write_jid_ref(jid)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+        if let Some(content) = self.content.as_deref() {
+            match content {
+                NodeContentRef::String(s) => encoder.write_string(s)?,
+                NodeContentRef::Bytes(b) => encoder.write_bytes_with_len(b)?,
+                NodeContentRef::Nodes(nodes) => {
+                    encoder.write_list_start(nodes.len())?;
+                    for node in nodes.iter() {
+                        encoder.write_node(node)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 struct ParsedJid<'a> {
     user: &'a str,
@@ -155,6 +249,28 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
+    /// Write a JidRef directly without converting to string first.
+    /// This avoids the allocation that would occur with `jid.to_string()`.
+    fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
+        if jid.device > 0 {
+            // AD_JID format: agent/domain_type, device, user
+            self.write_u8(token::AD_JID)?;
+            self.write_u8(jid.agent)?;
+            self.write_u8(jid.device as u8)?;
+            self.write_string(&jid.user)?;
+        } else {
+            // JID_PAIR format: user, server
+            self.write_u8(token::JID_PAIR)?;
+            if jid.user.is_empty() {
+                self.write_u8(token::LIST_EMPTY)?;
+            } else {
+                self.write_string(&jid.user)?;
+            }
+            self.write_string(&jid.server)?;
+        }
+        Ok(())
+    }
+
     fn validate_nibble(value: &str) -> bool {
         if value.len() > token::PACKED_MAX as usize {
             return false;
@@ -270,81 +386,15 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    fn write_attributes(&mut self, attrs: &Attrs) -> Result<()> {
-        for (key, value) in attrs {
-            self.write_string(key)?;
-            self.write_string(value)?;
-        }
-        Ok(())
-    }
-
-    fn write_content(&mut self, content: &NodeContent) -> Result<()> {
-        match content {
-            NodeContent::String(s) => self.write_string(s)?,
-            NodeContent::Bytes(bytes) => self.write_bytes_with_len(bytes)?,
-            NodeContent::Nodes(nodes) => {
-                self.write_list_start(nodes.len())?;
-                for node in nodes {
-                    self.write_node(node)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn write_node(&mut self, node: &Node) -> Result<()> {
-        let content_len = if node.content.is_some() { 1 } else { 0 };
-        let list_len = 1 + (node.attrs.len() * 2) + content_len;
+    /// Write any node type (owned or borrowed) using the EncodeNode trait.
+    pub(crate) fn write_node<N: EncodeNode>(&mut self, node: &N) -> Result<()> {
+        let content_len = if node.has_content() { 1 } else { 0 };
+        let list_len = 1 + (node.attrs_len() * 2) + content_len;
 
         self.write_list_start(list_len)?;
-        self.write_string(&node.tag)?;
-        self.write_attributes(&node.attrs)?;
-
-        if let Some(content) = &node.content {
-            self.write_content(content)?;
-        }
-        Ok(())
-    }
-
-    /// Zero-copy serialization of a borrowed `NodeRef`.
-    /// This avoids the need to call `.to_owned()` when encoding nodes that were just parsed.
-    pub(crate) fn write_node_ref(&mut self, node: &NodeRef<'_>) -> Result<()> {
-        let content_len = if node.content.is_some() { 1 } else { 0 };
-        let list_len = 1 + (node.attrs.len() * 2) + content_len;
-
-        self.write_list_start(list_len)?;
-        self.write_string(&node.tag)?;
-        self.write_attributes_ref(&node.attrs)?;
-
-        if let Some(content) = node.content.as_deref() {
-            self.write_content_ref(content)?;
-        }
-        Ok(())
-    }
-
-    /// Write attributes from a borrowed AttrsRef (Vec of key-value pairs).
-    fn write_attributes_ref(&mut self, attrs: &AttrsRef<'_>) -> Result<()> {
-        for (key, value) in attrs {
-            self.write_string(key)?;
-            // ValueRef can be either a string or a JID - convert to string representation
-            let value_str = value.to_string_cow();
-            self.write_string(&value_str)?;
-        }
-        Ok(())
-    }
-
-    /// Write content from a borrowed NodeContentRef.
-    fn write_content_ref(&mut self, content: &NodeContentRef<'_>) -> Result<()> {
-        match content {
-            NodeContentRef::String(s) => self.write_string(s)?,
-            NodeContentRef::Bytes(bytes) => self.write_bytes_with_len(bytes)?,
-            NodeContentRef::Nodes(nodes) => {
-                self.write_list_start(nodes.len())?;
-                for node in nodes.iter() {
-                    self.write_node_ref(node)?;
-                }
-            }
-        }
+        self.write_string(node.tag())?;
+        node.encode_attrs(self)?;
+        node.encode_content(self)?;
         Ok(())
     }
 }
@@ -352,6 +402,7 @@ impl<W: Write> Encoder<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::Attrs;
     use std::io::Cursor;
 
     type TestResult = crate::error::Result<()>;

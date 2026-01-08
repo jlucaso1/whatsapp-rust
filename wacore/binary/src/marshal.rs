@@ -29,7 +29,7 @@ pub fn marshal(node: &Node) -> Result<Vec<u8>> {
 /// This avoids the allocation overhead of converting to an owned `Node` first.
 pub fn marshal_ref_to(node: &NodeRef<'_>, writer: &mut impl Write) -> Result<()> {
     let mut encoder = Encoder::new(writer)?;
-    encoder.write_node_ref(node)?;
+    encoder.write_node(node)?;
     Ok(())
 }
 

@@ -7,7 +7,7 @@ use iai_callgrind::{
 use std::hint::black_box;
 use std::io::Write;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::marshal::{marshal, marshal_to, unmarshal_ref};
+use wacore_binary::marshal::{marshal, marshal_ref, marshal_to, unmarshal_ref};
 use wacore_binary::node::Node;
 use wacore_binary::util::unpack;
 
@@ -131,6 +131,17 @@ fn bench_attr_parser(marshaled: Vec<u8>) {
     black_box(parser.finish().is_ok());
 }
 
+// Round-trip benchmark: unmarshal to NodeRef and re-marshal using the borrowed path.
+// This tests the zero-copy encoding path with EncodeNode trait.
+#[library_benchmark]
+#[bench::small(setup = setup_small_marshaled)]
+#[bench::large(setup = setup_large_marshaled)]
+fn bench_roundtrip(marshaled: Vec<u8>) -> Vec<u8> {
+    // Skip the flag byte at position 0
+    let node_ref = unmarshal_ref(black_box(&marshaled[1..])).unwrap();
+    black_box(marshal_ref(&node_ref).unwrap())
+}
+
 library_benchmark_group!(
     name = marshal_group;
     benchmarks = bench_marshal_allocating, bench_marshal_reusing_buffer
@@ -151,6 +162,11 @@ library_benchmark_group!(
     benchmarks = bench_attr_parser
 );
 
+library_benchmark_group!(
+    name = roundtrip_group;
+    benchmarks = bench_roundtrip
+);
+
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
@@ -158,5 +174,6 @@ main!(
         marshal_group,
         unmarshal_group,
         unpack_group,
-        attr_parser_group
+        attr_parser_group,
+        roundtrip_group
 );
