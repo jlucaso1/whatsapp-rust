@@ -30,7 +30,7 @@ anyhow = { version = "1.0", default-features = false }
 async-channel = { version = "2.5.0", default-features = false }
 async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-bytes = { version = "1.5", default-features = false }
+bytes = { version = "1.5", default-features = false, features = ["serde"] }
 chrono = { version = "0.4", default-features = false }
 ctr = { version = "0.9", default-features = false }
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }

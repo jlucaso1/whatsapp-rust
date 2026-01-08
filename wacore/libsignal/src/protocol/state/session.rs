@@ -283,9 +283,10 @@ impl SessionState {
     }
 
     pub fn add_receiver_chain(&mut self, sender: &PublicKey, chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(chain_key.index()),
-            key: Some(chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(chain_key.key())),
         };
 
         let chain = session_structure::Chain {
@@ -314,9 +315,10 @@ impl SessionState {
     }
 
     pub fn set_sender_chain(&mut self, sender: &KeyPair, next_chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(next_chain_key.index()),
-            key: Some(next_chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(next_chain_key.key())),
         };
 
         let new_chain = session_structure::Chain {
@@ -365,9 +367,10 @@ impl SessionState {
     }
 
     pub fn set_sender_chain_key(&mut self, next_chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(next_chain_key.index()),
-            key: Some(next_chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(next_chain_key.key())),
         };
 
         // Is it actually valid to call this function with sender_chain == None?
@@ -450,10 +453,11 @@ impl SessionState {
             .get_receiver_chain_index(sender)?
             .expect("called set_receiver_chain_key for a non-existent chain");
 
+        use prost::bytes::Bytes;
         self.session.receiver_chains[chain_idx].chain_key =
             Some(session_structure::chain::ChainKey {
                 index: Some(chain_key.index()),
-                key: Some(chain_key.key().to_vec()),
+                key: Some(Bytes::copy_from_slice(chain_key.key())),
             });
 
         Ok(())

@@ -191,10 +191,7 @@ macro_rules! impl_store_wrapper {
 #[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
-        let private_key_bytes = self.identity_key.private_key;
-        let private_key = PrivateKey::deserialize(private_key_bytes.serialize())?;
-        let ikp = IdentityKeyPair::try_from(private_key)?;
-        Ok(ikp)
+        Ok(self.identity_key.into())
     }
 
     async fn get_local_registration_id(&self) -> SignalResult<u32> {
@@ -333,19 +330,9 @@ impl SignedPreKeyStore for Device {
         signed_prekey_id: u32,
     ) -> Result<Option<SignedPreKeyRecordStructure>, StoreError> {
         if signed_prekey_id == self.signed_pre_key_id {
-            use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
-
-            let public_key = PublicKey::from_djb_public_key_bytes(
-                self.signed_pre_key.public_key.public_key_bytes(),
-            )
-            .map_err(|e| Box::new(e) as StoreError)?;
-            let private_key = PrivateKey::deserialize(self.signed_pre_key.private_key.serialize())
-                .map_err(|e| Box::new(e) as StoreError)?;
-            let key_pair = KeyPair::new(public_key, private_key);
-
             let record = wacore::libsignal::store::record_helpers::new_signed_pre_key_record(
                 self.signed_pre_key_id,
-                &key_pair,
+                &self.signed_pre_key,
                 self.signed_pre_key_signature,
                 chrono::Utc::now(),
             );

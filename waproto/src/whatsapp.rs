@@ -10942,24 +10942,28 @@ pub mod sender_key_state_structure {
     pub struct SenderChainKey {
         #[prost(uint32, optional, tag="1")]
         pub iteration: ::core::option::Option<u32>,
-        #[prost(bytes="vec", optional, tag="2")]
-        pub seed: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+        #[prost(bytes="bytes", optional, tag="2")]
+        #[serde(skip, default)]
+        pub seed: ::core::option::Option<::prost::bytes::Bytes>,
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderMessageKey {
         #[prost(uint32, optional, tag="1")]
         pub iteration: ::core::option::Option<u32>,
-        #[prost(bytes="vec", optional, tag="2")]
-        pub seed: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+        #[prost(bytes="bytes", optional, tag="2")]
+        #[serde(skip, default)]
+        pub seed: ::core::option::Option<::prost::bytes::Bytes>,
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderSigningKey {
-        #[prost(bytes="vec", optional, tag="1")]
-        pub public: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-        #[prost(bytes="vec", optional, tag="2")]
-        pub private: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+        #[prost(bytes="bytes", optional, tag="1")]
+        #[serde(skip, default)]
+        pub public: ::core::option::Option<::prost::bytes::Bytes>,
+        #[prost(bytes="bytes", optional, tag="2")]
+        #[serde(skip, default)]
+        pub private: ::core::option::Option<::prost::bytes::Bytes>,
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -11019,20 +11023,24 @@ pub mod session_structure {
         pub struct ChainKey {
             #[prost(uint32, optional, tag="1")]
             pub index: ::core::option::Option<u32>,
-            #[prost(bytes="vec", optional, tag="2")]
-            pub key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+            #[prost(bytes="bytes", optional, tag="2")]
+            #[serde(skip, default)]
+            pub key: ::core::option::Option<::prost::bytes::Bytes>,
         }
         #[derive(serde::Serialize, serde::Deserialize)]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct MessageKey {
             #[prost(uint32, optional, tag="1")]
             pub index: ::core::option::Option<u32>,
-            #[prost(bytes="vec", optional, tag="2")]
-            pub cipher_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-            #[prost(bytes="vec", optional, tag="3")]
-            pub mac_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-            #[prost(bytes="vec", optional, tag="4")]
-            pub iv: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+            #[prost(bytes="bytes", optional, tag="2")]
+            #[serde(skip, default)]
+            pub cipher_key: ::core::option::Option<::prost::bytes::Bytes>,
+            #[prost(bytes="bytes", optional, tag="3")]
+            #[serde(skip, default)]
+            pub mac_key: ::core::option::Option<::prost::bytes::Bytes>,
+            #[prost(bytes="bytes", optional, tag="4")]
+            #[serde(skip, default)]
+            pub iv: ::core::option::Option<::prost::bytes::Bytes>,
         }
     }
     #[derive(serde::Serialize, serde::Deserialize)]

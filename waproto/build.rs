@@ -32,6 +32,56 @@ fn main() -> std::io::Result<()> {
     let mut config = prost_build::Config::new();
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
 
+    // Use bytes::Bytes instead of Vec<u8> for frequently-serialized cryptographic structures.
+    // This enables O(1) cloning (reference-counted) instead of O(n) copying.
+    // See: https://docs.rs/prost-build/latest/prost_build/struct.Config.html#method.bytes
+    config.bytes([
+        // Session chain keys (called on every message encrypt/decrypt)
+        ".whatsapp.SessionStructure.Chain.ChainKey",
+        ".whatsapp.SessionStructure.Chain.MessageKey",
+        // Sender key structures (group messaging hot path)
+        ".whatsapp.SenderKeyStateStructure.SenderChainKey",
+        ".whatsapp.SenderKeyStateStructure.SenderMessageKey",
+        ".whatsapp.SenderKeyStateStructure.SenderSigningKey",
+    ]);
+
+    // Skip serde for Bytes fields since bytes::Bytes doesn't implement Serialize/Deserialize
+    // without the serde feature which prost doesn't expose. These nested types aren't JSON
+    // serialized anyway - they're stored as protobuf blobs.
+    // We use skip + default so serde doesn't try to deserialize these fields.
+    config.field_attribute(
+        ".whatsapp.SessionStructure.Chain.ChainKey.key",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SessionStructure.Chain.MessageKey.cipherKey",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SessionStructure.Chain.MessageKey.macKey",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SessionStructure.Chain.MessageKey.iv",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SenderKeyStateStructure.SenderChainKey.seed",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SenderKeyStateStructure.SenderMessageKey.seed",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SenderKeyStateStructure.SenderSigningKey.public",
+        "#[serde(skip, default)]",
+    );
+    config.field_attribute(
+        ".whatsapp.SenderKeyStateStructure.SenderSigningKey.private",
+        "#[serde(skip, default)]",
+    );
+
     // Configure prost to output the file to the `src/` directory,
     // so it can be version-controlled.
     config.out_dir("src/");

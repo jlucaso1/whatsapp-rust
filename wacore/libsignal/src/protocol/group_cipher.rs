@@ -252,7 +252,7 @@ pub async fn process_sender_key_distribution_message(
         "Processing SenderKey distribution for group {} from sender {} with chain ID {}",
         sender_key_name.group_id(),
         sender_key_name.sender_id(),
-        skdm.chain_id()?
+        skdm.chain_id()
     );
 
     let mut sender_key_record = sender_key_store
@@ -262,10 +262,10 @@ pub async fn process_sender_key_distribution_message(
 
     sender_key_record.add_sender_key_state(
         skdm.message_version(),
-        skdm.chain_id()?,
-        skdm.iteration()?,
-        skdm.chain_key()?,
-        *skdm.signing_key()?,
+        skdm.chain_id(),
+        skdm.iteration(),
+        skdm.chain_key(),
+        *skdm.signing_key(),
         None,
     );
     sender_key_store

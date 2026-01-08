@@ -556,23 +556,23 @@ impl SenderKeyDistributionMessage {
     }
 
     #[inline]
-    pub fn chain_id(&self) -> Result<u32> {
-        Ok(self.chain_id)
+    pub fn chain_id(&self) -> u32 {
+        self.chain_id
     }
 
     #[inline]
-    pub fn iteration(&self) -> Result<u32> {
-        Ok(self.iteration)
+    pub fn iteration(&self) -> u32 {
+        self.iteration
     }
 
     #[inline]
-    pub fn chain_key(&self) -> Result<&[u8; 32]> {
-        Ok(&self.chain_key)
+    pub fn chain_key(&self) -> &[u8; 32] {
+        &self.chain_key
     }
 
     #[inline]
-    pub fn signing_key(&self) -> Result<&PublicKey> {
-        Ok(&self.signing_key)
+    pub fn signing_key(&self) -> &PublicKey {
+        &self.signing_key
     }
 
     #[inline]

@@ -52,8 +52,9 @@ impl SenderMessageKey {
     }
 
     pub(crate) fn from_protobuf(smk: sender_key_state_structure::SenderMessageKey) -> Self {
-        let seed_vec = smk.seed.unwrap_or_default();
-        let seed: [u8; 32] = seed_vec
+        let seed_bytes = smk.seed.unwrap_or_default();
+        let seed: [u8; 32] = seed_bytes
+            .as_ref()
             .try_into()
             .expect("SenderMessageKey seed must be exactly 32 bytes");
         Self::new(smk.iteration.unwrap_or_default(), seed)
@@ -72,9 +73,10 @@ impl SenderMessageKey {
     }
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderMessageKey {
+        use prost::bytes::Bytes;
         sender_key_state_structure::SenderMessageKey {
             iteration: Some(self.iteration),
-            seed: Some(self.seed.to_vec()),
+            seed: Some(Bytes::copy_from_slice(&self.seed)),
         }
     }
 }
@@ -157,9 +159,10 @@ impl SenderChainKey {
     }
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderChainKey {
+        use prost::bytes::Bytes;
         sender_key_state_structure::SenderChainKey {
             iteration: Some(self.iteration),
-            seed: Some(self.chain_key.to_vec()),
+            seed: Some(Bytes::copy_from_slice(&self.chain_key)),
         }
     }
 }
@@ -178,13 +181,15 @@ impl SenderKeyState {
         signature_key: PublicKey,
         signature_private_key: Option<PrivateKey>,
     ) -> SenderKeyState {
+        use prost::bytes::Bytes;
         let chain_key_arr: [u8; 32] = chain_key.try_into().expect("chain_key must be 32 bytes");
         let state = SenderKeyStateStructure {
             sender_key_id: Some(chain_id),
             sender_chain_key: Some(SenderChainKey::new(iteration, chain_key_arr).as_protobuf()),
             sender_signing_key: Some(sender_key_state_structure::SenderSigningKey {
-                public: Some(signature_key.serialize().to_vec()),
-                private: signature_private_key.map(|k| k.serialize().to_vec()),
+                public: Some(Bytes::copy_from_slice(&signature_key.serialize())),
+                private: signature_private_key
+                    .map(|k| Bytes::copy_from_slice(k.serialize().as_ref())),
             }),
             sender_message_keys: vec![],
         };

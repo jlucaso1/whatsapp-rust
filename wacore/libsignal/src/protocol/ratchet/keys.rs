@@ -12,9 +12,19 @@ use sha2::Sha256;
 
 use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
 
+/// Lazy message key generator that defers key derivation and avoids re-serialization.
+///
+/// This enum enables two optimizations:
+/// 1. **Lazy derivation**: Keys are only derived from seed when actually needed for encryption
+/// 2. **Zero-cost round-trip**: Keys loaded from protobuf are kept in serialized form and
+///    returned as-is when saving, avoiding unnecessary deserialization and re-serialization
 pub enum MessageKeyGenerator {
+    /// Native computed keys - from encryption operations
     Keys(MessageKeys),
+    /// Seed for lazy derivation - keys derived on demand
     Seed(([u8; 32], u32)),
+    /// Original protobuf - zero-cost pass-through on save
+    Serialized(session_structure::chain::MessageKey),
 }
 
 impl MessageKeyGenerator {
@@ -22,45 +32,81 @@ impl MessageKeyGenerator {
     pub fn new_from_seed(seed: &[u8; 32], counter: u32) -> Self {
         Self::Seed((*seed, counter))
     }
+
+    /// Generate the actual MessageKeys, deriving them if necessary.
+    /// This is called when keys are needed for actual encryption/decryption.
     pub fn generate_keys(self) -> MessageKeys {
         match self {
             Self::Seed((seed, counter)) => MessageKeys::derive_keys(&seed, None, counter),
             Self::Keys(k) => k,
+            Self::Serialized(pb) => {
+                // Parse on demand - only when keys are actually needed
+                MessageKeys {
+                    cipher_key: pb
+                        .cipher_key
+                        .as_deref()
+                        .and_then(|b| b.try_into().ok())
+                        .unwrap_or([0u8; 32]),
+                    mac_key: pb
+                        .mac_key
+                        .as_deref()
+                        .and_then(|b| b.try_into().ok())
+                        .unwrap_or([0u8; 32]),
+                    iv: pb
+                        .iv
+                        .as_deref()
+                        .and_then(|b| b.try_into().ok())
+                        .unwrap_or([0u8; 16]),
+                    counter: pb.index.unwrap_or(0),
+                }
+            }
         }
     }
+
+    /// Convert to protobuf format for storage.
+    /// Zero-cost for Serialized variant (pass-through), allocates for others.
     pub fn into_pb(self) -> session_structure::chain::MessageKey {
-        let keys = self.generate_keys();
-        session_structure::chain::MessageKey {
-            cipher_key: Some(keys.cipher_key().to_vec()),
-            mac_key: Some(keys.mac_key().to_vec()),
-            iv: Some(keys.iv().to_vec()),
-            index: Some(keys.counter()),
+        match self {
+            // Zero-cost pass-through: return original protobuf unchanged
+            Self::Serialized(pb) => pb,
+            // Need to serialize: derive keys and convert
+            Self::Seed(_) | Self::Keys(_) => {
+                use prost::bytes::Bytes;
+                let keys = self.generate_keys();
+                session_structure::chain::MessageKey {
+                    cipher_key: Some(Bytes::copy_from_slice(keys.cipher_key())),
+                    mac_key: Some(Bytes::copy_from_slice(keys.mac_key())),
+                    iv: Some(Bytes::copy_from_slice(keys.iv())),
+                    index: Some(keys.counter()),
+                }
+            }
         }
     }
+
+    /// Load from protobuf without parsing - keeps original bytes for zero-cost round-trip.
     pub fn from_pb(
         pb: session_structure::chain::MessageKey,
     ) -> std::result::Result<Self, &'static str> {
-        Ok(Self::Keys(MessageKeys {
-            cipher_key: pb
-                .cipher_key
-                .as_deref()
-                .ok_or("missing cipher key")?
-                .try_into()
-                .map_err(|_| "invalid message cipher key")?,
-            mac_key: pb
-                .mac_key
-                .as_deref()
-                .ok_or("missing mac key")?
-                .try_into()
-                .map_err(|_| "invalid message MAC key")?,
-            iv: pb
-                .iv
-                .as_deref()
-                .ok_or("missing iv")?
-                .try_into()
-                .map_err(|_| "invalid message IV")?,
-            counter: pb.index.unwrap_or(0),
-        }))
+        // Validate the protobuf has required fields
+        if pb.cipher_key.as_ref().is_some_and(|b| b.len() == 32)
+            && pb.mac_key.as_ref().is_some_and(|b| b.len() == 32)
+            && pb.iv.as_ref().is_some_and(|b| b.len() == 16)
+        {
+            // Keep as Serialized for zero-cost round-trip
+            Ok(Self::Serialized(pb))
+        } else {
+            Err("invalid message key format")
+        }
+    }
+
+    /// Get the counter/index without fully parsing the keys.
+    #[inline]
+    pub fn counter(&self) -> u32 {
+        match self {
+            Self::Keys(k) => k.counter(),
+            Self::Seed((_, counter)) => *counter,
+            Self::Serialized(pb) => pb.index.unwrap_or(0),
+        }
     }
 }
 
