@@ -857,7 +857,7 @@ pub async fn create_sender_key_distribution_message_for_group(
         message_version,
         state.chain_id(),
         chain_key.iteration(),
-        chain_key.seed().to_vec(),
+        *chain_key.seed(),
         state
             .signing_key_public()
             .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,

@@ -46,33 +46,41 @@ pub fn initialize_alice_session<R: Rng + CryptoRng>(
 
     let sending_ratchet_key = KeyPair::generate(&mut csprng);
 
-    let mut secrets = Vec::with_capacity(32 * 5);
+    // Stack-allocated buffer for up to 5 shared secrets (160 bytes max)
+    let mut secrets = [0u8; 160];
+    let mut secrets_len = 0usize;
 
-    secrets.extend_from_slice(&[0xFFu8; 32]); // "discontinuity bytes"
+    // "discontinuity bytes"
+    secrets[..32].copy_from_slice(&[0xFFu8; 32]);
+    secrets_len += 32;
 
     let our_base_private_key = parameters.our_base_key_pair().private_key;
 
-    secrets.extend_from_slice(
-        &parameters
-            .our_identity_key_pair()
-            .private_key()
-            .calculate_agreement(parameters.their_signed_pre_key())?,
-    );
+    // Each agreement is 32 bytes. We have: discontinuity (32) + up to 4 agreements (128) = 160 max.
+    // The buffer is [u8; 160], so bounds are statically guaranteed.
+    let agreement = parameters
+        .our_identity_key_pair()
+        .private_key()
+        .calculate_agreement(parameters.their_signed_pre_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
-    secrets.extend_from_slice(
-        &our_base_private_key.calculate_agreement(parameters.their_identity_key().public_key())?,
-    );
+    let agreement =
+        our_base_private_key.calculate_agreement(parameters.their_identity_key().public_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
-    secrets.extend_from_slice(
-        &our_base_private_key.calculate_agreement(parameters.their_signed_pre_key())?,
-    );
+    let agreement = our_base_private_key.calculate_agreement(parameters.their_signed_pre_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
     if let Some(their_one_time_prekey) = parameters.their_one_time_pre_key() {
-        secrets
-            .extend_from_slice(&our_base_private_key.calculate_agreement(their_one_time_prekey)?);
+        let agreement = our_base_private_key.calculate_agreement(their_one_time_prekey)?;
+        secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+        secrets_len += 32;
     }
 
-    let (root_key, chain_key, _) = derive_keys(&secrets);
+    let (root_key, chain_key, _) = derive_keys(&secrets[..secrets_len]);
 
     let (sending_chain_root_key, sending_chain_chain_key) = root_key.create_chain(
         parameters.their_ratchet_key(),
@@ -95,40 +103,46 @@ pub fn initialize_alice_session<R: Rng + CryptoRng>(
 pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Result<SessionState> {
     let local_identity = parameters.our_identity_key_pair().identity_key();
 
-    let mut secrets = Vec::with_capacity(32 * 5);
+    // Stack-allocated buffer for up to 5 shared secrets (160 bytes max)
+    let mut secrets = [0u8; 160];
+    let mut secrets_len = 0usize;
 
-    secrets.extend_from_slice(&[0xFFu8; 32]); // "discontinuity bytes"
+    // "discontinuity bytes"
+    secrets[..32].copy_from_slice(&[0xFFu8; 32]);
+    secrets_len += 32;
 
-    secrets.extend_from_slice(
-        &parameters
-            .our_signed_pre_key_pair()
-            .private_key
-            .calculate_agreement(parameters.their_identity_key().public_key())?,
-    );
+    // Each agreement is 32 bytes. We have: discontinuity (32) + up to 4 agreements (128) = 160 max.
+    // The buffer is [u8; 160], so bounds are statically guaranteed.
+    let agreement = parameters
+        .our_signed_pre_key_pair()
+        .private_key
+        .calculate_agreement(parameters.their_identity_key().public_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
-    secrets.extend_from_slice(
-        &parameters
-            .our_identity_key_pair()
-            .private_key()
-            .calculate_agreement(parameters.their_base_key())?,
-    );
+    let agreement = parameters
+        .our_identity_key_pair()
+        .private_key()
+        .calculate_agreement(parameters.their_base_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
-    secrets.extend_from_slice(
-        &parameters
-            .our_signed_pre_key_pair()
-            .private_key
-            .calculate_agreement(parameters.their_base_key())?,
-    );
+    let agreement = parameters
+        .our_signed_pre_key_pair()
+        .private_key
+        .calculate_agreement(parameters.their_base_key())?;
+    secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+    secrets_len += 32;
 
     if let Some(our_one_time_pre_key_pair) = parameters.our_one_time_pre_key_pair() {
-        secrets.extend_from_slice(
-            &our_one_time_pre_key_pair
-                .private_key
-                .calculate_agreement(parameters.their_base_key())?,
-        );
+        let agreement = our_one_time_pre_key_pair
+            .private_key
+            .calculate_agreement(parameters.their_base_key())?;
+        secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
+        secrets_len += 32;
     }
 
-    let (root_key, chain_key, _) = derive_keys(&secrets);
+    let (root_key, chain_key, _) = derive_keys(&secrets[..secrets_len]);
 
     let session = SessionState::new(
         message_version(),

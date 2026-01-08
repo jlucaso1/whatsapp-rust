@@ -1235,13 +1235,24 @@ impl Client {
                         );
                         return;
                     };
+                    let chain_key_arr: [u8; 32] = match chain_key.as_slice().try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => {
+                            log::error!(
+                                "Invalid chain_key length {} from Go SKDM from {}",
+                                chain_key.len(),
+                                sender_jid
+                            );
+                            return;
+                        }
+                    };
                     match SignalPublicKey::from_djb_public_key_bytes(signing_key) {
                         Ok(pub_key) => {
                             match SenderKeyDistributionMessage::new(
                                 SENDERKEY_MESSAGE_CURRENT_VERSION,
                                 id,
                                 iteration,
-                                chain_key.clone(),
+                                chain_key_arr,
                                 pub_key,
                             ) {
                                 Ok(skdm) => skdm,

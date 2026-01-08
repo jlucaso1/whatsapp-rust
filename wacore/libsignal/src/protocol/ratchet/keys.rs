@@ -7,56 +7,113 @@ use std::fmt;
 
 use arrayref::array_ref;
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
 use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
 
+/// Lazy message key generator that defers key derivation and avoids re-serialization.
+///
+/// This enum enables two optimizations:
+/// 1. **Lazy derivation**: Keys are only derived from seed when actually needed for encryption
+/// 2. **Zero-cost round-trip**: Keys loaded from protobuf are kept in serialized form and
+///    returned as-is when saving, avoiding unnecessary deserialization and re-serialization
 pub enum MessageKeyGenerator {
+    /// Native computed keys - from encryption operations
     Keys(MessageKeys),
-    Seed((Vec<u8>, u32)),
+    /// Seed for lazy derivation - keys derived on demand
+    Seed(([u8; 32], u32)),
+    /// Original protobuf - zero-cost pass-through on save
+    Serialized(session_structure::chain::MessageKey),
 }
 
 impl MessageKeyGenerator {
-    pub fn new_from_seed(seed: &[u8], counter: u32) -> Self {
-        Self::Seed((seed.to_vec(), counter))
+    #[inline]
+    pub fn new_from_seed(seed: &[u8; 32], counter: u32) -> Self {
+        Self::Seed((*seed, counter))
     }
+
+    /// Generate the actual MessageKeys, deriving them if necessary.
+    /// This is called when keys are needed for actual encryption/decryption.
     pub fn generate_keys(self) -> MessageKeys {
         match self {
             Self::Seed((seed, counter)) => MessageKeys::derive_keys(&seed, None, counter),
             Self::Keys(k) => k,
+            Self::Serialized(pb) => {
+                // Parse on demand - only when keys are actually needed.
+                // Note: from_pb() validates field lengths before creating Serialized,
+                // so these conversions should always succeed. The unwrap_or fallbacks
+                // exist only as a defensive measure; in debug builds we assert to
+                // catch any invariant violations.
+                let cipher_key = pb
+                    .cipher_key
+                    .as_deref()
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok());
+                let mac_key = pb
+                    .mac_key
+                    .as_deref()
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok());
+                let iv = pb.iv.as_deref().and_then(|b| <[u8; 16]>::try_from(b).ok());
+
+                debug_assert!(
+                    cipher_key.is_some() && mac_key.is_some() && iv.is_some(),
+                    "Serialized MessageKeyGenerator has invalid field lengths - from_pb should have rejected this"
+                );
+
+                MessageKeys {
+                    cipher_key: cipher_key.unwrap_or([0u8; 32]),
+                    mac_key: mac_key.unwrap_or([0u8; 32]),
+                    iv: iv.unwrap_or([0u8; 16]),
+                    counter: pb.index.unwrap_or(0),
+                }
+            }
         }
     }
+
+    /// Convert to protobuf format for storage.
+    /// Zero-cost for Serialized variant (pass-through), allocates for others.
     pub fn into_pb(self) -> session_structure::chain::MessageKey {
-        let keys = self.generate_keys();
-        session_structure::chain::MessageKey {
-            cipher_key: Some(keys.cipher_key().to_vec()),
-            mac_key: Some(keys.mac_key().to_vec()),
-            iv: Some(keys.iv().to_vec()),
-            index: Some(keys.counter()),
+        match self {
+            // Zero-cost pass-through: return original protobuf unchanged
+            Self::Serialized(pb) => pb,
+            // Need to serialize: derive keys and convert
+            Self::Seed(_) | Self::Keys(_) => {
+                use prost::bytes::Bytes;
+                let keys = self.generate_keys();
+                session_structure::chain::MessageKey {
+                    cipher_key: Some(Bytes::copy_from_slice(keys.cipher_key())),
+                    mac_key: Some(Bytes::copy_from_slice(keys.mac_key())),
+                    iv: Some(Bytes::copy_from_slice(keys.iv())),
+                    index: Some(keys.counter()),
+                }
+            }
         }
     }
+
+    /// Load from protobuf without parsing - keeps original bytes for zero-cost round-trip.
     pub fn from_pb(
         pb: session_structure::chain::MessageKey,
     ) -> std::result::Result<Self, &'static str> {
-        Ok(Self::Keys(MessageKeys {
-            cipher_key: pb
-                .cipher_key
-                .as_deref()
-                .ok_or("missing cipher key")?
-                .try_into()
-                .map_err(|_| "invalid message cipher key")?,
-            mac_key: pb
-                .mac_key
-                .as_deref()
-                .ok_or("missing mac key")?
-                .try_into()
-                .map_err(|_| "invalid message MAC key")?,
-            iv: pb
-                .iv
-                .as_deref()
-                .ok_or("missing iv")?
-                .try_into()
-                .map_err(|_| "invalid message IV")?,
-            counter: pb.index.unwrap_or(0),
-        }))
+        // Validate the protobuf has required fields
+        if pb.cipher_key.as_ref().is_some_and(|b| b.len() == 32)
+            && pb.mac_key.as_ref().is_some_and(|b| b.len() == 32)
+            && pb.iv.as_ref().is_some_and(|b| b.len() == 16)
+        {
+            // Keep as Serialized for zero-cost round-trip
+            Ok(Self::Serialized(pb))
+        } else {
+            Err("invalid message key format")
+        }
+    }
+
+    /// Get the counter/index without fully parsing the keys.
+    #[inline]
+    pub fn counter(&self) -> u32 {
+        match self {
+            Self::Keys(k) => k.counter(),
+            Self::Seed((_, counter)) => *counter,
+            Self::Serialized(pb) => pb.index.unwrap_or(0),
+        }
     }
 }
 
@@ -108,7 +165,7 @@ impl MessageKeys {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ChainKey {
     key: [u8; 32],
     index: u32,
@@ -144,6 +201,27 @@ impl ChainKey {
             &self.calculate_base_material(Self::MESSAGE_KEY_SEED),
             self.index,
         )
+    }
+
+    /// Compute both message keys and next chain key in one call, reusing HMAC key setup.
+    #[inline]
+    pub fn step_with_message_keys(&self) -> (MessageKeyGenerator, Self) {
+        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.key)
+            .expect("HMAC-SHA256 should accept any size key");
+
+        hmac.update(&Self::MESSAGE_KEY_SEED);
+        let message_key_seed: [u8; 32] = hmac.finalize_reset().into_bytes().into();
+
+        hmac.update(&Self::CHAIN_KEY_SEED);
+        let next_key: [u8; 32] = hmac.finalize().into_bytes().into();
+
+        let message_keys = MessageKeyGenerator::new_from_seed(&message_key_seed, self.index);
+        let next_chain = Self {
+            key: next_key,
+            index: self.index + 1,
+        };
+
+        (message_keys, next_chain)
     }
 
     fn calculate_base_material(&self, seed: [u8; 1]) -> [u8; 32] {
@@ -303,7 +381,7 @@ mod tests {
     /// Test MessageKeyGenerator from seed
     #[test]
     fn test_message_key_generator_from_seed() {
-        let seed = vec![0xBBu8; 32];
+        let seed = [0xBBu8; 32];
         let counter = 42;
 
         let generator = MessageKeyGenerator::new_from_seed(&seed, counter);
@@ -338,5 +416,73 @@ mod tests {
         // Both should have same counter
         assert_eq!(keys1.counter(), counter);
         assert_eq!(keys2.counter(), counter);
+    }
+
+    /// Test that step_with_message_keys produces the same results as
+    /// calling message_keys() and next_chain_key() separately
+    #[test]
+    fn test_step_with_message_keys_equivalence() {
+        let initial_key = [0x77u8; 32];
+        let chain_key = ChainKey::new(initial_key, 5);
+
+        // Get results using separate calls
+        let message_keys_separate = chain_key.message_keys().generate_keys();
+        let next_chain_separate = chain_key.next_chain_key();
+
+        // Get results using optimized combined call
+        let (message_keys_gen_combined, next_chain_combined) = chain_key.step_with_message_keys();
+        let message_keys_combined = message_keys_gen_combined.generate_keys();
+
+        // Verify message keys are identical
+        assert_eq!(
+            message_keys_separate.cipher_key(),
+            message_keys_combined.cipher_key()
+        );
+        assert_eq!(
+            message_keys_separate.mac_key(),
+            message_keys_combined.mac_key()
+        );
+        assert_eq!(message_keys_separate.iv(), message_keys_combined.iv());
+        assert_eq!(
+            message_keys_separate.counter(),
+            message_keys_combined.counter()
+        );
+
+        // Verify next chain key is identical
+        assert_eq!(next_chain_separate.key(), next_chain_combined.key());
+        assert_eq!(next_chain_separate.index(), next_chain_combined.index());
+    }
+
+    /// Test step_with_message_keys over multiple iterations
+    #[test]
+    fn test_step_with_message_keys_chain() {
+        let initial_key = [0x88u8; 32];
+        let mut chain_separate = ChainKey::new(initial_key, 0);
+        let mut chain_combined = ChainKey::new(initial_key, 0);
+
+        // Step both chains 10 times and verify they stay in sync
+        for i in 0..10 {
+            let msg_keys_sep = chain_separate.message_keys().generate_keys();
+            chain_separate = chain_separate.next_chain_key();
+
+            let (msg_keys_gen_comb, next_chain) = chain_combined.step_with_message_keys();
+            let msg_keys_comb = msg_keys_gen_comb.generate_keys();
+            chain_combined = next_chain;
+
+            // Verify message keys match
+            assert_eq!(
+                msg_keys_sep.cipher_key(),
+                msg_keys_comb.cipher_key(),
+                "cipher_key mismatch at iteration {i}"
+            );
+
+            // Verify chain keys match
+            assert_eq!(
+                chain_separate.key(),
+                chain_combined.key(),
+                "chain key mismatch at iteration {i}"
+            );
+            assert_eq!(chain_separate.index(), chain_combined.index());
+        }
     }
 }
