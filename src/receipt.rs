@@ -106,18 +106,13 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::test_utils::MockHttpClient;
+    use crate::test_utils::{MockHttpClient, create_test_backend};
     use crate::types::message::{MessageInfo, MessageSource};
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -160,11 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_delivery_receipt_group() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -200,11 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_own_messages() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -242,11 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_empty_id() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -282,11 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_status_broadcast() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await

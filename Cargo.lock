@@ -1502,6 +1502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae323eb086579a3769daa2c753bb96deb95993c534711e0dbe881b5192906a06"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2353,9 +2362,25 @@ dependencies = [
  "wacore",
  "wacore-binary",
  "waproto",
+ "whatsapp-rust-redb-storage",
  "whatsapp-rust-sqlite-storage",
  "whatsapp-rust-tokio-transport",
  "whatsapp-rust-ureq-http-client",
+]
+
+[[package]]
+name = "whatsapp-rust-redb-storage"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "bincode 2.0.1",
+ "hex",
+ "prost",
+ "redb",
+ "serde",
+ "tokio",
+ "wacore",
+ "waproto",
 ]
 
 [[package]]

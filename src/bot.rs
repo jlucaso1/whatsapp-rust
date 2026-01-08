@@ -228,7 +228,10 @@ impl BotBuilder {
     ///
     /// # Example
     /// ```rust,ignore
-    /// let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
+    /// // Using RedbStore (default):
+    /// let backend = Arc::new(RedbStore::new("whatsapp.redb").await?);
+    /// // Or using SqliteStore:
+    /// // let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
     /// let bot = Bot::builder()
     ///     .with_backend(backend)
     ///     .build()
@@ -405,8 +408,8 @@ impl BotBuilder {
             anyhow::anyhow!("HTTP client is required. Use with_http_client() to provide one.")
         })?;
 
-        // Note: For multi-account mode, create the backend with SqliteStore::new_for_device()
-        // before passing it to with_backend()
+        // Note: For multi-account mode, create the backend with RedbStore::new_for_device()
+        // or SqliteStore::new_for_device() before passing it to with_backend()
         let persistence_manager = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -454,7 +457,7 @@ impl BotBuilder {
 mod tests {
     use super::*;
     use crate::http::{HttpClient, HttpRequest, HttpResponse};
-    use crate::store::SqliteStore;
+    use crate::test_utils::{create_test_backend, create_test_backend_for_device};
     use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
     // Mock HTTP client for testing
@@ -472,33 +475,9 @@ mod tests {
         }
     }
 
-    async fn create_test_sqlite_backend() -> Arc<dyn Backend> {
-        let temp_db = format!(
-            "file:memdb_bot_{}?mode=memory&cache=shared",
-            uuid::Uuid::new_v4()
-        );
-        Arc::new(
-            SqliteStore::new(&temp_db)
-                .await
-                .expect("Failed to create test SqliteStore"),
-        ) as Arc<dyn Backend>
-    }
-
-    async fn create_test_sqlite_backend_for_device(device_id: i32) -> Arc<dyn Backend> {
-        let temp_db = format!(
-            "file:memdb_bot_{}?mode=memory&cache=shared",
-            uuid::Uuid::new_v4()
-        );
-        Arc::new(
-            SqliteStore::new_for_device(&temp_db, device_id)
-                .await
-                .expect("Failed to create test SqliteStore"),
-        ) as Arc<dyn Backend>
-    }
-
     #[tokio::test]
     async fn test_bot_builder_single_device() {
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
@@ -517,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_multi_device() {
         // Create a backend configured for device ID 42
-        let backend = create_test_sqlite_backend_for_device(42).await;
+        let backend = create_test_backend_for_device(42);
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -535,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend() {
         // Create an in-memory backend for testing
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
         let bot = Bot::builder()
@@ -553,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_with_custom_backend_specific_device() {
         // Create a backend configured for device ID 100
-        let backend = create_test_sqlite_backend_for_device(100).await;
+        let backend = create_test_backend_for_device(100);
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
@@ -594,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn test_bot_builder_missing_transport() {
         // Try to build without setting a transport
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let http_client = MockHttpClient;
         let result = Bot::builder()
             .with_backend(backend)
@@ -614,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_with_version_override() {
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
@@ -636,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_with_os_info_override() {
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
@@ -668,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_with_os_only_override() {
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
@@ -698,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bot_builder_with_version_only_override() {
-        let backend = create_test_sqlite_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
 
