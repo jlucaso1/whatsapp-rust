@@ -8,50 +8,38 @@ repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Core WhatsApp protocol implementation without runtime dependencies"
 
 [dependencies]
-aes = "0.8.3"
-aes-gcm = { version = "0.10.2", features = [
-    "aes",
-    "alloc",
-], default-features = false }
-anyhow = { version = "1.0", default-features = false }
-async-channel = { version = "2.5.0", default-features = false }
-async-trait = "0.1.89"
-base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-bytes = { version = "1.5", default-features = false }
-
-# Time handling
-chrono = { version = "0.4.39", features = [
-    "now",
-    "serde",
-], default-features = false }
-ctr = { version = "0.9", default-features = false }
-flate2 = { workspace = true, features = ["zlib-rs"], default-features = false }
-hex = { version = "0.4", features = ["alloc"], default-features = false }
-hkdf = "0.12.3"
-hmac = { version = "0.12.1", features = ["reset"] }
-log = "0.4.29"
+aes = { workspace = true }
+aes-gcm = { workspace = true }
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["now", "serde"] }
+ctr = { workspace = true }
+flate2 = { workspace = true }
+hex = { workspace = true }
+hkdf = { workspace = true }
+hmac = { workspace = true }
+log = { workspace = true }
 md5 = "0.8.0"
 once_cell = { version = "1.19", default-features = false, features = ["std"] }
-
-# Pair code authentication
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-prost = { version = "0.14.1", default-features = false }
+prost = { workspace = true }
 protobuf = { version = "3", default-features = false }
-
-# Cryptography
-rand = { version = "0.9" }
-rand_core = "0.9"
-serde = { version = "1.0.228", features = ["derive"] }
-serde-big-array = "0.5"
-sha2 = "0.10.6"
+rand = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
-wacore-appstate = { path = "./appstate", version = "0.2.0" }
-wacore-binary = { path = "./binary", version = "0.2.0", features = ["serde"] }
-wacore-libsignal = { path = "./libsignal", version = "0.2.0" }
-waproto = { path = "../waproto", version = "0.2.0" }
+wacore-appstate = { workspace = true }
+wacore-binary = { workspace = true, features = ["serde"] }
+wacore-libsignal = { workspace = true }
+waproto = { workspace = true }
 
 [dev-dependencies]
-iai-callgrind = "0.16"
+iai-callgrind = { workspace = true }
 
 [[bench]]
 name = "reporting_token_benchmark"
