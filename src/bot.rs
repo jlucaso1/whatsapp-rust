@@ -30,7 +30,7 @@ impl MessageContext {
 
     pub async fn edit_message(
         &self,
-        original_message_id: String,
+        original_message_id: impl Into<String>,
         new_message: wa::Message,
     ) -> Result<String, anyhow::Error> {
         self.client

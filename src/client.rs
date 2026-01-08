@@ -488,7 +488,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn disconnect(&self) {
+    pub async fn disconnect(self: &Arc<Self>) {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
@@ -1668,9 +1668,10 @@ impl Client {
     pub async fn edit_message(
         &self,
         to: Jid,
-        original_id: String,
+        original_id: impl Into<String>,
         new_content: wa::Message,
     ) -> Result<String, anyhow::Error> {
+        let original_id = original_id.into();
         let own_jid = self
             .get_pn()
             .await
