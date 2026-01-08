@@ -56,28 +56,26 @@ pub fn initialize_alice_session<R: Rng + CryptoRng>(
 
     let our_base_private_key = parameters.our_base_key_pair().private_key;
 
+    // Each agreement is 32 bytes. We have: discontinuity (32) + up to 4 agreements (128) = 160 max.
+    // The buffer is [u8; 160], so bounds are statically guaranteed.
     let agreement = parameters
         .our_identity_key_pair()
         .private_key()
         .calculate_agreement(parameters.their_signed_pre_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
     let agreement =
         our_base_private_key.calculate_agreement(parameters.their_identity_key().public_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
     let agreement = our_base_private_key.calculate_agreement(parameters.their_signed_pre_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
     if let Some(their_one_time_prekey) = parameters.their_one_time_pre_key() {
         let agreement = our_base_private_key.calculate_agreement(their_one_time_prekey)?;
-        debug_assert!(secrets_len + 32 <= secrets.len());
         secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
         secrets_len += 32;
     }
@@ -113,11 +111,12 @@ pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Resul
     secrets[..32].copy_from_slice(&[0xFFu8; 32]);
     secrets_len += 32;
 
+    // Each agreement is 32 bytes. We have: discontinuity (32) + up to 4 agreements (128) = 160 max.
+    // The buffer is [u8; 160], so bounds are statically guaranteed.
     let agreement = parameters
         .our_signed_pre_key_pair()
         .private_key
         .calculate_agreement(parameters.their_identity_key().public_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
@@ -125,7 +124,6 @@ pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Resul
         .our_identity_key_pair()
         .private_key()
         .calculate_agreement(parameters.their_base_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
@@ -133,7 +131,6 @@ pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Resul
         .our_signed_pre_key_pair()
         .private_key
         .calculate_agreement(parameters.their_base_key())?;
-    debug_assert!(secrets_len + 32 <= secrets.len());
     secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
     secrets_len += 32;
 
@@ -141,7 +138,6 @@ pub fn initialize_bob_session(parameters: &BobSignalProtocolParameters) -> Resul
         let agreement = our_one_time_pre_key_pair
             .private_key
             .calculate_agreement(parameters.their_base_key())?;
-        debug_assert!(secrets_len + 32 <= secrets.len());
         secrets[secrets_len..secrets_len + 32].copy_from_slice(&agreement);
         secrets_len += 32;
     }

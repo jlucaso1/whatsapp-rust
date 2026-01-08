@@ -40,23 +40,30 @@ impl MessageKeyGenerator {
             Self::Seed((seed, counter)) => MessageKeys::derive_keys(&seed, None, counter),
             Self::Keys(k) => k,
             Self::Serialized(pb) => {
-                // Parse on demand - only when keys are actually needed
+                // Parse on demand - only when keys are actually needed.
+                // Note: from_pb() validates field lengths before creating Serialized,
+                // so these conversions should always succeed. The unwrap_or fallbacks
+                // exist only as a defensive measure; in debug builds we assert to
+                // catch any invariant violations.
+                let cipher_key = pb
+                    .cipher_key
+                    .as_deref()
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok());
+                let mac_key = pb
+                    .mac_key
+                    .as_deref()
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok());
+                let iv = pb.iv.as_deref().and_then(|b| <[u8; 16]>::try_from(b).ok());
+
+                debug_assert!(
+                    cipher_key.is_some() && mac_key.is_some() && iv.is_some(),
+                    "Serialized MessageKeyGenerator has invalid field lengths - from_pb should have rejected this"
+                );
+
                 MessageKeys {
-                    cipher_key: pb
-                        .cipher_key
-                        .as_deref()
-                        .and_then(|b| b.try_into().ok())
-                        .unwrap_or([0u8; 32]),
-                    mac_key: pb
-                        .mac_key
-                        .as_deref()
-                        .and_then(|b| b.try_into().ok())
-                        .unwrap_or([0u8; 32]),
-                    iv: pb
-                        .iv
-                        .as_deref()
-                        .and_then(|b| b.try_into().ok())
-                        .unwrap_or([0u8; 16]),
+                    cipher_key: cipher_key.unwrap_or([0u8; 32]),
+                    mac_key: mac_key.unwrap_or([0u8; 32]),
+                    iv: iv.unwrap_or([0u8; 16]),
                     counter: pb.index.unwrap_or(0),
                 }
             }

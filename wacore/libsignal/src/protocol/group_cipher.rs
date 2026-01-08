@@ -17,11 +17,13 @@ use crate::protocol::{
 };
 use crate::store::sender_key_name::SenderKeyName;
 
-struct EncryptionBuffer {
+/// Reusable buffer for cryptographic operations (encryption and decryption).
+/// Named generically since it's used for both ENCRYPTION_BUFFER and DECRYPTION_BUFFER.
+struct CryptoBuffer {
     buffer: Vec<u8>,
 }
 
-impl EncryptionBuffer {
+impl CryptoBuffer {
     const INITIAL_CAPACITY: usize = 1024;
 
     fn new() -> Self {
@@ -29,15 +31,23 @@ impl EncryptionBuffer {
             buffer: Vec::with_capacity(Self::INITIAL_CAPACITY),
         }
     }
+
+    /// Clears the buffer and returns a mutable reference for writing.
     fn get_buffer(&mut self) -> &mut Vec<u8> {
         self.buffer.clear();
         &mut self.buffer
     }
+
+    /// Takes ownership of the buffer contents, replacing with a fresh pre-allocated buffer.
+    /// More efficient than `mem::take` + `reserve` since we swap with an already-allocated buffer.
+    fn take_buffer(&mut self) -> Vec<u8> {
+        std::mem::replace(&mut self.buffer, Vec::with_capacity(Self::INITIAL_CAPACITY))
+    }
 }
 
 thread_local! {
-    static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
-    static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
+    static ENCRYPTION_BUFFER: RefCell<CryptoBuffer> = RefCell::new(CryptoBuffer::new());
+    static DECRYPTION_BUFFER: RefCell<CryptoBuffer> = RefCell::new(CryptoBuffer::new());
 }
 
 pub async fn group_encrypt<R: Rng + CryptoRng>(
@@ -80,10 +90,7 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
                 log::error!("outgoing sender key state corrupt for distribution");
                 SignalProtocolError::InvalidSenderKeySession
             })?;
-        let result = std::mem::take(buf);
-        // Restore buffer capacity for next use (take() leaves empty Vec with 0 capacity)
-        buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
-        Ok::<Vec<u8>, SignalProtocolError>(result)
+        Ok::<Vec<u8>, SignalProtocolError>(buf_wrapper.take_buffer())
     })?;
 
     let signing_key = sender_key_state
@@ -231,9 +238,7 @@ pub async fn group_decrypt(
                 }
             }
         }
-        let result = std::mem::take(buf);
-        buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
-        Ok::<Vec<u8>, SignalProtocolError>(result)
+        Ok::<Vec<u8>, SignalProtocolError>(buf_wrapper.take_buffer())
     })?;
 
     sender_key_store
