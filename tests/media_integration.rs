@@ -1021,7 +1021,10 @@ mod stun_auth_tests {
         ];
         let username = b"test-username";
 
-        let msg = StunMessage::binding_request(tx_id).with_username(username);
+        let msg = StunMessage::binding_request(tx_id)
+            .with_username(username)
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = msg.encode();
 
         // Header (20) + USERNAME attr (4 + 13 + 3 padding = 20) = 40 bytes
@@ -1044,7 +1047,9 @@ mod stun_auth_tests {
 
         let msg = StunMessage::binding_request(tx_id)
             .with_username(username)
-            .with_integrity_key(relay_key);
+            .with_integrity_key(relay_key)
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = msg.encode();
 
         // Header (20) + USERNAME attr (4 + 14 + 2 padding = 20) + MESSAGE-INTEGRITY (4 + 20 = 24) = 64 bytes
@@ -1067,7 +1072,9 @@ mod stun_auth_tests {
         let tx_id = [0u8; 12];
         let msg = StunMessage::binding_request(tx_id)
             .with_username(b"test")
-            .with_integrity_key(b"key");
+            .with_integrity_key(b"key")
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = msg.encode();
 
         // Message length (bytes 2-3) should include MESSAGE-INTEGRITY
@@ -1086,7 +1093,10 @@ mod stun_auth_tests {
         ];
         let username = b"my-auth-token";
 
-        let original = StunMessage::binding_request(tx_id).with_username(username);
+        let original = StunMessage::binding_request(tx_id)
+            .with_username(username)
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = original.encode();
 
         let decoded = StunMessage::decode(&encoded).expect("Failed to decode");
@@ -1104,7 +1114,9 @@ mod stun_auth_tests {
 
         let original = StunMessage::binding_request(tx_id)
             .with_username(username)
-            .with_integrity_key(key);
+            .with_integrity_key(key)
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = original.encode();
 
         let decoded = StunMessage::decode(&encoded).expect("Failed to decode");
@@ -1182,7 +1194,10 @@ mod stun_auth_tests {
 
         // Encode and verify no MESSAGE-INTEGRITY
         let tx_id = [0u8; 12];
-        let msg = StunMessage::binding_request(tx_id).with_username(&credentials.username);
+        let msg = StunMessage::binding_request(tx_id)
+            .with_username(&credentials.username)
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = msg.encode();
 
         // Only header + USERNAME, no MESSAGE-INTEGRITY
@@ -1195,7 +1210,9 @@ mod stun_auth_tests {
         let tx_id = [0u8; 12];
         let msg = StunMessage::binding_request(tx_id)
             .with_username(b"user")
-            .with_integrity_key(b"pass");
+            .with_integrity_key(b"pass")
+            .with_fingerprint(false)
+            .with_priority(None);
         let encoded = msg.encode();
 
         // Find MESSAGE-INTEGRITY in the encoded message
