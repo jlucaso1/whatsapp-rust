@@ -238,6 +238,10 @@ impl WhatsAppClient {
                     timeout_secs: timeout.as_secs(),
                 });
             }
+            Event::PairSuccess(_) => {
+                info!("Pairing successful, syncing...");
+                let _ = ui_tx.send(UiEvent::PairSuccess);
+            }
             Event::Connected(_) => {
                 info!("Connected to WhatsApp!");
                 let _ = ui_tx.send(UiEvent::Connected);

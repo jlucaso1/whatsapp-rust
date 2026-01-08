@@ -16,6 +16,11 @@ pub fn render_connecting_view() -> impl IntoElement {
     render_spinner_view("Connecting...")
 }
 
+/// Render syncing view (after pairing, before fully connected)
+pub fn render_syncing_view() -> impl IntoElement {
+    render_spinner_view("Pairing successful! Syncing...")
+}
+
 /// Render a centered spinner with message
 fn render_spinner_view(message: &str) -> impl IntoElement {
     centered_view(px(16.0))

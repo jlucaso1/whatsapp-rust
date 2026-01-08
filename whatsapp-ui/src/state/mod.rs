@@ -11,7 +11,7 @@ mod call;
 mod chat;
 mod events;
 
-pub use app_state::AppState;
+pub use app_state::{AppState, CachedQrCode};
 pub use call::{CallId, IncomingCall, OutgoingCall, OutgoingCallState};
 pub use chat::{Chat, ChatMessage, DownloadableMedia, MediaContent, MediaType};
 pub use events::{ReceiptType, UiEvent};

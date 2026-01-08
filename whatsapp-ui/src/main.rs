@@ -21,7 +21,13 @@ use gpui_component::Root;
 use crate::app::{WhatsAppApp, init_chat_list_bindings};
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .filter_module("blade_graphics", log::LevelFilter::Warn)
+        .filter_module("naga", log::LevelFilter::Warn)
+        .filter_module("zbus", log::LevelFilter::Warn)
+        .filter_module("tracing", log::LevelFilter::Warn)
+        .filter_module("gpui", log::LevelFilter::Warn)
+        .init();
 
     Application::new()
         .with_assets(assets::Assets)

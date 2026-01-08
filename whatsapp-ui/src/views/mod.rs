@@ -7,11 +7,11 @@ use crate::theme::colors;
 mod chat;
 mod error;
 mod loading;
-mod pairing;
+pub mod pairing;
 
 pub use chat::render_connected_view;
 pub use error::render_error_view;
-pub use loading::{render_connecting_view, render_loading_view};
+pub use loading::{render_connecting_view, render_loading_view, render_syncing_view};
 pub use pairing::render_pairing_view;
 
 /// Create a centered full-screen view container with consistent styling.

@@ -41,15 +41,16 @@ use wacore_binary::jid::{Jid, JidExt};
 use crate::audio::{AudioPlayer, AudioRecorder, encode_to_opus_ogg, generate_waveform};
 use crate::client::WhatsAppClient;
 use crate::state::{
-    AppState, Chat, ChatMessage, DownloadableMedia, IncomingCall, MediaContent, MediaType,
-    OutgoingCall, ReceiptType, UiEvent,
+    AppState, CachedQrCode, Chat, ChatMessage, DownloadableMedia, IncomingCall, MediaContent,
+    MediaType, OutgoingCall, ReceiptType, UiEvent,
 };
 use crate::theme::layout;
 use crate::utils::mime_to_image_format;
 use crate::video::{StreamingVideoDecoder, VideoPlayer, VideoPlayerState};
+use crate::views::pairing::generate_qr_png;
 use crate::views::{
     render_connected_view, render_connecting_view, render_error_view, render_loading_view,
-    render_pairing_view,
+    render_pairing_view, render_syncing_view,
 };
 
 // ChatListCache is now in chats.rs and re-exported above
@@ -1428,8 +1429,13 @@ impl WhatsAppApp {
                     } else {
                         None
                     };
+                // Generate QR PNG once on event, not on every render
+                let cached_qr = generate_qr_png(&code).map(|png_bytes| CachedQrCode {
+                    data: code,
+                    png_bytes: Arc::new(png_bytes),
+                });
                 self.app_state = AppState::WaitingForPairing {
-                    qr_code: Some(code),
+                    qr_code: cached_qr,
                     pair_code,
                     timeout_secs,
                 };
@@ -1446,6 +1452,10 @@ impl WhatsAppApp {
                     pair_code: Some(code),
                     timeout_secs,
                 };
+                cx.notify();
+            }
+            UiEvent::PairSuccess => {
+                self.app_state = AppState::Syncing;
                 cx.notify();
             }
             UiEvent::Connected => {
@@ -1697,8 +1707,9 @@ impl Render for WhatsAppApp {
                 qr_code,
                 pair_code,
                 timeout_secs,
-            } => render_pairing_view(qr_code.clone(), pair_code.clone(), *timeout_secs)
+            } => render_pairing_view(qr_code.as_ref(), pair_code.clone(), *timeout_secs)
                 .into_any_element(),
+            AppState::Syncing => render_syncing_view().into_any_element(),
             AppState::Connected => render_connected_view(self, window, cx).into_any_element(),
             AppState::Error(msg) => render_error_view(msg, entity).into_any_element(),
         }

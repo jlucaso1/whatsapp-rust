@@ -18,6 +18,9 @@ pub enum UiEvent {
     /// Pair code received
     PairCode { code: String, timeout_secs: u64 },
 
+    /// Pairing successful, now syncing
+    PairSuccess,
+
     /// Successfully connected
     Connected,
 

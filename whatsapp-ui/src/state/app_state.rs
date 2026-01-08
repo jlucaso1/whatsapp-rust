@@ -1,5 +1,20 @@
 //! Application state enum
 
+use std::sync::Arc;
+
+/// Cached QR code with pre-rendered PNG bytes
+#[derive(Debug, Clone)]
+pub struct CachedQrCode {
+    pub data: String,
+    pub png_bytes: Arc<Vec<u8>>,
+}
+
+impl PartialEq for CachedQrCode {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+    }
+}
+
 /// Application state representing the current phase of the app
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppState {
@@ -9,10 +24,12 @@ pub enum AppState {
     Connecting,
     /// Waiting for QR code scan or pair code entry (no session)
     WaitingForPairing {
-        qr_code: Option<String>,
+        qr_code: Option<CachedQrCode>,
         pair_code: Option<String>,
         timeout_secs: u64,
     },
+    /// Pairing successful, syncing data
+    Syncing,
     /// Connected and ready
     Connected,
     /// Error occurred

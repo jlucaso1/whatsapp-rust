@@ -30,6 +30,9 @@ gpui-component-assets = "0.5.0"
 # Image handling
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
+# QR code generation
+qrcode = "0.14"
+
 # Ordered maps for deterministic cache eviction
 indexmap = "2"
 

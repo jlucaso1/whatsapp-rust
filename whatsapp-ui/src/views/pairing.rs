@@ -1,18 +1,41 @@
 //! Pairing view (QR code / pair code)
 
-use gpui::{div, prelude::*, px, rgb};
+use std::sync::Arc;
+
+use gpui::{Image, ImageFormat, ImageSource, div, img, prelude::*, px, rgb};
 
 use super::centered_view;
+use crate::state::CachedQrCode;
 use crate::theme::{colors, layout};
+
+/// Generate QR code as PNG bytes (called once when QR data changes)
+pub fn generate_qr_png(data: &str) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+    use qrcode::QrCode;
+
+    let code = QrCode::new(data.as_bytes()).ok()?;
+    let image = code.render::<image::Luma<u8>>().build();
+
+    let mut png_bytes = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+    encoder
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::L8,
+        )
+        .ok()?;
+
+    Some(png_bytes)
+}
 
 /// Render pairing view (QR code / pair code)
 pub fn render_pairing_view(
-    qr_code: Option<String>,
+    qr_code: Option<&CachedQrCode>,
     pair_code: Option<String>,
     timeout_secs: u64,
 ) -> impl IntoElement {
-    let qr_display = qr_code.unwrap_or_else(|| "Waiting for QR...".to_string());
-
     centered_view(px(24.0))
         .child(
             div()
@@ -28,7 +51,6 @@ pub fn render_pairing_view(
                 .child("Open WhatsApp on your phone and scan the QR code"),
         )
         .child(
-            // QR code placeholder - TODO: render actual QR
             div()
                 .size(px(layout::QR_CODE_SIZE))
                 .bg(rgb(colors::WHITE))
@@ -36,12 +58,19 @@ pub fn render_pairing_view(
                 .flex()
                 .justify_center()
                 .items_center()
-                .child(
+                .child(if let Some(cached) = qr_code {
+                    let image =
+                        Image::from_bytes(ImageFormat::Png, cached.png_bytes.as_ref().clone());
+                    img(ImageSource::Image(Arc::new(image)))
+                        .size(px(layout::QR_CODE_SIZE - 16.0))
+                        .into_any_element()
+                } else {
                     div()
                         .text_color(rgb(colors::BLACK))
-                        .text_xs()
-                        .child(qr_display),
-                ),
+                        .text_sm()
+                        .child("Waiting for QR...")
+                        .into_any_element()
+                }),
         )
         .when_some(pair_code, |el, code| {
             el.child(
