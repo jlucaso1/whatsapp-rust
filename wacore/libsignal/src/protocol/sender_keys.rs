@@ -261,8 +261,12 @@ impl SenderKeyState {
         self.state
             .sender_message_keys
             .push(sender_message_key.as_protobuf());
-        while self.state.sender_message_keys.len() > consts::MAX_MESSAGE_KEYS {
-            self.state.sender_message_keys.remove(0);
+        // Remove oldest keys if we exceed capacity.
+        // Using drain() is O(n) once vs remove(0) in a loop which is O(n) per removal.
+        let len = self.state.sender_message_keys.len();
+        if len > consts::MAX_MESSAGE_KEYS {
+            let excess = len - consts::MAX_MESSAGE_KEYS;
+            self.state.sender_message_keys.drain(..excess);
         }
     }
 

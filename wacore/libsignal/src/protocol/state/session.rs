@@ -298,14 +298,18 @@ impl SessionState {
 
         self.session.receiver_chains.push(chain);
 
-        if self.session.receiver_chains.len() > consts::MAX_RECEIVER_CHAINS {
+        // Remove oldest chains if we exceed capacity (MAX_RECEIVER_CHAINS = 5).
+        // Using drain() for consistency, though with only 5 elements the difference is negligible.
+        let len = self.session.receiver_chains.len();
+        if len > consts::MAX_RECEIVER_CHAINS {
             log::info!(
                 "Trimming excessive receiver_chain for session with base key {}, chain count: {}",
                 self.sender_ratchet_key_for_logging()
                     .unwrap_or_else(|e| format!("<error: {}>", e.0)),
-                self.session.receiver_chains.len()
+                len
             );
-            self.session.receiver_chains.remove(0);
+            let excess = len - consts::MAX_RECEIVER_CHAINS;
+            self.session.receiver_chains.drain(..excess);
         }
     }
 
