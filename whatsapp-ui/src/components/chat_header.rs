@@ -36,8 +36,10 @@ pub fn render_chat_header(chat: &Chat, entity: Entity<WhatsAppApp>) -> impl Into
         .child(
             div()
                 .flex()
+                .flex_1()
                 .items_center()
                 .gap_3()
+                .overflow_hidden()
                 // Avatar
                 .child(Avatar::from_initial(initial, layout::AVATAR_SIZE_MEDIUM))
                 // Name
@@ -45,6 +47,9 @@ pub fn render_chat_header(chat: &Chat, entity: Entity<WhatsAppApp>) -> impl Into
                     div()
                         .text_color(rgb(colors::TEXT_PRIMARY))
                         .font_weight(gpui::FontWeight::MEDIUM)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         .child(name),
                 ),
         )

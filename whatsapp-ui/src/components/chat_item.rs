@@ -63,6 +63,7 @@ pub fn render_chat_item(
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .overflow_hidden()
                             .text_ellipsis()
+                            .whitespace_nowrap()
                             .child(name),
                     ),
                 )
@@ -78,7 +79,8 @@ pub fn render_chat_item(
                                 .text_sm()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .max_w(px(200.))
+                                .whitespace_nowrap()
+                                .flex_1()
                                 .child(last_message),
                         )
                         .when(unread > 0, |el| {
