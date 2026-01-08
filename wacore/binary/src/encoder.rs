@@ -83,9 +83,12 @@ impl<W: Write> Encoder<W> {
     }
 
     fn write_u20_be(&mut self, value: u32) -> Result<()> {
-        self.writer.write_all(&[((value >> 16) & 0x0F) as u8])?;
-        self.writer.write_all(&[((value >> 8) & 0xFF) as u8])?;
-        self.writer.write_all(&[(value & 0xFF) as u8])?;
+        let bytes = [
+            ((value >> 16) & 0x0F) as u8,
+            ((value >> 8) & 0xFF) as u8,
+            (value & 0xFF) as u8,
+        ];
+        self.writer.write_all(&bytes)?;
         Ok(())
     }
 
@@ -357,7 +360,7 @@ mod tests {
     fn test_encode_node() -> TestResult {
         let node = Node::new(
             "message",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(NodeContent::String("receipt".to_string())),
         );
 
@@ -377,7 +380,7 @@ mod tests {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(NodeContent::String(test_str.to_string())),
         );
 
@@ -508,14 +511,10 @@ mod tests {
     #[test]
     fn test_node_with_255_children() -> TestResult {
         let children: Vec<Node> = (0..255)
-            .map(|_| Node::new("child", indexmap::IndexMap::new(), None))
+            .map(|_| Node::new("child", Attrs::new(), None))
             .collect();
 
-        let parent = Node::new(
-            "parent",
-            indexmap::IndexMap::new(),
-            Some(NodeContent::Nodes(children)),
-        );
+        let parent = Node::new("parent", Attrs::new(), Some(NodeContent::Nodes(children)));
 
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -530,14 +529,10 @@ mod tests {
     #[test]
     fn test_node_with_256_children() -> TestResult {
         let children: Vec<Node> = (0..256)
-            .map(|_| Node::new("x", indexmap::IndexMap::new(), None))
+            .map(|_| Node::new("x", Attrs::new(), None))
             .collect();
 
-        let parent = Node::new(
-            "parent",
-            indexmap::IndexMap::new(),
-            Some(NodeContent::Nodes(children)),
-        );
+        let parent = Node::new("parent", Attrs::new(), Some(NodeContent::Nodes(children)));
 
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -590,7 +585,7 @@ mod tests {
     fn test_empty_string_roundtrip() -> TestResult {
         use crate::decoder::Decoder;
 
-        let mut attrs = indexmap::IndexMap::new();
+        let mut attrs = Attrs::new();
         attrs.insert("key".to_string(), "".to_string()); // Empty value
         attrs.insert("".to_string(), "value".to_string()); // Empty key
 

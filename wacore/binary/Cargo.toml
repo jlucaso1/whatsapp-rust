@@ -16,7 +16,6 @@ serde = ["dep:serde"]
 
 [dependencies]
 flate2 = { workspace = true, features = ["zlib-rs"], default-features = false }
-indexmap = { version = "2.12.1", features = ["serde"] }
 phf = { version = "0.13.1", default-features = false }
 serde = { version = "1.0", features = ["derive"], optional = true }
 

@@ -413,7 +413,7 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Node;
+    use crate::node::{Attrs, Node};
 
     type TestResult = crate::error::Result<()>;
 
@@ -421,7 +421,7 @@ mod tests {
     fn test_decode_node() -> TestResult {
         let node = Node::new(
             "message",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(crate::node::NodeContent::String("receipt".to_string())),
         );
 
@@ -451,7 +451,7 @@ mod tests {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(crate::node::NodeContent::String(test_str.to_string())),
         );
 
@@ -717,13 +717,13 @@ mod tests {
     #[test]
     fn test_nested_nodes() -> TestResult {
         // Create a 50-level deep node structure
-        let mut current = Node::new("leaf", indexmap::IndexMap::new(), None);
+        let mut current = Node::new("leaf", Attrs::new(), None);
 
         for i in 0..50 {
             let tag = format!("level{}", i);
             current = Node::new(
                 &tag,
-                indexmap::IndexMap::new(),
+                Attrs::new(),
                 Some(crate::node::NodeContent::Nodes(vec![current])),
             );
         }

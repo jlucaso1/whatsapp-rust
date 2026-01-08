@@ -1,9 +1,104 @@
 use crate::attrs::{AttrParser, AttrParserRef};
 use crate::jid::{Jid, JidRef};
-use indexmap::IndexMap;
 use std::borrow::Cow;
 
-pub type Attrs = IndexMap<String, String>;
+/// A collection of node attributes stored as key-value pairs.
+/// Uses a Vec internally for better cache locality with small attribute counts (typically 3-6).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Attrs(pub Vec<(String, String)>);
+
+impl Attrs {
+    #[inline]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    /// Get a reference to the value for a key, or None if not found.
+    /// Uses linear search which is efficient for small attribute counts.
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// Check if a key exists.
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.iter().any(|(k, _)| k == key)
+    }
+
+    /// Insert a key-value pair. If the key already exists, update the value.
+    pub fn insert(&mut self, key: String, value: String) {
+        if let Some(pos) = self.0.iter().position(|(k, _)| k == &key) {
+            self.0[pos].1 = value;
+        } else {
+            self.0.push((key, value));
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Iterate over key-value pairs.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.0.iter().map(|(k, v)| (k, v))
+    }
+
+    /// Push a key-value pair without checking for duplicates.
+    /// Use this when building from a known-unique source (e.g., decoding).
+    #[inline]
+    pub fn push(&mut self, key: String, value: String) {
+        self.0.push((key, value));
+    }
+
+    /// Iterate over keys only.
+    #[inline]
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.iter().map(|(k, _)| k)
+    }
+}
+
+/// Owned iterator implementation (consuming).
+impl IntoIterator for Attrs {
+    type Item = (String, String);
+    type IntoIter = std::vec::IntoIter<(String, String)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+/// Borrowed iterator implementation.
+impl<'a> IntoIterator for &'a Attrs {
+    type Item = (&'a String, &'a String);
+    type IntoIter = std::iter::Map<
+        std::slice::Iter<'a, (String, String)>,
+        fn(&'a (String, String)) -> (&'a String, &'a String),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().map(|(k, v)| (k, v))
+    }
+}
+
+impl FromIterator<(String, String)> for Attrs {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
 pub type AttrsRef<'a> = Vec<(Cow<'a, str>, ValueRef<'a>)>;
 
 /// A decoded attribute value that can be either a string or a structured JID.
@@ -244,7 +339,7 @@ impl<'a> NodeRef<'a> {
                 .attrs
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string_cow().into_owned()))
-                .collect::<IndexMap<String, String>>(),
+                .collect::<Attrs>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
                 NodeContentRef::String(s) => NodeContent::String(s.to_string()),
