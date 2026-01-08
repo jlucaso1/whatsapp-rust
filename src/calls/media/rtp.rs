@@ -236,18 +236,13 @@ impl RtpPacket {
 
 /// RTP session state for sending/receiving.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct RtpSession {
-    /// Our SSRC.
     ssrc: u32,
-    /// Payload type.
     payload_type: u8,
-    /// Current sequence number.
     sequence_number: u16,
-    /// Sample rate (for timestamp calculation).
     sample_rate: u32,
-    /// Current timestamp.
     timestamp: u32,
-    /// Samples per packet (e.g., 960 for 20ms Opus at 48kHz).
     samples_per_packet: u32,
 }
 

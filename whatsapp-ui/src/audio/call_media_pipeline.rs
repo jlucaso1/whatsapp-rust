@@ -51,15 +51,10 @@ impl Drop for CallMediaPipelineHandle {
 }
 
 /// Configuration for the call media pipeline.
+#[derive(Default)]
 pub struct CallMediaPipelineConfig {
     /// SSRC for our RTP stream (random if not specified).
     pub ssrc: Option<u32>,
-}
-
-impl Default for CallMediaPipelineConfig {
-    fn default() -> Self {
-        Self { ssrc: None }
-    }
 }
 
 /// Errors from the call media pipeline.
@@ -331,7 +326,7 @@ pub async fn start_call_media_pipeline(
                         warn!("Failed to send audio packet: {}", e);
                     } else {
                         packet_count += 1;
-                        if packet_count % 500 == 0 {
+                        if packet_count.is_multiple_of(500) {
                             debug!(
                                 "Sent {} audio packets for call {}",
                                 packet_count, capture_call_id
@@ -410,7 +405,7 @@ pub async fn start_call_media_pipeline(
                     break;
                 }
                 packet_count += 1;
-                if packet_count % 500 == 0 {
+                if packet_count.is_multiple_of(500) {
                     debug!(
                         "Received {} audio packets for call {}",
                         packet_count, receive_call_id
@@ -486,7 +481,7 @@ pub async fn start_call_media_pipeline(
                 debug!("Failed to send ping for call {}: {}", ping_call_id, e);
             } else {
                 ping_count += 1;
-                if ping_count % 10 == 0 {
+                if ping_count.is_multiple_of(10) {
                     debug!("Sent {} pings for call {}", ping_count, ping_call_id);
                 }
             }

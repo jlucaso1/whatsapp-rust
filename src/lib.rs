@@ -1,3 +1,6 @@
+// Clippy configuration for the crate
+#![allow(clippy::type_complexity)]
+
 pub use wacore::{proto_helpers, store::traits};
 pub use wacore_binary::builder::NodeBuilder;
 pub use waproto;

@@ -279,7 +279,7 @@ impl util::Conn for InterceptedUdpConn {
                     debug!(
                         "ICE Interceptor: recv {} bytes (first byte: 0x{:02x})",
                         len,
-                        buf.get(0).unwrap_or(&0)
+                        buf.first().unwrap_or(&0)
                     );
                     return Ok(len);
                 }
@@ -316,7 +316,7 @@ impl util::Conn for InterceptedUdpConn {
                         "ICE Interceptor: recv_from {} bytes from {} (first byte: 0x{:02x})",
                         len,
                         from,
-                        buf.get(0).unwrap_or(&0)
+                        buf.first().unwrap_or(&0)
                     );
                     return Ok((len, from));
                 }
@@ -385,7 +385,7 @@ impl util::Conn for InterceptedUdpConn {
             debug!(
                 "ICE Interceptor: Forwarding unknown packet ({} bytes, first=0x{:02x}) to {}",
                 buf.len(),
-                buf.get(0).unwrap_or(&0),
+                buf.first().unwrap_or(&0),
                 target
             );
         }

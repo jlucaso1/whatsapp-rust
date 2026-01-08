@@ -19,8 +19,7 @@ pub use call_audio::{
     AudioCaptureHandle, AudioPlaybackHandle, start_audio_capture, start_audio_playback,
 };
 pub use call_media_pipeline::{
-    CallMediaPipelineConfig, CallMediaPipelineError, CallMediaPipelineHandle,
-    start_call_media_pipeline,
+    CallMediaPipelineConfig, CallMediaPipelineHandle, start_call_media_pipeline,
 };
 pub use encoder::encode_to_opus_ogg;
 pub use player::AudioPlayer;

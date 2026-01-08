@@ -415,11 +415,10 @@ pub struct NackTracker {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct MissingPacket {
     seq: u16,
-    /// Number of times we've sent NACK for this packet.
     nack_attempts: u8,
-    /// Timestamp when first detected missing.
     first_detected_ms: u64,
 }
 

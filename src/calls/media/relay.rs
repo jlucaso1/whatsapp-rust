@@ -13,6 +13,7 @@ use crate::calls::{RelayData, RelayEndpoint, WHATSAPP_RELAY_PORT};
 
 /// Default WhatsApp relay port for Web clients.
 /// Note: WhatsApp Web uses port 3480, not standard STUN port 3478.
+#[allow(dead_code)]
 pub const RELAY_PORT: u16 = WHATSAPP_RELAY_PORT; // 3480
 
 /// Configuration for relay connection.
