@@ -84,7 +84,7 @@ impl SignalMessage {
         receiver_identity_key: &IdentityKey,
     ) -> Result<Self> {
         let message = waproto::whatsapp::SignalMessage {
-            ratchet_key: Some(sender_ratchet_key.serialize().into_vec()),
+            ratchet_key: Some(sender_ratchet_key.serialize().to_vec()),
             counter: Some(counter),
             previous_counter: Some(previous_counter),
             ciphertext: Some(Vec::<u8>::from(ciphertext)),
@@ -259,8 +259,8 @@ impl PreKeySignalMessage {
             registration_id: Some(registration_id),
             pre_key_id: pre_key_id.map(|id| id.into()),
             signed_pre_key_id: Some(signed_pre_key_id.into()),
-            base_key: Some(base_key.serialize().into_vec()),
-            identity_key: Some(identity_key.serialize().into_vec()),
+            base_key: Some(base_key.serialize().to_vec()),
+            identity_key: Some(identity_key.serialize().to_vec()),
             message: Some(Vec::from(message.as_ref())),
         };
         let mut serialized = Vec::with_capacity(1 + proto_message.encoded_len());
@@ -397,26 +397,23 @@ impl SenderKeyMessage {
         let proto_message = waproto::whatsapp::SenderKeyMessage {
             id: Some(chain_id),
             iteration: Some(iteration),
-            ciphertext: Some(ciphertext.to_vec()),
+            ciphertext: Some(Vec::from(ciphertext.as_ref())),
         };
 
-        let proto_bytes = proto_message.encode_to_vec();
-
-        // The signature must cover the version byte concatenated with the protobuf
-        // payload. Other clients (e.g. baileys, libsignal-go) compute the signature
-        // over [shifted_version || proto_bytes]. Signing only the proto bytes causes
-        // verification to fail on recipients.
+        // Build serialized buffer directly: [version_byte || proto || signature]
+        // Sign over [version_byte || proto], then append signature
         let shifted_version = (message_version << 4) | 3u8;
-        let mut data_to_sign = Vec::with_capacity(1 + proto_bytes.len());
-        data_to_sign.push(shifted_version);
-        data_to_sign.extend_from_slice(&proto_bytes);
+        let proto_len = proto_message.encoded_len();
+        let mut serialized = Vec::with_capacity(1 + proto_len + Self::SIGNATURE_LEN);
+        serialized.push(shifted_version);
+        proto_message
+            .encode(&mut serialized)
+            .expect("can always append to a buffer");
 
+        // Sign the data we've built so far (version + proto)
         let signature = signature_key
-            .calculate_signature(&data_to_sign, csprng)
+            .calculate_signature(&serialized, csprng)
             .map_err(|_| SignalProtocolError::SignatureValidationFailed)?;
-
-        let mut serialized = vec![shifted_version];
-        serialized.extend_from_slice(&proto_bytes);
         serialized.extend_from_slice(&signature);
 
         Ok(Self {
@@ -424,7 +421,7 @@ impl SenderKeyMessage {
             chain_id,
             iteration,
             ciphertext,
-            serialized: Box::from(serialized),
+            serialized: serialized.into_boxed_slice(),
         })
     }
 
@@ -518,7 +515,7 @@ pub struct SenderKeyDistributionMessage {
     message_version: u8,
     chain_id: u32,
     iteration: u32,
-    chain_key: Vec<u8>,
+    chain_key: [u8; 32],
     signing_key: PublicKey,
     serialized: Box<[u8]>,
 }
@@ -528,13 +525,13 @@ impl SenderKeyDistributionMessage {
         message_version: u8,
         chain_id: u32,
         iteration: u32,
-        chain_key: Vec<u8>,
+        chain_key: [u8; 32],
         signing_key: PublicKey,
     ) -> Result<Self> {
         let proto_message = waproto::whatsapp::SenderKeyDistributionMessage {
             id: Some(chain_id),
             iteration: Some(iteration),
-            chain_key: Some(chain_key.clone()),
+            chain_key: Some(chain_key.to_vec()),
             signing_key: Some(signing_key.serialize().to_vec()),
         };
         let mut serialized = Vec::with_capacity(1 + proto_message.encoded_len());
@@ -559,23 +556,23 @@ impl SenderKeyDistributionMessage {
     }
 
     #[inline]
-    pub fn chain_id(&self) -> Result<u32> {
-        Ok(self.chain_id)
+    pub fn chain_id(&self) -> u32 {
+        self.chain_id
     }
 
     #[inline]
-    pub fn iteration(&self) -> Result<u32> {
-        Ok(self.iteration)
+    pub fn iteration(&self) -> u32 {
+        self.iteration
     }
 
     #[inline]
-    pub fn chain_key(&self) -> Result<&[u8]> {
-        Ok(&self.chain_key)
+    pub fn chain_key(&self) -> &[u8; 32] {
+        &self.chain_key
     }
 
     #[inline]
-    pub fn signing_key(&self) -> Result<&PublicKey> {
-        Ok(&self.signing_key)
+    pub fn signing_key(&self) -> &PublicKey {
+        &self.signing_key
     }
 
     #[inline]
@@ -621,17 +618,20 @@ impl TryFrom<&[u8]> for SenderKeyDistributionMessage {
         let iteration = proto_structure
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let chain_key = proto_structure
+        let chain_key_vec = proto_structure
             .chain_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
         let signing_key = proto_structure
             .signing_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
 
-        if chain_key.len() != 32 || signing_key.len() != 33 {
+        if chain_key_vec.len() != 32 || signing_key.len() != 33 {
             return Err(SignalProtocolError::InvalidProtobufEncoding);
         }
 
+        let chain_key: [u8; 32] = chain_key_vec
+            .try_into()
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         let signing_key = PublicKey::deserialize(&signing_key)?;
 
         Ok(SenderKeyDistributionMessage {

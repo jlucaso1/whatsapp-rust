@@ -332,6 +332,7 @@ impl Client {
             false,
             true, // is_retry: includes fresh SKDM for groups
             None,
+            vec![], // Extra nodes not preserved on retry - caller must resend with options if needed
         )
         .await?;
 
@@ -754,12 +755,12 @@ mod tests {
 
     #[test]
     fn get_bytes_content_extracts_bytes() {
-        use wacore_binary::node::Node;
+        use wacore_binary::node::{Attrs, Node};
 
         // Test with bytes content
         let node = Node {
             tag: "test".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(vec![1, 2, 3, 4])),
         };
         assert_eq!(get_bytes_content(&node), Some(&[1, 2, 3, 4][..]));
@@ -767,7 +768,7 @@ mod tests {
         // Test with string content (should return None)
         let node_str = Node {
             tag: "test".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::String("hello".to_string())),
         };
         assert_eq!(get_bytes_content(&node_str), None);
@@ -775,7 +776,7 @@ mod tests {
         // Test with no content
         let node_empty = Node {
             tag: "test".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: None,
         };
         assert_eq!(get_bytes_content(&node_empty), None);
@@ -1159,18 +1160,18 @@ mod tests {
 
     #[test]
     fn extract_registration_id_from_node_test() {
-        use wacore_binary::node::Node;
+        use wacore_binary::node::{Attrs, Node};
 
         // Test with 4-byte registration ID
         let reg_bytes = vec![0x00, 0x01, 0x02, 0x03]; // = 66051
         let reg_node = Node {
             tag: "registration".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(reg_bytes)),
         };
         let parent = Node {
             tag: "receipt".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node])),
         };
         assert_eq!(extract_registration_id_from_node(&parent), Some(0x00010203));
@@ -1179,12 +1180,12 @@ mod tests {
         let reg_bytes_short = vec![0x01, 0x02, 0x03]; // = 66051
         let reg_node_short = Node {
             tag: "registration".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(reg_bytes_short)),
         };
         let parent_short = Node {
             tag: "receipt".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node_short])),
         };
         assert_eq!(
@@ -1195,7 +1196,7 @@ mod tests {
         // Test with no registration node
         let parent_no_reg = Node {
             tag: "receipt".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![])),
         };
         assert_eq!(extract_registration_id_from_node(&parent_no_reg), None);
@@ -1203,12 +1204,12 @@ mod tests {
         // Test with empty bytes
         let reg_node_empty = Node {
             tag: "registration".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(vec![])),
         };
         let parent_empty = Node {
             tag: "receipt".to_string(),
-            attrs: indexmap::IndexMap::new(),
+            attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node_empty])),
         };
         assert_eq!(extract_registration_id_from_node(&parent_empty), None);

@@ -1,10 +1,9 @@
-use crate::node::{Node, NodeContent};
-use indexmap::IndexMap;
+use crate::node::{Attrs, Node, NodeContent};
 
 #[derive(Debug, Default)]
 pub struct NodeBuilder {
     tag: String,
-    attrs: IndexMap<String, String>,
+    attrs: Attrs,
     content: Option<NodeContent>,
 }
 

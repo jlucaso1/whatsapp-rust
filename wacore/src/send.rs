@@ -358,6 +358,7 @@ pub async fn prepare_dm_stanza<
     message: &wa::Message,
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
+    extra_stanza_nodes: Vec<Node>,
 ) -> Result<Node> {
     // Generate reporting token if the message type supports it
     // For DMs, both sender_jid and remote_jid are the recipient (to_jid) per Baileys implementation
@@ -454,6 +455,9 @@ pub async fn prepare_dm_stanza<
         message_content_nodes.push(build_reporting_node(result));
     }
 
+    // Add any extra stanza nodes provided by the caller
+    message_content_nodes.extend(extra_stanza_nodes);
+
     let mut stanza_attrs = Attrs::new();
     stanza_attrs.insert("to".to_string(), to_jid.to_string());
     stanza_attrs.insert("id".to_string(), request_id);
@@ -534,6 +538,7 @@ pub async fn prepare_group_stanza<
     force_skdm_distribution: bool,
     skdm_target_devices: Option<Vec<Jid>>,
     edit: Option<crate::types::message::EditAttribute>,
+    extra_stanza_nodes: Vec<Node>,
 ) -> Result<Node> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
@@ -790,6 +795,9 @@ pub async fn prepare_group_stanza<
         }
     }
 
+    // Add any extra stanza nodes provided by the caller
+    message_children.extend(extra_stanza_nodes);
+
     let stanza = NodeBuilder::new("message")
         .attrs(stanza_attrs.into_iter())
         .children(message_children)
@@ -797,6 +805,7 @@ pub async fn prepare_group_stanza<
 
     Ok(stanza)
 }
+
 pub async fn create_sender_key_distribution_message_for_group(
     store: &mut (dyn SenderKeyStore + Send + Sync),
     group_jid: &Jid,
@@ -848,7 +857,7 @@ pub async fn create_sender_key_distribution_message_for_group(
         message_version,
         state.chain_id(),
         chain_key.iteration(),
-        chain_key.seed().to_vec(),
+        *chain_key.seed(),
         state
             .signing_key_public()
             .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,

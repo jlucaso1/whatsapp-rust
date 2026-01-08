@@ -169,7 +169,7 @@ impl KeySerde for PublicKey {
 
 impl KeySerde for PrivateKey {
     fn serialize(&self) -> Vec<u8> {
-        self.serialize()
+        self.serialize().to_vec()
     }
 
     fn deserialize<T: AsRef<[u8]>>(bytes: T) -> Result<Self> {

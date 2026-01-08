@@ -5,7 +5,15 @@ use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
+
+/// Options for sending messages with additional customization.
+#[derive(Debug, Clone, Default)]
+pub struct SendOptions {
+    /// Extra XML nodes to add to the message stanza.
+    pub extra_stanza_nodes: Vec<Node>,
+}
 
 impl Client {
     pub async fn send_message(
@@ -13,12 +21,32 @@ impl Client {
         to: Jid,
         message: wa::Message,
     ) -> Result<String, anyhow::Error> {
+        self.send_message_with_options(to, message, SendOptions::default())
+            .await
+    }
+
+    /// Send a message with additional options.
+    pub async fn send_message_with_options(
+        &self,
+        to: Jid,
+        message: wa::Message,
+        options: SendOptions,
+    ) -> Result<String, anyhow::Error> {
         let request_id = self.generate_message_id().await;
-        self.send_message_impl(to, &message, Some(request_id.clone()), false, false, None)
-            .await?;
+        self.send_message_impl(
+            to,
+            &message,
+            Some(request_id.clone()),
+            false,
+            false,
+            None,
+            options.extra_stanza_nodes,
+        )
+        .await?;
         Ok(request_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn send_message_impl(
         &self,
         to: Jid,
@@ -27,6 +55,7 @@ impl Client {
         peer: bool,
         force_key_distribution: bool,
         edit: Option<crate::types::message::EditAttribute>,
+        extra_stanza_nodes: Vec<Node>,
     ) -> Result<(), anyhow::Error> {
         // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
@@ -229,6 +258,7 @@ impl Client {
                 force_skdm,
                 skdm_target_devices.clone(),
                 edit.clone(),
+                extra_stanza_nodes.clone(),
             )
             .await
             {
@@ -304,6 +334,7 @@ impl Client {
                             true, // Force distribution on retry
                             None, // Distribute to all devices
                             edit.clone(),
+                            extra_stanza_nodes.clone(),
                         )
                         .await?
                     } else {
@@ -364,6 +395,7 @@ impl Client {
                 message,
                 request_id,
                 edit,
+                extra_stanza_nodes,
             )
             .await?
             // Lock released here automatically

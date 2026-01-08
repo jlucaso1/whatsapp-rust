@@ -25,19 +25,10 @@ jobs:
         with:
           toolchain: nightly-2025-12-19
 
-      - name: Install protoc
+      - name: Install tools (protoc, valgrind, iai-callgrind-runner)
         uses: taiki-e/install-action@v2
         with:
-          tool: protoc@${{ env.PROTOC_VERSION }}
-
-      - name: Install Valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
-
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.16.4
-
-      - name: Install iai-callgrind-runner
-        run: cargo binstall --no-confirm iai-callgrind-runner@0.16.1
+          tool: protoc@${{ env.PROTOC_VERSION }},valgrind,iai-callgrind-runner@0.16.1
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -46,16 +37,16 @@ jobs:
 
       - uses: bencherdev/bencher@v0.5.9
 
-      - name: Run Iai-Callgrind benchmarks
+      - name: Run Iai-Callgrind benchmarks (Push to main)
+        if: github.event_name == 'push'
         env:
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bencher run \
             --project whatsapp-rust \
             --token "$BENCHER_API_TOKEN" \
-            --branch "$BRANCH_NAME" \
+            --branch main \
             --testbed ubuntu-latest \
             --adapter rust_iai_callgrind \
             --github-actions "$GITHUB_TOKEN" \
@@ -63,4 +54,26 @@ jobs:
             --threshold-test percentage \
             --threshold-upper-boundary 0.05 \
             --thresholds-reset \
+            --err \
+            "cargo bench --workspace"
+
+      - name: Run Iai-Callgrind benchmarks (Pull Request)
+        if: github.event_name == 'pull_request'
+        env:
+          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bencher run \
+            --project whatsapp-rust \
+            --token "$BENCHER_API_TOKEN" \
+            --branch "${{ github.head_ref }}" \
+            --start-point "${{ github.base_ref }}" \
+            --start-point-hash "${{ github.event.pull_request.base.sha }}" \
+            --start-point-clone-thresholds \
+            --start-point-reset \
+            --testbed ubuntu-latest \
+            --adapter rust_iai_callgrind \
+            --github-actions "$GITHUB_TOKEN" \
+            --ci-only-thresholds \
+            --err \
             "cargo bench --workspace"

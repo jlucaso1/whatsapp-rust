@@ -84,8 +84,8 @@ impl SessionState {
         Self {
             session: SessionStructure {
                 session_version: Some(version as u32),
-                local_identity_public: Some(our_identity.public_key().serialize().into_vec()),
-                remote_identity_public: Some(their_identity.serialize().into_vec()),
+                local_identity_public: Some(our_identity.public_key().serialize().to_vec()),
+                remote_identity_public: Some(their_identity.serialize().to_vec()),
                 root_key: Some(root_key.key().to_vec()),
                 previous_counter: Some(0),
                 sender_chain: None,
@@ -93,7 +93,7 @@ impl SessionState {
                 pending_pre_key: None,
                 remote_registration_id: Some(0),
                 local_registration_id: Some(0),
-                alice_base_key: Some(alice_base_key.serialize().into_vec()),
+                alice_base_key: Some(alice_base_key.serialize().to_vec()),
                 needs_refresh: None,
                 pending_key_exchange: None,
             },
@@ -283,9 +283,10 @@ impl SessionState {
     }
 
     pub fn add_receiver_chain(&mut self, sender: &PublicKey, chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(chain_key.index()),
-            key: Some(chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(chain_key.key())),
         };
 
         let chain = session_structure::Chain {
@@ -297,14 +298,18 @@ impl SessionState {
 
         self.session.receiver_chains.push(chain);
 
-        if self.session.receiver_chains.len() > consts::MAX_RECEIVER_CHAINS {
+        // Remove oldest chains if we exceed capacity (MAX_RECEIVER_CHAINS = 5).
+        // Using drain() for consistency, though with only 5 elements the difference is negligible.
+        let len = self.session.receiver_chains.len();
+        if len > consts::MAX_RECEIVER_CHAINS {
             log::info!(
                 "Trimming excessive receiver_chain for session with base key {}, chain count: {}",
                 self.sender_ratchet_key_for_logging()
                     .unwrap_or_else(|e| format!("<error: {}>", e.0)),
-                self.session.receiver_chains.len()
+                len
             );
-            self.session.receiver_chains.remove(0);
+            let excess = len - consts::MAX_RECEIVER_CHAINS;
+            self.session.receiver_chains.drain(..excess);
         }
     }
 
@@ -314,9 +319,10 @@ impl SessionState {
     }
 
     pub fn set_sender_chain(&mut self, sender: &KeyPair, next_chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(next_chain_key.index()),
-            key: Some(next_chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(next_chain_key.key())),
         };
 
         let new_chain = session_structure::Chain {
@@ -365,9 +371,10 @@ impl SessionState {
     }
 
     pub fn set_sender_chain_key(&mut self, next_chain_key: &ChainKey) {
+        use prost::bytes::Bytes;
         let chain_key = session_structure::chain::ChainKey {
             index: Some(next_chain_key.index()),
-            key: Some(next_chain_key.key().to_vec()),
+            key: Some(Bytes::copy_from_slice(next_chain_key.key())),
         };
 
         // Is it actually valid to call this function with sender_chain == None?
@@ -450,10 +457,11 @@ impl SessionState {
             .get_receiver_chain_index(sender)?
             .expect("called set_receiver_chain_key for a non-existent chain");
 
+        use prost::bytes::Bytes;
         self.session.receiver_chains[chain_idx].chain_key =
             Some(session_structure::chain::ChainKey {
                 index: Some(chain_key.index()),
-                key: Some(chain_key.key().to_vec()),
+                key: Some(Bytes::copy_from_slice(chain_key.key())),
             });
 
         Ok(())

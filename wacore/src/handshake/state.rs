@@ -57,10 +57,7 @@ impl HandshakeState {
 
         self.noise.authenticate(&server_ephemeral)?;
         self.noise
-            .mix_shared_secret(
-                &self.ephemeral_kp.private_key.serialize(),
-                &server_ephemeral,
-            )
+            .mix_shared_secret(self.ephemeral_kp.private_key.serialize(), &server_ephemeral)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let static_decrypted = self
@@ -74,7 +71,7 @@ impl HandshakeState {
 
         self.noise
             .mix_shared_secret(
-                &self.ephemeral_kp.private_key.serialize(),
+                self.ephemeral_kp.private_key.serialize(),
                 &static_decrypted_arr,
             )
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
@@ -94,7 +91,7 @@ impl HandshakeState {
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         self.noise
-            .mix_shared_secret(&self.static_kp.private_key.serialize(), &server_ephemeral)
+            .mix_shared_secret(self.static_kp.private_key.serialize(), &server_ephemeral)
             .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
 
         let encrypted_payload = self

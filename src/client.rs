@@ -10,13 +10,12 @@ use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
-use indexmap::IndexMap;
 use moka::future::Cache;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
-use wacore_binary::node::Node;
+use wacore_binary::node::{Attrs, Node};
 
 use crate::appstate_sync::AppStateProcessor;
 use crate::jid_utils::server_jid;
@@ -434,6 +433,11 @@ impl Client {
         router
     }
 
+    /// Registers an external event handler to the core event bus.
+    pub fn register_handler(&self, handler: Arc<dyn wacore::types::events::EventHandler>) {
+        self.core.event_bus.add_handler(handler);
+    }
+
     pub async fn run(self: &Arc<Self>) {
         if self.is_running.swap(true, Ordering::SeqCst) {
             warn!("Client `run` method called while already running.");
@@ -782,7 +786,7 @@ impl Client {
         } else {
             None
         };
-        let mut attrs = IndexMap::new();
+        let mut attrs = Attrs::new();
         attrs.insert("class".to_string(), node.tag.clone());
         attrs.insert("id".to_string(), id);
         attrs.insert("to".to_string(), from);
@@ -1366,6 +1370,7 @@ impl Client {
                 true,
                 false,
                 None,
+                vec![],
             )
             .await
         {
@@ -1756,6 +1761,7 @@ impl Client {
             false,
             false,
             Some(crate::types::message::EditAttribute::MessageEdit),
+            vec![], // TODO: Support extra nodes for edit messages if needed
         )
         .await?;
 
@@ -1933,10 +1939,9 @@ mod tests {
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
-        use indexmap::IndexMap;
-        use wacore_binary::node::{Node, NodeContent};
+        use wacore_binary::node::{Attrs, Node, NodeContent};
 
-        let mut receipt_attrs = IndexMap::new();
+        let mut receipt_attrs = Attrs::new();
         receipt_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
         receipt_attrs.insert("id".to_string(), "RCPT-1".to_string());
         let receipt_node = Node::new(
@@ -1945,7 +1950,7 @@ mod tests {
             Some(NodeContent::String("test".to_string())),
         );
 
-        let mut notification_attrs = IndexMap::new();
+        let mut notification_attrs = Attrs::new();
         notification_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
         notification_attrs.insert("id".to_string(), "NOTIF-1".to_string());
         let notification_node = Node::new(

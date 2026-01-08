@@ -1,4 +1,6 @@
 pub use wacore::{proto_helpers, store::traits};
+pub use wacore_binary::builder::NodeBuilder;
+pub use waproto;
 
 pub mod http;
 pub mod types;
@@ -16,6 +18,7 @@ pub mod pair;
 pub mod pair_code;
 pub mod request;
 pub mod send;
+pub use send::SendOptions;
 pub mod session;
 pub mod socket;
 pub mod store;

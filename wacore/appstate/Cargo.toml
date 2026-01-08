@@ -11,16 +11,16 @@ description = "Appstate for WhatsApp protocol"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = { version = "1.0", default-features = false }
-hkdf = "0.12.3"
-prost = { version = "0.14.1", default-features = false }
-serde = { version = "1.0.228", features = ["derive"] }
-serde-big-array = "0.5"
-serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-sha2 = "0.10.6"
+anyhow = { workspace = true }
+hkdf = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+serde_json = { workspace = true, features = ["alloc"] }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
-wacore-binary = { path = "../binary", version = "0.2.0", features = ["serde"] }
-wacore-libsignal = { path = "../libsignal", version = "0.2.0" }
-waproto = { path = "../../waproto", version = "0.2.0" }
+wacore-binary = { workspace = true, features = ["serde"] }
+wacore-libsignal = { workspace = true }
+waproto = { workspace = true }
 
 [dev-dependencies]
