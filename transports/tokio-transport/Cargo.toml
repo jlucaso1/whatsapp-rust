@@ -13,19 +13,19 @@ default = []
 danger-skip-tls-verify = []
 
 [dependencies]
-anyhow = { version = "1.0", default-features = false }
-async-channel = "2.5.0"
-async-trait = "0.1.89"
-bytes = { version = "1.5", default-features = false }
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
 futures-util = { version = "0.3.31", default-features = false, features = [
     "sink",
     "alloc",
     "std",
 ] }
 http = "1.4.0"
-log = "0.4.29"
+log = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tokio = { version = "1.48.0", features = [
+tokio = { workspace = true, features = [
     "macros",
     "net",
     "rt-multi-thread",
@@ -39,5 +39,5 @@ tokio-websockets = { version = "0.13.0", features = [
     "rand",
     "ring",
 ] }
-wacore = { path = "../../wacore", version = "0.2.0" }
+wacore = { workspace = true }
 webpki-roots = "1.0.4"

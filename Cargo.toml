@@ -23,13 +23,38 @@ members = [
 ]
 
 [workspace.dependencies]
+# Shared dependencies
+aes = "0.8.3"
+aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
+anyhow = { version = "1.0", default-features = false }
+async-channel = { version = "2.5.0", default-features = false }
+async-trait = "0.1.89"
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+bytes = { version = "1.5", default-features = false }
+chrono = { version = "0.4", default-features = false }
+ctr = { version = "0.9", default-features = false }
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+hkdf = { version = "0.12.3", default-features = false }
+hmac = { version = "0.12.1", default-features = false, features = ["reset"] }
+iai-callgrind = "0.16"
+log = "0.4"
+prost = { version = "0.14.1", default-features = false, features = ["std"] }
+prost-build = { version = "0.14.1", default-features = false }
 rand = "0.9"
 rand_core = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde-big-array = "0.5"
+serde_json = { version = "1.0", default-features = false }
+sha2 = { version = "0.10.6", default-features = false }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", default-features = false }
+
+# Internal workspace crates
+wacore = { path = "./wacore", version = "0.2.0" }
 wacore-appstate = { path = "./wacore/appstate", version = "0.2.0" }
 wacore-binary = { path = "./wacore/binary", version = "0.2.0" }
+wacore-libsignal = { path = "./wacore/libsignal", version = "0.2.0" }
 waproto = { path = "./waproto", version = "0.2.0" }
 
 [features]
@@ -42,31 +67,26 @@ sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 tokio-native = ["tokio/rt-multi-thread"]
 
 [dependencies]
-
-anyhow = { version = "1.0", default-features = false }
-async-channel = "2.5.0"
-async-trait = "0.1.89"
-base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-bytes = { version = "1.5", default-features = false }
-
-# Time handling
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
 dashmap = "6.1.0"
 env_logger = { version = "0.11", default-features = false }
-hex = { version = "0.4", features = ["alloc"], default-features = false }
-log = "0.4.27"
+hex = { workspace = true }
+log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"] }
-prost = { version = "0.14.1", default-features = false }
-
-# Cryptography
+prost = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
 scopeguard = "1.2"
-serde = { version = "1.0.188", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
-wacore = { path = "./wacore", version = "0.2.0" }
+wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
