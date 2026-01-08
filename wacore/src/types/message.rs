@@ -114,3 +114,59 @@ pub struct MessageInfo {
     pub verified_name: Option<wa::VerifiedNameCertificate>,
     pub device_sent_meta: Option<DeviceSentMeta>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edit_attribute_parsing_and_serialization() {
+        // Test all known edit attribute values
+        let attrs = vec![
+            ("", EditAttribute::Empty),
+            ("1", EditAttribute::MessageEdit),
+            ("2", EditAttribute::PinInChat),
+            ("3", EditAttribute::AdminEdit),
+            ("7", EditAttribute::SenderRevoke),
+            ("8", EditAttribute::AdminRevoke),
+        ];
+
+        for (string_val, expected_attr) in attrs {
+            let parsed = EditAttribute::from(string_val.to_string());
+            assert_eq!(parsed, expected_attr);
+            assert_eq!(parsed.to_string_val(), string_val);
+        }
+
+        // Unknown values should be preserved
+        assert_eq!(
+            EditAttribute::from("99".to_string()),
+            EditAttribute::Unknown("99".to_string())
+        );
+        assert_eq!(
+            EditAttribute::Unknown("anything".to_string()).to_string_val(),
+            ""
+        );
+    }
+
+    #[test]
+    fn test_decrypt_fail_hide_logic_for_edits() {
+        // Documents the logic used in prepare_group_stanza (wacore/src/send.rs).
+        // The decrypt-fail="hide" attribute is added for edited messages to hide
+        // failed decryption attempts. However, admin revokes should NOT have it
+        // because WhatsApp Web doesn't include it, and the server rejects it.
+
+        fn should_add_decrypt_fail_hide(edit: &EditAttribute) -> bool {
+            *edit != EditAttribute::Empty && *edit != EditAttribute::AdminRevoke
+        }
+
+        // Should add decrypt-fail="hide"
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::MessageEdit));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::PinInChat));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::AdminEdit));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::SenderRevoke));
+
+        // Should NOT add decrypt-fail="hide"
+        assert!(!should_add_decrypt_fail_hide(&EditAttribute::Empty));
+        assert!(!should_add_decrypt_fail_hide(&EditAttribute::AdminRevoke));
+    }
+}
