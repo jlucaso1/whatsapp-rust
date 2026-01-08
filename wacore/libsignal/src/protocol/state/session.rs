@@ -84,8 +84,8 @@ impl SessionState {
         Self {
             session: SessionStructure {
                 session_version: Some(version as u32),
-                local_identity_public: Some(our_identity.public_key().serialize().into_vec()),
-                remote_identity_public: Some(their_identity.serialize().into_vec()),
+                local_identity_public: Some(our_identity.public_key().serialize().to_vec()),
+                remote_identity_public: Some(their_identity.serialize().to_vec()),
                 root_key: Some(root_key.key().to_vec()),
                 previous_counter: Some(0),
                 sender_chain: None,
@@ -93,7 +93,7 @@ impl SessionState {
                 pending_pre_key: None,
                 remote_registration_id: Some(0),
                 local_registration_id: Some(0),
-                alice_base_key: Some(alice_base_key.serialize().into_vec()),
+                alice_base_key: Some(alice_base_key.serialize().to_vec()),
                 needs_refresh: None,
                 pending_key_exchange: None,
             },

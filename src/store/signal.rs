@@ -192,7 +192,7 @@ macro_rules! impl_store_wrapper {
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
         let private_key_bytes = self.identity_key.private_key;
-        let private_key = PrivateKey::deserialize(&private_key_bytes.serialize())?;
+        let private_key = PrivateKey::deserialize(private_key_bytes.serialize())?;
         let ikp = IdentityKeyPair::try_from(private_key)?;
         Ok(ikp)
     }
@@ -339,7 +339,7 @@ impl SignedPreKeyStore for Device {
                 self.signed_pre_key.public_key.public_key_bytes(),
             )
             .map_err(|e| Box::new(e) as StoreError)?;
-            let private_key = PrivateKey::deserialize(&self.signed_pre_key.private_key.serialize())
+            let private_key = PrivateKey::deserialize(self.signed_pre_key.private_key.serialize())
                 .map_err(|e| Box::new(e) as StoreError)?;
             let key_pair = KeyPair::new(public_key, private_key);
 

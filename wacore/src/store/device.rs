@@ -20,7 +20,8 @@ pub mod key_pair_serde {
         let bytes: Vec<u8> = key_pair
             .private_key
             .serialize()
-            .into_iter()
+            .iter()
+            .copied()
             .chain(key_pair.public_key.public_key_bytes().iter().copied())
             .collect();
         serializer.serialize_bytes(&bytes)

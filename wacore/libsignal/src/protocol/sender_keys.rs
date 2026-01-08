@@ -8,6 +8,9 @@ use std::collections::VecDeque;
 use itertools::Itertools;
 use prost::Message;
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
 use crate::protocol::crypto::hmac_sha256;
 use crate::protocol::stores::{
     SenderKeyRecordStructure, SenderKeyStateStructure, sender_key_state_structure,
@@ -76,7 +79,7 @@ impl SenderMessageKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SenderChainKey {
     iteration: u32,
     chain_key: [u8; 32],
@@ -97,7 +100,7 @@ impl SenderChainKey {
         self.iteration
     }
 
-    pub fn seed(&self) -> &[u8] {
+    pub fn seed(&self) -> &[u8; 32] {
         &self.chain_key
     }
 
@@ -117,6 +120,34 @@ impl SenderChainKey {
 
     pub fn sender_message_key(&self) -> SenderMessageKey {
         SenderMessageKey::new(self.iteration, self.get_derivative(Self::MESSAGE_KEY_SEED))
+    }
+
+    /// Compute both sender message key and next chain key in one call, reusing HMAC key setup.
+    #[inline]
+    pub fn step_with_message_key(&self) -> Result<(SenderMessageKey, Self), SignalProtocolError> {
+        let new_iteration = self.iteration.checked_add(1).ok_or_else(|| {
+            SignalProtocolError::InvalidState(
+                "sender_chain_key_step",
+                "Sender chain is too long".into(),
+            )
+        })?;
+
+        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.chain_key)
+            .expect("HMAC-SHA256 should accept any size key");
+
+        hmac.update(&[Self::MESSAGE_KEY_SEED]);
+        let message_key_seed: [u8; 32] = hmac.finalize_reset().into_bytes().into();
+
+        hmac.update(&[Self::CHAIN_KEY_SEED]);
+        let next_chain_key: [u8; 32] = hmac.finalize().into_bytes().into();
+
+        let message_key = SenderMessageKey::new(self.iteration, message_key_seed);
+        let next_chain = Self {
+            iteration: new_iteration,
+            chain_key: next_chain_key,
+        };
+
+        Ok((message_key, next_chain))
     }
 
     #[inline]
@@ -529,7 +560,7 @@ mod tests {
             .next()
             .expect("sender chain key iteration should succeed");
 
-        state.set_sender_chain_key(next_sck.clone());
+        state.set_sender_chain_key(next_sck);
 
         let updated_sck = state
             .sender_chain_key()
@@ -723,5 +754,68 @@ mod tests {
             .expect("sender key state should exist");
         assert_eq!(state.chain_id(), 12345);
         assert!(state.sender_chain_key().is_some());
+    }
+
+    /// Test that step_with_message_key produces the same results as
+    /// calling sender_message_key() and next() separately
+    #[test]
+    fn test_step_with_message_key_equivalence() {
+        let chain = [0x99u8; 32];
+        let sck = SenderChainKey::new(5, chain);
+
+        // Get results using separate calls
+        let msg_key_separate = sck.sender_message_key();
+        let next_chain_separate = sck.next().expect("next should succeed");
+
+        // Get results using optimized combined call
+        let (msg_key_combined, next_chain_combined) = sck
+            .step_with_message_key()
+            .expect("step_with_message_key should succeed");
+
+        // Verify message keys are identical
+        assert_eq!(msg_key_separate.iteration(), msg_key_combined.iteration());
+        assert_eq!(msg_key_separate.iv(), msg_key_combined.iv());
+        assert_eq!(msg_key_separate.cipher_key(), msg_key_combined.cipher_key());
+
+        // Verify next chain key is identical
+        assert_eq!(next_chain_separate.seed(), next_chain_combined.seed());
+        assert_eq!(
+            next_chain_separate.iteration(),
+            next_chain_combined.iteration()
+        );
+    }
+
+    /// Test step_with_message_key over multiple iterations
+    #[test]
+    fn test_step_with_message_key_chain() {
+        let initial_chain = [0xBBu8; 32];
+        let mut chain_separate = SenderChainKey::new(0, initial_chain);
+        let mut chain_combined = SenderChainKey::new(0, initial_chain);
+
+        // Step both chains 10 times and verify they stay in sync
+        for i in 0..10 {
+            let msg_key_sep = chain_separate.sender_message_key();
+            chain_separate = chain_separate.next().expect("next should succeed");
+
+            let (msg_key_comb, next_chain) = chain_combined
+                .step_with_message_key()
+                .expect("step_with_message_key should succeed");
+            chain_combined = next_chain;
+
+            // Verify message keys match
+            assert_eq!(
+                msg_key_sep.cipher_key(),
+                msg_key_comb.cipher_key(),
+                "cipher_key mismatch at iteration {i}"
+            );
+
+            // Verify chain keys match
+            assert_eq!(
+                chain_separate.seed(),
+                chain_combined.seed(),
+                "chain key mismatch at iteration {i}"
+            );
+            assert_eq!(chain_separate.iteration(), chain_combined.iteration());
+        }
     }
 }

@@ -78,7 +78,8 @@ pub async fn message_encrypt(
 
     let chain_key = session_state.get_sender_chain_key()?;
 
-    let message_keys = chain_key.message_keys().generate_keys();
+    let (message_keys_gen, next_chain_key) = chain_key.step_with_message_keys();
+    let message_keys = message_keys_gen.generate_keys();
 
     let sender_ephemeral = session_state.sender_ratchet_key()?;
     let previous_counter = session_state.previous_counter();
@@ -153,7 +154,7 @@ pub async fn message_encrypt(
         )?)
     };
 
-    session_state.set_sender_chain_key(&chain_key.next_chain_key());
+    session_state.set_sender_chain_key(&next_chain_key);
 
     // XXX why is this check after everything else?!!
     if !identity_store
@@ -817,14 +818,15 @@ fn get_or_create_message_key(
         }
     }
 
-    let mut chain_key = chain_key.clone();
+    let mut chain_key = *chain_key;
 
     while chain_key.index() < counter {
-        let message_keys = chain_key.message_keys();
+        let (message_keys, next_chain) = chain_key.step_with_message_keys();
         state.set_message_keys(their_ephemeral, message_keys)?;
-        chain_key = chain_key.next_chain_key();
+        chain_key = next_chain;
     }
 
-    state.set_receiver_chain_key(their_ephemeral, &chain_key.next_chain_key())?;
-    Ok(chain_key.message_keys())
+    let (result_message_keys, next_chain) = chain_key.step_with_message_keys();
+    state.set_receiver_chain_key(their_ephemeral, &next_chain)?;
+    Ok(result_message_keys)
 }

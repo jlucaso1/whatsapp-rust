@@ -7,16 +7,20 @@ use std::fmt;
 
 use arrayref::array_ref;
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
 use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
 
 pub enum MessageKeyGenerator {
     Keys(MessageKeys),
-    Seed((Vec<u8>, u32)),
+    Seed(([u8; 32], u32)),
 }
 
 impl MessageKeyGenerator {
-    pub fn new_from_seed(seed: &[u8], counter: u32) -> Self {
-        Self::Seed((seed.to_vec(), counter))
+    #[inline]
+    pub fn new_from_seed(seed: &[u8; 32], counter: u32) -> Self {
+        Self::Seed((*seed, counter))
     }
     pub fn generate_keys(self) -> MessageKeys {
         match self {
@@ -108,7 +112,7 @@ impl MessageKeys {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ChainKey {
     key: [u8; 32],
     index: u32,
@@ -144,6 +148,27 @@ impl ChainKey {
             &self.calculate_base_material(Self::MESSAGE_KEY_SEED),
             self.index,
         )
+    }
+
+    /// Compute both message keys and next chain key in one call, reusing HMAC key setup.
+    #[inline]
+    pub fn step_with_message_keys(&self) -> (MessageKeyGenerator, Self) {
+        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.key)
+            .expect("HMAC-SHA256 should accept any size key");
+
+        hmac.update(&Self::MESSAGE_KEY_SEED);
+        let message_key_seed: [u8; 32] = hmac.finalize_reset().into_bytes().into();
+
+        hmac.update(&Self::CHAIN_KEY_SEED);
+        let next_key: [u8; 32] = hmac.finalize().into_bytes().into();
+
+        let message_keys = MessageKeyGenerator::new_from_seed(&message_key_seed, self.index);
+        let next_chain = Self {
+            key: next_key,
+            index: self.index + 1,
+        };
+
+        (message_keys, next_chain)
     }
 
     fn calculate_base_material(&self, seed: [u8; 1]) -> [u8; 32] {
@@ -303,7 +328,7 @@ mod tests {
     /// Test MessageKeyGenerator from seed
     #[test]
     fn test_message_key_generator_from_seed() {
-        let seed = vec![0xBBu8; 32];
+        let seed = [0xBBu8; 32];
         let counter = 42;
 
         let generator = MessageKeyGenerator::new_from_seed(&seed, counter);
@@ -338,5 +363,73 @@ mod tests {
         // Both should have same counter
         assert_eq!(keys1.counter(), counter);
         assert_eq!(keys2.counter(), counter);
+    }
+
+    /// Test that step_with_message_keys produces the same results as
+    /// calling message_keys() and next_chain_key() separately
+    #[test]
+    fn test_step_with_message_keys_equivalence() {
+        let initial_key = [0x77u8; 32];
+        let chain_key = ChainKey::new(initial_key, 5);
+
+        // Get results using separate calls
+        let message_keys_separate = chain_key.message_keys().generate_keys();
+        let next_chain_separate = chain_key.next_chain_key();
+
+        // Get results using optimized combined call
+        let (message_keys_gen_combined, next_chain_combined) = chain_key.step_with_message_keys();
+        let message_keys_combined = message_keys_gen_combined.generate_keys();
+
+        // Verify message keys are identical
+        assert_eq!(
+            message_keys_separate.cipher_key(),
+            message_keys_combined.cipher_key()
+        );
+        assert_eq!(
+            message_keys_separate.mac_key(),
+            message_keys_combined.mac_key()
+        );
+        assert_eq!(message_keys_separate.iv(), message_keys_combined.iv());
+        assert_eq!(
+            message_keys_separate.counter(),
+            message_keys_combined.counter()
+        );
+
+        // Verify next chain key is identical
+        assert_eq!(next_chain_separate.key(), next_chain_combined.key());
+        assert_eq!(next_chain_separate.index(), next_chain_combined.index());
+    }
+
+    /// Test step_with_message_keys over multiple iterations
+    #[test]
+    fn test_step_with_message_keys_chain() {
+        let initial_key = [0x88u8; 32];
+        let mut chain_separate = ChainKey::new(initial_key, 0);
+        let mut chain_combined = ChainKey::new(initial_key, 0);
+
+        // Step both chains 10 times and verify they stay in sync
+        for i in 0..10 {
+            let msg_keys_sep = chain_separate.message_keys().generate_keys();
+            chain_separate = chain_separate.next_chain_key();
+
+            let (msg_keys_gen_comb, next_chain) = chain_combined.step_with_message_keys();
+            let msg_keys_comb = msg_keys_gen_comb.generate_keys();
+            chain_combined = next_chain;
+
+            // Verify message keys match
+            assert_eq!(
+                msg_keys_sep.cipher_key(),
+                msg_keys_comb.cipher_key(),
+                "cipher_key mismatch at iteration {i}"
+            );
+
+            // Verify chain keys match
+            assert_eq!(
+                chain_separate.key(),
+                chain_combined.key(),
+                "chain key mismatch at iteration {i}"
+            );
+            assert_eq!(chain_separate.index(), chain_combined.index());
+        }
     }
 }

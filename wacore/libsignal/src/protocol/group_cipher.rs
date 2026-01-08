@@ -37,6 +37,7 @@ impl EncryptionBuffer {
 
 thread_local! {
     static ENCRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
+    static DECRYPTION_BUFFER: RefCell<EncryptionBuffer> = RefCell::new(EncryptionBuffer::new());
 }
 
 pub async fn group_encrypt<R: Rng + CryptoRng>(
@@ -69,7 +70,7 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
         .sender_chain_key()
         .ok_or(SignalProtocolError::InvalidSenderKeySession)?;
 
-    let message_keys = sender_chain_key.sender_message_key();
+    let (message_keys, next_sender_chain_key) = sender_chain_key.step_with_message_key()?;
 
     let ciphertext = ENCRYPTION_BUFFER.with(|buffer| {
         let mut buf_wrapper = buffer.borrow_mut();
@@ -98,7 +99,7 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
         &signing_key,
     )?;
 
-    sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
+    sender_key_state.set_sender_chain_key(next_sender_chain_key);
 
     sender_key_store
         .store_sender_key(sender_key_name, &record)
@@ -141,12 +142,14 @@ fn get_sender_key(state: &mut SenderKeyState, iteration: u32) -> Result<SenderMe
     let mut sender_chain_key = sender_chain_key;
 
     while sender_chain_key.iteration() < iteration {
-        state.add_sender_message_key(&sender_chain_key.sender_message_key());
-        sender_chain_key = sender_chain_key.next()?;
+        let (message_key, next_chain) = sender_chain_key.step_with_message_key()?;
+        state.add_sender_message_key(&message_key);
+        sender_chain_key = next_chain;
     }
 
-    state.set_sender_chain_key(sender_chain_key.next()?);
-    Ok(sender_chain_key.sender_message_key())
+    let (result_message_key, next_chain) = sender_chain_key.step_with_message_key()?;
+    state.set_sender_chain_key(next_chain);
+    Ok(result_message_key)
 }
 
 pub async fn group_decrypt(
@@ -201,31 +204,37 @@ pub async fn group_decrypt(
 
     let sender_key = get_sender_key(sender_key_state, skm.iteration())?;
 
-    let mut plaintext = Vec::new();
-    if let Err(e) = aes_256_cbc_decrypt_into(
-        skm.ciphertext(),
-        sender_key.cipher_key(),
-        sender_key.iv(),
-        &mut plaintext,
-    ) {
-        match e {
-            DecryptionErrorCrypto::BadKeyOrIv => {
-                log::error!(
-                    "incoming sender key state corrupt for group {} sender {} (chain ID {chain_id})",
-                    sender_key_name.group_id(),
-                    sender_key_name.sender_id()
-                );
-                return Err(SignalProtocolError::InvalidSenderKeySession);
-            }
-            DecryptionErrorCrypto::BadCiphertext(msg) => {
-                log::error!("sender key decryption failed: {msg}");
-                return Err(SignalProtocolError::InvalidMessage(
-                    CiphertextMessageType::SenderKey,
-                    "decryption failed",
-                ));
+    let plaintext = DECRYPTION_BUFFER.with(|buffer| {
+        let mut buf_wrapper = buffer.borrow_mut();
+        let buf = buf_wrapper.get_buffer();
+        if let Err(e) = aes_256_cbc_decrypt_into(
+            skm.ciphertext(),
+            sender_key.cipher_key(),
+            sender_key.iv(),
+            buf,
+        ) {
+            match e {
+                DecryptionErrorCrypto::BadKeyOrIv => {
+                    log::error!(
+                        "incoming sender key state corrupt for group {} sender {} (chain ID {chain_id})",
+                        sender_key_name.group_id(),
+                        sender_key_name.sender_id()
+                    );
+                    return Err(SignalProtocolError::InvalidSenderKeySession);
+                }
+                DecryptionErrorCrypto::BadCiphertext(msg) => {
+                    log::error!("sender key decryption failed: {msg}");
+                    return Err(SignalProtocolError::InvalidMessage(
+                        CiphertextMessageType::SenderKey,
+                        "decryption failed",
+                    ));
+                }
             }
         }
-    }
+        let result = std::mem::take(buf);
+        buf.reserve(EncryptionBuffer::INITIAL_CAPACITY);
+        Ok::<Vec<u8>, SignalProtocolError>(result)
+    })?;
 
     sender_key_store
         .store_sender_key(sender_key_name, &record)
@@ -313,7 +322,7 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
         message_version,
         state.chain_id(),
         sender_chain_key.iteration(),
-        sender_chain_key.seed().to_vec(),
+        *sender_chain_key.seed(),
         state
             .signing_key_public()
             .map_err(|_| SignalProtocolError::InvalidSenderKeySession)?,

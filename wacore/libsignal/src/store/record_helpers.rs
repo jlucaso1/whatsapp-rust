@@ -9,7 +9,7 @@ pub fn new_pre_key_record(id: u32, key_pair: &KeyPair) -> wa::PreKeyRecordStruct
     wa::PreKeyRecordStructure {
         id: Some(id),
         public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
-        private_key: Some(key_pair.private_key.serialize()),
+        private_key: Some(key_pair.private_key.serialize().to_vec()),
     }
 }
 
@@ -22,7 +22,7 @@ pub fn new_signed_pre_key_record(
     wa::SignedPreKeyRecordStructure {
         id: Some(id),
         public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
-        private_key: Some(key_pair.private_key.serialize()),
+        private_key: Some(key_pair.private_key.serialize().to_vec()),
         signature: Some(signature.to_vec()),
         timestamp: Some(
             timestamp
@@ -62,7 +62,7 @@ pub fn prekey_record_to_structure(
     Ok(wa::PreKeyRecordStructure {
         id: Some(record.id()?.into()),
         public_key: Some(record.key_pair()?.public_key.public_key_bytes()[1..].to_vec()),
-        private_key: Some(record.key_pair()?.private_key.serialize()),
+        private_key: Some(record.key_pair()?.private_key.serialize().to_vec()),
     })
 }
 

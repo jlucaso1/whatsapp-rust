@@ -105,16 +105,14 @@ impl PublicKey {
         }
     }
 
-    pub fn serialize(&self) -> Box<[u8]> {
-        let value_len = match &self.key {
-            PublicKeyData::DjbPublicKey(v) => v.len(),
-        };
-        let mut result = Vec::with_capacity(1 + value_len);
-        result.push(self.key_type().value());
+    /// Serialize the public key to a fixed-size array (1 type byte + 32 key bytes).
+    pub fn serialize(&self) -> [u8; 33] {
+        let mut result = [0u8; 33];
+        result[0] = self.key_type().value();
         match &self.key {
-            PublicKeyData::DjbPublicKey(v) => result.extend_from_slice(v),
+            PublicKeyData::DjbPublicKey(v) => result[1..].copy_from_slice(v),
         }
-        result.into_boxed_slice()
+        result
     }
 
     pub fn verify_signature(&self, message: &[u8], signature: &[u8]) -> bool {
@@ -228,9 +226,9 @@ impl PrivateKey {
         }
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> &[u8; 32] {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(v) => v.to_vec(),
+            PrivateKeyData::DjbPrivateKey(v) => v,
         }
     }
 
@@ -254,7 +252,7 @@ impl PrivateKey {
         &self,
         message: &[u8],
         csprng: &mut R,
-    ) -> Result<Box<[u8]>, CurveError> {
+    ) -> Result<[u8; 64], CurveError> {
         self.calculate_signature_for_multipart_message(&[message], csprng)
     }
 
@@ -262,20 +260,20 @@ impl PrivateKey {
         &self,
         message: &[&[u8]],
         csprng: &mut R,
-    ) -> Result<Box<[u8]>, CurveError> {
+    ) -> Result<[u8; 64], CurveError> {
         match self.key {
             PrivateKeyData::DjbPrivateKey(k) => {
                 let private_key = curve25519::PrivateKey::from(k);
-                Ok(Box::new(private_key.calculate_signature(csprng, message)))
+                Ok(private_key.calculate_signature(csprng, message))
             }
         }
     }
 
-    pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<Box<[u8]>, CurveError> {
+    pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError> {
         match (self.key, their_key.key) {
             (PrivateKeyData::DjbPrivateKey(priv_key), PublicKeyData::DjbPublicKey(pub_key)) => {
                 let private_key = curve25519::PrivateKey::from(priv_key);
-                Ok(Box::new(private_key.calculate_agreement(&pub_key)))
+                Ok(private_key.calculate_agreement(&pub_key))
             }
         }
     }
@@ -335,11 +333,11 @@ impl KeyPair {
         &self,
         message: &[u8],
         csprng: &mut R,
-    ) -> Result<Box<[u8]>, CurveError> {
+    ) -> Result<[u8; 64], CurveError> {
         self.private_key.calculate_signature(message, csprng)
     }
 
-    pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<Box<[u8]>, CurveError> {
+    pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError> {
         self.private_key.calculate_agreement(their_key)
     }
 }

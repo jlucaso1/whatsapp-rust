@@ -148,7 +148,7 @@ impl SqliteStore {
 
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(64);
-        bytes.extend_from_slice(&key_pair.private_key.serialize());
+        bytes.extend_from_slice(key_pair.private_key.serialize());
         bytes.extend_from_slice(key_pair.public_key.public_key_bytes());
         Ok(bytes)
     }
@@ -272,19 +272,19 @@ impl SqliteStore {
 
             let noise_key_data = {
                 let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(&new_device.noise_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.noise_key.private_key.serialize());
                 bytes.extend_from_slice(new_device.noise_key.public_key.public_key_bytes());
                 bytes
             };
             let identity_key_data = {
                 let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(&new_device.identity_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.identity_key.private_key.serialize());
                 bytes.extend_from_slice(new_device.identity_key.public_key.public_key_bytes());
                 bytes
             };
             let signed_pre_key_data = {
                 let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(&new_device.signed_pre_key.private_key.serialize());
+                bytes.extend_from_slice(new_device.signed_pre_key.private_key.serialize());
                 bytes.extend_from_slice(new_device.signed_pre_key.public_key.public_key_bytes());
                 bytes
             };
