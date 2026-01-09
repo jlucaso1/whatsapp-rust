@@ -33,10 +33,7 @@ const ATTR_XOR_MAPPED_ADDRESS: u16 = 0x0020;
 const ATTR_FINGERPRINT: u16 = 0x8028;
 
 /// DTLS content types (first byte of packet)
-const DTLS_CHANGE_CIPHER_SPEC: u8 = 20;
-const DTLS_ALERT: u8 = 21;
-const DTLS_HANDSHAKE: u8 = 22;
-const DTLS_APPLICATION_DATA: u8 = 23;
+const DTLS_CONTENT_TYPES: [u8; 4] = [20, 21, 22, 23]; // change_cipher_spec, alert, handshake, application_data
 
 /// Check if a packet is a STUN message (starts with 0x00 or 0x01, has magic cookie)
 fn is_stun_message(data: &[u8]) -> bool {
@@ -63,13 +60,8 @@ fn is_stun_binding_request(data: &[u8]) -> bool {
 
 /// Check if a packet is DTLS (should be forwarded to relay)
 fn is_dtls_packet(data: &[u8]) -> bool {
-    if data.is_empty() {
-        return false;
-    }
-    matches!(
-        data[0],
-        DTLS_CHANGE_CIPHER_SPEC | DTLS_ALERT | DTLS_HANDSHAKE | DTLS_APPLICATION_DATA
-    )
+    data.first()
+        .is_some_and(|&b| DTLS_CONTENT_TYPES.contains(&b))
 }
 
 /// Generate a fake STUN Binding Response for a given request.
@@ -437,8 +429,8 @@ mod tests {
 
     #[test]
     fn test_is_dtls_packet() {
-        assert!(is_dtls_packet(&[DTLS_HANDSHAKE]));
-        assert!(is_dtls_packet(&[DTLS_APPLICATION_DATA]));
+        assert!(is_dtls_packet(&[22])); // handshake
+        assert!(is_dtls_packet(&[23])); // application_data
         assert!(!is_dtls_packet(&[0x00])); // STUN
         assert!(!is_dtls_packet(&[]));
     }

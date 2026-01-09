@@ -24,11 +24,8 @@ pub fn render_chat_list(
     entity: Entity<WhatsAppApp>,
     layout: ResponsiveLayout,
 ) -> impl IntoElement {
-    // Recompute item sizes based on current layout (responsive dimensions)
     let item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
-        cache
-            .chats
-            .iter()
+        (0..cache.chats.len())
             .map(|_| size(px(layout.sidebar_width()), px(layout.chat_item_height())))
             .collect(),
     );
@@ -40,7 +37,6 @@ pub fn render_chat_list(
     let entity_for_down = entity.clone();
     let is_empty = chats_arc.is_empty();
 
-    // On mobile, take full width; otherwise use calculated sidebar width
     let width = if layout.is_mobile() {
         div().w_full()
     } else {

@@ -25,20 +25,8 @@ use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
 
 /// Callback trait for media protocol events.
-///
-/// External media handlers (e.g., UI packages, WebRTC implementations) implement
-/// this trait to receive parsed protocol data from call signaling.
-///
-/// This is the primary integration point between whatsapp-rust protocol layer
-/// and external media handling code.
 #[async_trait]
 pub trait CallMediaCallback: Send + Sync {
-    /// Called when an offer is received with full relay/media data.
-    ///
-    /// This provides all the data needed to set up a media connection:
-    /// - Relay endpoints with tokens and addresses
-    /// - Audio/video codec parameters
-    /// - Encrypted call key for SRTP
     async fn on_offer_received(
         &self,
         call_id: &str,
@@ -47,40 +35,22 @@ pub trait CallMediaCallback: Send + Sync {
         enc_data: &OfferEncData,
     );
 
-    /// Called when transport candidates are received.
-    ///
-    /// The raw_data can be passed directly to WASM/WebRTC for processing.
     async fn on_transport_received(&self, call_id: &str, transport: &TransportPayload);
 
-    /// Called when relay latency measurement is received.
-    ///
-    /// Used for relay selection - choose the relay with lowest latency.
     async fn on_relay_latency(&self, call_id: &str, latency: &[RelayLatencyData]);
 
-    /// Called when enc_rekey is received (new SRTP keys).
-    ///
-    /// The derived keys should be used to update SRTP encryption.
     async fn on_enc_rekey(&self, call_id: &str, keys: &DerivedCallKeys);
 
-    /// Called when the call is accepted by the remote peer.
-    ///
-    /// For outgoing calls, this is when the callee accepts.
-    /// This is the signal to start connecting to the relay for media.
     async fn on_call_accepted(&self, call_id: &str);
 }
 
 /// Configuration for the call manager.
 #[derive(Clone)]
 pub struct CallManagerConfig {
-    /// Maximum concurrent calls allowed.
     pub max_concurrent_calls: usize,
-    /// Ring timeout in seconds before auto-rejecting.
     pub ring_timeout_secs: u64,
-    /// Optional media callback for external handlers.
     pub media_callback: Option<Arc<dyn CallMediaCallback>>,
-    /// Transport type for media connections (default: WebRTC).
     pub transport_type: TransportType,
-    /// WebRTC connection timeout in seconds.
     pub webrtc_timeout_secs: u64,
 }
 
@@ -422,9 +392,6 @@ impl CallManager {
     }
 
     /// Send PREACCEPT to acknowledge incoming call (shows "ringing" to caller).
-    ///
-    /// Should be called immediately after receiving OFFER.
-    /// This tells the caller that we're ringing and processing their call.
     pub async fn send_preaccept(&self, call_id: &CallId) -> Result<Node, CallError> {
         let calls = self.calls.read().await;
         let info = calls
@@ -443,9 +410,6 @@ impl CallManager {
     }
 
     /// Send relay latency measurements to the caller.
-    ///
-    /// Should be called after measuring latency to relay servers from the offer.
-    /// The caller uses these measurements for relay selection.
     pub async fn send_relay_latency(
         &self,
         call_id: &CallId,
@@ -468,8 +432,6 @@ impl CallManager {
     }
 
     /// Send TRANSPORT stanza in response to received transport.
-    ///
-    /// This "echoes" the transport message back to the caller for P2P negotiation.
     pub async fn send_transport(
         &self,
         call_id: &CallId,
@@ -491,11 +453,7 @@ impl CallManager {
         Ok(builder.build())
     }
 
-    /// Send mute state to peer (should be sent before ACCEPT).
-    ///
-    /// # Arguments
-    /// * `call_id` - The call ID
-    /// * `muted` - true if audio is muted, false otherwise
+    /// Send mute state to peer.
     pub async fn send_mute_state(&self, call_id: &CallId, muted: bool) -> Result<Node, CallError> {
         let calls = self.calls.read().await;
         let info = calls
@@ -650,7 +608,6 @@ impl CallManager {
         self.config.media_callback.as_ref()
     }
 
-    /// Notify callback about an incoming offer.
     pub async fn notify_offer_received(
         &self,
         call_id: &str,
@@ -664,41 +621,30 @@ impl CallManager {
         }
     }
 
-    /// Notify callback about transport data.
     pub async fn notify_transport_received(&self, call_id: &str, transport: &TransportPayload) {
         if let Some(cb) = &self.config.media_callback {
             cb.on_transport_received(call_id, transport).await;
         }
     }
 
-    /// Notify callback about relay latency measurements.
     pub async fn notify_relay_latency(&self, call_id: &str, latency: &[RelayLatencyData]) {
         if let Some(cb) = &self.config.media_callback {
             cb.on_relay_latency(call_id, latency).await;
         }
     }
 
-    /// Notify callback about enc_rekey (new SRTP keys).
     pub async fn notify_enc_rekey(&self, call_id: &str, keys: &DerivedCallKeys) {
         if let Some(cb) = &self.config.media_callback {
             cb.on_enc_rekey(call_id, keys).await;
         }
     }
 
-    /// Notify callback that the call was accepted.
-    ///
-    /// For outgoing calls, this indicates the callee has accepted and
-    /// media connection should be established.
     pub async fn notify_call_accepted(&self, call_id: &str) {
         if let Some(cb) = &self.config.media_callback {
             cb.on_call_accepted(call_id).await;
         }
     }
 
-    /// Get relay data for a call.
-    ///
-    /// Returns the relay data from the offer (for incoming calls) or from
-    /// the offer ACK (for outgoing calls, must be stored after receiving ACK).
     pub async fn get_relay_data(&self, call_id: &CallId) -> Option<RelayData> {
         self.calls
             .read()
@@ -707,10 +653,6 @@ impl CallManager {
             .and_then(|info| info.offer_relay_data.clone())
     }
 
-    /// Store relay data from an offer ACK (for outgoing calls).
-    ///
-    /// When we send an offer, the server allocates relays and returns them
-    /// in the ACK response. This method stores that data in the call info.
     pub async fn store_relay_data(
         &self,
         call_id: &CallId,

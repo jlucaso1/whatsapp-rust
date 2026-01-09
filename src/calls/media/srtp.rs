@@ -151,16 +151,16 @@ impl SrtpContext {
         iv[..14].copy_from_slice(&self.session_salt);
 
         // XOR SSRC at bytes 4-7
-        let ssrc_bytes = ssrc.to_be_bytes();
-        for i in 0..4 {
-            iv[4 + i] ^= ssrc_bytes[i];
-        }
+        ssrc.to_be_bytes()
+            .iter()
+            .zip(&mut iv[4..8])
+            .for_each(|(src, dst)| *dst ^= src);
 
         // XOR index at bytes 8-13 (48-bit index, 6 bytes)
-        let index_bytes = index.to_be_bytes();
-        for i in 0..6 {
-            iv[8 + i] ^= index_bytes[2 + i];
-        }
+        index.to_be_bytes()[2..]
+            .iter()
+            .zip(&mut iv[8..14])
+            .for_each(|(src, dst)| *dst ^= src);
 
         iv
     }

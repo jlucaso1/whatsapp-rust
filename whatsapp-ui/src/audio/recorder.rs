@@ -16,18 +16,13 @@ pub const TARGET_SAMPLE_RATE: u32 = 16000;
 /// Capture sample rate (most hardware supports this)
 const CAPTURE_SAMPLE_RATE: u32 = 48000;
 
-/// Recorded audio data
 pub struct RecordedAudio {
-    /// Audio samples in f32 format (-1.0 to 1.0)
     pub samples: Vec<f32>,
-    /// Sample rate of the audio
     pub sample_rate: u32,
-    /// Duration in seconds
     pub duration_secs: u32,
 }
 
 impl RecordedAudio {
-    /// Resample audio to target sample rate (16kHz for Opus)
     pub fn resample_to_16khz(&self) -> Vec<f32> {
         if self.sample_rate == TARGET_SAMPLE_RATE {
             return self.samples.clone();
@@ -48,21 +43,13 @@ impl RecordedAudio {
     }
 }
 
-/// Audio recorder state
 pub struct AudioRecorder {
-    /// cpal stream handle
     stream: Option<Stream>,
-    /// Shared buffer for captured samples
     samples: Arc<Mutex<Vec<f32>>>,
-    /// Whether currently recording
     is_recording: bool,
-    /// Recording start time
     start_time: Option<Instant>,
-    /// Input device
     device: Option<Device>,
-    /// Stream config
     config: Option<StreamConfig>,
-    /// Actual sample rate being captured
     sample_rate: u32,
 }
 
@@ -73,7 +60,6 @@ impl Default for AudioRecorder {
 }
 
 impl AudioRecorder {
-    /// Create a new audio recorder
     pub fn new() -> Self {
         Self {
             stream: None,
@@ -86,7 +72,6 @@ impl AudioRecorder {
         }
     }
 
-    /// Initialize the audio device
     pub fn init(&mut self) -> Result<(), RecorderError> {
         let host = cpal::default_host();
 
@@ -96,12 +81,10 @@ impl AudioRecorder {
 
         info!("Using input device: {}", device.name().unwrap_or_default());
 
-        // Try to get a mono config at our target sample rate
         let supported = device
             .supported_input_configs()
             .map_err(|e| RecorderError::DeviceError(e.to_string()))?;
 
-        // Find best config - prefer 48kHz mono, fallback to any mono config
         let mut best_config = None;
         for config in supported {
             if config.channels() == 1 {
@@ -116,7 +99,6 @@ impl AudioRecorder {
             }
         }
 
-        // If no mono config, try stereo and we'll downmix
         let supported_config = best_config.ok_or(RecorderError::NoSupportedConfig)?;
 
         let stream_config: StreamConfig = supported_config.into();
@@ -133,13 +115,11 @@ impl AudioRecorder {
         Ok(())
     }
 
-    /// Start recording
     pub fn start(&mut self) -> Result<(), RecorderError> {
         if self.is_recording {
             return Err(RecorderError::AlreadyRecording);
         }
 
-        // Initialize if not already done
         if self.device.is_none() {
             self.init()?;
         }
@@ -147,12 +127,7 @@ impl AudioRecorder {
         let device = self.device.as_ref().ok_or(RecorderError::NotInitialized)?;
         let config = self.config.clone().ok_or(RecorderError::NotInitialized)?;
 
-        // Clear previous samples (handle poisoned lock by recovering)
-        {
-            let mut samples = self.samples.lock().unwrap_or_else(|e| {
-                warn!("Audio samples lock was poisoned, recovering");
-                e.into_inner()
-            });
+        if let Ok(mut samples) = self.samples.lock() {
             samples.clear();
         }
 
@@ -163,10 +138,8 @@ impl AudioRecorder {
             .build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Handle poisoned lock by recovering - don't panic in audio callback
-                    let mut buffer = match samples.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
+                    let Ok(mut buffer) = samples.lock() else {
+                        return;
                     };
                     if channels == 1 {
                         buffer.extend_from_slice(data);
@@ -185,12 +158,13 @@ impl AudioRecorder {
             )
             .map_err(|e| RecorderError::StreamError(e.to_string()))?;
 
-        if let Err(e) = stream.play() {
-            // Reset state on failure so next attempt reinitializes properly
-            self.device = None;
-            self.config = None;
-            return Err(RecorderError::StreamError(e.to_string()));
-        }
+        stream
+            .play()
+            .inspect_err(|_| {
+                self.device = None;
+                self.config = None;
+            })
+            .map_err(|e| RecorderError::StreamError(e.to_string()))?;
 
         self.stream = Some(stream);
         self.is_recording = true;
@@ -200,29 +174,16 @@ impl AudioRecorder {
         Ok(())
     }
 
-    /// Stop recording and return the recorded audio
     pub fn stop(&mut self) -> Result<RecordedAudio, RecorderError> {
         if !self.is_recording {
             return Err(RecorderError::NotRecording);
         }
 
-        // Drop the stream to stop recording
         self.stream.take();
         self.is_recording = false;
 
-        let duration = self
-            .start_time
-            .map(|t| t.elapsed())
-            .unwrap_or(Duration::ZERO);
-
-        let samples = {
-            // Handle poisoned lock by recovering
-            let buffer = self.samples.lock().unwrap_or_else(|e| {
-                warn!("Audio samples lock was poisoned, recovering");
-                e.into_inner()
-            });
-            buffer.clone()
-        };
+        let duration = self.start_time.map_or(Duration::ZERO, |t| t.elapsed());
+        let samples = self.samples.lock().map(|b| b.clone()).unwrap_or_default();
 
         info!(
             "Recording stopped: {} samples, {:.1}s",
@@ -237,7 +198,6 @@ impl AudioRecorder {
         })
     }
 
-    /// Cancel recording without returning audio
     pub fn cancel(&mut self) {
         self.stream.take();
         self.is_recording = false;

@@ -146,11 +146,11 @@ pub enum EncType {
     PkMsg,
 }
 
-impl EncType {
-    pub fn as_str(&self) -> &'static str {
+impl std::fmt::Display for EncType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Msg => "msg",
-            Self::PkMsg => "pkmsg",
+            Self::Msg => write!(f, "msg"),
+            Self::PkMsg => write!(f, "pkmsg"),
         }
     }
 }
@@ -203,13 +203,14 @@ where
         .await
         .map_err(|e| CallError::Encryption(format!("Signal encryption failed: {}", e)))?;
 
-    let (enc_type, ciphertext) = match encrypted {
+    let (enc_type, ciphertext) = match &encrypted {
         CiphertextMessage::SignalMessage(msg) => (EncType::Msg, msg.serialized().to_vec()),
         CiphertextMessage::PreKeySignalMessage(msg) => (EncType::PkMsg, msg.serialized().to_vec()),
-        _ => {
-            return Err(CallError::Encryption(
-                "unexpected ciphertext message type".into(),
-            ));
+        other => {
+            return Err(CallError::Encryption(format!(
+                "unexpected ciphertext message type: {:?}",
+                other.message_type()
+            )));
         }
     };
 
@@ -518,9 +519,9 @@ mod tests {
     }
 
     #[test]
-    fn test_enc_type_as_str() {
-        assert_eq!(EncType::Msg.as_str(), "msg");
-        assert_eq!(EncType::PkMsg.as_str(), "pkmsg");
+    fn test_enc_type_display() {
+        assert_eq!(EncType::Msg.to_string(), "msg");
+        assert_eq!(EncType::PkMsg.to_string(), "pkmsg");
     }
 
     #[test]

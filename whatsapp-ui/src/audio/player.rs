@@ -13,19 +13,13 @@ use ogg::reading::PacketReader;
 use opus::{Channels, Decoder as OpusDecoder};
 use tokio::sync::oneshot;
 
-/// Audio player for PTT voice messages
+/// Audio player for PTT voice messages.
 pub struct AudioPlayer {
-    /// cpal stream handle (kept alive while playing)
     stream: Option<Stream>,
-    /// Whether currently playing
     is_playing: Arc<AtomicBool>,
-    /// Current playback position in samples
     position: Arc<AtomicU64>,
-    /// Total samples in current audio
     total_samples: u64,
-    /// Sample rate of output device
     sample_rate: u32,
-    /// Sender to notify when playback completes (one-shot)
     completion_tx: Option<oneshot::Sender<()>>,
 }
 
@@ -36,7 +30,6 @@ impl Default for AudioPlayer {
 }
 
 impl AudioPlayer {
-    /// Create a new audio player
     pub fn new() -> Self {
         Self {
             stream: None,
@@ -48,42 +41,34 @@ impl AudioPlayer {
         }
     }
 
-    /// Subscribe to playback completion.
-    /// Returns a receiver that will be notified when playback completes.
-    /// Only one subscriber is supported at a time (calling again replaces previous).
+    /// Returns a receiver that fires when playback completes.
     pub fn on_complete(&mut self) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         self.completion_tx = Some(tx);
         rx
     }
 
-    /// Check if currently playing
     pub fn is_playing(&self) -> bool {
         self.is_playing.load(Ordering::Relaxed)
     }
 
-    /// Play OGG audio data
     pub fn play(&mut self, ogg_data: Vec<u8>) -> Result<(), PlayerError> {
-        // Decode the OGG/Opus data
         let samples = decode_ogg(&ogg_data)?;
         if samples.is_empty() {
             return Err(PlayerError::EmptyAudio);
         }
 
         info!("Decoded {} samples for playback", samples.len());
-
-        // Play the decoded samples
         self.play_samples(samples, 48000)
     }
 
-    /// Play raw f32 PCM samples at the specified sample rate
+    /// Play raw f32 PCM samples at the specified sample rate.
     pub fn play_samples(
         &mut self,
         samples: Vec<f32>,
         src_sample_rate: u32,
     ) -> Result<(), PlayerError> {
-        // Stop any current playback, but preserve the completion sender
-        // (it may have been set by on_complete() before this call)
+        // Preserve completion sender through stop() since it may have been set by on_complete()
         let saved_completion_tx = self.completion_tx.take();
         self.stop();
         self.completion_tx = saved_completion_tx;
@@ -98,7 +83,6 @@ impl AudioPlayer {
             src_sample_rate
         );
 
-        // Get output device
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -106,7 +90,6 @@ impl AudioPlayer {
 
         info!("Using output device: {}", device.name().unwrap_or_default());
 
-        // Get supported config - prefer 48kHz which matches Opus decoder output
         let supported_configs: Vec<_> = device
             .supported_output_configs()
             .map_err(|e| PlayerError::DeviceError(e.to_string()))?
@@ -116,13 +99,11 @@ impl AudioPlayer {
             return Err(PlayerError::NoSupportedConfig);
         }
 
-        // Find config that supports 48kHz, or fall back to first available
         let config: StreamConfig = supported_configs
             .iter()
             .find(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
             .map(|c| c.with_sample_rate(cpal::SampleRate(48000)))
             .unwrap_or_else(|| {
-                // Fall back to minimum sample rate of first config (usually more reasonable)
                 let first = &supported_configs[0];
                 first.with_sample_rate(first.min_sample_rate())
             })
@@ -135,22 +116,17 @@ impl AudioPlayer {
             config.sample_rate.0, output_channels
         );
 
-        // Resample if needed
         let resampled =
             resample_audio(&samples, src_sample_rate, self.sample_rate, output_channels);
         self.total_samples = resampled.len() as u64;
 
-        // Setup shared state
         let is_playing = self.is_playing.clone();
         let position = self.position.clone();
         position.store(0, Ordering::Relaxed);
         is_playing.store(true, Ordering::Relaxed);
 
-        // Move completion sender into Arc<Mutex> so callback can take it once
         let completion_tx: Arc<Mutex<Option<oneshot::Sender<()>>>> =
             Arc::new(Mutex::new(self.completion_tx.take()));
-
-        // Create audio buffer for playback
         let audio_data = Arc::new(resampled);
         let audio_data_clone = audio_data.clone();
 
@@ -196,20 +172,14 @@ impl AudioPlayer {
         Ok(())
     }
 
-    /// Stop playback
     pub fn stop(&mut self) {
-        if let Some(stream) = self.stream.take() {
-            drop(stream);
-        }
+        self.stream.take();
         self.is_playing.store(false, Ordering::Relaxed);
         self.position.store(0, Ordering::Relaxed);
         self.total_samples = 0;
-        // Drop the completion sender to signal cancellation to any waiting task
-        // (the receiver will get a Canceled error, which is handled gracefully)
         self.completion_tx = None;
     }
 
-    /// Pause playback
     pub fn pause(&mut self) {
         if let Some(ref stream) = self.stream {
             let _ = stream.pause();
@@ -217,7 +187,6 @@ impl AudioPlayer {
         }
     }
 
-    /// Resume playback
     pub fn resume(&mut self) {
         if let Some(ref stream) = self.stream {
             let _ = stream.play();
@@ -226,109 +195,68 @@ impl AudioPlayer {
     }
 }
 
-/// Decode OGG/Opus audio to f32 samples using ogg + opus crates
 fn decode_ogg(ogg_data: &[u8]) -> Result<Vec<f32>, PlayerError> {
     let cursor = Cursor::new(ogg_data);
     let mut packet_reader = PacketReader::new(cursor);
-
     let mut all_samples: Vec<f32> = Vec::new();
     let mut packet_count = 0;
     let mut decoder: Option<OpusDecoder> = None;
-    let mut sample_rate = 48000u32; // Default to 48kHz
 
-    // Read all OGG packets
     while let Some(packet) = packet_reader
         .read_packet()
-        .map_err(|e| PlayerError::DecodeError(format!("Failed to read OGG packet: {}", e)))?
+        .map_err(|e| PlayerError::DecodeError(format!("OGG read error: {}", e)))?
     {
         packet_count += 1;
 
-        // First packet is OpusHead header
+        // First packet: OpusHead header, second packet: OpusTags (skip both)
         if packet_count == 1 {
-            // Parse OpusHead to get channel count and sample rate
-            // Format: "OpusHead" (8 bytes) + version (1) + channels (1) + pre-skip (2) + sample_rate (4) + ...
             if packet.data.len() >= 12 && &packet.data[0..8] == b"OpusHead" {
                 let channels = packet.data[9];
-                // Input sample rate is at bytes 12-15 (little endian)
-                if packet.data.len() >= 16 {
-                    sample_rate = u32::from_le_bytes([
-                        packet.data[12],
-                        packet.data[13],
-                        packet.data[14],
-                        packet.data[15],
-                    ]);
-                }
-                info!(
-                    "OpusHead: {} channel(s), {} Hz input sample rate",
-                    channels, sample_rate
-                );
-
-                // Opus decoder always works at 48kHz internally
-                // Use mono or stereo based on header
                 let opus_channels = if channels > 1 {
                     Channels::Stereo
                 } else {
                     Channels::Mono
                 };
-
-                decoder = Some(OpusDecoder::new(48000, opus_channels).map_err(|e| {
-                    PlayerError::DecodeError(format!("Failed to create Opus decoder: {}", e))
-                })?);
+                decoder =
+                    Some(OpusDecoder::new(48000, opus_channels).map_err(|e| {
+                        PlayerError::DecodeError(format!("Opus decoder init: {}", e))
+                    })?);
             }
             continue;
         }
-
-        // Second packet is OpusTags - skip it
         if packet_count == 2 {
             continue;
         }
 
-        // Ensure decoder is initialized (create default if header wasn't parsed)
-        if decoder.is_none() {
-            decoder = Some(OpusDecoder::new(48000, Channels::Mono).map_err(|e| {
-                PlayerError::DecodeError(format!("Failed to create Opus decoder: {}", e))
-            })?);
-        }
-        let Some(dec) = decoder.as_mut() else {
-            // This should be unreachable since we just ensured decoder is Some
-            return Err(PlayerError::DecodeError(
-                "Opus decoder initialization failed".to_string(),
-            ));
-        };
+        // Create default decoder if header wasn't parsed
+        let dec = decoder.get_or_insert_with(|| {
+            OpusDecoder::new(48000, Channels::Mono).expect("default decoder")
+        });
 
-        // Decode Opus packet to f32 samples
-        // Max frame size at 48kHz is 5760 samples (120ms)
-        let mut output = vec![0.0f32; 5760 * 2]; // *2 for potential stereo
+        let mut output = vec![0.0f32; 5760 * 2];
         match dec.decode_float(&packet.data, &mut output, false) {
-            Ok(samples_decoded) => {
-                output.truncate(samples_decoded);
+            Ok(n) => {
+                output.truncate(n);
                 all_samples.extend_from_slice(&output);
             }
-            Err(e) => {
-                warn!("Error decoding Opus packet {}: {}", packet_count, e);
-                // Continue with other packets
-            }
+            Err(e) => warn!("Opus decode error (packet {}): {}", packet_count, e),
         }
     }
 
     info!(
-        "Decoded {} Opus packets, {} total samples",
+        "Decoded {} packets, {} samples",
         packet_count,
         all_samples.len()
     );
 
     if all_samples.is_empty() {
-        return Err(PlayerError::DecodeError(
-            "No audio samples decoded".to_string(),
-        ));
+        return Err(PlayerError::DecodeError("No samples decoded".to_string()));
     }
 
     Ok(all_samples)
 }
 
-/// Resample audio from source rate to target rate
 fn resample_audio(samples: &[f32], src_rate: u32, dst_rate: u32, channels: usize) -> Vec<f32> {
-    // Guard against invalid sample rates
     if src_rate == 0 || dst_rate == 0 {
         return samples.to_vec();
     }
@@ -343,16 +271,8 @@ fn resample_audio(samples: &[f32], src_rate: u32, dst_rate: u32, channels: usize
 
     for i in 0..output_len {
         let src_idx = (i as f32 / ratio) as usize;
-        let sample = if src_idx < samples.len() {
-            samples[src_idx]
-        } else {
-            0.0
-        };
-
-        // Duplicate for all output channels
-        for _ in 0..channels {
-            output.push(sample);
-        }
+        let sample = samples.get(src_idx).copied().unwrap_or(0.0);
+        output.extend(std::iter::repeat_n(sample, channels));
     }
 
     output

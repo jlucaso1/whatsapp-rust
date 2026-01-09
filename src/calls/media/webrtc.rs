@@ -197,8 +197,7 @@ impl WebRtcTransport {
                 relay_info.relay_id,
                 relay_info
                     .c2r_rtt_ms
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "?".to_string())
+                    .map_or("?".to_string(), |r| r.to_string())
             );
         }
 
@@ -218,8 +217,7 @@ impl WebRtcTransport {
                     r.relay_info.port,
                     r.relay_info
                         .c2r_rtt_ms
-                        .map(|r| r.to_string())
-                        .unwrap_or_else(|| "?".to_string())
+                        .map_or("?".to_string(), |r| r.to_string())
                 );
             }
             Err(e) => {
@@ -271,8 +269,7 @@ impl WebRtcTransport {
                 addresses.len(),
                 addresses[0]
                     .c2r_rtt_ms
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "?".to_string())
+                    .map_or("?".to_string(), |r| r.to_string())
             );
 
             // Try all addresses for this relay in parallel

@@ -201,22 +201,23 @@ impl ChatMessage {
     /// An empty emoji string removes the sender's reaction entirely.
     pub fn add_reaction(&mut self, emoji: String, sender: String) {
         // Remove any existing reaction from this sender (one reaction per person)
-        self.reactions.values_mut().for_each(|senders| {
+        for senders in self.reactions.values_mut() {
             senders.retain(|s| s != &sender);
-        });
+        }
         self.reactions.retain(|_, senders| !senders.is_empty());
 
-        // Add the new reaction if emoji is not empty (empty = remove)
-        if !emoji.is_empty() {
-            // Check if adding a new emoji type would exceed the limit
-            if !self.reactions.contains_key(&emoji)
-                && self.reactions.len() >= MAX_REACTIONS_PER_MESSAGE
-            {
-                // At limit, don't add new emoji types (but updating existing is fine)
-                return;
-            }
-            self.reactions.entry(emoji).or_default().push(sender);
+        // Empty emoji means remove reaction
+        if emoji.is_empty() {
+            return;
         }
+
+        // Check if adding a new emoji type would exceed the limit
+        if !self.reactions.contains_key(&emoji) && self.reactions.len() >= MAX_REACTIONS_PER_MESSAGE
+        {
+            return;
+        }
+
+        self.reactions.entry(emoji).or_default().push(sender);
     }
 
     /// Get the preview text for chat list display.

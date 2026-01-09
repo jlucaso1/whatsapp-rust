@@ -395,6 +395,27 @@ impl ParsedCallStanza {
         }
     }
 
+    /// Parse indexed tokens from child nodes (e.g., "token" or "auth_token").
+    /// Returns a Vec indexed by the "id" attribute value.
+    fn parse_indexed_tokens(children: &[Node], tag: &str) -> Vec<Vec<u8>> {
+        let mut tokens: Vec<Vec<u8>> = Vec::new();
+        for node in children.iter().filter(|c| c.tag == tag) {
+            let Some(NodeContent::Bytes(bytes)) = &node.content else {
+                continue;
+            };
+            let id = node
+                .attrs()
+                .optional_string("id")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(tokens.len());
+            if id >= tokens.len() {
+                tokens.resize(id + 1, Vec::new());
+            }
+            tokens[id] = bytes.clone();
+        }
+        tokens
+    }
+
     fn parse_relay_data(signaling_node: &Node) -> Option<RelayData> {
         // offer structure: <offer><relay uuid="..." self_pid="3" peer_pid="1">
         //   <key>base64</key>
@@ -431,38 +452,9 @@ impl ParsedCallStanza {
             .find(|c| c.tag == "key")
             .and_then(|node| Self::decode_base64_content(&node.content));
 
-        // Parse tokens - collect into a Vec indexed by id
-        let mut relay_tokens: Vec<Vec<u8>> = Vec::new();
-        for node in relay_children.iter().filter(|c| c.tag == "token") {
-            if let Some(NodeContent::Bytes(bytes)) = &node.content {
-                let id = node
-                    .attrs()
-                    .optional_string("id")
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(relay_tokens.len());
-                // Ensure vector is large enough
-                if id >= relay_tokens.len() {
-                    relay_tokens.resize(id + 1, Vec::new());
-                }
-                relay_tokens[id] = bytes.clone();
-            }
-        }
-
-        // Parse auth_tokens
-        let mut auth_tokens: Vec<Vec<u8>> = Vec::new();
-        for node in relay_children.iter().filter(|c| c.tag == "auth_token") {
-            if let Some(NodeContent::Bytes(bytes)) = &node.content {
-                let id = node
-                    .attrs()
-                    .optional_string("id")
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(auth_tokens.len());
-                if id >= auth_tokens.len() {
-                    auth_tokens.resize(id + 1, Vec::new());
-                }
-                auth_tokens[id] = bytes.clone();
-            }
-        }
+        // Parse tokens and auth_tokens (indexed by id attribute)
+        let relay_tokens = Self::parse_indexed_tokens(relay_children, "token");
+        let auth_tokens = Self::parse_indexed_tokens(relay_children, "auth_token");
 
         // Parse te2 elements - each contains endpoint address info
         // Binary format: 6 bytes = IPv4 (4 bytes IP + 2 bytes port)
@@ -1077,7 +1069,7 @@ impl CallStanzaBuilder {
         ) && let Some(ref enc_key) = self.encrypted_key
         {
             let enc_node = NodeBuilder::new("enc")
-                .attr("type", enc_key.enc_type.as_str())
+                .attr("type", enc_key.enc_type.to_string())
                 .attr("v", "2")
                 .bytes(enc_key.ciphertext.clone())
                 .build();

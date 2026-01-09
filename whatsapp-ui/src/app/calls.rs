@@ -38,13 +38,7 @@ impl CallState {
 
     /// Dismiss incoming call if it matches the given call ID
     pub fn dismiss_incoming(&mut self, call_id: &CallId) -> bool {
-        if let Some(ref call) = self.incoming
-            && call.call_id == *call_id
-        {
-            self.incoming = None;
-            return true;
-        }
-        false
+        self.incoming.take_if(|c| c.call_id == *call_id).is_some()
     }
 
     // ========== Outgoing Call ==========
@@ -81,45 +75,31 @@ impl CallState {
 
     /// Dismiss outgoing call if it matches the given call ID
     pub fn dismiss_outgoing(&mut self, call_id: &CallId) -> bool {
-        if let Some(ref call) = self.outgoing
-            && call.call_id == *call_id
-        {
-            self.outgoing = None;
-            return true;
-        }
-        false
+        self.outgoing.take_if(|c| c.call_id == *call_id).is_some()
     }
 
     /// Update outgoing call state to connected
     pub fn set_outgoing_connected(&mut self, call_id: &CallId) -> bool {
-        if let Some(ref mut call) = self.outgoing
-            && call.call_id == *call_id
-        {
-            call.set_state(OutgoingCallState::Connected);
-            return true;
-        }
-        false
+        self.outgoing
+            .as_mut()
+            .filter(|c| c.call_id == *call_id)
+            .map(|c| c.set_state(OutgoingCallState::Connected))
+            .is_some()
     }
 
     /// Update outgoing call ID (when real ID comes from CallManager)
     pub fn update_outgoing_call_id(&mut self, recipient_jid: &str, new_call_id: CallId) -> bool {
-        if let Some(ref mut call) = self.outgoing
-            && call.recipient_jid == recipient_jid
-        {
-            call.call_id = new_call_id;
-            return true;
-        }
-        false
+        self.outgoing
+            .as_mut()
+            .filter(|c| c.recipient_jid == recipient_jid)
+            .map(|c| c.call_id = new_call_id)
+            .is_some()
     }
 
     /// Dismiss outgoing call for a recipient (on failure)
     pub fn dismiss_outgoing_for_recipient(&mut self, recipient_jid: &str) -> bool {
-        if let Some(ref call) = self.outgoing
-            && call.recipient_jid == recipient_jid
-        {
-            self.outgoing = None;
-            return true;
-        }
-        false
+        self.outgoing
+            .take_if(|c| c.recipient_jid == recipient_jid)
+            .is_some()
     }
 }

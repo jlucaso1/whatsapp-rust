@@ -11,11 +11,8 @@ use super::rtp::RtpPacket;
 /// Configuration for the jitter buffer.
 #[derive(Debug, Clone)]
 pub struct JitterBufferConfig {
-    /// Target buffer delay (playout delay).
     pub target_delay: Duration,
-    /// Maximum buffer size in packets.
     pub max_packets: usize,
-    /// Maximum age of packets before discarding.
     pub max_age: Duration,
 }
 
@@ -32,57 +29,37 @@ impl Default for JitterBufferConfig {
 /// A buffered packet with timing info.
 #[derive(Debug)]
 struct BufferedPacket {
-    /// The RTP packet.
     packet: RtpPacket,
-    /// When the packet was received.
     received_at: Instant,
 }
 
 /// Statistics about the jitter buffer.
 #[derive(Debug, Clone, Default)]
 pub struct JitterStats {
-    /// Total packets received.
     pub packets_received: u64,
-    /// Packets played out.
     pub packets_played: u64,
-    /// Packets dropped (too old, buffer full, etc.).
     pub packets_dropped: u64,
-    /// Packets that arrived out of order.
     pub packets_reordered: u64,
-    /// Packets that were duplicates.
     pub packets_duplicate: u64,
-    /// Current buffer depth in packets.
     pub buffer_depth: usize,
-    /// Estimated jitter in milliseconds.
     pub jitter_ms: f64,
 }
 
 /// Jitter buffer for smoothing RTP packet delivery.
 pub struct JitterBuffer {
-    /// Configuration.
     config: JitterBufferConfig,
-    /// Buffered packets indexed by sequence number.
     buffer: BTreeMap<u16, BufferedPacket>,
-    /// Next expected sequence number for playout.
     next_seq: Option<u16>,
-    /// Time when first packet was received (for playout timing).
     first_packet_time: Option<Instant>,
-    /// RTP timestamp of first packet (for timing calculation).
     first_rtp_timestamp: Option<u32>,
-    /// Sample rate for timestamp to time conversion.
     sample_rate: u32,
-    /// Statistics.
     stats: JitterStats,
-    /// Running jitter estimate (RFC 3550 algorithm).
     jitter_estimate: f64,
-    /// Last packet arrival time for jitter calculation.
     last_arrival: Option<Instant>,
-    /// Last RTP timestamp for jitter calculation.
     last_timestamp: Option<u32>,
 }
 
 impl JitterBuffer {
-    /// Create a new jitter buffer.
     pub fn new(config: JitterBufferConfig, sample_rate: u32) -> Self {
         Self {
             config,
@@ -98,12 +75,10 @@ impl JitterBuffer {
         }
     }
 
-    /// Create a jitter buffer for Opus at 16kHz.
     pub fn opus_16khz() -> Self {
         Self::new(JitterBufferConfig::default(), 16000)
     }
 
-    /// Push a packet into the buffer.
     pub fn push(&mut self, packet: RtpPacket) {
         let now = Instant::now();
         let seq = packet.header.sequence_number;
@@ -164,27 +139,18 @@ impl JitterBuffer {
         self.stats.buffer_depth = self.buffer.len();
     }
 
-    /// Pop the next packet if it's ready for playout.
-    ///
-    /// Returns `Some(packet)` if a packet is ready, `None` if we should
-    /// wait or generate comfort noise.
+    /// Pop the next packet if ready for playout.
     pub fn pop(&mut self) -> Option<RtpPacket> {
         let now = Instant::now();
-
-        // Clean up old packets
         self.cleanup_old_packets(now);
 
         // Check if we've waited long enough for initial buffering
-        if let Some(first_time) = self.first_packet_time {
-            if now.duration_since(first_time) < self.config.target_delay {
-                return None; // Still in initial buffering period
-            }
-        } else {
-            return None; // No packets received yet
+        let first_time = self.first_packet_time?;
+        if now.duration_since(first_time) < self.config.target_delay {
+            return None;
         }
 
-        // On first playback, set next_seq to the lowest sequence in the buffer
-        // This handles out-of-order initial packets correctly
+        // On first playback, set next_seq to the lowest sequence in buffer
         if self.stats.packets_played == 0
             && let Some(&min_seq) = self.buffer.keys().next()
         {
@@ -201,43 +167,33 @@ impl JitterBuffer {
             return Some(buffered.packet);
         }
 
-        // Packet is missing - check if we should skip ahead
-        // Look for the next available packet
-        if let Some(&available_seq) = self.buffer.keys().next() {
-            let gap = available_seq.wrapping_sub(next_seq);
+        // Packet missing - skip ahead if gap is reasonable
+        let &available_seq = self.buffer.keys().next()?;
+        let gap = available_seq.wrapping_sub(next_seq);
 
-            // If we've waited too long, skip to the available packet
-            if gap < 100 {
-                // Skip the missing packets
-                self.stats.packets_dropped += gap as u64;
-                self.next_seq = Some(available_seq);
+        if gap < 100 {
+            self.stats.packets_dropped += gap as u64;
+            self.next_seq = Some(available_seq);
 
-                if let Some(buffered) = self.buffer.remove(&available_seq) {
-                    self.next_seq = Some(available_seq.wrapping_add(1));
-                    self.stats.packets_played += 1;
-                    self.stats.buffer_depth = self.buffer.len();
-                    return Some(buffered.packet);
-                }
+            if let Some(buffered) = self.buffer.remove(&available_seq) {
+                self.next_seq = Some(available_seq.wrapping_add(1));
+                self.stats.packets_played += 1;
+                self.stats.buffer_depth = self.buffer.len();
+                return Some(buffered.packet);
             }
         }
 
         None
     }
 
-    /// Update jitter estimate using RFC 3550 algorithm.
     fn update_jitter(&mut self, arrival: Instant, timestamp: u32) {
         if let (Some(last_arrival), Some(last_ts)) = (self.last_arrival, self.last_timestamp) {
-            // Calculate transit time difference
             let arrival_diff = arrival.duration_since(last_arrival).as_micros() as f64;
             let ts_diff = timestamp.wrapping_sub(last_ts) as f64;
-
-            // Convert RTP timestamp diff to microseconds
             let expected_diff = (ts_diff / self.sample_rate as f64) * 1_000_000.0;
-
-            // Calculate jitter (difference between expected and actual)
             let d = (arrival_diff - expected_diff).abs();
 
-            // Exponential moving average (as per RFC 3550)
+            // Exponential moving average (RFC 3550)
             self.jitter_estimate += (d - self.jitter_estimate) / 16.0;
             self.stats.jitter_ms = self.jitter_estimate / 1000.0;
         }
@@ -246,7 +202,6 @@ impl JitterBuffer {
         self.last_timestamp = Some(timestamp);
     }
 
-    /// Remove packets that are too old.
     fn cleanup_old_packets(&mut self, now: Instant) {
         let max_age = self.config.max_age;
         let old_count = self.buffer.len();
@@ -259,22 +214,18 @@ impl JitterBuffer {
         self.stats.buffer_depth = self.buffer.len();
     }
 
-    /// Get current statistics.
     pub fn stats(&self) -> JitterStats {
         self.stats.clone()
     }
 
-    /// Get current buffer depth.
     pub fn depth(&self) -> usize {
         self.buffer.len()
     }
 
-    /// Check if buffer is empty.
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
-    /// Reset the buffer.
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.next_seq = None;

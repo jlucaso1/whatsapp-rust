@@ -75,24 +75,23 @@ pub fn render_call_popup(call: &IncomingCall, app_entity: Entity<WhatsAppApp>) -
     let accept_entity = app_entity.clone();
     let decline_entity = app_entity;
 
-    // Buttons row for incoming call
     let buttons = div()
         .mt_4()
         .flex()
         .gap_6()
-        // Decline button (red)
         .child(render_call_button(
             "Decline",
-            0xff4444, // Red
+            "✕",
+            0xff4444,
             move |_, _window, cx| {
                 decline_entity.update(cx, |app, cx| {
                     app.decline_call(cx);
                 });
             },
         ))
-        // Accept button (green)
         .child(render_call_button(
             "Accept",
+            "✓",
             colors::ACCENT_GREEN,
             move |_, _window, cx| {
                 accept_entity.update(cx, |app, cx| {
@@ -107,6 +106,7 @@ pub fn render_call_popup(call: &IncomingCall, app_entity: Entity<WhatsAppApp>) -
 /// Render a circular call action button
 fn render_call_button(
     label: &'static str,
+    icon: &'static str,
     color: u32,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
@@ -133,7 +133,7 @@ fn render_call_button(
                         .text_color(rgb(colors::WHITE))
                         .text_lg()
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child(if label == "Accept" { "✓" } else { "✕" }),
+                        .child(icon),
                 ),
         )
         .child(

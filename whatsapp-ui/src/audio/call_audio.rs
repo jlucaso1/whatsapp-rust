@@ -86,39 +86,26 @@ fn run_audio_capture(
         .default_input_device()
         .ok_or(CallAudioError::NoInputDevice)?;
 
-    info!(
-        "Call audio input device: {}",
-        device.name().unwrap_or_default()
-    );
+    info!("Call audio input: {}", device.name().unwrap_or_default());
 
-    // Find a config that supports our sample rate
     let supported = device
         .supported_input_configs()
         .map_err(|e| CallAudioError::DeviceError(e.to_string()))?;
 
-    // Find a config that supports our sample rate
-    // Accept mono or stereo (will downmix stereo to mono)
-    let mut best_config = None;
-    for cfg in supported {
-        let sample_rate_ok = cfg.min_sample_rate().0 <= CALL_SAMPLE_RATE
-            && cfg.max_sample_rate().0 >= CALL_SAMPLE_RATE;
-        let channels_ok = cfg.channels() <= 2; // Mono or stereo
-
-        if sample_rate_ok && channels_ok {
-            // Prefer mono if available, but accept stereo
-            if cfg.channels() == 1 || best_config.is_none() {
-                best_config = Some(cfg.with_sample_rate(SampleRate(CALL_SAMPLE_RATE)));
-                if cfg.channels() == 1 {
-                    break; // Found ideal mono config
-                }
-            }
-        }
-    }
+    // Find config that supports our sample rate (prefer mono, accept stereo)
+    let best_config = supported
+        .filter(|cfg| {
+            cfg.min_sample_rate().0 <= CALL_SAMPLE_RATE
+                && cfg.max_sample_rate().0 >= CALL_SAMPLE_RATE
+                && cfg.channels() <= 2
+        })
+        .min_by_key(|cfg| cfg.channels()) // Prefer mono
+        .map(|cfg| cfg.with_sample_rate(SampleRate(CALL_SAMPLE_RATE)));
 
     let config: StreamConfig = best_config.ok_or(CallAudioError::NoSupportedConfig)?.into();
 
     info!(
-        "Call audio capture config: {} Hz, {} channel(s)",
+        "Capture config: {} Hz, {} ch",
         config.sample_rate.0, config.channels
     );
 
@@ -268,30 +255,24 @@ fn run_audio_playback(
         .default_output_device()
         .ok_or(CallAudioError::NoOutputDevice)?;
 
-    info!(
-        "Call audio output device: {}",
-        device.name().unwrap_or_default()
-    );
+    info!("Call audio output: {}", device.name().unwrap_or_default());
 
-    let supported = device
+    let mut supported = device
         .supported_output_configs()
         .map_err(|e| CallAudioError::DeviceError(e.to_string()))?;
 
-    let mut best_config = None;
-    for cfg in supported {
-        if cfg.min_sample_rate().0 <= CALL_SAMPLE_RATE
-            && cfg.max_sample_rate().0 >= CALL_SAMPLE_RATE
-        {
-            best_config = Some(cfg.with_sample_rate(SampleRate(CALL_SAMPLE_RATE)));
-            break;
-        }
-    }
+    let best_config = supported
+        .find(|cfg| {
+            cfg.min_sample_rate().0 <= CALL_SAMPLE_RATE
+                && cfg.max_sample_rate().0 >= CALL_SAMPLE_RATE
+        })
+        .map(|cfg| cfg.with_sample_rate(SampleRate(CALL_SAMPLE_RATE)));
 
     let config: StreamConfig = best_config.ok_or(CallAudioError::NoSupportedConfig)?.into();
     let output_channels = config.channels as usize;
 
     info!(
-        "Call audio playback config: {} Hz, {} channel(s)",
+        "Playback config: {} Hz, {} ch",
         config.sample_rate.0, output_channels
     );
 

@@ -136,67 +136,39 @@ impl CallHandler {
     }
 
     async fn handle_incoming_offer(&self, client: &Client, parsed: &ParsedCallStanza) {
+        let media = if parsed.is_video { "video" } else { "audio" };
         debug!(
-            "Incoming {} call (call_id: {}, offline: {})",
-            if parsed.is_video { "video" } else { "audio" },
-            parsed.call_id,
-            parsed.is_offline
+            "Incoming {} call: {} (offline={})",
+            media, parsed.call_id, parsed.is_offline
         );
 
-        if let Some(enc_data) = &parsed.offer_enc_data {
-            debug!(
-                "Call {} has encrypted key: type={:?}, {} bytes",
-                parsed.call_id,
-                enc_data.enc_type,
-                enc_data.ciphertext.len()
-            );
-        }
-
-        if let Some(relay) = &parsed.relay_data {
-            debug!(
-                "Call {} relay: uuid={:?}, self_pid={:?}, peer_pid={:?}, hbh_key={} bytes, relay_key={} bytes, endpoints={}",
-                parsed.call_id,
-                relay.uuid,
-                relay.self_pid,
-                relay.peer_pid,
-                relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
-                relay.relay_key.as_ref().map(|k| k.len()).unwrap_or(0),
-                relay.endpoints.len(),
-            );
-        }
-
-        // Register the call with CallManager (skip offline calls as they're stale)
         let call_manager = client.get_call_manager().await;
+
+        // Register call unless offline (stale)
         if parsed.is_offline {
-            debug!(
-                "Skipping registration of offline call {} (stale)",
-                parsed.call_id
-            );
+            debug!("Skipping offline call {} (stale)", parsed.call_id);
         } else if let Err(e) = call_manager.register_incoming_call(parsed).await {
-            warn!("Failed to register incoming call {}: {}", parsed.call_id, e);
+            warn!("Failed to register call {}: {}", parsed.call_id, e);
         }
 
         // Notify callback with parsed offer data
         if parsed.offer_enc_data.is_some() || parsed.relay_data.is_some() {
-            let relay_data = parsed.relay_data.as_ref().cloned().unwrap_or_default();
-            let media_params = parsed.media_params.as_ref().cloned().unwrap_or_default();
-            let enc_data =
-                parsed
-                    .offer_enc_data
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(|| OfferEncData {
-                        enc_type: super::encryption::EncType::Msg,
-                        ciphertext: Vec::new(),
-                        version: 0,
-                    });
+            let relay_data = parsed.relay_data.clone().unwrap_or_default();
+            let media_params = parsed.media_params.clone().unwrap_or_default();
+            let enc_data = parsed
+                .offer_enc_data
+                .clone()
+                .unwrap_or_else(|| OfferEncData {
+                    enc_type: super::encryption::EncType::Msg,
+                    ciphertext: Vec::new(),
+                    version: 0,
+                });
 
             call_manager
                 .notify_offer_received(&parsed.call_id, &relay_data, &media_params, &enc_data)
                 .await;
         }
 
-        // Emit CallOffer event
         let event = Event::CallOffer(CallOffer {
             meta: parsed.basic_meta(),
             media_type: parsed.media_type(),
@@ -208,25 +180,13 @@ impl CallHandler {
     }
 
     async fn handle_transport(&self, client: &Client, parsed: &ParsedCallStanza) {
-        debug!(
-            "Received transport (ICE candidates) for call {}",
-            parsed.call_id
-        );
+        debug!("Received transport for call {}", parsed.call_id);
 
-        // Parse transport payload if present
         if let Some(payload_bytes) = &parsed.payload {
             let transport = TransportPayload::from_raw(payload_bytes.clone());
-            debug!(
-                "Call {} transport: {} candidates, ufrag={:?}, raw_bytes={}",
-                parsed.call_id,
-                transport.candidates.len(),
-                transport.ufrag,
-                transport.raw_data.len(),
-            );
-
-            // Notify callback
-            let call_manager = client.get_call_manager().await;
-            call_manager
+            client
+                .get_call_manager()
+                .await
                 .notify_transport_received(&parsed.call_id, &transport)
                 .await;
         }
@@ -234,145 +194,106 @@ impl CallHandler {
 
     async fn handle_relay_latency(&self, client: &Client, parsed: &ParsedCallStanza) {
         if parsed.relay_latency.is_empty() {
-            debug!("Received empty relay latency for call {}", parsed.call_id);
             return;
         }
 
         debug!(
-            "Received relay latency for call {}: {} measurements",
+            "Relay latency for {}: {} measurements",
             parsed.call_id,
             parsed.relay_latency.len()
         );
 
-        for lat in &parsed.relay_latency {
-            debug!(
-                "  Relay {}: {}ms (raw={}, ipv4={:?}, ipv6={:?})",
-                lat.relay_name, lat.latency_ms, lat.raw_latency, lat.ipv4, lat.ipv6
-            );
-        }
-
-        // Notify callback
-        let call_manager = client.get_call_manager().await;
-        call_manager
+        client
+            .get_call_manager()
+            .await
             .notify_relay_latency(&parsed.call_id, &parsed.relay_latency)
             .await;
     }
 
     async fn handle_accept(&self, client: &Client, parsed: &ParsedCallStanza) {
-        debug!("Call {} accepted by peer", parsed.call_id);
+        debug!("Call {} accepted", parsed.call_id);
 
-        // Update call state in manager
         let call_manager = client.get_call_manager().await;
         if let Err(e) = call_manager.handle_remote_accept(parsed).await {
-            warn!("Failed to update call state for accept: {}", e);
+            warn!("Failed to handle accept for {}: {}", parsed.call_id, e);
         }
 
-        // Notify callback that the call was accepted (so media connection can start)
         call_manager.notify_call_accepted(&parsed.call_id).await;
 
-        // Emit CallAccepted event for UI
-        let event = Event::CallAccepted(CallAccepted {
-            meta: parsed.basic_meta(),
-        });
-        client.core.event_bus.dispatch(&event);
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::CallAccepted(CallAccepted {
+                meta: parsed.basic_meta(),
+            }));
     }
 
     async fn handle_reject(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} rejected", parsed.call_id);
-        let event = Event::CallRejected(CallRejected {
-            meta: parsed.basic_meta(),
-        });
-        client.core.event_bus.dispatch(&event);
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::CallRejected(CallRejected {
+                meta: parsed.basic_meta(),
+            }));
     }
 
     async fn handle_terminate(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} terminated", parsed.call_id);
-        let event = Event::CallEnded(CallEnded {
+        client.core.event_bus.dispatch(&Event::CallEnded(CallEnded {
             meta: parsed.basic_meta(),
-        });
-        client.core.event_bus.dispatch(&event);
+        }));
     }
 
     async fn handle_relay_election(&self, client: &Client, parsed: &ParsedCallStanza) {
-        if let Some(election) = &parsed.relay_election {
-            log::info!(
-                "Received relay_election for call {}: elected_relay_idx={}",
-                parsed.call_id,
-                election.elected_relay_idx
+        let Some(election) = &parsed.relay_election else {
+            debug!("relay_election for {} missing data", parsed.call_id);
+            return;
+        };
+
+        info!(
+            "relay_election for {}: relay_idx={}",
+            parsed.call_id, election.elected_relay_idx
+        );
+
+        let call_manager = client.get_call_manager().await;
+        let call_id = wacore::types::call::CallId::new(&parsed.call_id);
+
+        if let Err(e) = call_manager
+            .store_elected_relay(&call_id, election.elected_relay_idx)
+            .await
+        {
+            warn!(
+                "Failed to store elected relay for {}: {}",
+                parsed.call_id, e
             );
+        }
 
-            let call_manager = client.get_call_manager().await;
-            let call_id = wacore::types::call::CallId::new(&parsed.call_id);
-
-            // Store the elected relay index
-            if let Err(e) = call_manager
-                .store_elected_relay(&call_id, election.elected_relay_idx)
+        // Switch transport to elected relay if already bound
+        if let Some(transport) = call_manager.get_bound_transport(&call_id).await {
+            if transport
+                .select_relay_by_id(election.elected_relay_idx)
                 .await
             {
-                warn!(
-                    "Failed to store elected relay for call {}: {}",
-                    parsed.call_id, e
+                info!(
+                    "Switched to elected relay {} for {}",
+                    election.elected_relay_idx, parsed.call_id
                 );
-            }
-
-            // If we have a bound transport, switch it to the elected relay NOW
-            // This ensures we're on the right relay before the peer accepts
-            if let Some(transport) = call_manager.get_bound_transport(&call_id).await {
-                if transport
-                    .select_relay_by_id(election.elected_relay_idx)
-                    .await
-                {
-                    log::info!(
-                        "Switched to elected relay {} for call {}",
-                        election.elected_relay_idx,
-                        parsed.call_id
-                    );
-                } else {
-                    warn!(
-                        "Could not switch to elected relay {} for call {} (not connected to it)",
-                        election.elected_relay_idx, parsed.call_id
-                    );
-                }
             } else {
-                debug!(
-                    "No bound transport for call {} yet, will use elected relay when connected",
-                    parsed.call_id
+                warn!(
+                    "Elected relay {} not connected for {}",
+                    election.elected_relay_idx, parsed.call_id
                 );
             }
-        } else {
-            debug!(
-                "Received relay_election for call {} but failed to parse election data",
-                parsed.call_id
-            );
         }
     }
 
-    /// Handle enc_rekey signaling (SRTP key rotation).
-    ///
-    /// The enc_rekey stanza contains a Signal-encrypted call key that we need to:
-    /// 1. Decrypt using Signal Protocol
-    /// 2. Derive new SRTP keys from the master key
-    /// 3. Notify the media session via callback to rotate keys
     async fn handle_enc_rekey(&self, client: &Client, parsed: &ParsedCallStanza) {
-        let enc_data = match &parsed.enc_rekey_data {
-            Some(data) => data,
-            None => {
-                warn!(
-                    "Received enc_rekey for call {} but failed to parse enc data",
-                    parsed.call_id
-                );
-                return;
-            }
+        let Some(enc_data) = &parsed.enc_rekey_data else {
+            warn!("enc_rekey for {} missing data", parsed.call_id);
+            return;
         };
 
-        debug!(
-            "Processing enc_rekey for call {} (type: {:?}, {} bytes)",
-            parsed.call_id,
-            enc_data.enc_type,
-            enc_data.ciphertext.len()
-        );
-
-        // Decrypt the call key using Signal Protocol
         let call_key = match client
             .decrypt_call_key_from(
                 &parsed.call_creator,
@@ -381,39 +302,23 @@ impl CallHandler {
             )
             .await
         {
-            Ok(key) => {
-                info!(
-                    "Successfully decrypted enc_rekey for call {} (generation={})",
-                    parsed.call_id, key.generation
-                );
-                key
-            }
+            Ok(key) => key,
             Err(e) => {
-                warn!(
-                    "Failed to decrypt enc_rekey for call {}: {}",
-                    parsed.call_id, e
-                );
+                warn!("Failed to decrypt enc_rekey for {}: {}", parsed.call_id, e);
                 return;
             }
         };
 
-        // Derive SRTP keys from the master key
-        let derived_keys = derive_call_keys(&call_key);
-
-        debug!(
-            "Derived new SRTP keys for call {} from enc_rekey",
-            parsed.call_id
+        info!(
+            "enc_rekey for {} decrypted (generation={})",
+            parsed.call_id, call_key.generation
         );
 
-        // Notify callback to rotate keys in the media session
-        let call_manager = client.get_call_manager().await;
-        call_manager
+        let derived_keys = derive_call_keys(&call_key);
+        client
+            .get_call_manager()
+            .await
             .notify_enc_rekey(&parsed.call_id, &derived_keys)
             .await;
-
-        info!(
-            "Completed enc_rekey processing for call {} - keys rotated",
-            parsed.call_id
-        );
     }
 }

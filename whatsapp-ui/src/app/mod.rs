@@ -1444,13 +1444,10 @@ impl WhatsAppApp {
                 cx.notify();
             }
             UiEvent::QrCode { code, timeout_secs } => {
-                let pair_code =
-                    if let AppState::WaitingForPairing { pair_code, .. } = &self.app_state {
-                        pair_code.clone()
-                    } else {
-                        None
-                    };
-                // Generate QR PNG once on event, not on every render
+                let pair_code = match &self.app_state {
+                    AppState::WaitingForPairing { pair_code, .. } => pair_code.clone(),
+                    _ => None,
+                };
                 let cached_qr = generate_qr_png(&code).map(|png_bytes| CachedQrCode {
                     data: code,
                     png_bytes: Arc::new(png_bytes),
@@ -1463,10 +1460,9 @@ impl WhatsAppApp {
                 cx.notify();
             }
             UiEvent::PairCode { code, timeout_secs } => {
-                let qr_code = if let AppState::WaitingForPairing { qr_code, .. } = &self.app_state {
-                    qr_code.clone()
-                } else {
-                    None
+                let qr_code = match &self.app_state {
+                    AppState::WaitingForPairing { qr_code, .. } => qr_code.clone(),
+                    _ => None,
                 };
                 self.app_state = AppState::WaitingForPairing {
                     qr_code,

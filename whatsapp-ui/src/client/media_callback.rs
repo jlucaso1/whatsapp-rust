@@ -63,16 +63,7 @@ impl CallMediaManager {
         }
     }
 
-    /// Start a WebRTC media session for a call.
-    ///
-    /// Uses the WebRTC DataChannel for audio transport instead of legacy STUN.
-    ///
-    /// # Arguments
-    /// * `call_manager` - The call manager for sending/receiving via WebRTC
-    /// * `call_id` - The call identifier
-    /// * `hbh_key` - Hop-by-hop SRTP key (30 bytes: 16-byte key + 14-byte salt)
-    /// * `auth_token` - Authentication token for STUN bind (raw bytes)
-    /// * `relay_key` - Relay key for STUN MESSAGE-INTEGRITY (raw bytes)
+    /// Start a WebRTC media session using DataChannel for audio transport.
     pub async fn start_webrtc_session(
         &self,
         call_manager: Arc<CallManager>,
@@ -83,14 +74,12 @@ impl CallMediaManager {
     ) -> Result<(), String> {
         info!("Starting WebRTC media session for call {}", call_id);
 
-        // Check if session already exists
         if self.webrtc_sessions.lock().await.contains_key(call_id) {
             warn!("WebRTC session for call {} already exists", call_id);
             return Ok(());
         }
 
-        // Start the media pipeline with hbh_key and credentials for STUN bind
-        match start_call_media_pipeline(
+        let handle = start_call_media_pipeline(
             call_manager,
             call_id.to_string(),
             hbh_key,
@@ -99,23 +88,20 @@ impl CallMediaManager {
             CallMediaPipelineConfig::default(),
         )
         .await
-        {
-            Ok(handle) => {
-                info!("WebRTC media pipeline started for call {}", call_id);
-                self.webrtc_sessions
-                    .lock()
-                    .await
-                    .insert(call_id.to_string(), handle);
-                Ok(())
-            }
-            Err(e) => {
-                error!(
-                    "Failed to start WebRTC media pipeline for call {}: {}",
-                    call_id, e
-                );
-                Err(format!("WebRTC media pipeline failed: {}", e))
-            }
-        }
+        .map_err(|e| {
+            error!(
+                "Failed to start WebRTC media pipeline for call {}: {}",
+                call_id, e
+            );
+            format!("WebRTC media pipeline failed: {}", e)
+        })?;
+
+        info!("WebRTC media pipeline started for call {}", call_id);
+        self.webrtc_sessions
+            .lock()
+            .await
+            .insert(call_id.to_string(), handle);
+        Ok(())
     }
 
     /// Start a media session for a call.
@@ -433,53 +419,35 @@ impl CallMediaManager {
         );
     }
 
-    /// Get an active media session.
     pub async fn get_session(&self, call_id: &str) -> Option<Arc<ActiveMediaSession>> {
         self.sessions.lock().await.get(call_id).cloned()
     }
 
-    /// Stop and remove a media session.
     pub async fn stop_session(&self, call_id: &str) {
-        // Stop WebRTC session if present
         if let Some(handle) = self.webrtc_sessions.lock().await.remove(call_id) {
             info!("Stopping WebRTC media session for call {}", call_id);
             handle.stop();
             info!("WebRTC media session stopped for call {}", call_id);
         }
 
-        // Stop legacy session if present
         if let Some(session) = self.sessions.lock().await.remove(call_id) {
             info!("Stopping legacy media session for call {}", call_id);
 
-            // Stop audio (handles are dropped, which stops the threads)
-            {
-                let mut capture = session.capture_handle.lock().await;
-                if let Some(ref handle) = *capture {
-                    handle.stop();
-                }
-                *capture = None;
+            if let Some(handle) = session.capture_handle.lock().await.take() {
+                handle.stop();
             }
-            {
-                let mut playback = session.playback_handle.lock().await;
-                if let Some(ref handle) = *playback {
-                    handle.stop();
-                }
-                *playback = None;
+            if let Some(handle) = session.playback_handle.lock().await.take() {
+                handle.stop();
             }
 
-            // Close the media session
             session.session.close().await;
             info!("Legacy media session stopped for call {}", call_id);
         }
     }
 
-    /// Get statistics for a session.
     pub async fn get_stats(&self, call_id: &str) -> Option<MediaSessionStats> {
-        if let Some(session) = self.get_session(call_id).await {
-            Some(session.session.stats().await)
-        } else {
-            None
-        }
+        let session = self.get_session(call_id).await?;
+        Some(session.session.stats().await)
     }
 }
 
@@ -490,23 +458,8 @@ impl Default for CallMediaManager {
 }
 
 /// Media callback that forwards events to the media manager.
-pub struct UiCallMediaCallback {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl UiCallMediaCallback {
-    pub fn new() -> Self {
-        Self {
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl Default for UiCallMediaCallback {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Default)]
+pub struct UiCallMediaCallback;
 
 #[async_trait::async_trait]
 impl CallMediaCallback for UiCallMediaCallback {

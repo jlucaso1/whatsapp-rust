@@ -1,13 +1,4 @@
-//! Streaming video decoder with on-demand frame decoding and YUV GPU rendering
-//!
-//! Memory-efficient video decoder that stores compressed H.264 samples
-//! and decodes frames on-demand. Uses GPUI's YUV surface for GPU-accelerated
-//! color conversion (no CPU YUV→RGB conversion needed).
-//!
-//! Memory comparison for a 30-frame 480x848 video:
-//! - Old (all frames BGRA): 30 × 1.6MB = 48MB
-//! - Streaming BGRA: ~1MB H.264 + 1.6MB current frame = ~3MB
-//! - **YUV streaming**: ~1MB H.264 + 0.6MB current frame = ~1.6MB (62% less!)
+//! Streaming video decoder with on-demand frame decoding and YUV GPU rendering.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -27,10 +18,7 @@ const NAL_START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
 /// NAL length size in AVCC format (typically 4 bytes for WhatsApp videos)
 const NAL_LENGTH_SIZE: usize = 4;
 
-/// A decoded video frame in YUV format (I420)
-///
-/// Memory efficient: YUV420 uses 1.5 bytes/pixel vs 4 bytes/pixel for BGRA.
-/// GPU converts YUV→RGB during rendering via GPUI's surface element.
+/// A decoded video frame in YUV format (I420).
 #[derive(Clone)]
 pub struct StreamingFrame {
     /// YUV frame data for GPU rendering
@@ -49,15 +37,7 @@ struct H264Sample {
     is_keyframe: bool,
 }
 
-/// Streaming video decoder that decodes frames on-demand
-///
-/// Instead of pre-decoding all frames, this decoder stores compressed H.264
-/// samples and decodes only when a frame is requested. Outputs YUV directly
-/// for GPU rendering - no CPU color conversion needed.
-///
-/// Memory usage: O(compressed_size + yuv_frame_size)
-/// - compressed_size: ~1-2MB for typical WhatsApp video
-/// - yuv_frame_size: width × height × 1.5 bytes (~0.6MB for 480×848)
+/// Streaming video decoder that decodes frames on-demand.
 pub struct StreamingVideoDecoder {
     /// H.264 samples (Annex B format) - compressed, small
     samples: Vec<H264Sample>,

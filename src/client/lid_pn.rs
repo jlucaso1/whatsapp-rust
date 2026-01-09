@@ -177,12 +177,7 @@ impl Client {
     ///
     /// The phone number user part if a mapping exists, None otherwise.
     pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String> {
-        // Handle both full JID (e.g., "100000012345678@lid") and user part only
-        let lid_user = if lid.contains('@') {
-            lid.split('@').next().unwrap_or(lid)
-        } else {
-            lid
-        };
+        let lid_user = lid.split('@').next().unwrap_or(lid);
         self.lid_pn_cache.get_phone_number(lid_user).await
     }
 
@@ -197,12 +192,7 @@ impl Client {
     ///
     /// The LID user part if a mapping exists, None otherwise.
     pub async fn get_lid_from_phone_number(&self, phone: &str) -> Option<String> {
-        // Handle both full JID (e.g., "559980000001@s.whatsapp.net") and user part only
-        let phone_user = if phone.contains('@') {
-            phone.split('@').next().unwrap_or(phone)
-        } else {
-            phone
-        };
+        let phone_user = phone.split('@').next().unwrap_or(phone);
         self.lid_pn_cache.get_current_lid(phone_user).await
     }
 
@@ -221,10 +211,8 @@ impl Client {
     ///
     /// The normalized JID string - LID version if mapping exists, original otherwise.
     pub async fn normalize_jid_to_lid(&self, jid_str: &str) -> String {
-        // Try to parse the JID
-        let jid: Jid = match jid_str.parse() {
-            Ok(j) => j,
-            Err(_) => return jid_str.to_string(),
+        let Ok(jid) = jid_str.parse::<Jid>() else {
+            return jid_str.to_string();
         };
 
         // Only process phone number JIDs - skip groups, broadcasts, LIDs, etc.
@@ -233,12 +221,10 @@ impl Client {
         }
 
         // Try to resolve PN to LID from cache
-        if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
-            // Return LID JID without device (for chat identification)
-            return Jid::lid(lid_user).to_string();
-        }
-
-        // No mapping - return original
-        jid_str.to_string()
+        self.lid_pn_cache
+            .get_current_lid(&jid.user)
+            .await
+            .map(|lid_user| Jid::lid(lid_user).to_string())
+            .unwrap_or_else(|| jid_str.to_string())
     }
 }

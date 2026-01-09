@@ -7,9 +7,6 @@ use std::sync::Arc;
 use wacore::types::call::CallId;
 use wacore_binary::node::Node;
 
-/// Handler for `<success>` stanzas.
-///
-/// Processes successful authentication/connection events.
 #[derive(Default)]
 pub struct SuccessHandler;
 
@@ -25,9 +22,6 @@ impl StanzaHandler for SuccessHandler {
     }
 }
 
-/// Handler for `<failure>` stanzas.
-///
-/// Processes connection or authentication failures.
 #[derive(Default)]
 pub struct FailureHandler;
 
@@ -43,9 +37,6 @@ impl StanzaHandler for FailureHandler {
     }
 }
 
-/// Handler for `<stream:error>` stanzas.
-///
-/// Processes stream-level errors that may require connection reset.
 #[derive(Default)]
 pub struct StreamErrorHandler;
 
@@ -61,10 +52,6 @@ impl StanzaHandler for StreamErrorHandler {
     }
 }
 
-/// Handler for `<ack>` stanzas.
-///
-/// Processes acknowledgment messages, including special handling for
-/// call offer ACKs which contain relay allocation data.
 #[derive(Default)]
 pub struct AckHandler;
 
@@ -76,17 +63,8 @@ impl StanzaHandler for AckHandler {
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
         // Check for call offer ACK with relay data
-        // Format: <ack class="call" type="offer"><relay call-id="...">...</relay></ack>
-        let is_call_offer_ack = node
-            .attrs
-            .get("class")
-            .map(|c| c == "call")
-            .unwrap_or(false)
-            && node
-                .attrs
-                .get("type")
-                .map(|t| t == "offer")
-                .unwrap_or(false);
+        let is_call_offer_ack = node.attrs.get("class").is_some_and(|c| c == "call")
+            && node.attrs.get("type").is_some_and(|t| t == "offer");
 
         if is_call_offer_ack {
             // Parse relay data from the ACK

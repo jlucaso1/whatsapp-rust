@@ -20,13 +20,8 @@ impl Client {
 
         info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
-        let from_clone = from.clone();
         let sender = if from.is_group() {
-            if let Some(participant) = participant {
-                participant
-            } else {
-                from_clone
-            }
+            participant.unwrap_or_else(|| from.clone())
         } else {
             from.clone()
         };

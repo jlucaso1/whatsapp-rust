@@ -83,6 +83,13 @@ impl std::fmt::Display for CallMediaPipelineError {
 
 impl std::error::Error for CallMediaPipelineError {}
 
+fn generate_transaction_id() -> [u8; 12] {
+    use rand::RngCore;
+    let mut id = [0u8; 12];
+    rand::rng().fill_bytes(&mut id);
+    id
+}
+
 /// Perform STUN Allocate to bind with the relay.
 ///
 /// This must be called BEFORE sending media packets. The relay needs this
@@ -102,10 +109,7 @@ async fn perform_stun_allocate(
         call_id, ssrc
     );
 
-    // Generate random transaction ID
-    let mut transaction_id = [0u8; 12];
-    use rand::RngCore;
-    rand::rng().fill_bytes(&mut transaction_id);
+    let transaction_id = generate_transaction_id();
 
     // Create SenderSubscriptions with our SSRC (tells relay what streams we're sending)
     // This is the WhatsApp 0x4000 attribute - protobuf-encoded stream subscription
@@ -464,10 +468,7 @@ pub async fn start_call_media_pipeline(
                 break;
             }
 
-            // Generate random transaction ID for ping
-            let mut transaction_id = [0u8; 12];
-            use rand::RngCore;
-            rand::rng().fill_bytes(&mut transaction_id);
+            let transaction_id = generate_transaction_id();
 
             // Create WhatsApp ping message (0x0801)
             let ping_msg = StunMessage::whatsapp_ping(transaction_id);

@@ -81,7 +81,7 @@ impl LazyConversation {
         let conv = self
             .parsed
             .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default());
-        if conv.id.is_empty() { None } else { Some(conv) }
+        (!conv.id.is_empty()).then_some(conv)
     }
 
     /// Get the parsed conversation, parsing on first access.

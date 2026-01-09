@@ -19,13 +19,12 @@ pub fn render_chat_header(
 ) -> impl IntoElement {
     let initial = chat.name.chars().next().unwrap_or('?');
     let name: SharedString = chat.name.clone().into();
-    let jid = chat.jid.clone();
+    let audio_jid = chat.jid.clone();
+    let video_jid = chat.jid.clone();
 
     let back_entity = entity.clone();
     let audio_call_entity = entity.clone();
     let video_call_entity = entity;
-    let audio_jid = jid.clone();
-    let video_jid = jid;
 
     div()
         .h(px(layout.header_height()))
@@ -37,7 +36,6 @@ pub fn render_chat_header(
         .bg(rgb(colors::BG_SECONDARY))
         .border_b_1()
         .border_color(rgb(colors::BORDER))
-        // Left section: back button (mobile) + avatar + name
         .child(
             div()
                 .flex()
@@ -45,7 +43,6 @@ pub fn render_chat_header(
                 .items_center()
                 .gap(px(layout.gap()))
                 .overflow_hidden()
-                // Back button - only on mobile
                 .when(layout.show_back_button(), |el| {
                     el.child(
                         div()
@@ -59,9 +56,7 @@ pub fn render_chat_header(
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(colors::BG_HOVER)))
                             .on_click(move |_, _, cx| {
-                                back_entity.update(cx, |app, cx| {
-                                    app.navigate_back(cx);
-                                });
+                                back_entity.update(cx, |app, cx| app.navigate_back(cx));
                             })
                             .child(
                                 Icon::new(IconName::ArrowLeft)
@@ -69,12 +64,10 @@ pub fn render_chat_header(
                             ),
                     )
                 })
-                // Avatar - smaller on mobile
                 .child(Avatar::from_initial(
                     initial,
                     if layout.is_mobile() { 36.0 } else { 40.0 },
                 ))
-                // Name
                 .child(
                     div()
                         .flex_1()
@@ -86,7 +79,6 @@ pub fn render_chat_header(
                         .child(name),
                 ),
         )
-        // Right section: call buttons (hidden on narrow screens)
         .when(layout.show_call_buttons(), |el| {
             el.child(
                 div()
@@ -100,7 +92,7 @@ pub fn render_chat_header(
                             .small()
                             .on_click(move |_, _window, cx| {
                                 video_call_entity.update(cx, |app, cx| {
-                                    app.start_call(video_jid.clone(), true, cx);
+                                    app.start_call(video_jid.clone(), true, cx)
                                 });
                             }),
                     )
@@ -111,7 +103,7 @@ pub fn render_chat_header(
                             .small()
                             .on_click(move |_, _window, cx| {
                                 audio_call_entity.update(cx, |app, cx| {
-                                    app.start_call(audio_jid.clone(), false, cx);
+                                    app.start_call(audio_jid.clone(), false, cx)
                                 });
                             }),
                     ),

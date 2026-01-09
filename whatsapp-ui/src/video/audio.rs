@@ -56,15 +56,7 @@ pub fn extract_audio_from_mp4(mp4_data: &[u8]) -> Option<VideoAudio> {
     let audio_track = mp4
         .tracks()
         .values()
-        .find(|t| matches!(t.track_type(), Ok(TrackType::Audio)));
-
-    let audio_track = match audio_track {
-        Some(t) => t,
-        None => {
-            log::info!("No audio track found in video");
-            return None;
-        }
-    };
+        .find(|t| matches!(t.track_type(), Ok(TrackType::Audio)))?;
 
     let track_id = audio_track.track_id();
     let sample_count = audio_track.sample_count();
@@ -130,13 +122,7 @@ pub fn extract_audio_from_mp4(mp4_data: &[u8]) -> Option<VideoAudio> {
     let mut format = probed.format;
 
     // Find the audio track in ADTS
-    let track = match format.tracks().first() {
-        Some(t) => t,
-        None => {
-            log::warn!("No track found in ADTS stream");
-            return None;
-        }
-    };
+    let track = format.tracks().first()?;
 
     let adts_track_id = track.id;
     let decoder_opts = DecoderOptions::default();
@@ -180,14 +166,16 @@ pub fn extract_audio_from_mp4(mp4_data: &[u8]) -> Option<VideoAudio> {
 
     // Convert stereo to mono if needed (average L and R channels)
     let mono_samples = if channels == 2 {
-        let mut mono = Vec::with_capacity(all_samples.len() / 2);
-        for chunk in all_samples.chunks(2) {
-            if chunk.len() == 2 {
-                mono.push((chunk[0] + chunk[1]) / 2.0);
-            } else {
-                mono.push(chunk[0]);
-            }
-        }
+        let mono: Vec<f32> = all_samples
+            .chunks(2)
+            .map(|chunk| {
+                if chunk.len() == 2 {
+                    (chunk[0] + chunk[1]) / 2.0
+                } else {
+                    chunk[0]
+                }
+            })
+            .collect();
         log::info!(
             "Converted {} stereo samples to {} mono samples",
             all_samples.len(),

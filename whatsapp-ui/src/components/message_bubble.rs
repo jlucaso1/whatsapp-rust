@@ -33,21 +33,14 @@ pub fn render_message_bubble(
 ) -> impl IntoElement {
     let is_from_me = message.is_from_me;
     let message_id = message.id.clone();
-    // Use SharedString to avoid allocation for text content
     let content: SharedString = message.content.clone().into();
     let time: SharedString = format_time_local(&message.timestamp).into();
-    // Clone the Arc, not the underlying data - this is cheap
     let media = message.media.clone();
-    // Clone content for clipboard
     let content_for_copy = message.content.clone();
-    // Create a unique ID for the bubble
     let bubble_id: SharedString = format!("msg-{}", message.id).into();
-    // Check if this message is currently playing
     let is_playing = playing_message_id.as_ref() == Some(&message_id);
-    // Clone reactions for rendering
     let reactions = message.reactions.clone();
     let has_reactions = !reactions.is_empty();
-    // Get sender name for group messages
     let sender_name: Option<SharedString> = if is_group && !is_from_me && show_sender {
         message.sender_name.clone().map(|s| s.into())
     } else {
@@ -57,13 +50,18 @@ pub fn render_message_bubble(
     div()
         .w_full()
         .flex()
-        .when(is_from_me, |el| el.justify_end())
-        .when(!is_from_me, |el| el.justify_start())
-        // Reduce padding when grouping consecutive messages
-        .when(show_sender, |el| el.pt(px(layout::MSG_PADDING_TOP_FIRST)))
-        .when(!show_sender, |el| {
-            el.pt(px(layout::MSG_PADDING_TOP_GROUPED))
+        .map(|el| {
+            if is_from_me {
+                el.justify_end()
+            } else {
+                el.justify_start()
+            }
         })
+        .pt(px(if show_sender {
+            layout::MSG_PADDING_TOP_FIRST
+        } else {
+            layout::MSG_PADDING_TOP_GROUPED
+        }))
         .pb(px(layout::MSG_PADDING_BOTTOM))
         .child(
             v_flex()
@@ -84,7 +82,6 @@ pub fn render_message_bubble(
                         .child(
                             v_flex()
                                 .gap(px(layout::MSG_CONTENT_GAP))
-                                // Show sender name for group messages (when not grouped)
                                 .when_some(sender_name, |el, name| {
                                     el.child(
                                         div()
@@ -94,7 +91,6 @@ pub fn render_message_bubble(
                                             .child(name),
                                     )
                                 })
-                                // Render media if present
                                 .when_some(media, |el, media_content| {
                                     render_media_content(
                                         el,
@@ -129,7 +125,6 @@ pub fn render_message_bubble(
                                                 .text_xs()
                                                 .child(time),
                                         )
-                                        // Copy button - only show if there's text content
                                         .when(!content_for_copy.is_empty(), |el| {
                                             el.child(
                                                 Clipboard::new(bubble_id).value(content_for_copy),
@@ -138,16 +133,13 @@ pub fn render_message_bubble(
                                 ),
                         ),
                 )
-                // Render reactions below the bubble
                 .when(has_reactions, |el| {
                     el.child(render_reactions(reactions, is_from_me))
                 }),
         )
 }
 
-/// Render reactions row below a message bubble
 fn render_reactions(reactions: HashMap<String, Vec<String>>, is_from_me: bool) -> impl IntoElement {
-    // Sort reactions by count (most popular first), then alphabetically
     let mut sorted_reactions: Vec<_> = reactions.into_iter().collect();
     sorted_reactions.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
 
@@ -155,8 +147,13 @@ fn render_reactions(reactions: HashMap<String, Vec<String>>, is_from_me: bool) -
         .gap_1()
         .mt(px(layout::MSG_REACTION_MARGIN_TOP))
         .h(px(layout::MSG_REACTION_HEIGHT))
-        .when(is_from_me, |el| el.justify_end())
-        .when(!is_from_me, |el| el.justify_start())
+        .map(|el| {
+            if is_from_me {
+                el.justify_end()
+            } else {
+                el.justify_start()
+            }
+        })
         .px_1()
         .children(sorted_reactions.into_iter().map(|(emoji, senders)| {
             let count = senders.len();
@@ -184,7 +181,6 @@ fn render_reactions(reactions: HashMap<String, Vec<String>>, is_from_me: bool) -
         }))
 }
 
-/// Render media content within a message bubble
 fn render_media_content(
     el: gpui::Div,
     media_content: crate::state::MediaContent,
@@ -198,41 +194,33 @@ fn render_media_content(
 ) -> gpui::Div {
     match media_content.media_type {
         MediaType::Image => {
-            // Calculate display size maintaining aspect ratio
             let (display_w, display_h) = calculate_media_size(
                 media_content.width.unwrap_or(300),
                 media_content.height.unwrap_or(300),
                 max_media_size,
             );
 
-            // Only render if we have actual image data
             if !media_content.data.is_empty() {
                 el.child(render_image_from_bytes(
                     media_content.data,
                     &media_content.mime_type,
                     display_w,
                     display_h,
-                    true, // rounded corners
+                    true,
                 ))
             } else {
                 el.child(render_media_placeholder("[Image]", 200.0, 150.0))
             }
         }
         MediaType::Sticker => {
-            // Calculate display size maintaining aspect ratio
             let (display_w, display_h) = calculate_media_size(
                 media_content.width.unwrap_or(300),
                 media_content.height.unwrap_or(300),
                 max_media_size,
             );
 
-            // Use cached sticker image if available (preserves animation state across renders)
             if let Some(cached_image) = sticker_image {
                 let sticker_id: SharedString = format!("sticker-{}", message_id).into();
-
-                // For animated stickers, GPUI handles animation automatically
-                // The ID is important for GPUI to track animation state
-                // The same Arc<Image> must be reused for animation to work
                 el.child(
                     img(ImageSource::Image(cached_image))
                         .id(sticker_id)
@@ -241,13 +229,12 @@ fn render_media_content(
                         .object_fit(gpui::ObjectFit::Contain),
                 )
             } else if !media_content.data.is_empty() {
-                // Fallback: create image inline (won't animate properly)
                 el.child(render_image_from_bytes(
                     media_content.data,
                     &media_content.mime_type,
                     display_w,
                     display_h,
-                    false, // no rounded corners for stickers
+                    false,
                 ))
             } else {
                 el.child(render_media_placeholder("[Sticker]", 150.0, 150.0))
@@ -271,7 +258,6 @@ fn render_media_content(
     }
 }
 
-/// Calculate display size maintaining aspect ratio
 fn calculate_media_size(width: u32, height: u32, max_size: f32) -> (f32, f32) {
     let w = width as f32;
     let h = height as f32;
@@ -279,7 +265,6 @@ fn calculate_media_size(width: u32, height: u32, max_size: f32) -> (f32, f32) {
     ((w * scale).max(50.0), (h * scale).max(50.0))
 }
 
-/// Render a placeholder for unsupported media
 fn render_media_placeholder(text: &'static str, width: f32, height: f32) -> impl IntoElement {
     div()
         .w(px(width))
@@ -292,7 +277,6 @@ fn render_media_placeholder(text: &'static str, width: f32, height: f32) -> impl
         .child(div().text_color(rgb(colors::TEXT_SECONDARY)).child(text))
 }
 
-/// Render an image from raw bytes with the given dimensions
 fn render_image_from_bytes(
     data: Arc<Vec<u8>>,
     mime_type: &str,
@@ -316,7 +300,6 @@ fn render_image_from_bytes(
     }
 }
 
-/// Audio player state for UI rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AudioPlayerState {
     #[default]
@@ -326,7 +309,6 @@ pub enum AudioPlayerState {
     Error,
 }
 
-/// Render an audio player with play/pause button (supports lazy loading)
 fn render_audio_player(
     media_content: crate::state::MediaContent,
     message_id: String,
@@ -338,8 +320,6 @@ fn render_audio_player(
     let can_play = has_data || can_download;
     let downloadable = media_content.downloadable.clone();
     let button_id: SharedString = format!("play-{}", message_id).into();
-
-    // Format duration if available
     let duration_text: SharedString = if let Some(secs) = media_content.duration_secs {
         let mins = secs / 60;
         let secs = secs % 60;
@@ -357,18 +337,17 @@ fn render_audio_player(
         .items_center()
         .px_2()
         .gap_2()
-        // Play/Pause button
         .child(
             Button::new(button_id)
-                .icon(if is_playing {
+                .icon(
                     Icon::default()
-                        .path("icons/pause.svg")
-                        .text_color(rgb(colors::TEXT_PRIMARY))
-                } else {
-                    Icon::default()
-                        .path("icons/play.svg")
-                        .text_color(rgb(colors::TEXT_PRIMARY))
-                })
+                        .path(if is_playing {
+                            "icons/pause.svg"
+                        } else {
+                            "icons/play.svg"
+                        })
+                        .text_color(rgb(colors::TEXT_PRIMARY)),
+                )
                 .ghost()
                 .disabled(!can_play)
                 .on_click({
@@ -378,17 +357,14 @@ fn render_audio_player(
                         let msg_id = message_id.clone();
                         entity.update(cx, |app, cx| {
                             if !data.is_empty() {
-                                // Already have data, play directly
                                 app.toggle_audio(msg_id, (*data).clone(), cx);
                             } else if let Some(dl) = downloadable.clone() {
-                                // Need to download first
                                 app.toggle_audio_lazy(msg_id, dl, cx);
                             }
                         });
                     }
                 }),
         )
-        // Waveform placeholder / progress indicator
         .child(
             div()
                 .flex_1()
@@ -406,18 +382,15 @@ fn render_audio_player(
                     div()
                         .text_xs()
                         .text_color(rgb(colors::TEXT_SECONDARY))
-                        .child(if is_playing {
-                            SharedString::from("Playing...")
-                        } else if !has_data && can_download {
-                            SharedString::from("Tap to download")
-                        } else {
-                            duration_text
+                        .child(match (is_playing, !has_data && can_download) {
+                            (true, _) => SharedString::from("Playing..."),
+                            (_, true) => SharedString::from("Tap to download"),
+                            _ => duration_text,
                         }),
                 ),
         )
 }
 
-/// Render a document placeholder
 fn render_document_placeholder() -> impl IntoElement {
     div()
         .w(px(200.))
@@ -435,7 +408,6 @@ fn render_document_placeholder() -> impl IntoElement {
         )
 }
 
-/// Render a video player with play button overlay
 fn render_video_player(
     media_content: crate::state::MediaContent,
     message_id: String,
@@ -444,7 +416,6 @@ fn render_video_player(
     video_frame: Option<YuvFrameData>,
     max_media_size: f32,
 ) -> impl IntoElement {
-    // Calculate display size maintaining aspect ratio
     let (display_w, display_h) = calculate_media_size(
         media_content.width.unwrap_or(300),
         media_content.height.unwrap_or(200),
@@ -455,8 +426,6 @@ fn render_video_player(
     let state = video_player_state.unwrap_or(VideoPlayerState::Idle);
     let downloadable = media_content.downloadable.clone();
     let can_download = media_content.can_download();
-
-    // Use state helper methods
     let is_playing = state.is_playing();
     let is_paused = state.is_paused();
     let is_loading = state.is_loading();
@@ -469,10 +438,7 @@ fn render_video_player(
         .rounded(px(layout::RADIUS_SMALL))
         .overflow_hidden()
         .child(
-            // Background: either video frame or thumbnail
             if let Some(frame) = video_frame.filter(|_| is_playing || is_paused) {
-                // Render current video frame using YUV surface (GPU-accelerated)
-                // YUV→RGB conversion happens on GPU - no CPU overhead
                 div()
                     .w_full()
                     .h_full()
@@ -484,7 +450,6 @@ fn render_video_player(
                     )
                     .into_any_element()
             } else if !media_content.data.is_empty() {
-                // Render thumbnail
                 div()
                     .w_full()
                     .h_full()
@@ -493,11 +458,10 @@ fn render_video_player(
                         &media_content.mime_type,
                         display_w,
                         display_h,
-                        false, // no rounded corners (container handles it)
+                        false,
                     ))
                     .into_any_element()
             } else {
-                // No thumbnail available
                 div()
                     .w_full()
                     .h_full()
@@ -513,7 +477,6 @@ fn render_video_player(
                     .into_any_element()
             },
         )
-        // Overlay with play/pause button
         .child(
             div()
                 .absolute()
@@ -521,11 +484,9 @@ fn render_video_player(
                 .flex()
                 .justify_center()
                 .items_center()
-                .bg(gpui::rgba(0x00000066)) // Semi-transparent overlay
-                .when(!is_playing, |el| el)
-                .when(is_playing, |el| el.bg(gpui::rgba(0x00000000))) // No overlay when playing
+                .bg(gpui::rgba(0x00000066))
+                .when(is_playing, |el| el.bg(gpui::rgba(0x00000000)))
                 .child(if is_loading {
-                    // Show loading indicator
                     div()
                         .w(px(48.))
                         .h(px(48.))
@@ -543,7 +504,6 @@ fn render_video_player(
                         ))
                         .into_any_element()
                 } else if is_error {
-                    // Show error indicator
                     div()
                         .w(px(48.))
                         .h(px(48.))
@@ -560,7 +520,6 @@ fn render_video_player(
                         )
                         .into_any_element()
                 } else if !is_playing {
-                    // Show play button
                     Button::new(button_id)
                         .icon(
                             Icon::default()
@@ -583,7 +542,6 @@ fn render_video_player(
                         })
                         .into_any_element()
                 } else {
-                    // Playing - show pause button on hover (subtle)
                     Button::new(button_id)
                         .icon(
                             Icon::default()

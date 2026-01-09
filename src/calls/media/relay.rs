@@ -285,9 +285,7 @@ impl RelayConnection {
 
     /// Select the best address from a relay endpoint.
     ///
-    /// **IMPORTANT**: WhatsApp Web only uses protocol=0 addresses (UDP).
-    /// Addresses with protocol=1 (TCP) are completely ignored by WhatsApp Web JS.
-    /// See: sTyteLh02ST.js line 156 (`me = 0`) and line 191 (`if (d.protocol === me)`)
+    /// WhatsApp Web only uses protocol=0 (UDP) addresses. Protocol=1 (TCP) is a fallback.
     fn select_address(&self, endpoint: &RelayEndpoint) -> Result<SocketAddr, RelayError> {
         debug!(
             "Selecting address for {} from {} addresses",
@@ -295,103 +293,37 @@ impl RelayConnection {
             endpoint.addresses.len()
         );
 
-        for (i, addr) in endpoint.addresses.iter().enumerate() {
-            debug!(
-                "  Address {}: ipv4={:?}, ipv6={:?}, port={}, protocol={}",
-                i, addr.ipv4, addr.ipv6, addr.port, addr.protocol
-            );
-        }
-
-        // First pass: try protocol=0 addresses (UDP - what WhatsApp Web uses)
-        // WhatsApp Web JS: `var me = 0; if (d.protocol === me) { ... }`
-        for addr in &endpoint.addresses {
-            if addr.protocol != 0 {
-                continue;
-            }
-
-            // Try IPv6 first if preferred
+        // Helper to try parsing an address with the given protocol
+        let try_address = |addr: &crate::calls::RelayAddress| -> Option<SocketAddr> {
             if self.config.prefer_ipv6
                 && let Some(ipv6) = &addr.ipv6
                 && let Ok(ip) = ipv6.parse::<IpAddr>()
             {
-                let port = addr.port_v6.unwrap_or(addr.port);
-                debug!(
-                    "Selected protocol=0 (UDP) IPv6 address for {}: {}:{}",
-                    endpoint.relay_name, ip, port
-                );
-                return Ok(SocketAddr::new(ip, port));
+                return Some(SocketAddr::new(ip, addr.port_v6.unwrap_or(addr.port)));
             }
-
-            // Try IPv4
             if let Some(ipv4) = &addr.ipv4
                 && let Ok(ip) = ipv4.parse::<Ipv4Addr>()
             {
-                debug!(
-                    "Selected protocol=0 (UDP) IPv4 address for {}: {}:{}",
-                    endpoint.relay_name, ip, addr.port
-                );
-                return Ok(SocketAddr::new(IpAddr::V4(ip), addr.port));
+                return Some(SocketAddr::new(IpAddr::V4(ip), addr.port));
             }
-
-            // Fallback to IPv6 if IPv4 not available
             if let Some(ipv6) = &addr.ipv6
                 && let Ok(ip) = ipv6.parse::<IpAddr>()
             {
-                let port = addr.port_v6.unwrap_or(addr.port);
-                debug!(
-                    "Selected protocol=0 (UDP) IPv6 address for {}: {}:{}",
-                    endpoint.relay_name, ip, port
-                );
-                return Ok(SocketAddr::new(ip, port));
+                return Some(SocketAddr::new(ip, addr.port_v6.unwrap_or(addr.port)));
             }
-        }
+            None
+        };
 
-        // Second pass: fallback to protocol=1 (TCP) addresses
-        // Note: WhatsApp Web ignores these, but the WASM module supports them.
-        // TCP relay might work differently and could be useful for native implementations.
-        debug!(
-            "No protocol=0 (UDP) addresses found for {}, trying protocol=1 (TCP) fallback",
-            endpoint.relay_name
-        );
-        for addr in &endpoint.addresses {
-            if addr.protocol != 1 {
-                continue;
-            }
-
-            // Try IPv6 first if preferred
-            if self.config.prefer_ipv6
-                && let Some(ipv6) = &addr.ipv6
-                && let Ok(ip) = ipv6.parse::<IpAddr>()
-            {
-                let port = addr.port_v6.unwrap_or(addr.port);
-                debug!(
-                    "Selected protocol=1 (TCP) IPv6 address for {}: {}:{}",
-                    endpoint.relay_name, ip, port
-                );
-                return Ok(SocketAddr::new(ip, port));
-            }
-
-            // Try IPv4
-            if let Some(ipv4) = &addr.ipv4
-                && let Ok(ip) = ipv4.parse::<Ipv4Addr>()
-            {
-                debug!(
-                    "Selected protocol=1 (TCP) IPv4 address for {}: {}:{}",
-                    endpoint.relay_name, ip, addr.port
-                );
-                return Ok(SocketAddr::new(IpAddr::V4(ip), addr.port));
-            }
-
-            // Fallback to IPv6 if IPv4 not available
-            if let Some(ipv6) = &addr.ipv6
-                && let Ok(ip) = ipv6.parse::<IpAddr>()
-            {
-                let port = addr.port_v6.unwrap_or(addr.port);
-                debug!(
-                    "Selected protocol=1 (TCP) IPv6 address for {}: {}:{}",
-                    endpoint.relay_name, ip, port
-                );
-                return Ok(SocketAddr::new(ip, port));
+        // First pass: protocol=0 (UDP), second pass: protocol=1 (TCP) fallback
+        for protocol in [0, 1] {
+            for addr in endpoint.addresses.iter().filter(|a| a.protocol == protocol) {
+                if let Some(socket_addr) = try_address(addr) {
+                    debug!(
+                        "Selected protocol={} address for {}: {}",
+                        protocol, endpoint.relay_name, socket_addr
+                    );
+                    return Ok(socket_addr);
+                }
             }
         }
 

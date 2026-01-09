@@ -54,6 +54,33 @@ impl<'a> DownloadableBuilder<'a> {
     }
 }
 
+/// Extract relay credentials (auth_token, relay_key) from WebRTC transport or fallback data.
+async fn extract_relay_credentials(
+    call_manager: &whatsapp_rust::calls::CallManager,
+    call_id: &CallId,
+    relay: &whatsapp_rust::calls::RelayData,
+) -> (Vec<u8>, Vec<u8>) {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    if let Some(transport) = call_manager.get_webrtc_transport(call_id).await
+        && let Some(relay_info) = transport.connected_relay().await
+    {
+        let auth = engine
+            .decode(&relay_info.auth_token)
+            .unwrap_or_else(|_| relay_info.auth_token.as_bytes().to_vec());
+        let key = engine
+            .decode(&relay_info.relay_key)
+            .unwrap_or_else(|_| relay_info.relay_key.as_bytes().to_vec());
+        return (auth, key);
+    }
+
+    // Fallback to relay data
+    let auth = relay.auth_tokens.first().cloned().unwrap_or_default();
+    let key = relay.relay_key.clone().unwrap_or_default();
+    (auth, key)
+}
+
 /// Shared client handle for accessing the WhatsApp client from UI
 pub type ClientHandle = Arc<Mutex<Option<Arc<Client>>>>;
 
@@ -304,52 +331,10 @@ impl WhatsAppClient {
                                     call_id_str, relay_name
                                 );
 
-                                // 2. Start audio pipeline with hbh_key and STUN credentials
                                 if let Some(hbh_key) = &relay.hbh_key {
-                                    // Get auth_token and relay_key from connected relay info
                                     let (auth_token_bytes, relay_key_bytes) =
-                                        if let Some(transport) =
-                                            call_manager.get_webrtc_transport(&call_id).await
-                                        {
-                                            if let Some(relay_info) =
-                                                transport.connected_relay().await
-                                            {
-                                                // Decode base64 auth_token
-                                                use base64::Engine;
-                                                let engine =
-                                                    base64::engine::general_purpose::STANDARD;
-                                                let auth = engine
-                                                    .decode(&relay_info.auth_token)
-                                                    .unwrap_or_else(|_| {
-                                                        relay_info.auth_token.as_bytes().to_vec()
-                                                    });
-                                                let key = engine
-                                                    .decode(&relay_info.relay_key)
-                                                    .unwrap_or_else(|_| {
-                                                        relay_info.relay_key.as_bytes().to_vec()
-                                                    });
-                                                (auth, key)
-                                            } else {
-                                                // Fallback to relay_key from relay data
-                                                let auth = relay
-                                                    .auth_tokens
-                                                    .first()
-                                                    .cloned()
-                                                    .unwrap_or_default();
-                                                let key =
-                                                    relay.relay_key.clone().unwrap_or_default();
-                                                (auth, key)
-                                            }
-                                        } else {
-                                            // Fallback to relay_key from relay data
-                                            let auth = relay
-                                                .auth_tokens
-                                                .first()
-                                                .cloned()
-                                                .unwrap_or_default();
-                                            let key = relay.relay_key.clone().unwrap_or_default();
-                                            (auth, key)
-                                        };
+                                        extract_relay_credentials(&call_manager, &call_id, &relay)
+                                            .await;
 
                                     if let Err(e) = media_manager
                                         .start_webrtc_session(
@@ -465,12 +450,7 @@ impl WhatsAppClient {
                     .normalize_jid_to_lid(&info.source.chat.to_string())
                     .await;
 
-                // Extract sender name from push_name (notify attribute)
-                let sender_name = if info.push_name.is_empty() {
-                    None
-                } else {
-                    Some(info.push_name.clone())
-                };
+                let sender_name = (!info.push_name.is_empty()).then(|| info.push_name.clone());
 
                 let _ = ui_tx.send(UiEvent::MessageReceived {
                     chat_jid: normalized_chat_jid,
@@ -479,11 +459,12 @@ impl WhatsAppClient {
                 });
             }
             Event::Receipt(receipt) => {
-                // Only handle read and played receipts for UI updates
-                let dominated_type = match &receipt.r#type {
-                    ReceiptType::Read | ReceiptType::ReadSelf => ReceiptType::Read,
-                    ReceiptType::Played | ReceiptType::PlayedSelf => ReceiptType::Played,
-                    _ => return, // Ignore other receipt types (delivery, retry, etc.)
+                let Some(dominated_type) = (match &receipt.r#type {
+                    ReceiptType::Read | ReceiptType::ReadSelf => Some(ReceiptType::Read),
+                    ReceiptType::Played | ReceiptType::PlayedSelf => Some(ReceiptType::Played),
+                    _ => None,
+                }) else {
+                    return;
                 };
 
                 info!(
@@ -899,19 +880,17 @@ impl WhatsAppClient {
                     }
                 };
 
-                // Parse message sender JIDs
-                let mut parsed_messages: Vec<(String, Jid)> = Vec::with_capacity(messages.len());
-                for (msg_id, sender_str) in messages {
-                    match sender_str.parse::<Jid>() {
-                        Ok(sender_jid) => {
-                            parsed_messages.push((msg_id, sender_jid));
-                        }
-                        Err(e) => {
-                            warn!("Invalid sender JID '{}': {}", sender_str, e);
-                            // Skip this message but continue with others
-                        }
-                    }
-                }
+                // Parse message sender JIDs, skipping invalid ones
+                let parsed_messages: Vec<(String, Jid)> = messages
+                    .into_iter()
+                    .filter_map(|(msg_id, sender_str)| {
+                        sender_str
+                            .parse::<Jid>()
+                            .inspect_err(|e| warn!("Invalid sender JID '{}': {}", sender_str, e))
+                            .ok()
+                            .map(|jid| (msg_id, jid))
+                    })
+                    .collect();
 
                 if parsed_messages.is_empty() {
                     return;
@@ -1019,38 +998,14 @@ impl WhatsAppClient {
                                                     call_id, relay_name
                                                 );
 
-                                                // 2. Start audio pipeline with hbh_key and STUN credentials
                                                 if let Some(hbh_key) = &relay.hbh_key {
-                                                    // Get auth_token and relay_key from connected relay info
                                                     let (auth_token_bytes, relay_key_bytes) =
-                                                        if let Some(transport) =
-                                                            call_manager.get_webrtc_transport(&call_id_obj).await
-                                                        {
-                                                            if let Some(relay_info) =
-                                                                transport.connected_relay().await
-                                                            {
-                                                                // Decode base64 auth_token
-                                                                use base64::Engine;
-                                                                let engine = base64::engine::general_purpose::STANDARD;
-                                                                let auth = engine
-                                                                    .decode(&relay_info.auth_token)
-                                                                    .unwrap_or_else(|_| relay_info.auth_token.as_bytes().to_vec());
-                                                                let key = engine
-                                                                    .decode(&relay_info.relay_key)
-                                                                    .unwrap_or_else(|_| relay_info.relay_key.as_bytes().to_vec());
-                                                                (auth, key)
-                                                            } else {
-                                                                // Fallback to relay_key from relay data
-                                                                let auth = relay.auth_tokens.first().cloned().unwrap_or_default();
-                                                                let key = relay.relay_key.clone().unwrap_or_default();
-                                                                (auth, key)
-                                                            }
-                                                        } else {
-                                                            // Fallback to relay_key from relay data
-                                                            let auth = relay.auth_tokens.first().cloned().unwrap_or_default();
-                                                            let key = relay.relay_key.clone().unwrap_or_default();
-                                                            (auth, key)
-                                                        };
+                                                        extract_relay_credentials(
+                                                            &call_manager,
+                                                            &call_id_obj,
+                                                            &relay,
+                                                        )
+                                                        .await;
 
                                                     let media_guard = media_manager_handle.lock().await;
                                                     if let Some(ref media_manager) = *media_guard {

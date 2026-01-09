@@ -16,7 +16,6 @@ pub fn render_chat_item(
     entity: Entity<WhatsAppApp>,
     layout: ResponsiveLayout,
 ) -> impl IntoElement {
-    // Use SharedString to avoid extra allocations
     let name: SharedString = chat.name.into();
     let last_message: SharedString = chat
         .last_message
@@ -24,6 +23,12 @@ pub fn render_chat_item(
         .into();
     let unread = chat.unread_count;
     let initial = name.chars().next().unwrap_or('?');
+
+    let bg = if is_selected {
+        rgb(colors::BG_SELECTED)
+    } else {
+        rgb(colors::BG_SECONDARY)
+    };
 
     div()
         .id(SharedString::from(format!("chat-{}", jid)))
@@ -34,21 +39,12 @@ pub fn render_chat_item(
         .px(px(layout.padding_small()))
         .gap(px(layout.gap()))
         .cursor_pointer()
-        .bg(if is_selected {
-            rgb(colors::BG_SELECTED)
-        } else {
-            rgb(colors::BG_SECONDARY)
-        })
-        // Only show hover effect when not selected
+        .bg(bg)
         .when(!is_selected, |el| el.hover(|s| s.bg(rgb(colors::BG_HOVER))))
         .on_click(move |_, _, cx| {
-            entity.update(cx, |this, cx| {
-                this.select_chat(jid.clone(), cx);
-            });
+            entity.update(cx, |this, cx| this.select_chat(jid.clone(), cx));
         })
-        // Avatar
         .child(Avatar::from_initial(initial, layout.avatar_size()))
-        // Chat info
         .child(
             div()
                 .flex_1()
@@ -56,7 +52,6 @@ pub fn render_chat_item(
                 .flex_col()
                 .gap_1()
                 .overflow_hidden()
-                // Name row
                 .child(
                     div().flex().justify_between().child(
                         div()
@@ -68,7 +63,6 @@ pub fn render_chat_item(
                             .child(name),
                     ),
                 )
-                // Last message row
                 .child(
                     div()
                         .flex()

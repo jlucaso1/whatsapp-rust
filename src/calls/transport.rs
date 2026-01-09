@@ -121,17 +121,11 @@ impl TransportPayload {
 
     /// Create a transport payload from raw bytes.
     pub fn from_raw(data: Vec<u8>) -> Self {
-        let mut payload = Self {
-            raw_data: data.clone(),
-            ..Default::default()
-        };
         // Try to parse as JSON if it looks like JSON
-        if data.first() == Some(&b'{')
+        let (ufrag, pwd, candidates) = if data.first() == Some(&b'{')
             && let Ok(json) = serde_json::from_slice::<TransportJson>(&data)
         {
-            payload.ufrag = json.ufrag;
-            payload.pwd = json.pwd;
-            payload.candidates = json
+            let candidates = json
                 .candidates
                 .into_iter()
                 .map(|c| {
@@ -145,8 +139,17 @@ impl TransportPayload {
                     candidate
                 })
                 .collect();
+            (json.ufrag, json.pwd, candidates)
+        } else {
+            (None, None, Vec::new())
+        };
+
+        Self {
+            raw_data: data,
+            candidates,
+            ufrag,
+            pwd,
         }
-        payload
     }
 
     /// Add an ICE candidate.

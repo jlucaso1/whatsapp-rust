@@ -1702,9 +1702,9 @@ mod enc_rekey_tests {
     }
 
     #[test]
-    fn test_enc_type_as_str() {
-        assert_eq!(EncType::Msg.as_str(), "msg");
-        assert_eq!(EncType::PkMsg.as_str(), "pkmsg");
+    fn test_enc_type_display() {
+        assert_eq!(EncType::Msg.to_string(), "msg");
+        assert_eq!(EncType::PkMsg.to_string(), "pkmsg");
     }
 
     #[test]

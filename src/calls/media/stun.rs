@@ -886,64 +886,46 @@ impl StunMessage {
         Ok(StunAttribute::ErrorCode { code, reason })
     }
 
-    /// Get the mapped address from the response, if present.
     pub fn mapped_address(&self) -> Option<SocketAddr> {
-        for attr in &self.attributes {
-            if let StunAttribute::MappedAddress(addr) = attr {
-                return Some(*addr);
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::MappedAddress(addr) => Some(*addr),
+            _ => None,
+        })
     }
 
-    /// Get the relayed address from a TURN Allocate response, if present.
     pub fn relayed_address(&self) -> Option<SocketAddr> {
-        for attr in &self.attributes {
-            if let StunAttribute::XorRelayedAddress(addr) = attr {
-                return Some(*addr);
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::XorRelayedAddress(addr) => Some(*addr),
+            _ => None,
+        })
     }
 
-    /// Get the lifetime from the response, if present.
     pub fn lifetime(&self) -> Option<u32> {
-        for attr in &self.attributes {
-            if let StunAttribute::Lifetime(secs) = attr {
-                return Some(*secs);
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::Lifetime(secs) => Some(*secs),
+            _ => None,
+        })
     }
 
-    /// Get the realm from the response, if present.
     pub fn realm(&self) -> Option<&str> {
-        for attr in &self.attributes {
-            if let StunAttribute::Realm(realm) = attr {
-                return Some(realm);
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::Realm(realm) => Some(realm.as_str()),
+            _ => None,
+        })
     }
 
-    /// Get the nonce from the response, if present.
     pub fn nonce(&self) -> Option<&[u8]> {
-        for attr in &self.attributes {
-            if let StunAttribute::Nonce(nonce) = attr {
-                return Some(nonce);
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::Nonce(nonce) => Some(nonce.as_slice()),
+            _ => None,
+        })
     }
 
-    /// Get the error code from the response, if present.
     pub fn error_code(&self) -> Option<(u16, &str)> {
-        for attr in &self.attributes {
-            if let StunAttribute::ErrorCode { code, reason } = attr {
-                return Some((*code, reason));
-            }
-        }
-        None
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::ErrorCode { code, reason } => Some((*code, reason.as_str())),
+            _ => None,
+        })
     }
 
     /// Check if this is an error response.
@@ -1367,7 +1349,7 @@ impl StunBinder {
     pub fn is_allocate_packet(data: &[u8]) -> bool {
         matches!(
             Self::classify_packet(data),
-            Some(StunMessageType::AllocateRequest) | Some(StunMessageType::AllocateResponse)
+            Some(StunMessageType::AllocateRequest | StunMessageType::AllocateResponse)
         )
     }
 
@@ -1375,7 +1357,7 @@ impl StunBinder {
     pub fn is_binding_packet(data: &[u8]) -> bool {
         matches!(
             Self::classify_packet(data),
-            Some(StunMessageType::BindingRequest) | Some(StunMessageType::BindingResponse)
+            Some(StunMessageType::BindingRequest | StunMessageType::BindingResponse)
         )
     }
 
@@ -1386,25 +1368,19 @@ impl StunBinder {
 
     /// Check if a packet is a WhatsApp Ping message (0x0801).
     pub fn is_ping_packet(data: &[u8]) -> bool {
-        matches!(
-            Self::classify_packet(data),
-            Some(StunMessageType::WhatsAppPing)
-        )
+        Self::classify_packet(data) == Some(StunMessageType::WhatsAppPing)
     }
 
     /// Check if a packet is a WhatsApp Pong message (0x0802).
     pub fn is_pong_packet(data: &[u8]) -> bool {
-        matches!(
-            Self::classify_packet(data),
-            Some(StunMessageType::WhatsAppPong)
-        )
+        Self::classify_packet(data) == Some(StunMessageType::WhatsAppPong)
     }
 
     /// Check if a packet is a WhatsApp Ping or Pong message.
     pub fn is_ping_pong_packet(data: &[u8]) -> bool {
         matches!(
             Self::classify_packet(data),
-            Some(StunMessageType::WhatsAppPing) | Some(StunMessageType::WhatsAppPong)
+            Some(StunMessageType::WhatsAppPing | StunMessageType::WhatsAppPong)
         )
     }
 }

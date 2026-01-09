@@ -138,12 +138,11 @@ impl InputAreaView {
 
                 let should_stop = entity
                     .update(cx, |view, cx| {
-                        if let TypingState::Composing(last_keystroke) = view.typing_state {
-                            if last_keystroke.elapsed() >= TYPING_PAUSED_TIMEOUT {
-                                view.stop_typing_internal(cx);
-                                return true;
-                            }
-                        } else {
+                        let TypingState::Composing(last_keystroke) = view.typing_state else {
+                            return true;
+                        };
+                        if last_keystroke.elapsed() >= TYPING_PAUSED_TIMEOUT {
+                            view.stop_typing_internal(cx);
                             return true;
                         }
                         false
@@ -157,9 +156,8 @@ impl InputAreaView {
         }));
     }
 
-    /// Stop typing and emit event
     fn stop_typing_internal(&mut self, cx: &mut Context<Self>) {
-        if let TypingState::Composing(_) = self.typing_state {
+        if matches!(self.typing_state, TypingState::Composing(_)) {
             cx.emit(InputAreaEvent::StoppedTyping);
         }
         self.typing_state = TypingState::Idle;

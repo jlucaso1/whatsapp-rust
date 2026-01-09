@@ -118,7 +118,6 @@ pub enum EndCallReason {
 }
 
 impl EndCallReason {
-    /// Convert to CallOutcome for logging.
     pub fn to_outcome(self) -> CallOutcome {
         match self {
             Self::Unknown | Self::UserEnded => CallOutcome::Connected,
