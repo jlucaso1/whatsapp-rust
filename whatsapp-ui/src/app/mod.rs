@@ -174,6 +174,9 @@ pub struct WhatsAppApp {
     recording_state: RecordingState,
     /// Audio player for voice message and video audio playback
     audio_player: AudioPlayer,
+    /// Message ID of the audio currently loaded in audio_player (for ownership tracking)
+    /// This ensures we don't resume audio from a different video when switching
+    audio_owner: Option<String>,
     /// Currently active media (mutual exclusion: only one audio or video at a time)
     active_media: ActiveMedia,
     /// Call state (incoming and outgoing calls)
@@ -241,6 +244,7 @@ impl WhatsAppApp {
             audio_recorder: AudioRecorder::new(),
             recording_state: RecordingState::default(),
             audio_player: AudioPlayer::new(),
+            audio_owner: None,
             active_media: ActiveMedia::None,
             call_state: CallState::new(),
             name_cache: HashMap::new(),
@@ -570,11 +574,9 @@ impl WhatsAppApp {
 
     // ========== Actions ==========
 
-    /// Select a chat by JID
     pub fn select_chat(&mut self, jid: String, cx: &mut Context<Self>) {
+        self.stop_current_media();
         self.selected_chat = Some(jid.clone());
-
-        // On mobile, navigate to the chat panel
         self.navigate_to_chat();
 
         // Collect unread messages from others to send read receipts
@@ -941,23 +943,18 @@ impl WhatsAppApp {
 
     // ========== Media Playback Control ==========
 
-    /// Stop any currently playing media (audio or video).
-    /// This is the single control point for mutual exclusion.
-    /// Note: Does NOT call cx.notify() - caller is responsible for notification.
+    /// Stop any currently playing media. Does NOT call cx.notify().
     fn stop_current_media(&mut self) {
-        match &self.active_media {
-            ActiveMedia::None => {}
-            ActiveMedia::Audio { .. } => {
-                self.audio_player.stop();
+        self.audio_player.stop();
+        self.audio_owner = None;
+
+        if let ActiveMedia::Video { message_id } = &self.active_media {
+            if let Some(player) = self.video_players.get_mut(message_id) {
+                player.stop();
             }
-            ActiveMedia::Video { message_id } => {
-                if let Some(player) = self.video_players.get_mut(message_id) {
-                    player.stop();
-                }
-                self.audio_player.stop(); // Video's audio track
-                self.video_update_task = None;
-            }
+            self.video_update_task = None;
         }
+
         self.active_media = ActiveMedia::None;
     }
 
@@ -979,17 +976,14 @@ impl WhatsAppApp {
 
     // ========== Audio Playback ==========
 
-    /// Play an audio message
     pub fn play_audio(&mut self, message_id: String, audio_data: Vec<u8>, cx: &mut Context<Self>) {
-        // Stop any currently playing media (mutual exclusion)
         self.stop_current_media();
 
-        // Subscribe to completion event before starting playback
         let completion_rx = self.audio_player.on_complete();
 
-        // Start playing this message
         match self.audio_player.play(audio_data) {
             Ok(()) => {
+                self.audio_owner = Some(message_id.clone());
                 self.active_media = ActiveMedia::Audio {
                     message_id: message_id.clone(),
                 };
@@ -1160,12 +1154,10 @@ impl WhatsAppApp {
                 self.video_update_task = None;
             }
             Some(VideoPlayerState::Paused) => {
-                // Stop any other media first (mutual exclusion)
                 if !self.active_media.is_playing(&message_id) {
                     self.stop_current_media();
                 }
 
-                // Now get mutable access to player
                 let (needs_audio, audio_data) =
                     if let Some(player) = self.video_players.get_mut(&message_id) {
                         let needs = player.play();
@@ -1181,13 +1173,11 @@ impl WhatsAppApp {
                         return;
                     };
 
-                // Set this video as active media
                 self.active_media = ActiveMedia::Video {
                     message_id: message_id.clone(),
                 };
                 self.start_video_update_task(cx);
 
-                // Either start or resume audio
                 if let Some((samples, sample_rate)) = audio_data {
                     info!(
                         "Playing video audio: {} samples at {} Hz",
@@ -1197,8 +1187,9 @@ impl WhatsAppApp {
                     if let Err(e) = self.audio_player.play_samples(samples, sample_rate) {
                         warn!("Failed to play video audio: {}", e);
                     }
-                } else if !needs_audio {
-                    // Just resume from current position
+                    self.audio_owner = Some(message_id.clone());
+                } else if !needs_audio && self.audio_owner.as_ref() == Some(&message_id) {
+                    // Only resume if audio belongs to this video
                     self.audio_player.resume();
                 }
             }
@@ -1330,6 +1321,8 @@ impl WhatsAppApp {
                                                     .play_samples(audio.samples, audio.sample_rate)
                                                 {
                                                     warn!("Failed to play video audio: {}", e);
+                                                } else {
+                                                    app.audio_owner = Some(msg_id_for_play.clone());
                                                 }
                                             }
                                         }
