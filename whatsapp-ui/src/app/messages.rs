@@ -1,8 +1,4 @@
 //! Message list handling for the WhatsApp UI
-//!
-//! This module contains types and utilities for message list rendering:
-//! - `MessageListCache`: Cached data for virtual list rendering
-//! - Height calculation for message bubbles
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -13,7 +9,6 @@ use crate::state::{ChatMessage, MediaType};
 use crate::theme::layout;
 
 /// Cached data for message list rendering to avoid recomputing on every frame.
-/// This is a significant performance optimization for typing responsiveness.
 #[derive(Clone)]
 pub struct MessageListCache {
     /// Message count when cache was created (invalidation check)
@@ -27,8 +22,9 @@ pub struct MessageListCache {
 }
 
 impl MessageListCache {
-    /// Create a new message list cache from messages
-    pub fn new(messages: &[ChatMessage], is_group: bool) -> Self {
+    /// Create a new message list cache from messages.
+    /// `max_media_size` should come from ResponsiveLayout for correct sizing.
+    pub fn new(messages: &[ChatMessage], is_group: bool, max_media_size: f32) -> Self {
         let messages_arc: Arc<[ChatMessage]> = Arc::from(messages);
 
         let show_sender_flags: Arc<[bool]> = Arc::from(
@@ -45,7 +41,10 @@ impl MessageListCache {
                 .enumerate()
                 .map(|(i, msg)| {
                     let show_sender = is_group && show_sender_flags[i];
-                    size(px(600.), px(calculate_message_height(msg, show_sender)))
+                    size(
+                        px(600.),
+                        px(calculate_message_height(msg, show_sender, max_media_size)),
+                    )
                 })
                 .collect(),
         );
@@ -69,8 +68,9 @@ pub fn should_show_sender(messages: &[ChatMessage], index: usize) -> bool {
     current.sender != previous.sender || current.is_from_me != previous.is_from_me
 }
 
-/// Calculate the height needed for a message bubble
-pub fn calculate_message_height(msg: &ChatMessage, show_sender: bool) -> f32 {
+/// Calculate the height needed for a message bubble.
+/// `max_media_size` should come from ResponsiveLayout for correct sizing.
+pub fn calculate_message_height(msg: &ChatMessage, show_sender: bool, max_media_size: f32) -> f32 {
     let outer_top = if show_sender {
         layout::MSG_PADDING_TOP_FIRST
     } else {
@@ -93,8 +93,7 @@ pub fn calculate_message_height(msg: &ChatMessage, show_sender: bool) -> f32 {
             MediaType::Image | MediaType::Sticker | MediaType::Video => {
                 let h = media.height.unwrap_or(300) as f32;
                 let w = media.width.unwrap_or(300) as f32;
-                let max_size = layout::MAX_MEDIA_SIZE;
-                let scale = (max_size / w).min(max_size / h).min(1.0);
+                let scale = (max_media_size / w).min(max_media_size / h).min(1.0);
                 (h * scale).max(50.0)
             }
             MediaType::Audio => 44.0,

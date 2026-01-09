@@ -1,29 +1,25 @@
-//! Message list component for displaying chat messages
+//! Message list with virtual scrolling and responsive layout.
 
 use std::sync::Arc;
 
-use gpui::{Entity, div, prelude::*, rgb};
+use gpui::{Entity, div, prelude::*, px, rgb};
 use gpui_component::{VirtualListScrollHandle, scroll::Scrollbar, v_virtual_list};
 
 use crate::app::{MessageListCache, WhatsAppApp};
+use crate::responsive::ResponsiveLayout;
 use crate::state::MediaType;
 use crate::theme::colors;
 
 use super::render_message_bubble;
 
-/// Render the messages list
-/// Uses cached values from MessageListCache to avoid expensive recomputation on every render.
-/// This is critical for typing performance - without caching, every keystroke would
-/// recalculate message heights for ALL messages.
-///
-/// Note: `_playing_message_id` parameter is kept for API compatibility but is now
-/// read directly from app state inside the render closure to ensure fresh values.
+/// Renders the message list using cached values to avoid recomputation on every render.
 pub fn render_message_list(
     cache: MessageListCache,
     scroll_handle: &VirtualListScrollHandle,
     entity: Entity<WhatsAppApp>,
     _playing_message_id: Option<String>,
     is_group: bool,
+    layout: ResponsiveLayout,
 ) -> impl IntoElement {
     // Use pre-computed values from cache (cheap Rc/Arc clones)
     let messages_arc = cache.messages;
@@ -31,6 +27,7 @@ pub fn render_message_list(
     let item_sizes = cache.item_sizes;
 
     let is_empty = messages_arc.is_empty();
+    let padding = layout.padding();
 
     div()
         .flex_1()
@@ -93,6 +90,7 @@ pub fn render_message_list(
                                     video_state,
                                     video_frame,
                                     sticker_image,
+                                    layout,
                                 )
                             })
                             .collect()
@@ -100,7 +98,7 @@ pub fn render_message_list(
                 )
                 .track_scroll(scroll_handle)
                 .size_full()
-                .p_4(),
+                .p(px(padding)),
             )
             .child(
                 div()

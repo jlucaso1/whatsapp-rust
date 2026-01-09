@@ -1,19 +1,20 @@
-//! Chat list item component
+//! Chat list item component with responsive dimensions.
 
 use gpui::{Entity, SharedString, div, prelude::*, px, rgb};
 
 use crate::app::WhatsAppApp;
+use crate::responsive::ResponsiveLayout;
 use crate::state::Chat;
-use crate::theme::{colors, layout};
+use crate::theme::colors;
 
 use super::Avatar;
 
-/// Render a single chat item in the list
 pub fn render_chat_item(
     chat: Chat,
     is_selected: bool,
     jid: String,
     entity: Entity<WhatsAppApp>,
+    layout: ResponsiveLayout,
 ) -> impl IntoElement {
     // Use SharedString to avoid extra allocations
     let name: SharedString = chat.name.into();
@@ -27,11 +28,11 @@ pub fn render_chat_item(
     div()
         .id(SharedString::from(format!("chat-{}", jid)))
         .w_full()
-        .h(px(layout::CHAT_ITEM_HEIGHT))
+        .h(px(layout.chat_item_height()))
         .flex()
         .items_center()
-        .px_3()
-        .gap_3()
+        .px(px(layout.padding_small()))
+        .gap(px(layout.gap()))
         .cursor_pointer()
         .bg(if is_selected {
             rgb(colors::BG_SELECTED)
@@ -46,7 +47,7 @@ pub fn render_chat_item(
             });
         })
         // Avatar
-        .child(Avatar::from_initial(initial, layout::AVATAR_SIZE_LARGE))
+        .child(Avatar::from_initial(initial, layout.avatar_size()))
         // Chat info
         .child(
             div()

@@ -19,14 +19,13 @@ use calls::CallState;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Image, KeyBinding, Pixels, ScrollStrategy, Size,
-    Task, WeakEntity, Window, actions, prelude::*, px, size,
+    App, Context, Entity, FocusHandle, Focusable, Image, KeyBinding, ScrollStrategy, Task,
+    WeakEntity, Window, actions, prelude::*,
 };
 use gpui_component::VirtualListScrollHandle;
 use gpui_component::input::InputState;
@@ -40,11 +39,11 @@ use wacore_binary::jid::{Jid, JidExt};
 
 use crate::audio::{AudioPlayer, AudioRecorder, encode_to_opus_ogg, generate_waveform};
 use crate::client::WhatsAppClient;
+use crate::responsive::{MobilePanel, ResponsiveLayout};
 use crate::state::{
     AppState, CachedQrCode, Chat, ChatMessage, DownloadableMedia, IncomingCall, MediaContent,
     MediaType, OutgoingCall, ReceiptType, UiEvent,
 };
-use crate::theme::layout;
 use crate::utils::mime_to_image_format;
 use crate::video::{StreamingVideoDecoder, VideoPlayer, VideoPlayerState};
 use crate::views::pairing::generate_qr_png;
@@ -138,6 +137,9 @@ pub fn init_chat_list_bindings(cx: &mut gpui::App) {
     ]);
 }
 
+// Action to navigate back to chat list on mobile
+actions!(mobile_nav, [NavigateBack]);
+
 /// Main application struct
 pub struct WhatsAppApp {
     /// Current application state
@@ -192,6 +194,8 @@ pub struct WhatsAppApp {
     message_list_cache: RefCell<HashMap<String, MessageListCache>>,
     /// Cache of chat list data to avoid recomputation on every render.
     chat_list_cache: RefCell<Option<ChatListCache>>,
+    /// Mobile navigation state - which panel to show on mobile devices
+    mobile_panel: MobilePanel,
 }
 
 impl WhatsAppApp {
@@ -245,14 +249,40 @@ impl WhatsAppApp {
             sticker_images: RefCell::new(IndexMap::new()),
             message_list_cache: RefCell::new(HashMap::new()),
             chat_list_cache: RefCell::new(None),
+            mobile_panel: MobilePanel::default(),
         }
+    }
+
+    // ========== Responsive Layout ==========
+
+    /// Create a ResponsiveLayout from the current window viewport.
+    /// This should be called at the start of render to get all layout dimensions.
+    pub fn responsive_layout(&self, window: &Window) -> ResponsiveLayout {
+        ResponsiveLayout::new(window.viewport_size(), self.mobile_panel)
+    }
+
+    /// Get the current mobile panel state
+    pub fn mobile_panel(&self) -> MobilePanel {
+        self.mobile_panel
+    }
+
+    /// Navigate back to chat list (for mobile)
+    pub fn navigate_back(&mut self, cx: &mut Context<Self>) {
+        self.mobile_panel = MobilePanel::ChatList;
+        cx.notify();
+    }
+
+    /// Navigate to chat view (for mobile) - called when selecting a chat
+    fn navigate_to_chat(&mut self) {
+        self.mobile_panel = MobilePanel::Chat;
     }
 
     // ========== Render Caches ==========
 
     /// Get or compute the chat list cache.
     /// This avoids expensive recomputation of chat list data on every render.
-    /// Filters by search query if active.
+    /// Filters by search query if active. Item sizes are computed at render time
+    /// based on ResponsiveLayout.
     pub fn get_chat_list_cache(&self) -> ChatListCache {
         let mut cache = self.chat_list_cache.borrow_mut();
 
@@ -276,18 +306,11 @@ impl WhatsAppApp {
             return cached.clone();
         }
 
-        // Compute new cache entry
+        // Compute new cache entry (item sizes computed at render time)
         let chats_arc: Arc<[Chat]> = filtered_chats.into_iter().cloned().collect();
-        let item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
-            chats_arc
-                .iter()
-                .map(|_| size(px(layout::SIDEBAR_WIDTH), px(layout::CHAT_ITEM_HEIGHT)))
-                .collect(),
-        );
 
         let new_cache = ChatListCache {
             chat_count: chats_arc.len(),
-            item_sizes,
             chats: chats_arc,
         };
 
@@ -305,11 +328,13 @@ impl WhatsAppApp {
     /// Get or compute the message list cache for a chat.
     /// This avoids expensive recomputation of message heights on every render.
     /// Uses interior mutability so it can be called during immutable render.
+    /// `max_media_size` should come from ResponsiveLayout for correct sizing.
     pub fn get_message_list_cache(
         &self,
         chat_jid: &str,
         messages: &[ChatMessage],
         is_group: bool,
+        max_media_size: f32,
     ) -> MessageListCache {
         let mut cache = self.message_list_cache.borrow_mut();
 
@@ -321,7 +346,7 @@ impl WhatsAppApp {
         }
 
         // Compute new cache entry using the messages module
-        let new_cache = MessageListCache::new(messages, is_group);
+        let new_cache = MessageListCache::new(messages, is_group, max_media_size);
         cache.insert(chat_jid.to_string(), new_cache.clone());
         new_cache
     }
@@ -548,6 +573,9 @@ impl WhatsAppApp {
     /// Select a chat by JID
     pub fn select_chat(&mut self, jid: String, cx: &mut Context<Self>) {
         self.selected_chat = Some(jid.clone());
+
+        // On mobile, navigate to the chat panel
+        self.navigate_to_chat();
 
         // Collect unread messages from others to send read receipts
         let unread_messages: Vec<(String, String)> = self
@@ -913,9 +941,10 @@ impl WhatsAppApp {
 
     // ========== Media Playback Control ==========
 
-    /// Stop any currently playing media (audio or video)
+    /// Stop any currently playing media (audio or video).
     /// This is the single control point for mutual exclusion.
-    fn stop_current_media(&mut self, cx: &mut Context<Self>) {
+    /// Note: Does NOT call cx.notify() - caller is responsible for notification.
+    fn stop_current_media(&mut self) {
         match &self.active_media {
             ActiveMedia::None => {}
             ActiveMedia::Audio { .. } => {
@@ -930,7 +959,6 @@ impl WhatsAppApp {
             }
         }
         self.active_media = ActiveMedia::None;
-        cx.notify();
     }
 
     /// Get the currently playing audio message ID (if audio is playing)
@@ -954,7 +982,7 @@ impl WhatsAppApp {
     /// Play an audio message
     pub fn play_audio(&mut self, message_id: String, audio_data: Vec<u8>, cx: &mut Context<Self>) {
         // Stop any currently playing media (mutual exclusion)
-        self.stop_current_media(cx);
+        self.stop_current_media();
 
         // Subscribe to completion event before starting playback
         let completion_rx = self.audio_player.on_complete();
@@ -1134,7 +1162,7 @@ impl WhatsAppApp {
             Some(VideoPlayerState::Paused) => {
                 // Stop any other media first (mutual exclusion)
                 if !self.active_media.is_playing(&message_id) {
-                    self.stop_current_media(cx);
+                    self.stop_current_media();
                 }
 
                 // Now get mutable access to player
@@ -1197,7 +1225,7 @@ impl WhatsAppApp {
         cx: &mut Context<Self>,
     ) {
         // Stop any currently playing media (mutual exclusion)
-        self.stop_current_media(cx);
+        self.stop_current_media();
 
         // Evict old video players if cache is full (excluding currently playing)
         if self.video_players.len() >= MAX_VIDEO_PLAYERS {
@@ -1507,12 +1535,13 @@ impl WhatsAppApp {
             UiEvent::CallAccepted(call_id) => {
                 info!("Call {} accepted by peer", call_id);
                 // Dismiss the incoming call popup if it matches
-                if self.call_state.dismiss_incoming(&call_id) {
-                    cx.notify();
-                }
+                let incoming_dismissed = self.call_state.dismiss_incoming(&call_id);
                 // For outgoing calls, transition to Connected state
-                if self.call_state.set_outgoing_connected(&call_id) {
+                let outgoing_connected = self.call_state.set_outgoing_connected(&call_id);
+                if outgoing_connected {
                     info!("Outgoing call {} is now connected", call_id);
+                }
+                if incoming_dismissed || outgoing_connected {
                     cx.notify();
                 }
             }

@@ -1,4 +1,4 @@
-//! Message bubble component for displaying chat messages
+//! Message bubble component with responsive layout support.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,23 +14,12 @@ use gpui_component::v_flex;
 use gpui_component::{Disableable, Icon};
 
 use crate::app::WhatsAppApp;
+use crate::responsive::ResponsiveLayout;
 use crate::state::{ChatMessage, MediaType};
 use crate::theme::{colors, layout};
 use crate::utils::{format_time_local, mime_to_image_format};
 use crate::video::VideoPlayerState;
 
-/// Render a single message bubble
-/// Takes owned ChatMessage since virtual list callback needs owned elements
-///
-/// Parameters:
-/// - `message`: The message to render
-/// - `entity`: The app entity for callbacks
-/// - `playing_message_id`: Currently playing audio message ID (if any)
-/// - `is_group`: Whether this is a group chat (to show sender names)
-/// - `show_sender`: Whether to show sender name (false if previous message was from same sender)
-/// - `video_player_state`: Current video player state for this message (if any)
-/// - `video_frame`: Current video frame as YuvFrameData (GPU-accelerated YUV rendering)
-/// - `sticker_image`: Cached sticker image for animation state preservation
 pub fn render_message_bubble(
     message: ChatMessage,
     entity: Entity<WhatsAppApp>,
@@ -40,6 +29,7 @@ pub fn render_message_bubble(
     video_player_state: Option<VideoPlayerState>,
     video_frame: Option<YuvFrameData>,
     sticker_image: Option<Arc<Image>>,
+    responsive_layout: ResponsiveLayout,
 ) -> impl IntoElement {
     let is_from_me = message.is_from_me;
     let message_id = message.id.clone();
@@ -82,7 +72,7 @@ pub fn render_message_bubble(
                 .child(
                     div()
                         .id(bubble_id.clone())
-                        .max_w(px(layout::MAX_BUBBLE_WIDTH))
+                        .max_w(px(responsive_layout.max_bubble_width()))
                         .px(px(layout::MSG_BUBBLE_PADDING_X))
                         .py(px(layout::MSG_BUBBLE_PADDING_Y))
                         .rounded(px(layout::RADIUS_MEDIUM))
@@ -115,6 +105,7 @@ pub fn render_message_bubble(
                                         video_player_state,
                                         video_frame.clone(),
                                         sticker_image.clone(),
+                                        responsive_layout.max_media_size(),
                                     )
                                 })
                                 .when(!content.is_empty(), |el| {
@@ -203,13 +194,15 @@ fn render_media_content(
     video_player_state: Option<VideoPlayerState>,
     video_frame: Option<YuvFrameData>,
     sticker_image: Option<Arc<Image>>,
+    max_media_size: f32,
 ) -> gpui::Div {
     match media_content.media_type {
         MediaType::Image => {
-            // Calculate display size (max 300px, maintain aspect ratio)
+            // Calculate display size maintaining aspect ratio
             let (display_w, display_h) = calculate_media_size(
                 media_content.width.unwrap_or(300),
                 media_content.height.unwrap_or(300),
+                max_media_size,
             );
 
             // Only render if we have actual image data
@@ -226,10 +219,11 @@ fn render_media_content(
             }
         }
         MediaType::Sticker => {
-            // Calculate display size (max 300px, maintain aspect ratio)
+            // Calculate display size maintaining aspect ratio
             let (display_w, display_h) = calculate_media_size(
                 media_content.width.unwrap_or(300),
                 media_content.height.unwrap_or(300),
+                max_media_size,
             );
 
             // Use cached sticker image if available (preserves animation state across renders)
@@ -265,6 +259,7 @@ fn render_media_content(
             entity,
             video_player_state,
             video_frame,
+            max_media_size,
         )),
         MediaType::Audio => el.child(render_audio_player(
             media_content,
@@ -277,10 +272,9 @@ fn render_media_content(
 }
 
 /// Calculate display size maintaining aspect ratio
-fn calculate_media_size(width: u32, height: u32) -> (f32, f32) {
+fn calculate_media_size(width: u32, height: u32, max_size: f32) -> (f32, f32) {
     let w = width as f32;
     let h = height as f32;
-    let max_size = layout::MAX_MEDIA_SIZE;
     let scale = (max_size / w).min(max_size / h).min(1.0);
     ((w * scale).max(50.0), (h * scale).max(50.0))
 }
@@ -448,11 +442,13 @@ fn render_video_player(
     entity: Entity<WhatsAppApp>,
     video_player_state: Option<VideoPlayerState>,
     video_frame: Option<YuvFrameData>,
+    max_media_size: f32,
 ) -> impl IntoElement {
-    // Calculate display size (max 300px, maintain aspect ratio)
+    // Calculate display size maintaining aspect ratio
     let (display_w, display_h) = calculate_media_size(
         media_content.width.unwrap_or(300),
         media_content.height.unwrap_or(200),
+        max_media_size,
     );
 
     let button_id: SharedString = format!("video-{}", message_id).into();

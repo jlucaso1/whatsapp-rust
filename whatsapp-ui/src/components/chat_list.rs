@@ -1,21 +1,20 @@
-//! Chat list sidebar component
+//! Chat list sidebar component with responsive layout support.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{Entity, FocusHandle, div, prelude::*, px, rgb};
+use gpui::{Entity, FocusHandle, Pixels, Size, div, prelude::*, px, rgb, size};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName, VirtualListScrollHandle, scroll::Scrollbar, v_virtual_list};
 
 use crate::app::{ChatListCache, SelectDown, SelectUp, WhatsAppApp};
-use crate::theme::{colors, layout};
+use crate::responsive::ResponsiveLayout;
+use crate::theme::colors;
 
 use super::render_chat_item;
 
-/// Key context for chat list keyboard navigation
 const CHAT_LIST_CONTEXT: &str = "ChatList";
 
-/// Render the chat list sidebar
-/// Uses cached values from ChatListCache to avoid expensive recomputation on every render.
 pub fn render_chat_list(
     cache: ChatListCache,
     selected_jid: Option<String>,
@@ -23,17 +22,32 @@ pub fn render_chat_list(
     focus_handle: &FocusHandle,
     search_input: Option<&Entity<InputState>>,
     entity: Entity<WhatsAppApp>,
+    layout: ResponsiveLayout,
 ) -> impl IntoElement {
-    // Use pre-computed values from cache (cheap Rc/Arc clones)
+    // Recompute item sizes based on current layout (responsive dimensions)
+    let item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
+        cache
+            .chats
+            .iter()
+            .map(|_| size(px(layout.sidebar_width()), px(layout.chat_item_height())))
+            .collect(),
+    );
+
     let chats_arc = cache.chats;
-    let item_sizes = cache.item_sizes;
     let selected_jid_clone = selected_jid.clone();
     let entity_clone = entity.clone();
     let entity_for_up = entity.clone();
     let entity_for_down = entity.clone();
     let is_empty = chats_arc.is_empty();
 
-    div()
+    // On mobile, take full width; otherwise use calculated sidebar width
+    let width = if layout.is_mobile() {
+        div().w_full()
+    } else {
+        div().w(px(layout.sidebar_width()))
+    };
+
+    width
         .id("chat-list-container")
         .key_context(CHAT_LIST_CONTEXT)
         .track_focus(focus_handle)
@@ -49,19 +63,20 @@ pub fn render_chat_list(
         })
         .flex()
         .flex_col()
-        .w(px(layout::SIDEBAR_WIDTH))
         .h_full()
         .bg(rgb(colors::BG_SECONDARY))
-        .border_r_1()
-        .border_color(rgb(colors::BORDER))
+        // Only show border on non-mobile (mobile is full screen)
+        .when(!layout.is_mobile(), |el| {
+            el.border_r_1().border_color(rgb(colors::BORDER))
+        })
         // Header with title
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(layout::HEADER_HEIGHT))
-                .px_4()
+                .h(px(layout.header_height()))
+                .px(px(layout.padding()))
                 .border_b_1()
                 .border_color(rgb(colors::BORDER))
                 .child(
@@ -76,7 +91,7 @@ pub fn render_chat_list(
         .when_some(search_input.cloned(), |el, input| {
             el.child(
                 div()
-                    .px_3()
+                    .px(px(layout.padding_small()))
                     .py_2()
                     .border_b_1()
                     .border_color(rgb(colors::BORDER))
@@ -128,6 +143,7 @@ pub fn render_chat_list(
                                             is_selected,
                                             jid,
                                             entity_clone.clone(),
+                                            layout,
                                         )
                                     })
                                     .collect()
