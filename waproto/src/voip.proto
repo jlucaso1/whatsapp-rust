@@ -1,0 +1,36 @@
+syntax = "proto2";
+package voip;
+
+// VoIP SenderSubscriptions - STUN 0x4000 attribute
+// Reverse engineered from WhatsApp WASM (Wa__Voip__SenderSubscriptions)
+
+enum StreamLayer {
+  STREAM_LAYER_AUDIO = 0;
+  STREAM_LAYER_VIDEO_STREAM_0 = 1;
+  STREAM_LAYER_VIDEO_STREAM_1 = 2;
+  STREAM_LAYER_HBH_FEC_CLIENT_TO_SERVER = 3;
+  STREAM_LAYER_HBH_FEC_SERVER_TO_CLIENT = 4;
+  STREAM_LAYER_APP_DATA_STREAM_0 = 5;
+  STREAM_LAYER_LIVE_TRANSCRIPTION_STREAM_0 = 6;
+}
+
+enum PayloadType {
+  PAYLOAD_TYPE_MEDIA = 0;
+  PAYLOAD_TYPE_FEC = 1;
+  PAYLOAD_TYPE_NACK = 2;
+  PAYLOAD_TYPE_APP_DATA = 3;
+  PAYLOAD_TYPE_HBH_FEC = 4;
+}
+
+message SenderSubscription {
+  optional string sender_jid = 1;
+  optional uint32 pid = 2;
+  optional uint32 ssrc = 3;
+  repeated uint32 ssrcs = 4;
+  optional StreamLayer stream_layer = 5;
+  optional PayloadType payload_type = 6;
+}
+
+message SenderSubscriptions {
+  repeated SenderSubscription senders = 1;
+}

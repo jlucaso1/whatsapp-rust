@@ -1,3 +1,6 @@
+// Clippy configuration for the crate
+#![allow(clippy::type_complexity)]
+
 pub use wacore::{proto_helpers, store::traits};
 pub use wacore_binary::builder::NodeBuilder;
 pub use waproto;
@@ -31,6 +34,7 @@ pub mod receipt;
 pub mod retry;
 
 pub mod appstate_sync;
+pub mod calls;
 pub mod history_sync;
 pub mod usync;
 

@@ -83,7 +83,36 @@ The project is split into three main crates:
 
 ---
 
-## 5. Final Implementation Checks
+## 5. Code Style & Comments
+
+- **Avoid unnecessary comments**: Code should be self-documenting. Don't add comments that merely restate what the code does.
+- **Keep doc comments concise**: Module-level (`//!`) and function-level (`///`) docs should be brief and focused. One-liner preferred.
+- **Remove obvious comments**: Comments like `// Clone the value` or `// Return the result` add no value.
+- **DRY applies to docs too**: Don't repeat parameter names/types in doc comments - they're already in the signature.
+- **Section headers sparingly**: Use `// Section name` comments only for large files with distinct logical sections.
+
+**Good:**
+```rust
+//! Message bubble component with responsive layout.
+
+pub fn sidebar_width(&self) -> f32 { ... }
+```
+
+**Bad:**
+```rust
+//! Message bubble component for displaying chat messages
+//!
+//! Renders message bubbles with responsive layout support.
+//! This component handles...
+
+/// Get the sidebar width
+/// Returns the width of the sidebar in pixels based on the current breakpoint
+pub fn sidebar_width(&self) -> f32 { ... }
+```
+
+---
+
+## 6. Final Implementation Checks
 
 Before finalizing a feature/fix, always run:
 
@@ -93,7 +122,7 @@ Before finalizing a feature/fix, always run:
 
 ---
 
-## 6. Debugging Tools
+## 7. Debugging Tools
 
 ### evcxr - Rust REPL
 

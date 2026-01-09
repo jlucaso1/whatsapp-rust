@@ -1,3 +1,4 @@
+use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
@@ -80,7 +81,7 @@ impl LazyConversation {
         let conv = self
             .parsed
             .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default());
-        if conv.id.is_empty() { None } else { Some(conv) }
+        (!conv.id.is_empty()).then_some(conv)
     }
 
     /// Get the parsed conversation, parsing on first access.
@@ -265,6 +266,15 @@ pub enum Event {
 
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
+
+    /// Incoming call offer received
+    CallOffer(CallOffer),
+    /// Call accepted by remote party
+    CallAccepted(CallAccepted),
+    /// Call rejected by remote party
+    CallRejected(CallRejected),
+    /// Call ended/terminated
+    CallEnded(CallEnded),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -640,4 +650,40 @@ pub struct NewsletterLiveUpdate {
     pub jid: Jid,
     pub time: DateTime<Utc>,
     pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+}
+
+/// Incoming call offer event.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallOffer {
+    /// Basic call metadata (from, timestamp, call_id, call_creator)
+    pub meta: BasicCallMeta,
+    /// Media type (audio or video)
+    pub media_type: CallMediaType,
+    /// Whether this was delivered while offline
+    pub is_offline: bool,
+    /// Remote peer metadata (platform, version)
+    pub remote_meta: CallRemoteMeta,
+    /// Group JID if this is a group call
+    pub group_jid: Option<Jid>,
+}
+
+/// Call accepted event - the remote party accepted our outgoing call.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallAccepted {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
+}
+
+/// Call rejected event - the remote party rejected the call.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallRejected {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
+}
+
+/// Call ended event - the call was terminated.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallEnded {
+    /// Basic call metadata
+    pub meta: BasicCallMeta,
 }
