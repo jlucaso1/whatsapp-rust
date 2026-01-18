@@ -2,6 +2,7 @@
 
 pub use aes_gcm;
 pub use wacore_appstate as appstate;
+pub use wacore_noise as noise;
 pub mod client;
 pub mod download;
 pub mod framing;

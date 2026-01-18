@@ -3,9 +3,9 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use wacore::handshake::NoiseHandshake;
-use wacore::handshake::utils::generate_iv;
 use wacore::libsignal::crypto::CryptographicHash;
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
+use wacore::noise::generate_iv;
 use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {

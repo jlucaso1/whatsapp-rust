@@ -2234,6 +2234,7 @@ dependencies = [
  "wacore-appstate",
  "wacore-binary",
  "wacore-libsignal",
+ "wacore-noise",
  "waproto",
 ]
 
@@ -2299,6 +2300,23 @@ dependencies = [
  "uuid",
  "waproto",
  "x25519-dalek",
+]
+
+[[package]]
+name = "wacore-noise"
+version = "0.2.0"
+dependencies = [
+ "aes-gcm",
+ "hex",
+ "hkdf",
+ "prost",
+ "rand",
+ "rand_core 0.9.3",
+ "sha2",
+ "thiserror 2.0.17",
+ "wacore-binary",
+ "wacore-libsignal",
+ "waproto",
 ]
 
 [[package]]

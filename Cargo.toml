@@ -19,6 +19,7 @@ members = [
     "wacore/appstate",
     "wacore/binary",
     "wacore/libsignal",
+    "wacore/noise",
     "waproto",
 ]
 
@@ -56,6 +57,7 @@ wacore = { path = "./wacore", version = "0.2.0" }
 wacore-appstate = { path = "./wacore/appstate", version = "0.2.0" }
 wacore-binary = { path = "./wacore/binary", version = "0.2.0" }
 wacore-libsignal = { path = "./wacore/libsignal", version = "0.2.0" }
+wacore-noise = { path = "./wacore/noise", version = "0.2.0" }
 waproto = { path = "./waproto", version = "0.2.0" }
 
 [features]
