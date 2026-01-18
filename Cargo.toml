@@ -41,7 +41,7 @@ hkdf = { version = "0.12.3", default-features = false }
 hmac = { version = "0.12.1", default-features = false, features = ["reset"] }
 iai-callgrind = "0.16"
 log = "0.4"
-prost = { version = "0.14.1", default-features = false, features = ["std"] }
+prost = { version = "0.14.3", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.1", default-features = false }
 rand = "0.9"
 rand_core = "0.9"
