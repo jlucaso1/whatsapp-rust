@@ -894,6 +894,9 @@ pub struct CallStanzaBuilder {
     net_medium: Option<u8>,
     /// Encryption key generation version for ACCEPT stanza (default 2).
     encopt_keygen: Option<u8>,
+    /// Device identity for pkmsg offers (ADV encoded identity).
+    /// Required when sending encrypted key with type "pkmsg" (PreKey message).
+    device_identity: Option<Vec<u8>>,
 }
 
 impl CallStanzaBuilder {
@@ -922,6 +925,7 @@ impl CallStanzaBuilder {
             mute_state: None,
             net_medium: None,
             encopt_keygen: None,
+            device_identity: None,
         }
     }
 
@@ -1023,6 +1027,15 @@ impl CallStanzaBuilder {
     /// This adds `<encopt keygen="2"/>` element.
     pub fn encopt_keygen(mut self, keygen: u8) -> Self {
         self.encopt_keygen = Some(keygen);
+        self
+    }
+
+    /// Set device identity for pkmsg offers.
+    ///
+    /// This adds `<device-identity>bytes</device-identity>` element.
+    /// Required when sending encrypted key with type "pkmsg" (PreKey message).
+    pub fn device_identity(mut self, identity: Vec<u8>) -> Self {
+        self.device_identity = Some(identity);
         self
     }
 
@@ -1158,6 +1171,14 @@ impl CallStanzaBuilder {
                     .attr("keygen", keygen.to_string())
                     .build();
                 children.push(encopt_node);
+            }
+
+            // Add <device-identity> for pkmsg offers (required for PreKey messages)
+            if let Some(ref identity) = self.device_identity {
+                let identity_node = NodeBuilder::new("device-identity")
+                    .bytes(identity.clone())
+                    .build();
+                children.push(identity_node);
             }
         }
 

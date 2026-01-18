@@ -184,7 +184,7 @@ impl CallManager {
     /// For a fully functional offer, use `build_offer_stanza_with_key` instead which
     /// includes the encrypted call key required for media connection.
     pub async fn build_offer_stanza(&self, call_id: &CallId) -> Result<Node, CallError> {
-        self.build_offer_stanza_with_key(call_id, None).await
+        self.build_offer_stanza_with_key(call_id, None, None).await
     }
 
     /// Build an offer stanza for an outgoing call with an encrypted call key.
@@ -195,25 +195,36 @@ impl CallManager {
     /// - Video codec parameters if video call (`<video enc="vp8">`)
     /// - Network medium (`<net medium="2"/>`)
     /// - Encryption key generation (`<encopt keygen="2"/>`)
+    /// - Device identity (`<device-identity>...`) - only for pkmsg type
     ///
     /// # Arguments
     /// * `call_id` - The call to build the offer for
     /// * `encrypted_key` - The encrypted call key (encrypted using Signal protocol
     ///   for the recipient). If None, builds a basic offer stanza.
+    /// * `device_identity` - The ADV encoded device identity bytes. Required when
+    ///   `encrypted_key` is a PreKey message (pkmsg type).
     ///
     /// # Example
     /// ```ignore
     /// // Generate and encrypt call key for the recipient
     /// let (call_key, encrypted) = client.encrypt_call_key_for(&peer_jid).await?;
     ///
-    /// // Build offer stanza with encrypted key
-    /// let stanza = call_manager.build_offer_stanza_with_key(&call_id, Some(encrypted)).await?;
+    /// // Get device identity for pkmsg
+    /// let device_identity = if encrypted.enc_type == EncType::PkMsg {
+    ///     device_snapshot.account.map(|a| a.encode_to_vec())
+    /// } else {
+    ///     None
+    /// };
+    ///
+    /// // Build offer stanza with encrypted key and device identity
+    /// let stanza = call_manager.build_offer_stanza_with_key(&call_id, Some(encrypted), device_identity).await?;
     /// client.send_node(stanza).await?;
     /// ```
     pub async fn build_offer_stanza_with_key(
         &self,
         call_id: &CallId,
         encrypted_key: Option<EncryptedCallKey>,
+        device_identity: Option<Vec<u8>>,
     ) -> Result<Node, CallError> {
         let calls = self.calls.read().await;
         let info = calls
@@ -249,6 +260,11 @@ impl CallManager {
 
         // Add net and encopt elements (required for proper call initiation)
         builder = builder.net_medium(2).encopt_keygen(2);
+
+        // Add device identity for pkmsg offers (required for PreKey messages)
+        if let Some(identity) = device_identity {
+            builder = builder.device_identity(identity);
+        }
 
         Ok(builder.build())
     }

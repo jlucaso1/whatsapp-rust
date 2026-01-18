@@ -36,6 +36,9 @@ qrcode = "0.14"
 # Ordered maps for deterministic cache eviction
 indexmap = "2"
 
+# Protobuf encoding
+prost = "0.14"
+
 # Logging
 log = "0.4"
 mp4 = "0.14.0"

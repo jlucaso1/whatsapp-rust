@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use log::{debug, error, info, warn};
+use prost::Message;
 use tokio::sync::{Mutex, mpsc};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::call::{CallId, CallMediaType, EndCallReason};
@@ -11,7 +12,7 @@ use wacore::types::presence::ReceiptType;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::calls::CallOptions;
+use whatsapp_rust::calls::{CallOptions, EncType};
 use whatsapp_rust::client::Client;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
@@ -1179,7 +1180,7 @@ impl WhatsAppClient {
                     };
 
                     // Step 3: Encrypt the call key for the recipient and store it
-                    let encrypted_key = match client.encrypt_call_key_for(&session_target).await {
+                    let (encrypted_key, device_identity) = match client.encrypt_call_key_for(&session_target).await {
                         Ok((call_key, encrypted)) => {
                             info!(
                                 "Encrypted call key for {}: type={:?}, {} bytes",
@@ -1195,20 +1196,32 @@ impl WhatsAppClient {
                                 info!("Stored encryption key for call {}", call_id);
                             }
 
-                            Some(encrypted)
+                            // Get device identity for pkmsg offers (required for PreKey messages)
+                            let device_identity = if encrypted.enc_type == EncType::PkMsg {
+                                let device_snapshot = client.persistence_manager().get_device_snapshot().await;
+                                device_snapshot.account.as_ref().map(|a: &wa::AdvSignedDeviceIdentity| a.encode_to_vec())
+                            } else {
+                                None
+                            };
+
+                            if device_identity.is_some() {
+                                info!("Including device-identity for pkmsg offer");
+                            }
+
+                            (Some(encrypted), device_identity)
                         }
                         Err(e) => {
                             warn!(
                                 "Failed to encrypt call key for {}: {} - proceeding without encrypted key",
                                 session_target, e
                             );
-                            None
+                            (None, None)
                         }
                     };
 
-                    // Step 4: Build the offer stanza with encrypted key
+                    // Step 4: Build the offer stanza with encrypted key and device identity
                     let node = match call_manager
-                        .build_offer_stanza_with_key(&call_id, encrypted_key)
+                        .build_offer_stanza_with_key(&call_id, encrypted_key, device_identity)
                         .await
                     {
                         Ok(n) => n,
