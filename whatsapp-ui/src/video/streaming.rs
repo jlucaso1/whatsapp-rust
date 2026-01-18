@@ -1,11 +1,10 @@
 //! Streaming video decoder with on-demand frame decoding and YUV GPU rendering.
 
 use std::io::Cursor;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use gpui::{YuvFormat, YuvFrameData};
+use gpui::{SharedBytes, YuvFormat, YuvFrameData};
 use mp4::{Mp4Reader, TrackType};
 use openh264::decoder::Decoder;
 use openh264::formats::YUVSource;
@@ -58,12 +57,12 @@ pub struct StreamingVideoDecoder {
     current_frame: Option<StreamingFrame>,
     /// Decoded audio from the video
     audio: Option<VideoAudio>,
-    /// Reusable buffer for Y plane (avoids allocation per frame)
-    y_buffer: Vec<u8>,
-    /// Reusable buffer for U plane
-    u_buffer: Vec<u8>,
-    /// Reusable buffer for V plane
-    v_buffer: Vec<u8>,
+    /// Single contiguous buffer for all YUV planes (Y + U + V)
+    /// This reduces allocations from 3 to 1 per frame and improves cache locality
+    combined_buffer: Vec<u8>,
+    /// Precomputed plane sizes for slicing
+    y_size: usize,
+    u_size: usize,
 }
 
 impl StreamingVideoDecoder {
@@ -222,11 +221,13 @@ impl StreamingVideoDecoder {
         // Extract audio
         let audio = Self::extract_audio(mp4_data);
 
-        // Pre-allocate YUV plane buffers (reused for each frame)
+        // Pre-compute plane sizes for YUV I420 format
         let y_size = (width as usize) * (height as usize);
         let uv_width = (width as usize).div_ceil(2);
         let uv_height = (height as usize).div_ceil(2);
-        let uv_size = uv_width * uv_height;
+        let u_size = uv_width * uv_height;
+        let v_size = u_size;
+        let total_size = y_size + u_size + v_size;
 
         Ok(Self {
             samples,
@@ -239,9 +240,9 @@ impl StreamingVideoDecoder {
             last_decoded_index: -1,
             current_frame: None,
             audio,
-            y_buffer: Vec::with_capacity(y_size),
-            u_buffer: Vec::with_capacity(uv_size),
-            v_buffer: Vec::with_capacity(uv_size),
+            combined_buffer: Vec::with_capacity(total_size),
+            y_size,
+            u_size,
         })
     }
 
@@ -472,19 +473,28 @@ impl StreamingVideoDecoder {
                     let uv_width = width.div_ceil(2);
                     let uv_height = height.div_ceil(2);
 
-                    // Extract planes into reusable buffers (no allocation if capacity sufficient)
-                    extract_plane_into(&mut self.y_buffer, yuv.y(), width, height, y_stride);
-                    extract_plane_into(&mut self.u_buffer, yuv.u(), uv_width, uv_height, u_stride);
-                    extract_plane_into(&mut self.v_buffer, yuv.v(), uv_width, uv_height, v_stride);
+                    // Clear and reuse the combined buffer (no allocation if capacity sufficient)
+                    self.combined_buffer.clear();
 
-                    // Create YuvFrameData - Arc::from copies slice data
+                    // Extract all planes contiguously into the single buffer
+                    extract_plane_append(&mut self.combined_buffer, yuv.y(), width, height, y_stride);
+                    extract_plane_append(&mut self.combined_buffer, yuv.u(), uv_width, uv_height, u_stride);
+                    extract_plane_append(&mut self.combined_buffer, yuv.v(), uv_width, uv_height, v_stride);
+
+                    // Convert to SharedBytes (takes ownership, O(1) move) and slice into planes
+                    // This is 1 allocation vs 3, with zero-copy slicing for Y/U/V views
+                    let shared = SharedBytes::from(std::mem::take(&mut self.combined_buffer));
+                    let y_plane = shared.slice(0..self.y_size);
+                    let u_plane = shared.slice(self.y_size..self.y_size + self.u_size);
+                    let v_plane = shared.slice(self.y_size + self.u_size..);
+
                     let yuv_data = YuvFrameData {
                         format: YuvFormat::I420,
                         width: self.width,
                         height: self.height,
-                        y_plane: Arc::from(self.y_buffer.as_slice()),
-                        u_plane: Arc::from(self.u_buffer.as_slice()),
-                        v_plane: Some(Arc::from(self.v_buffer.as_slice())),
+                        y_plane,
+                        u_plane,
+                        v_plane: Some(v_plane),
                         y_stride: self.width,
                         u_stride: uv_width as u32,
                         v_stride: Some(uv_width as u32),
@@ -499,10 +509,11 @@ impl StreamingVideoDecoder {
 
                     if index == 0 {
                         log::info!(
-                            "First frame YUV created: Y={} bytes, U={} bytes, V={} bytes",
-                            self.y_buffer.len(),
-                            self.u_buffer.len(),
-                            self.v_buffer.len()
+                            "First frame YUV created: combined buffer {} bytes (Y={}, U={}, V={})",
+                            self.y_size + self.u_size * 2,
+                            self.y_size,
+                            self.u_size,
+                            self.u_size
                         );
                     }
                 }
@@ -639,19 +650,13 @@ impl StreamingVideoDecoder {
     }
 }
 
-/// Extract a plane from strided buffer into a reusable buffer (no allocation)
-fn extract_plane_into(dst: &mut Vec<u8>, src: &[u8], width: usize, height: usize, stride: usize) {
-    let expected_size = width * height;
-    dst.clear();
-
-    // Ensure capacity without reallocating if already large enough
-    if dst.capacity() < expected_size {
-        dst.reserve(expected_size - dst.capacity());
-    }
+/// Append a plane from strided buffer to the destination buffer (for contiguous storage)
+fn extract_plane_append(dst: &mut Vec<u8>, src: &[u8], width: usize, height: usize, stride: usize) {
+    let plane_size = width * height;
 
     if stride == width {
-        // No padding, direct copy
-        let end = expected_size.min(src.len());
+        // No padding, direct append
+        let end = plane_size.min(src.len());
         dst.extend_from_slice(&src[..end]);
     } else {
         // Has padding, copy row by row
