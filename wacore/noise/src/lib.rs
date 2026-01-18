@@ -34,6 +34,7 @@
 
 mod edge_routing;
 mod error;
+pub mod framing;
 mod handshake;
 mod state;
 

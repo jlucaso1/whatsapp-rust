@@ -2307,8 +2307,11 @@ name = "wacore-noise"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
+ "anyhow",
+ "bytes",
  "hex",
  "hkdf",
+ "log",
  "prost",
  "rand",
  "rand_core 0.9.3",

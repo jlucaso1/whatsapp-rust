@@ -5,7 +5,7 @@ pub use wacore_appstate as appstate;
 pub use wacore_noise as noise;
 pub mod client;
 pub mod download;
-pub mod framing;
+pub use wacore_noise::framing;
 pub mod handshake;
 pub mod history_sync;
 pub use wacore_libsignal as libsignal;
