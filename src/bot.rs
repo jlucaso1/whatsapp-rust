@@ -7,6 +7,7 @@ use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
 use anyhow::Result;
 use log::{info, warn};
+use wacore_binary::jid::Jid;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -21,11 +22,33 @@ pub struct MessageContext {
     pub client: Arc<Client>,
 }
 
+#[derive(Debug)]
+pub struct BasicDeviceInfo {
+    pub jid: Option<Jid>,
+    pub push_name: String
+}
+
 impl MessageContext {
     pub async fn send_message(&self, message: wa::Message) -> Result<String, anyhow::Error> {
         self.client
             .send_message(self.info.source.chat.clone(), message)
             .await
+    }
+
+    pub async fn get_device_info(&self) -> Result<BasicDeviceInfo, anyhow::Error> {
+        let manager = self.client.persistence_manager.clone();
+        let backend = manager.backend().clone();
+
+        if let Ok(result) = backend.load().await {
+            if let Some(device) = result {
+                return Ok(BasicDeviceInfo {
+                    jid: device.pn,
+                    push_name: device.push_name,
+                })
+            }
+        }
+
+        Err(anyhow::anyhow!("Failed to load device info"))
     }
 
     pub async fn edit_message(

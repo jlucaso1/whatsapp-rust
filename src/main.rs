@@ -62,6 +62,7 @@ fn main() {
                 return;
             }
         };
+
         info!("SQLite backend initialized successfully.");
 
         let transport_factory = TokioWebSocketTransportFactory::new();
@@ -114,6 +115,10 @@ fn main() {
                                 info,
                                 client,
                             };
+
+                            //to get connected device information
+                            let device_data = ctx.get_device_info().await;
+                            info!("{:?}", &device_data);
 
                             if let Some(media_ping_request) = get_pingable_media(&ctx.message) {
                                 handle_media_ping(&ctx, media_ping_request).await;
