@@ -1,4 +1,5 @@
 use thiserror::Error;
+use wacore_binary::consts::WA_CONN_HEADER;
 
 /// Maximum length for edge routing data (3 bytes max = 0xFFFFFF)
 pub const MAX_EDGE_ROUTING_LEN: usize = 0xFF_FFFF;
@@ -24,6 +25,30 @@ pub fn build_edge_routing_preintro(routing_info: &[u8]) -> Result<Vec<u8>, EdgeR
     preintro.push(len as u8);
     preintro.extend_from_slice(routing_info);
     Ok(preintro)
+}
+
+/// Builds the complete handshake connection header.
+///
+/// If edge routing info is provided and valid, prepends the edge routing pre-intro
+/// to the WhatsApp connection header. Otherwise, returns just the connection header.
+///
+/// Returns `(header, used_edge_routing)` where `used_edge_routing` indicates whether
+/// edge routing was successfully applied.
+pub fn build_handshake_header(edge_routing_info: Option<&[u8]>) -> (Vec<u8>, bool) {
+    let Some(routing_info) = edge_routing_info else {
+        return (WA_CONN_HEADER.to_vec(), false);
+    };
+
+    match build_edge_routing_preintro(routing_info) {
+        Ok(mut header) => {
+            header.extend_from_slice(&WA_CONN_HEADER);
+            (header, true)
+        }
+        // Intentional silent fallback: edge routing is optional and failures (e.g., oversized
+        // routing info) should not prevent connection. The returned `false` flag allows callers
+        // to detect and log this condition if needed.
+        Err(_) => (WA_CONN_HEADER.to_vec(), false),
+    }
 }
 
 #[cfg(test)]
@@ -81,5 +106,31 @@ mod tests {
         assert_eq!((len >> 16) as u8, 0xFF);
         assert_eq!((len >> 8) as u8, 0xFF);
         assert_eq!(len as u8, 0xFF);
+    }
+
+    #[test]
+    fn test_build_handshake_header_without_edge_routing() {
+        let (header, used) = build_handshake_header(None);
+        assert_eq!(header, WA_CONN_HEADER.to_vec());
+        assert!(!used);
+    }
+
+    #[test]
+    fn test_build_handshake_header_with_edge_routing() {
+        let routing = vec![0x01, 0x02, 0x03];
+        let (header, used) = build_handshake_header(Some(&routing));
+
+        assert!(used);
+        assert!(header.starts_with(b"ED\x00\x01"));
+        assert!(header.ends_with(&WA_CONN_HEADER));
+    }
+
+    #[test]
+    fn test_build_handshake_header_with_oversized_routing() {
+        let routing = vec![0x00; MAX_EDGE_ROUTING_LEN + 1];
+        let (header, used) = build_handshake_header(Some(&routing));
+
+        assert!(!used);
+        assert_eq!(header, WA_CONN_HEADER.to_vec());
     }
 }

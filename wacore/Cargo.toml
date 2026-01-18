@@ -36,6 +36,7 @@ thiserror = { workspace = true }
 wacore-appstate = { workspace = true }
 wacore-binary = { workspace = true, features = ["serde"] }
 wacore-libsignal = { workspace = true }
+wacore-noise = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
