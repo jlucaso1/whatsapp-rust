@@ -7,13 +7,13 @@ use crate::types::events::{Event, EventHandler};
 use crate::types::message::MessageInfo;
 use anyhow::Result;
 use log::{info, warn};
-use wacore_binary::jid::Jid;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 pub struct MessageContext {
@@ -25,7 +25,7 @@ pub struct MessageContext {
 #[derive(Debug)]
 pub struct BasicDeviceInfo {
     pub jid: Option<Jid>,
-    pub push_name: String
+    pub push_name: String,
 }
 
 impl MessageContext {
@@ -36,19 +36,11 @@ impl MessageContext {
     }
 
     pub async fn get_device_info(&self) -> Result<BasicDeviceInfo, anyhow::Error> {
-        let manager = self.client.persistence_manager.clone();
-        let backend = manager.backend().clone();
-
-        if let Ok(result) = backend.load().await {
-            if let Some(device) = result {
-                return Ok(BasicDeviceInfo {
-                    jid: device.pn,
-                    push_name: device.push_name,
-                })
-            }
-        }
-
-        Err(anyhow::anyhow!("Failed to load device info"))
+        let device = self.client.persistence_manager.get_device_snapshot().await;
+        Ok(BasicDeviceInfo {
+            jid: device.pn.clone(),
+            push_name: device.push_name.to_string(),
+        })
     }
 
     pub async fn edit_message(

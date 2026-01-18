@@ -1,5 +1,5 @@
 use chrono::{Local, Utc};
-use log::{error, info};
+use log::{error, info, warn};
 use std::io::Cursor;
 use std::sync::Arc;
 use wacore::download::{Downloadable, MediaType};
@@ -117,8 +117,18 @@ fn main() {
                             };
 
                             //to get connected device information
-                            let device_data = ctx.get_device_info().await;
-                            info!("{:?}", &device_data);
+                            match ctx.get_device_info().await {
+                                Ok(device_info) => {
+                                    info!(
+                                        "Device info loaded (jid_present={}, push_name_present={})",
+                                        device_info.jid.is_some(),
+                                        !device_info.push_name.is_empty()
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!("Device info unavailable: {}", e);
+                                }
+                            }
 
                             if let Some(media_ping_request) = get_pingable_media(&ctx.message) {
                                 handle_media_ping(&ctx, media_ping_request).await;
