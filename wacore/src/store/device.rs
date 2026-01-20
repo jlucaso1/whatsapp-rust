@@ -199,12 +199,16 @@ impl Device {
         &mut self,
         os: Option<String>,
         version: Option<wa::device_props::AppVersion>,
+        platform_type: Option<wa::device_props::PlatformType>,
     ) {
         if let Some(os) = os {
             self.device_props.os = Some(os);
         }
         if let Some(version) = version {
             self.device_props.version = Some(version);
+        }
+        if let Some(platform_type) = platform_type {
+            self.device_props.platform_type = Some(platform_type as i32);
         }
     }
 
