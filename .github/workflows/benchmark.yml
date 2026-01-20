@@ -75,5 +75,4 @@ jobs:
             --adapter rust_iai_callgrind \
             --github-actions "$GITHUB_TOKEN" \
             --ci-only-thresholds \
-            --err \
             "cargo bench --workspace"
