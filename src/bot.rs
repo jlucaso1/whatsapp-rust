@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::pair_code::PairCodeOptions;
+use crate::store::commands::DeviceCommand;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::store::traits::Backend;
 use crate::types::enc_handler::EncHandler;
@@ -450,9 +451,11 @@ impl BotBuilder {
                 os_name, version, platform_type
             );
             persistence_manager
-                .modify_device(|device| {
-                    device.set_device_props(os_name, version, platform_type);
-                })
+                .process_command(DeviceCommand::SetDeviceProps(
+                    os_name,
+                    version,
+                    platform_type,
+                ))
                 .await;
         }
 
