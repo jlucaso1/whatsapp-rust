@@ -1,33 +1,26 @@
+//! Chat state (typing indicators) feature.
+
 use crate::client::Client;
 use log::debug;
+use wacore::StringEnum;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Chat state type for typing indicators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum ChatStateType {
+    /// User is typing a text message.
+    #[str = "composing"]
     Composing,
-
+    /// User is recording an audio message.
+    #[str = "recording"]
     Recording,
-
+    /// User has stopped typing.
+    #[str = "paused"]
     Paused,
 }
 
-impl ChatStateType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            ChatStateType::Composing => "composing",
-            ChatStateType::Recording => "recording",
-            ChatStateType::Paused => "paused",
-        }
-    }
-}
-
-impl std::fmt::Display for ChatStateType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
+/// Feature handle for chat state operations.
 pub struct Chatstate<'a> {
     client: &'a Client,
 }
@@ -37,6 +30,7 @@ impl<'a> Chatstate<'a> {
         Self { client }
     }
 
+    /// Send a chat state update to a recipient.
     pub async fn send(
         &self,
         to: &Jid,
@@ -48,14 +42,17 @@ impl<'a> Chatstate<'a> {
         self.client.send_node(node).await
     }
 
+    /// Send "composing" (typing) state.
     pub async fn send_composing(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Composing).await
     }
 
+    /// Send "recording" (voice message) state.
     pub async fn send_recording(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Recording).await
     }
 
+    /// Send "paused" (stopped typing) state.
     pub async fn send_paused(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Paused).await
     }
@@ -77,6 +74,7 @@ impl<'a> Chatstate<'a> {
 }
 
 impl Client {
+    /// Access chat state operations.
     pub fn chatstate(&self) -> Chatstate<'_> {
         Chatstate::new(self)
     }
@@ -87,16 +85,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_chat_state_type_display() {
-        assert_eq!(ChatStateType::Composing.to_string(), "composing");
-        assert_eq!(ChatStateType::Recording.to_string(), "recording");
-        assert_eq!(ChatStateType::Paused.to_string(), "paused");
-    }
-
-    #[test]
-    fn test_chat_state_type_as_str() {
+    fn test_chat_state_type_string_enum() {
+        // Verify StringEnum derive works correctly
         assert_eq!(ChatStateType::Composing.as_str(), "composing");
-        assert_eq!(ChatStateType::Recording.as_str(), "recording");
-        assert_eq!(ChatStateType::Paused.as_str(), "paused");
+        assert_eq!(ChatStateType::Recording.to_string(), "recording");
+        assert_eq!(
+            ChatStateType::try_from("paused").unwrap(),
+            ChatStateType::Paused
+        );
     }
 }

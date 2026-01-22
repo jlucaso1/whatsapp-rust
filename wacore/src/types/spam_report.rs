@@ -1,34 +1,29 @@
+//! Spam report types and node building.
+
+use crate::StringEnum;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
 
 /// The type of spam flow indicating the source of the report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum SpamFlow {
     /// Report triggered from group spam banner
+    #[str = "GroupSpamBannerReport"]
     GroupSpamBannerReport,
     /// Report triggered from group info screen
+    #[str = "GroupInfoReport"]
     GroupInfoReport,
     /// Report triggered from message context menu
-    #[default]
+    #[string_default]
+    #[str = "MessageMenu"]
     MessageMenu,
     /// Report triggered from contact info screen
+    #[str = "ContactInfo"]
     ContactInfo,
     /// Report triggered from status view
+    #[str = "StatusReport"]
     StatusReport,
-}
-
-impl SpamFlow {
-    /// Returns the string representation of the spam flow.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SpamFlow::GroupSpamBannerReport => "GroupSpamBannerReport",
-            SpamFlow::GroupInfoReport => "GroupInfoReport",
-            SpamFlow::MessageMenu => "MessageMenu",
-            SpamFlow::ContactInfo => "ContactInfo",
-            SpamFlow::StatusReport => "StatusReport",
-        }
-    }
 }
 
 /// A request to report a message as spam.
@@ -133,13 +128,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_spam_flow_as_str() {
+    fn test_spam_flow_string_enum() {
         assert_eq!(SpamFlow::MessageMenu.as_str(), "MessageMenu");
-        assert_eq!(
-            SpamFlow::GroupSpamBannerReport.as_str(),
-            "GroupSpamBannerReport"
-        );
-        assert_eq!(SpamFlow::ContactInfo.as_str(), "ContactInfo");
+        assert_eq!(SpamFlow::GroupSpamBannerReport.to_string(), "GroupSpamBannerReport");
+        assert_eq!(SpamFlow::default(), SpamFlow::MessageMenu);
     }
 
     #[test]

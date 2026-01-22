@@ -23,6 +23,8 @@ pub enum IqError {
     ServerError { code: u16, text: String },
     #[error("Internal channel closed unexpectedly")]
     InternalChannelClosed,
+    #[error("Failed to parse IQ response: {0}")]
+    ParseError(#[from] anyhow::Error),
 }
 
 impl From<wacore::request::IqError> for IqError {
@@ -158,6 +160,28 @@ impl Client {
                 Err(IqError::Timeout)
             }
         }
+    }
+
+    /// Executes an IQ specification and returns the typed response.
+    ///
+    /// This is a convenience method that combines building the IQ request,
+    /// sending it, and parsing the response into a single operation.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use wacore::iq::groups::GroupQueryIq;
+    ///
+    /// let group_info = client.execute(GroupQueryIq::new(group_jid)).await?;
+    /// println!("Group subject: {}", group_info.subject);
+    /// ```
+    pub async fn execute<S>(&self, spec: S) -> Result<S::Response, IqError>
+    where
+        S: wacore::iq::spec::IqSpec,
+    {
+        let iq = spec.build_iq();
+        let response = self.send_iq(iq).await?;
+        spec.parse_response(&response).map_err(IqError::ParseError)
     }
 
     /// Handles an IQ response by checking if there's a waiter for this response ID.
