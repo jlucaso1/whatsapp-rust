@@ -1,18 +1,17 @@
+//! Blocking feature for managing blocked contacts.
+//!
+//! This module provides high-level APIs for blocking and unblocking contacts.
+//! Protocol-level types are defined in `wacore::iq::blocklist`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, IqError};
+use crate::request::IqError;
 use anyhow::Result;
 use log::debug;
-use wacore_binary::builder::NodeBuilder;
+pub use wacore::iq::blocklist::BlocklistEntry;
+use wacore::iq::blocklist::{GetBlocklistSpec, UpdateBlocklistSpec};
 use wacore_binary::jid::Jid;
-use wacore_binary::node::NodeContent;
 
-#[derive(Debug, Clone)]
-pub struct BlocklistEntry {
-    pub jid: Jid,
-    pub timestamp: Option<u64>,
-}
-
+/// Feature handle for blocklist operations.
 pub struct Blocking<'a> {
     client: &'a Client,
 }
@@ -22,67 +21,31 @@ impl<'a> Blocking<'a> {
         Self { client }
     }
 
+    /// Block a contact.
     pub async fn block(&self, jid: &Jid) -> Result<(), IqError> {
         debug!(target: "Blocking", "Blocking contact: {}", jid);
-        self.update_blocklist(jid, "block").await
-    }
-
-    pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError> {
-        debug!(target: "Blocking", "Unblocking contact: {}", jid);
-        self.update_blocklist(jid, "unblock").await
-    }
-
-    pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>> {
-        debug!(target: "Blocking", "Fetching blocklist...");
-
-        let iq = InfoQuery::get("blocklist", server_jid(), None);
-
-        let response = self.client.send_iq(iq).await?;
-        self.parse_blocklist_response(&response)
-    }
-
-    async fn update_blocklist(&self, jid: &Jid, action: &str) -> Result<(), IqError> {
-        let item_node = NodeBuilder::new("item")
-            .attr("action", action)
-            .attr("jid", jid.to_string())
-            .build();
-
-        let iq = InfoQuery::set(
-            "blocklist",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![item_node])),
-        );
-
-        self.client.send_iq(iq).await?;
-        debug!(target: "Blocking", "Successfully {}ed contact: {}", action, jid);
+        self.client.execute(UpdateBlocklistSpec::block(jid)).await?;
+        debug!(target: "Blocking", "Successfully blocked contact: {}", jid);
         Ok(())
     }
 
-    fn parse_blocklist_response(
-        &self,
-        node: &wacore_binary::node::Node,
-    ) -> Result<Vec<BlocklistEntry>> {
-        let mut entries = Vec::new();
+    /// Unblock a contact.
+    pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError> {
+        debug!(target: "Blocking", "Unblocking contact: {}", jid);
+        self.client.execute(UpdateBlocklistSpec::unblock(jid)).await?;
+        debug!(target: "Blocking", "Successfully unblocked contact: {}", jid);
+        Ok(())
+    }
 
-        let items = if let Some(list) = node.get_optional_child("list") {
-            list.get_children_by_tag("item")
-        } else {
-            node.get_children_by_tag("item")
-        };
-
-        for item in items {
-            if let Some(jid_str) = item.attrs().optional_string("jid")
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let timestamp = item.attrs().optional_u64("t");
-                entries.push(BlocklistEntry { jid, timestamp });
-            }
-        }
-
-        debug!(target: "Blocking", "Parsed {} blocked contacts", entries.len());
+    /// Get the full blocklist.
+    pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>> {
+        debug!(target: "Blocking", "Fetching blocklist...");
+        let entries = self.client.execute(GetBlocklistSpec).await?;
+        debug!(target: "Blocking", "Fetched {} blocked contacts", entries.len());
         Ok(entries)
     }
 
+    /// Check if a contact is blocked.
     pub async fn is_blocked(&self, jid: &Jid) -> Result<bool> {
         let blocklist = self.get_blocklist().await?;
         Ok(blocklist.iter().any(|e| e.jid.user == jid.user))
@@ -90,26 +53,8 @@ impl<'a> Blocking<'a> {
 }
 
 impl Client {
+    /// Access blocking operations.
     pub fn blocking(&self) -> Blocking<'_> {
         Blocking::new(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_blocklist_entry() {
-        let jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let entry = BlocklistEntry {
-            jid: jid.clone(),
-            timestamp: Some(1234567890),
-        };
-
-        assert_eq!(entry.jid.user, "1234567890");
-        assert_eq!(entry.timestamp, Some(1234567890));
     }
 }

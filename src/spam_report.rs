@@ -1,8 +1,12 @@
-use crate::client::Client;
-use crate::request::{InfoQuery, IqError};
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::NodeContent;
+//! Spam reporting feature.
+//!
+//! Types and IQ specification are defined in `wacore::iq::spam_report`.
 
+use crate::client::Client;
+use crate::request::IqError;
+use wacore::iq::spam_report::SpamReportSpec;
+
+// Re-export types from wacore
 pub use wacore::types::{SpamFlow, SpamReportRequest, SpamReportResult, build_spam_list_node};
 
 impl Client {
@@ -31,27 +35,8 @@ impl Client {
         &self,
         request: SpamReportRequest,
     ) -> Result<SpamReportResult, IqError> {
-        let spam_list_node = build_spam_list_node(&request);
-
-        let server_jid = Jid::new("", SERVER_JID);
-
-        let query = InfoQuery::set(
-            "spam",
-            server_jid,
-            Some(NodeContent::Nodes(vec![spam_list_node])),
-        );
-
-        let response = self.send_iq(query).await?;
-
-        // Extract report_id from response if present
-        let report_id = response
-            .get_optional_child_by_tag(&["report_id"])
-            .and_then(|n| match &n.content {
-                Some(NodeContent::String(s)) => Some(s.clone()),
-                _ => None,
-            });
-
-        Ok(SpamReportResult { report_id })
+        let spec = SpamReportSpec::new(request);
+        self.execute(spec).await
     }
 }
 

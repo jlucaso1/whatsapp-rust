@@ -1,3 +1,4 @@
+use crate::StringEnum;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6,19 +7,13 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{self, Jid, JidExt};
 use wacore_binary::node::{Node, NodeContent};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// IQ request type for WhatsApp protocol queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum InfoQueryType {
+    #[str = "set"]
     Set,
+    #[str = "get"]
     Get,
-}
-
-impl InfoQueryType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            InfoQueryType::Set => "set",
-            InfoQueryType::Get => "get",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

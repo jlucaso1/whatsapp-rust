@@ -20,6 +20,7 @@
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
 use crate::libsignal::protocol::{KeyPair, PublicKey};
+use crate::StringEnum;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
@@ -53,38 +54,30 @@ const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
 /// Platform identifiers for companion devices.
 /// These match the DeviceProps.PlatformType protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 #[repr(u8)]
 pub enum PlatformId {
+    #[str = "0"]
     Unknown = 0,
-    #[default]
+    #[string_default]
+    #[str = "1"]
     Chrome = 1,
+    #[str = "2"]
     Firefox = 2,
+    #[str = "3"]
     InternetExplorer = 3,
+    #[str = "4"]
     Opera = 4,
+    #[str = "5"]
     Safari = 5,
+    #[str = "6"]
     Edge = 6,
+    #[str = "7"]
     Electron = 7,
+    #[str = "8"]
     Uwp = 8,
+    #[str = "9"]
     OtherWebClient = 9,
-}
-
-impl PlatformId {
-    /// Returns the platform ID as a string (for XML content).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Unknown => "0",
-            Self::Chrome => "1",
-            Self::Firefox => "2",
-            Self::InternetExplorer => "3",
-            Self::Opera => "4",
-            Self::Safari => "5",
-            Self::Edge => "6",
-            Self::Electron => "7",
-            Self::Uwp => "8",
-            Self::OtherWebClient => "9",
-        }
-    }
 }
 
 /// Options for pair code authentication.
@@ -604,11 +597,13 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_id_values() {
-        // Platform IDs match DeviceProps.PlatformType protobuf enum
+    fn test_platform_id_string_enum() {
+        // StringEnum derive works correctly
+        assert_eq!(PlatformId::Chrome.as_str(), "1");
+        assert_eq!(PlatformId::Firefox.to_string(), "2");
+        assert_eq!(PlatformId::default(), PlatformId::Chrome);
+        // repr(u8) values match DeviceProps.PlatformType protobuf enum
         assert_eq!(PlatformId::Chrome as u8, 1);
-        assert_eq!(PlatformId::Firefox as u8, 2);
-        assert_eq!(PlatformId::Edge as u8, 6);
     }
 
     #[test]
@@ -686,25 +681,6 @@ mod tests {
         assert_ne!(key1, key2);
     }
 
-    #[test]
-    fn test_platform_id_as_str() {
-        assert_eq!(PlatformId::Unknown.as_str(), "0");
-        assert_eq!(PlatformId::Chrome.as_str(), "1");
-        assert_eq!(PlatformId::Firefox.as_str(), "2");
-        assert_eq!(PlatformId::InternetExplorer.as_str(), "3");
-        assert_eq!(PlatformId::Opera.as_str(), "4");
-        assert_eq!(PlatformId::Safari.as_str(), "5");
-        assert_eq!(PlatformId::Edge.as_str(), "6");
-        assert_eq!(PlatformId::Electron.as_str(), "7");
-        assert_eq!(PlatformId::Uwp.as_str(), "8");
-        assert_eq!(PlatformId::OtherWebClient.as_str(), "9");
-    }
-
-    #[test]
-    fn test_platform_id_default() {
-        let default = PlatformId::default();
-        assert_eq!(default, PlatformId::Chrome);
-    }
 
     #[test]
     fn test_pair_code_options_default() {

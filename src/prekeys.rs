@@ -1,18 +1,18 @@
+//! Pre-key management for Signal Protocol.
+//!
+//! Protocol types are defined in `wacore::iq::prekeys`.
+
 use crate::client::Client;
 use crate::jid_utils::server_jid;
-use log;
-use wacore::libsignal::protocol::PreKeyBundle;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::NodeContent;
-
 use crate::request::InfoQuery;
-use wacore_binary::builder::NodeBuilder;
-
 use anyhow;
+use log;
 use rand::TryRngCore;
 use rand_core::OsRng;
-use wacore::libsignal::protocol::KeyPair;
+use wacore::iq::prekeys::{PreKeyCountSpec, PreKeyFetchSpec};
+use wacore::libsignal::protocol::{KeyPair, PreKeyBundle};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
+use wacore_binary::jid::Jid;
 
 pub use wacore::prekeys::PreKeyUtils;
 
@@ -25,17 +25,12 @@ impl Client {
         jids: &[Jid],
         reason: Option<&str>,
     ) -> Result<std::collections::HashMap<Jid, PreKeyBundle>, anyhow::Error> {
-        let content = PreKeyUtils::build_fetch_prekeys_request(jids, reason);
+        let spec = match reason {
+            Some(r) => PreKeyFetchSpec::with_reason(jids.to_vec(), r),
+            None => PreKeyFetchSpec::new(jids.to_vec()),
+        };
 
-        let resp_node = self
-            .send_iq(crate::request::InfoQuery::get(
-                "encrypt",
-                server_jid(),
-                Some(NodeContent::Nodes(vec![content])),
-            ))
-            .await?;
-
-        let bundles = PreKeyUtils::parse_prekeys_response(&resp_node)?;
+        let bundles = self.execute(spec).await?;
 
         for jid in bundles.keys() {
             log::debug!("Successfully parsed pre-key bundle for {jid}");
@@ -46,27 +41,8 @@ impl Client {
 
     /// Query the WhatsApp server for how many pre-keys it currently has for this device.
     pub(crate) async fn get_server_pre_key_count(&self) -> Result<usize, crate::request::IqError> {
-        let count_node = NodeBuilder::new("count").build();
-        let iq = InfoQuery::get(
-            "encrypt",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(vec![count_node])),
-        );
-
-        let resp_node = self.send_iq(iq).await?;
-        let count_resp_node = resp_node.get_optional_child("count").ok_or_else(|| {
-            crate::request::IqError::ServerError {
-                code: 500,
-                text: "Missing count node in response".to_string(),
-            }
-        })?;
-
-        let count_str = count_resp_node
-            .attrs()
-            .optional_string("value")
-            .unwrap_or("0");
-        let count = count_str.parse::<usize>().unwrap_or(0);
-        Ok(count)
+        let response = self.execute(PreKeyCountSpec::new()).await?;
+        Ok(response.count)
     }
 
     /// Ensure the server has at least MIN_PRE_KEY_COUNT pre-keys, and upload a batch of

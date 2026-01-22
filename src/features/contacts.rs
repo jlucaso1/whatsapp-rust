@@ -1,55 +1,19 @@
+//! Contact information feature.
+//!
+//! Profile picture types are defined in `wacore::iq::contacts`.
+//! Usync types are defined in `wacore::iq::usync`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::InfoQuery;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
-use wacore_binary::builder::NodeBuilder;
+use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
+use wacore::iq::usync::{ContactInfoSpec, IsOnWhatsAppSpec, UserInfoSpec};
 use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
 
-#[derive(Debug, Clone)]
-pub struct IsOnWhatsAppResult {
-    pub jid: Jid,
-    pub is_registered: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContactInfo {
-    pub jid: Jid,
-
-    pub lid: Option<Jid>,
-
-    pub is_registered: bool,
-
-    pub is_business: bool,
-
-    pub status: Option<String>,
-
-    pub picture_id: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProfilePicture {
-    pub id: String,
-
-    pub url: String,
-
-    pub direct_path: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct UserInfo {
-    pub jid: Jid,
-
-    pub lid: Option<Jid>,
-
-    pub status: Option<String>,
-
-    pub picture_id: Option<String>,
-
-    pub is_business: bool,
-}
+// Re-export types from wacore
+pub use wacore::iq::contacts::ProfilePicture;
+pub use wacore::iq::usync::{ContactInfo, IsOnWhatsAppResult, UserInfo};
 
 pub struct Contacts<'a> {
     client: &'a Client,
@@ -65,50 +29,13 @@ impl<'a> Contacts<'a> {
             return Ok(Vec::new());
         }
 
-        let request_id = self.client.generate_request_id();
         debug!("is_on_whatsapp: checking {} numbers", phones.len());
 
-        let query_node = NodeBuilder::new("query")
-            .children(vec![NodeBuilder::new("contact").build()])
-            .build();
+        let request_id = self.client.generate_request_id();
+        let phone_strings: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
+        let spec = IsOnWhatsAppSpec::new(phone_strings, request_id);
 
-        let user_nodes: Vec<Node> = phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.to_string()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![
-                        NodeBuilder::new("contact")
-                            .string_content(phone_content)
-                            .build(),
-                    ])
-                    .build()
-            })
-            .collect();
-
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
-
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "query")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "interactive")
-            .children(vec![query_node, list_node])
-            .build();
-
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_is_on_whatsapp_response(&response_node)
+        Ok(self.client.execute(spec).await?)
     }
 
     pub async fn get_info(&self, phones: &[&str]) -> Result<Vec<ContactInfo>> {
@@ -116,56 +43,13 @@ impl<'a> Contacts<'a> {
             return Ok(Vec::new());
         }
 
-        let request_id = self.client.generate_request_id();
         debug!("get_info: fetching info for {} numbers", phones.len());
 
-        let query_node = NodeBuilder::new("query")
-            .children(vec![
-                NodeBuilder::new("contact").build(),
-                NodeBuilder::new("lid").build(),
-                NodeBuilder::new("status").build(),
-                NodeBuilder::new("picture").build(),
-                NodeBuilder::new("business").build(),
-            ])
-            .build();
+        let request_id = self.client.generate_request_id();
+        let phone_strings: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
+        let spec = ContactInfoSpec::new(phone_strings, request_id);
 
-        let user_nodes: Vec<Node> = phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.to_string()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![
-                        NodeBuilder::new("contact")
-                            .string_content(phone_content)
-                            .build(),
-                    ])
-                    .build()
-            })
-            .collect();
-
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
-
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "query")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "interactive")
-            .children(vec![query_node, list_node])
-            .build();
-
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_contact_info_response(&response_node)
+        Ok(self.client.execute(spec).await?)
     }
 
     pub async fn get_profile_picture(
@@ -179,21 +63,14 @@ impl<'a> Contacts<'a> {
             jid
         );
 
-        let picture_type = if preview { "preview" } else { "image" };
-        let picture_node = NodeBuilder::new("picture")
-            .attr("type", picture_type)
-            .attr("query", "url")
-            .build();
+        let picture_type = if preview {
+            ProfilePictureType::Preview
+        } else {
+            ProfilePictureType::Full
+        };
+        let spec = ProfilePictureSpec::new(jid, picture_type);
 
-        let iq = InfoQuery::get(
-            "w:profile:picture",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![picture_node])),
-        )
-        .with_target(jid.clone());
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_profile_picture_response(&response_node)
+        Ok(self.client.execute(spec).await?)
     }
 
     pub async fn get_user_info(&self, jids: &[Jid]) -> Result<HashMap<Jid, UserInfo>> {
@@ -201,252 +78,12 @@ impl<'a> Contacts<'a> {
             return Ok(HashMap::new());
         }
 
-        let request_id = self.client.generate_request_id();
         debug!("get_user_info: fetching info for {} JIDs", jids.len());
 
-        let query_node = NodeBuilder::new("query")
-            .children(vec![
-                NodeBuilder::new("business")
-                    .children(vec![NodeBuilder::new("verified_name").build()])
-                    .build(),
-                NodeBuilder::new("status").build(),
-                NodeBuilder::new("picture").build(),
-                NodeBuilder::new("devices").attr("version", "2").build(),
-                NodeBuilder::new("lid").build(),
-            ])
-            .build();
+        let request_id = self.client.generate_request_id();
+        let spec = UserInfoSpec::new(jids.to_vec(), request_id);
 
-        let user_nodes: Vec<Node> = jids
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
-                    .build()
-            })
-            .collect();
-
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
-
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "full")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "background")
-            .children(vec![query_node, list_node])
-            .build();
-
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_user_info_response(&response_node)
-    }
-
-    fn parse_is_on_whatsapp_response(node: &Node) -> Result<Vec<IsOnWhatsAppResult>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = Vec::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let contact_node = user_node.get_optional_child("contact");
-                let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
-                    .unwrap_or(false);
-
-                results.push(IsOnWhatsAppResult { jid, is_registered });
-            }
-        }
-
-        Ok(results)
-    }
-
-    fn parse_contact_info_response(node: &Node) -> Result<Vec<ContactInfo>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = Vec::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let contact_node = user_node.get_optional_child("contact");
-                let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
-                    .unwrap_or(false);
-
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node.attrs().optional_u64("id")
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
-                results.push(ContactInfo {
-                    jid,
-                    lid,
-                    is_registered,
-                    is_business,
-                    status,
-                    picture_id,
-                });
-            }
-        }
-
-        Ok(results)
-    }
-
-    fn parse_profile_picture_response(node: &Node) -> Result<Option<ProfilePicture>> {
-        let picture_node = match node.get_optional_child("picture") {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        if let Some(error_node) = picture_node.get_optional_child("error") {
-            let code = error_node.attrs().optional_string("code").unwrap_or("0");
-            if code == "404" || code == "401" {
-                return Ok(None);
-            }
-            let text = error_node
-                .attrs()
-                .optional_string("text")
-                .unwrap_or("unknown error");
-            return Err(anyhow!("Profile picture error {}: {}", code, text));
-        }
-
-        let id = picture_node
-            .attrs()
-            .optional_string("id")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-
-        let url = picture_node
-            .attrs()
-            .optional_string("url")
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow!("Picture response missing 'url' attribute"))?;
-
-        let direct_path = picture_node
-            .attrs()
-            .optional_string("direct_path")
-            .map(|s| s.to_string());
-
-        Ok(Some(ProfilePicture {
-            id,
-            url,
-            direct_path,
-        }))
-    }
-
-    fn parse_user_info_response(node: &Node) -> Result<HashMap<Jid, UserInfo>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = HashMap::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node
-                            .attrs()
-                            .optional_string("id")
-                            .map(|s| s.to_string())
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
-                results.insert(
-                    jid.clone(),
-                    UserInfo {
-                        jid,
-                        lid,
-                        status,
-                        picture_id,
-                        is_business,
-                    },
-                );
-            }
-        }
-
-        Ok(results)
+        Ok(self.client.execute(spec).await?)
     }
 }
 

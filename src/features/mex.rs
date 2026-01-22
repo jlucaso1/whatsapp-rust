@@ -1,12 +1,17 @@
+//! MEX (Meta Exchange) GraphQL feature.
+//!
+//! Protocol types are defined in `wacore::iq::mex`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::InfoQuery;
-use serde::{Deserialize, Serialize};
+use crate::request::IqError;
 use serde_json::Value;
 use thiserror::Error;
-use wacore_binary::builder::NodeBuilder;
-use wacore_binary::node::{Node, NodeContent};
+use wacore::iq::mex::MexQuerySpec;
 
+// Re-export types from wacore
+pub use wacore::iq::mex::{MexErrorExtensions, MexGraphQLError, MexResponse};
+
+/// Error types for MEX operations.
 #[derive(Debug, Error)]
 pub enum MexError {
     #[error("MEX payload parsing error: {0}")]
@@ -16,84 +21,22 @@ pub enum MexError {
     ExtensionError { code: i32, message: String },
 
     #[error("IQ request failed: {0}")]
-    Request(#[from] Box<crate::request::IqError>),
+    Request(#[from] IqError),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
 
+/// MEX request with document ID and variables.
 #[derive(Debug, Clone)]
 pub struct MexRequest<'a> {
+    /// GraphQL document ID.
     pub doc_id: &'a str,
-
+    /// Query variables.
     pub variables: Value,
 }
 
-#[derive(Serialize)]
-struct MexPayload<'a> {
-    variables: &'a Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct MexResponse {
-    pub data: Option<Value>,
-
-    pub errors: Option<Vec<MexGraphQLError>>,
-}
-
-impl MexResponse {
-    #[inline]
-    pub fn has_data(&self) -> bool {
-        self.data.is_some()
-    }
-
-    #[inline]
-    pub fn has_errors(&self) -> bool {
-        self.errors.as_ref().is_some_and(|e| !e.is_empty())
-    }
-
-    pub fn fatal_error(&self) -> Option<&MexGraphQLError> {
-        self.errors.as_ref()?.iter().find(|e| {
-            e.extensions
-                .as_ref()
-                .is_some_and(|ext| ext.is_summary == Some(true))
-        })
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct MexGraphQLError {
-    pub message: String,
-
-    pub extensions: Option<MexErrorExtensions>,
-}
-
-impl MexGraphQLError {
-    #[inline]
-    pub fn error_code(&self) -> Option<i32> {
-        self.extensions.as_ref()?.error_code
-    }
-
-    #[inline]
-    pub fn is_fatal(&self) -> bool {
-        self.extensions
-            .as_ref()
-            .is_some_and(|ext| ext.is_summary == Some(true))
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct MexErrorExtensions {
-    pub error_code: Option<i32>,
-
-    pub is_summary: Option<bool>,
-
-    #[serde(default)]
-    pub is_retryable: Option<bool>,
-
-    pub severity: Option<String>,
-}
-
+/// Feature handle for MEX GraphQL operations.
 pub struct Mex<'a> {
     client: &'a Client,
 }
@@ -103,50 +46,24 @@ impl<'a> Mex<'a> {
         Self { client }
     }
 
+    /// Execute a GraphQL query.
     #[inline]
     pub async fn query(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
-        self.execute(request).await
+        self.execute_request(request).await
     }
 
+    /// Execute a GraphQL mutation.
     #[inline]
     pub async fn mutate(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
-        self.execute(request).await
+        self.execute_request(request).await
     }
 
-    async fn execute(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
-        let payload = MexPayload {
-            variables: &request.variables,
-        };
-        let payload_bytes = serde_json::to_vec(&payload)?;
+    async fn execute_request(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
+        let spec = MexQuerySpec::new(request.doc_id, request.variables);
 
-        let query_node = NodeBuilder::new("query")
-            .attr("query_id", request.doc_id)
-            .bytes(payload_bytes)
-            .build();
+        let response = self.client.execute(spec).await?;
 
-        let iq = InfoQuery::get(
-            "w:mex",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![query_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await.map_err(Box::new)?;
-
-        Self::parse_response(&response_node)
-    }
-
-    fn parse_response(node: &Node) -> Result<MexResponse, MexError> {
-        let result_node = node
-            .get_optional_child("result")
-            .ok_or_else(|| MexError::PayloadParsing("Missing <result> node".into()))?;
-
-        let result_bytes = match &result_node.content {
-            Some(NodeContent::Bytes(bytes)) => bytes,
-            _ => return Err(MexError::PayloadParsing("Result not binary".into())),
-        };
-
-        let response: MexResponse = serde_json::from_slice(result_bytes)?;
-
+        // Check for fatal errors (the IqSpec already checks, but we want to return our error type)
         if let Some(fatal) = response.fatal_error() {
             let code = fatal.error_code().unwrap_or(500);
             return Err(MexError::ExtensionError {
@@ -170,27 +87,6 @@ impl Client {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn test_mex_payload_serialization() {
-        let variables = json!({
-            "input": {
-                "query_input": [{"jid": "1234567890@s.whatsapp.net"}]
-            },
-            "include_username": true
-        });
-
-        let payload = MexPayload {
-            variables: &variables,
-        };
-
-        let serialized = serde_json::to_string(&payload).unwrap();
-
-        assert!(serialized.starts_with("{\"variables\":"));
-        assert!(!serialized.contains("\"id\":"));
-        assert!(serialized.contains("\"include_username\":true"));
-        assert!(serialized.contains("\"query_input\""));
-    }
 
     #[test]
     fn test_mex_request_borrows_doc_id() {

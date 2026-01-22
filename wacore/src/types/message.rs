@@ -3,10 +3,39 @@ use serde::Serialize;
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Addressing mode for a group (phone number vs LID).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub enum AddressingMode {
+    #[default]
     Pn,
     Lid,
+}
+
+impl AddressingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AddressingMode::Pn => "pn",
+            AddressingMode::Lid => "lid",
+        }
+    }
+}
+
+impl std::fmt::Display for AddressingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<&str> for AddressingMode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "lid" => Ok(AddressingMode::Lid),
+            "pn" | "" => Ok(AddressingMode::Pn),
+            _ => Err(anyhow::anyhow!("unknown addressing_mode: {value}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

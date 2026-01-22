@@ -1,26 +1,17 @@
+//! Presence (online status) feature.
+
 use crate::client::Client;
 use log::{debug, info, warn};
+use wacore::StringEnum;
 use wacore_binary::builder::NodeBuilder;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presence status for online/offline state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum PresenceStatus {
+    #[str = "available"]
     Available,
+    #[str = "unavailable"]
     Unavailable,
-}
-
-impl PresenceStatus {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PresenceStatus::Available => "available",
-            PresenceStatus::Unavailable => "unavailable",
-        }
-    }
-}
-
-impl std::fmt::Display for PresenceStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }
 
 impl From<crate::types::presence::Presence> for PresenceStatus {
@@ -32,6 +23,7 @@ impl From<crate::types::presence::Presence> for PresenceStatus {
     }
 }
 
+/// Feature handle for presence operations.
 pub struct Presence<'a> {
     client: &'a Client,
 }
@@ -41,6 +33,7 @@ impl<'a> Presence<'a> {
         Self { client }
     }
 
+    /// Set the presence status.
     pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error> {
         let device_snapshot = self
             .client
@@ -76,16 +69,19 @@ impl<'a> Presence<'a> {
         self.client.send_node(node).await.map_err(|e| e.into())
     }
 
+    /// Set presence to available (online).
     pub async fn set_available(&self) -> Result<(), anyhow::Error> {
         self.set(PresenceStatus::Available).await
     }
 
+    /// Set presence to unavailable (offline).
     pub async fn set_unavailable(&self) -> Result<(), anyhow::Error> {
         self.set(PresenceStatus::Unavailable).await
     }
 }
 
 impl Client {
+    /// Access presence operations.
     #[allow(clippy::wrong_self_convention)]
     pub fn presence(&self) -> Presence<'_> {
         Presence::new(self)
@@ -97,14 +93,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_presence_status_display() {
-        assert_eq!(PresenceStatus::Available.to_string(), "available");
-        assert_eq!(PresenceStatus::Unavailable.to_string(), "unavailable");
-    }
-
-    #[test]
-    fn test_presence_status_as_str() {
+    fn test_presence_status_string_enum() {
         assert_eq!(PresenceStatus::Available.as_str(), "available");
-        assert_eq!(PresenceStatus::Unavailable.as_str(), "unavailable");
+        assert_eq!(PresenceStatus::Unavailable.to_string(), "unavailable");
     }
 }

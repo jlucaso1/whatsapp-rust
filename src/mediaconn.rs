@@ -1,24 +1,30 @@
+//! Media connection management.
+//!
+//! Protocol types are defined in `wacore::iq::mediaconn`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, IqError};
-use serde::Deserialize;
+use crate::request::IqError;
 use std::time::{Duration, Instant};
-use wacore_binary::builder::NodeBuilder;
+use wacore::iq::mediaconn::MediaConnSpec;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct MediaConnHost {
-    pub hostname: String,
-}
+/// Re-export the host type from wacore.
+pub use wacore::iq::mediaconn::MediaConnHost;
 
+/// Media connection with runtime-specific fields.
 #[derive(Debug, Clone)]
 pub struct MediaConn {
+    /// Authentication token for media operations.
     pub auth: String,
+    /// Time-to-live in seconds.
     pub ttl: u64,
+    /// Available media hosts.
     pub hosts: Vec<MediaConnHost>,
+    /// When this connection info was fetched (runtime-specific).
     pub fetched_at: Instant,
 }
 
 impl MediaConn {
+    /// Check if this connection info has expired.
     pub fn is_expired(&self) -> bool {
         self.fetched_at.elapsed() > Duration::from_secs(self.ttl)
     }
@@ -36,38 +42,12 @@ impl Client {
             }
         }
 
-        let resp = self
-            .send_iq(InfoQuery::set(
-                "w:m",
-                server_jid(),
-                Some(wacore_binary::node::NodeContent::Nodes(vec![
-                    NodeBuilder::new("media_conn").build(),
-                ])),
-            ))
-            .await?;
-
-        let media_conn_node =
-            resp.get_optional_child("media_conn")
-                .ok_or_else(|| IqError::ServerError {
-                    code: 500,
-                    text: "Missing media_conn node in response".to_string(),
-                })?;
-
-        let mut attrs = media_conn_node.attrs();
-        let auth = attrs.string("auth");
-        let ttl = attrs.optional_u64("ttl").unwrap_or(0);
-
-        let mut hosts = Vec::new();
-        for host_node in media_conn_node.get_children_by_tag("host") {
-            hosts.push(MediaConnHost {
-                hostname: host_node.attrs().string("hostname"),
-            });
-        }
+        let response = self.execute(MediaConnSpec::new()).await?;
 
         let new_conn = MediaConn {
-            auth,
-            ttl,
-            hosts,
+            auth: response.auth,
+            ttl: response.ttl,
+            hosts: response.hosts,
             fetched_at: Instant::now(),
         };
 
