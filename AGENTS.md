@@ -83,7 +83,52 @@ The project is split into three main crates:
 
 ---
 
-## 5. Final Implementation Checks
+## 5. Feature Implementation Philosophy (WhatsApp Web–based)
+
+When adding a new feature, follow a repeatable flow that mirrors WhatsApp Web behavior while staying aligned with the project’s architecture:
+
+1. **Identify the wire format first**
+   - Capture or locate the WhatsApp Web request/response for the feature.
+   - Extract the exact stanza structure: tags, attributes, and children.
+   - Treat this as the ground truth for what must be sent and parsed.
+
+2. **Map the feature to the right layer**
+   - **wacore**: protocol logic, state traits, cryptographic helpers, and data models that must be platform-agnostic.
+   - **whatsapp-rust**: runtime orchestration, storage integration, and user-facing API.
+   - **waproto**: protobuf structures only (avoid feature logic here).
+
+3. **Build minimal primitives before high-level APIs**
+   - Start with the smallest IQ/message builder that can successfully round-trip.
+   - Parse and validate the response path before adding options or convenience methods.
+
+4. **Keep state changes behind the PersistenceManager**
+   - If the feature touches device or chat state, use `DeviceCommand` and `PersistenceManager::process_command()`.
+   - For read access, use `get_device_snapshot()`.
+
+5. **Confirm concurrency requirements**
+   - Network I/O stays async.
+   - Blocking or heavy CPU work goes into `tokio::task::spawn_blocking`.
+   - Use `Client::chat_locks` to serialize per-chat operations when needed.
+
+6. **Add ergonomic API last**
+   - Once the protocol is stable, add ergonomic Rust builders, enums, and result types.
+   - Expose them via `src/features/mod.rs`.
+
+7. **Test and verify**
+   - Run `cargo fmt`, `cargo clippy --all-targets`, and `cargo test --all`.
+   - Use logging to compare with WhatsApp Web traffic where applicable.
+
+### Quick Structure Guide
+
+- **Protocol entry points**: `src/send.rs`, `src/message.rs`, `src/socket/`, `src/handshake.rs`
+- **Feature modules**: `src/features/`
+- **State + storage**: `src/store/` + `PersistenceManager`
+- **Core protocol & crypto**: `wacore/`
+- **Protobufs**: `waproto/`
+
+---
+
+## 6. Final Implementation Checks
 
 Before finalizing a feature/fix, always run:
 
@@ -93,7 +138,7 @@ Before finalizing a feature/fix, always run:
 
 ---
 
-## 6. Debugging Tools
+## 7. Debugging Tools
 
 ### evcxr - Rust REPL
 
