@@ -11,7 +11,10 @@ pub use chatstate::{ChatStateType, Chatstate};
 
 pub use contacts::{ContactInfo, Contacts, IsOnWhatsAppResult, ProfilePicture, UserInfo};
 
-pub use groups::{GroupMetadata, GroupParticipant, Groups};
+pub use groups::{
+    CreateGroupResult, GroupCreateOptions, GroupMetadata, GroupParticipant,
+    GroupParticipantOptions, Groups, MemberAddMode, MemberLinkMode, MembershipApprovalMode,
+};
 
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
 
