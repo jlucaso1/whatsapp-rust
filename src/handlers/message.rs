@@ -31,9 +31,13 @@ impl StanzaHandler for MessageHandler {
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
         let chat_id = match node.attrs().optional_string("from") {
-            Some(id) => id.to_string(),
+            Some(id) if !id.is_empty() => id.to_string(),
+            Some(_) => {
+                warn!("Message stanza has empty 'from' attribute");
+                return false;
+            }
             None => {
-                log::warn!("Message stanza missing required 'from' attribute");
+                warn!("Message stanza missing required 'from' attribute");
                 return false;
             }
         };
