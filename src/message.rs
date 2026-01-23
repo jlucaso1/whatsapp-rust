@@ -1138,13 +1138,7 @@ impl Client {
             .map(|s| s.to_string())
             .unwrap_or_default();
 
-        let id = match attrs.optional_string("id") {
-            Some(id) => id.to_string(),
-            None => {
-                log::warn!("Message missing 'id' attribute");
-                String::new()
-            }
-        };
+        let id = attrs.required_string("id")?.to_string();
 
         Ok(MessageInfo {
             source,
@@ -4000,5 +3994,47 @@ mod tests {
                 should_process_skmsg
             );
         }
+    }
+
+    /// Test: parse_message_info returns error when message "id" attribute is missing
+    ///
+    /// Missing message IDs would cause silent collisions in caches/keys, so this
+    /// must be a hard error rather than defaulting to an empty string.
+    #[tokio::test]
+    async fn test_parse_message_info_missing_id_returns_error() {
+        // 1. Setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_missing_id_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        // 2. Create a message node WITHOUT the "id" attribute
+        let node = NodeBuilder::new("message")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("t", "1759295366")
+            .attr("type", "text")
+            .build();
+
+        // 3. Run the function under test - should return an error
+        let result = client.parse_message_info(&node).await;
+
+        // 4. Assert that it returns an error about missing id
+        assert!(
+            result.is_err(),
+            "parse_message_info should fail when 'id' is missing"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("id"),
+            "Error message should mention missing 'id' attribute: {}",
+            err_msg
+        );
     }
 }

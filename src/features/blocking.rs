@@ -5,7 +5,6 @@
 
 use crate::client::Client;
 use crate::request::IqError;
-use anyhow::Result;
 use log::debug;
 pub use wacore::iq::blocklist::BlocklistEntry;
 use wacore::iq::blocklist::{GetBlocklistSpec, UpdateBlocklistSpec};
@@ -40,7 +39,7 @@ impl<'a> Blocking<'a> {
     }
 
     /// Get the full blocklist.
-    pub async fn get_blocklist(&self) -> Result<Vec<BlocklistEntry>> {
+    pub async fn get_blocklist(&self) -> anyhow::Result<Vec<BlocklistEntry>> {
         debug!(target: "Blocking", "Fetching blocklist...");
         let entries = self.client.execute(GetBlocklistSpec).await?;
         debug!(target: "Blocking", "Fetched {} blocked contacts", entries.len());
@@ -51,7 +50,7 @@ impl<'a> Blocking<'a> {
     ///
     /// Compares only the user part of the JID, ignoring device ID,
     /// since blocking applies to the entire user account, not individual devices.
-    pub async fn is_blocked(&self, jid: &Jid) -> Result<bool> {
+    pub async fn is_blocked(&self, jid: &Jid) -> anyhow::Result<bool> {
         let blocklist = self.get_blocklist().await?;
         Ok(blocklist.iter().any(|e| e.jid.user == jid.user))
     }

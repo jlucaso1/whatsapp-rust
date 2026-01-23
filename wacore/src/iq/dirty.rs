@@ -92,17 +92,19 @@ pub struct CleanDirtyBitsSpec {
 
 impl CleanDirtyBitsSpec {
     /// Create a spec to clean a single dirty bit.
-    pub fn single(dirty_type: &str, timestamp: Option<&str>) -> Self {
+    ///
+    /// # Errors
+    /// Returns an error if `timestamp` is provided but cannot be parsed as `u64`.
+    pub fn single(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
         let bit = if let Some(ts) = timestamp {
-            if let Ok(ts_num) = ts.parse() {
-                DirtyBit::with_timestamp(DirtyType::from(dirty_type), ts_num)
-            } else {
-                DirtyBit::new(DirtyType::from(dirty_type))
-            }
+            let ts_num: u64 = ts
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid timestamp '{}': {}", ts, e))?;
+            DirtyBit::with_timestamp(DirtyType::from(dirty_type), ts_num)
         } else {
             DirtyBit::new(DirtyType::from(dirty_type))
         };
-        Self { bits: vec![bit] }
+        Ok(Self { bits: vec![bit] })
     }
 
     /// Create a spec to clean multiple dirty bits.
@@ -147,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_single() {
-        let spec = CleanDirtyBitsSpec::single("account_sync", None);
+        let spec = CleanDirtyBitsSpec::single("account_sync", None).unwrap();
         let iq = spec.build_iq();
 
         assert_eq!(iq.namespace, DIRTY_NAMESPACE);
@@ -168,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_with_timestamp() {
-        let spec = CleanDirtyBitsSpec::single("groups", Some("1234567890"));
+        let spec = CleanDirtyBitsSpec::single("groups", Some("1234567890")).unwrap();
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
@@ -181,6 +183,18 @@ mod tests {
         } else {
             panic!("Expected NodeContent::Nodes");
         }
+    }
+
+    #[test]
+    fn test_clean_dirty_bits_spec_invalid_timestamp() {
+        let result = CleanDirtyBitsSpec::single("account_sync", Some("not_a_number"));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("invalid timestamp"),
+            "Error should mention invalid timestamp: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -211,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_parse_response() {
-        let spec = CleanDirtyBitsSpec::single("account_sync", None);
+        let spec = CleanDirtyBitsSpec::single("account_sync", None).unwrap();
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
         let result = spec.parse_response(&response);
