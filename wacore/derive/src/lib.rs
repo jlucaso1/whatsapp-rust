@@ -130,7 +130,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
             } else {
                 quote! {
                     #field_ident: node.attrs().optional_string(#attr_name)
-                        .ok_or_else(|| anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                        .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
                         .to_string()
                 }
             }
@@ -151,20 +151,20 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         .collect();
 
     let expanded = quote! {
-        impl crate::protocol::ProtocolNode for #name {
+        impl ::wacore::protocol::ProtocolNode for #name {
             fn tag(&self) -> &'static str {
                 #tag
             }
 
-            fn into_node(self) -> wacore_binary::node::Node {
-                wacore_binary::builder::NodeBuilder::new(#tag)
+            fn into_node(self) -> ::wacore_binary::node::Node {
+                ::wacore_binary::builder::NodeBuilder::new(#tag)
                     #(#attr_setters)*
                     .build()
             }
 
-            fn try_from_node(node: &wacore_binary::node::Node) -> anyhow::Result<Self> {
+            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
-                    return Err(anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
+                    return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }
                 Ok(Self {
                     #(#field_parsers),*
@@ -172,7 +172,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl Default for #name {
+        impl ::core::default::Default for #name {
             fn default() -> Self {
                 Self {
                     #(#default_fields),*
@@ -221,24 +221,24 @@ pub fn derive_empty_node(input: TokenStream) -> TokenStream {
 
 fn generate_empty_impl(name: &syn::Ident, tag: &str) -> proc_macro2::TokenStream {
     quote! {
-        impl crate::protocol::ProtocolNode for #name {
+        impl ::wacore::protocol::ProtocolNode for #name {
             fn tag(&self) -> &'static str {
                 #tag
             }
 
-            fn into_node(self) -> wacore_binary::node::Node {
-                wacore_binary::builder::NodeBuilder::new(#tag).build()
+            fn into_node(self) -> ::wacore_binary::node::Node {
+                ::wacore_binary::builder::NodeBuilder::new(#tag).build()
             }
 
-            fn try_from_node(node: &wacore_binary::node::Node) -> anyhow::Result<Self> {
+            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
-                    return Err(anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
+                    return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }
                 Ok(Self)
             }
         }
 
-        impl Default for #name {
+        impl ::core::default::Default for #name {
             fn default() -> Self {
                 Self
             }
@@ -432,24 +432,24 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl std::fmt::Display for #name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl ::core::fmt::Display for #name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str(self.as_str())
             }
         }
 
-        impl TryFrom<&str> for #name {
-            type Error = anyhow::Error;
+        impl ::core::convert::TryFrom<&str> for #name {
+            type Error = ::anyhow::Error;
 
-            fn try_from(value: &str) -> Result<Self, Self::Error> {
+            fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
                 match value {
                     #(#try_from_arms),*,
-                    _ => Err(anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)),
+                    _ => Err(::anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)),
                 }
             }
         }
 
-        impl Default for #name {
+        impl ::core::default::Default for #name {
             fn default() -> Self {
                 #name::#default_variant
             }

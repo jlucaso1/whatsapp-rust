@@ -770,8 +770,8 @@ impl Client {
     ) -> Result<(), crate::request::IqError> {
         use wacore::iq::dirty::CleanDirtyBitsSpec;
 
-        self.execute(CleanDirtyBitsSpec::single(type_, timestamp))
-            .await
+        let spec = CleanDirtyBitsSpec::single(type_, timestamp)?;
+        self.execute(spec).await
     }
 
     pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
