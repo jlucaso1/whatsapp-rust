@@ -116,24 +116,21 @@ impl Client {
                         // Max retries reached, don't increment
                         Op::Nop
                     } else {
-                        // Increment the counter
                         Op::Put(current + 1)
                     }
                 } else {
-                    // No entry exists, insert initial count of 1
                     Op::Put(1_u8)
                 };
                 std::future::ready(op)
             })
             .await;
 
-        // Extract the new count from the result
         match result {
             moka::ops::compute::CompResult::Inserted(entry) => Some(entry.into_value()),
             moka::ops::compute::CompResult::ReplacedWith(entry) => Some(entry.into_value()),
             moka::ops::compute::CompResult::Unchanged(_) => None, // Max retries reached
-            moka::ops::compute::CompResult::StillNone(_) => None, // Should not happen
-            moka::ops::compute::CompResult::Removed(_) => None,   // Should not happen
+            moka::ops::compute::CompResult::StillNone(_) => None,
+            moka::ops::compute::CompResult::Removed(_) => None,
         }
     }
 
@@ -1353,7 +1350,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_message_info_for_status_broadcast() {
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_status_test?mode=memory&cache=shared")
                 .await
@@ -1369,7 +1365,6 @@ mod tests {
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
 
-        // 2. Create the test node mirroring the logs
         let node = NodeBuilder::new("message")
             .attr("from", status_broadcast_jid_str)
             .attr("id", "8A8CCCC7E6E466D9EE8CA11A967E485A")
@@ -1378,13 +1373,11 @@ mod tests {
             .attr("type", "media")
             .build();
 
-        // 3. Run the function under test
         let info = client
             .parse_message_info(&node)
             .await
             .expect("parse_message_info should not fail");
 
-        // 4. Assert the correct behavior
         let expected_sender: Jid = participant_jid_str
             .parse()
             .expect("test JID should be valid");
@@ -1410,7 +1403,6 @@ mod tests {
     async fn test_process_session_enc_batch_handles_session_not_found_gracefully() {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_graceful_fail?mode=memory&cache=shared")
                 .await
@@ -1435,7 +1427,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 2. Create a valid but undecryptable SignalMessage (encrypted with a dummy key)
+        // Create a valid but undecryptable SignalMessage
         let dummy_key = [0u8; 32];
         let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
         let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
@@ -1458,29 +1450,21 @@ mod tests {
             .build();
         let enc_nodes = vec![&enc_node];
 
-        // 3. Run the function under test
-        // The function now returns (any_success, any_duplicate, dispatched_undecryptable).
-        // With a SessionNotFound error, it should return (false, false, true) since it dispatches an event.
+        // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
             .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
             .await;
 
-        // 4. Assert the desired behavior: the function continues gracefully
-        // The function should return (false, false, true) (no successful decryption, no duplicates, but dispatched event)
         assert!(
             !success && !had_duplicates && dispatched,
             "process_session_enc_batch should return (false, false, true) when SessionNotFound occurs and dispatches event"
         );
-
-        // Note: Verifying event dispatch would require adding a test event handler.
-        // For this test, we're just ensuring the function doesn't panic and returns the correct status.
     }
 
     #[tokio::test]
     async fn test_handle_encrypted_message_skips_skmsg_after_msg_failure() {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_skip_skmsg_test?mode=memory&cache=shared")
                 .await
@@ -1500,8 +1484,7 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        // 2. Create a message node with both msg and skmsg
-        // The msg will fail to decrypt (no session), so skmsg should be skipped
+        // Create msg + skmsg node; msg will fail (no session), so skmsg should be skipped
         let dummy_key = [0u8; 32];
         let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
         let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
@@ -1538,14 +1521,8 @@ mod tests {
                 .build(),
         );
 
-        // 3. Run the function
-        // This should NOT panic or cause a retry loop. The skmsg should be skipped.
+        // Should not panic or retry loop - skmsg is skipped after msg failure
         client.handle_encrypted_message(message_node).await;
-
-        // 4. Assert
-        // If we get here without panicking, the test passes.
-        // The key improvement is that we won't send a retry receipt for the skmsg
-        // since we detected the msg failure and skipped skmsg processing entirely.
     }
 
     /// Test case for reproducing sender key JID mismatch in LID group messages
@@ -1568,8 +1545,6 @@ mod tests {
             process_sender_key_distribution_message,
         };
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
-
-        // Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
                 .await
@@ -1583,8 +1558,6 @@ mod tests {
         let (_client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        // Simulate own LID: 100000000000001.1:75@lid (note: using device 75 to match real scenario)
-        // Phone number: 15551234567:75@s.whatsapp.net
         let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
@@ -1595,8 +1568,7 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        // Step 1: Create a real sender key distribution message using LID address
-        // This mimics what happens in handle_sender_key_distribution_message
+        // Create SKDM using LID address (mimics handle_sender_key_distribution_message)
         let lid_protocol_address = own_lid.to_protocol_address();
         let lid_sender_key_name =
             SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
@@ -1613,7 +1585,6 @@ mod tests {
             .expect("Failed to create SKDM")
         };
 
-        // Step 2: Process the SKDM to ensure it's stored properly
         {
             let mut device_guard = device_arc.write().await;
             process_sender_key_distribution_message(
@@ -1625,12 +1596,7 @@ mod tests {
             .expect("Failed to process SKDM with LID address");
         }
 
-        println!(
-            "✅ Step 1: Stored sender key under LID address: {}",
-            lid_protocol_address
-        );
-
-        // Step 3: Try to retrieve using PHONE NUMBER address (THE BUG)
+        // Try to retrieve using PHONE NUMBER address (THE BUG)
         let phone_protocol_address = own_phone.to_protocol_address();
         let phone_sender_key_name =
             SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
@@ -1640,40 +1606,25 @@ mod tests {
             device_guard.load_sender_key(&phone_sender_key_name).await
         };
 
-        println!(
-            "❌ Step 2: Lookup with phone number address failed (expected): {}",
-            phone_protocol_address
-        );
         assert!(
             phone_lookup_result
                 .expect("lookup should not error")
                 .is_none(),
-            "Sender key should NOT be found when looking up with phone number address (this demonstrates the bug)"
+            "Sender key should NOT be found when looking up with phone number address (demonstrates the bug)"
         );
 
-        // Step 4: Try to retrieve using LID address (THE FIX)
+        // Try to retrieve using LID address (THE FIX)
         let lid_lookup_result = {
             let mut device_guard = device_arc.write().await;
             device_guard.load_sender_key(&lid_sender_key_name).await
         };
 
-        println!("✅ Step 3: Lookup with LID address succeeded (this is the fix)");
         assert!(
             lid_lookup_result
                 .expect("lookup should not error")
                 .is_some(),
             "Sender key SHOULD be found when looking up with LID address (same as storage)"
         );
-
-        println!("\n🎯 Summary:");
-        println!("   - LID protocol address: {}", lid_protocol_address);
-        println!("   - Phone protocol address: {}", phone_protocol_address);
-        println!(
-            "   - Storage key format: {}:{}",
-            group_jid, lid_protocol_address
-        );
-        println!("   - Bug: Using phone address for lookup after storing with LID address");
-        println!("   - Fix: Always use info.source.sender (LID) for both storage and retrieval");
     }
 
     /// Test that sender key consistency is maintained for multiple LID participants
@@ -1780,11 +1731,6 @@ mod tests {
                 lid_str
             );
         }
-
-        println!(
-            "✅ All {} LID participants have isolated sender keys",
-            participants.len()
-        );
     }
 
     /// Test that LID JID parsing handles various edge cases correctly
@@ -1985,8 +1931,6 @@ mod tests {
                 .user,
             "15551234567"
         );
-
-        println!("✅ sender_alt extraction working correctly for LID groups");
     }
 
     /// Test that device query logic uses phone numbers for LID participants
@@ -2055,8 +1999,6 @@ mod tests {
         assert_eq!(jids_to_query.len(), 2);
         assert!(jids_to_query.iter().any(|j| j.user == "15551234567"));
         assert!(jids_to_query.iter().any(|j| j.user == "551234567890"));
-
-        println!("✅ LID-to-phone mapping working correctly for device queries");
     }
 
     /// Test edge case: Group with mixed LID and phone number participants
@@ -2110,8 +2052,6 @@ mod tests {
         for jid in &jids_to_query {
             assert_eq!(jid.server, SERVER_JID);
         }
-
-        println!("✅ Mixed LID and phone number participants handled correctly");
     }
 
     /// Test edge case: Own JID check in LID mode
@@ -2147,8 +2087,6 @@ mod tests {
         // Verify we're checking using the phone number
         assert_eq!(own_jid_to_check.user, "15551234567");
         assert_eq!(own_jid_to_check.server, SERVER_JID);
-
-        println!("✅ Own JID check correctly uses phone number in LID mode");
     }
 
     /// Test that sender key operations always use the display JID (LID)
@@ -2231,8 +2169,6 @@ mod tests {
                 .is_none(),
             "Sender key should NOT be found with encryption JID (phone number)"
         );
-
-        println!("✅ Sender key operations correctly use display JID, not encryption JID");
     }
 
     /// Test edge case: Second message with only skmsg (no pkmsg/msg)
@@ -2294,10 +2230,7 @@ mod tests {
                 .expect("Failed to process SKDM");
         }
 
-        println!("✅ Step 1: Sender key established for {}", sender_jid);
-
-        // Step 2: Create a message with ONLY skmsg (no pkmsg/msg)
-        // This simulates the second message after session is established
+        // Create message with ONLY skmsg (simulating second message after session established)
         let skmsg_ciphertext = {
             let mut device_guard = device_arc.write().await;
             let sender_key_msg = wacore::libsignal::protocol::group_encrypt(
@@ -2329,19 +2262,8 @@ mod tests {
                 .build(),
         );
 
-        // Step 3: Handle the message (should NOT skip skmsg)
-        // Before the fix, this would log:
-        // "Skipping skmsg decryption for message SECOND_MSG_TEST from 100000000000001.1:75@lid
-        //  because the initial session/senderkey message failed to decrypt."
-        //
-        // After the fix, it should decrypt successfully.
+        // Should NOT skip skmsg - before the fix this would incorrectly skip
         client.handle_encrypted_message(message_node).await;
-
-        println!("✅ Step 2: Second message with only skmsg processed successfully");
-
-        // The test passes if we reach here without errors
-        // In a real scenario, we'd verify the message was decrypted and the event was dispatched
-        // For now, we're just ensuring the code path doesn't skip the skmsg incorrectly
     }
 
     /// Test case for UntrustedIdentity error handling and recovery
@@ -2417,14 +2339,7 @@ mod tests {
             success
         );
 
-        // The key here is that this didn't panic or crash
-        // The fix ensures that when UntrustedIdentity occurs, the deletion uses the full
-        // protocol address (e.g., "559981212574.0") not just the name part (e.g., "559981212574")
-        println!("✅ UntrustedIdentity error handling:");
-        println!("   - Error caught gracefully without panic");
-        println!("   - Deletion uses full protocol address: <name>.<device_id>");
-        println!("   - No fatal error propagated");
-        println!("   - Process continues normally");
+        // The key is that this didn't panic - deletion uses full protocol address
     }
 
     /// Test case: Error handling during batch processing
@@ -2495,11 +2410,6 @@ mod tests {
             .await;
 
         log::info!("Test: Batch processing completed - success: {}", success);
-
-        println!("✅ Error handling in batch processing:");
-        println!("   - Multiple messages processed without panic");
-        println!("   - Each error handled independently");
-        println!("   - Batch processor continues through all messages");
     }
 
     /// Test case: Error handling in group chat context
@@ -2560,11 +2470,6 @@ mod tests {
             .await;
 
         log::info!("Test: Group message processed - success: {}", success);
-
-        println!("✅ Error handling in group chat:");
-        println!("   - Sender with error handled gracefully");
-        println!("   - No panic when processing group messages with errors");
-        println!("   - Error doesn't affect group processing");
     }
 
     /// Test case: DM message parsing for self-sent messages via LID
@@ -2644,22 +2549,15 @@ mod tests {
             "sender_alt should be None for self-sent DMs (peer_recipient_pn is recipient's PN)"
         );
 
-        // 3. Chat should be the recipient
         assert_eq!(
             info.source.chat.user, "39492358562039",
             "Chat should be the recipient's LID"
         );
 
-        // 4. Sender should be own LID
         assert_eq!(
             info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
-
-        println!("✅ Self-sent DM via LID:");
-        println!("   - is_from_me correctly detected: true");
-        println!("   - sender_alt correctly NOT set (peer_recipient_pn is recipient's PN)");
-        println!("   - Decryption will use own PN via is_from_me fallback path");
     }
 
     /// Test case: DM message parsing for messages from others via LID
@@ -2723,14 +2621,11 @@ mod tests {
             .await
             .expect("parse_message_info should succeed");
 
-        // Assertions:
-        // 1. is_from_me should be false
         assert!(
             !info.source.is_from_me,
             "Should NOT be detected as self-sent"
         );
 
-        // 2. sender_alt should be populated from sender_pn
         assert!(
             info.source.sender_alt.is_some(),
             "sender_alt should be set from sender_pn attribute"
@@ -2745,22 +2640,15 @@ mod tests {
             "sender_alt should contain sender's phone number"
         );
 
-        // 3. Chat should be the sender (non-AD version)
         assert_eq!(
             info.source.chat.user, "39492358562039",
             "Chat should be the sender's LID (non-AD)"
         );
 
-        // 4. Sender should be the other user's LID
         assert_eq!(
             info.source.sender.user, "39492358562039",
             "Sender should be other user's LID"
         );
-
-        println!("✅ DM from other user via LID:");
-        println!("   - is_from_me correctly detected: false");
-        println!("   - sender_alt correctly set from sender_pn attribute");
-        println!("   - Decryption will use sender_alt for session lookup");
     }
 
     /// Test case: DM message to self (own chat, like "Notes to Myself")
@@ -2822,35 +2710,25 @@ mod tests {
             .await
             .expect("parse_message_info should succeed");
 
-        // Assertions:
-        // 1. is_from_me should be true
         assert!(
             info.source.is_from_me,
             "Should detect self-sent message to self-chat"
         );
 
-        // 2. sender_alt should be None (we don't use peer_recipient_pn for self-sent)
         assert!(
             info.source.sender_alt.is_none(),
             "sender_alt should be None for self-sent messages"
         );
 
-        // 3. Chat should be the recipient (self)
         assert_eq!(
             info.source.chat.user, "100000000000001",
             "Chat should be self (recipient)"
         );
 
-        // 4. Sender should be own LID
         assert_eq!(
             info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
-
-        println!("✅ DM to self (self-chat):");
-        println!("   - is_from_me correctly detected: true");
-        println!("   - sender_alt correctly NOT set");
-        println!("   - Decryption will use own PN via is_from_me fallback path");
     }
 
     /// Test that receiving a DM with sender_lid populates the lid_pn_cache.
@@ -2921,13 +2799,6 @@ mod tests {
             lid,
             "Cached LID should match the sender_lid from the message"
         );
-
-        println!("✅ test_lid_pn_cache_populated_on_message_with_sender_lid passed:");
-        println!(
-            "   - Received DM from {}@s.whatsapp.net with sender_lid={}@lid",
-            phone, lid
-        );
-        println!("   - Cache correctly populated: {} -> {}", phone, lid);
     }
 
     /// Test that messages without sender_lid do NOT populate the cache.
@@ -2970,15 +2841,10 @@ mod tests {
             .handle_encrypted_message(Arc::new(dm_node))
             .await;
 
-        // Verify the cache was NOT populated
         assert!(
             client.lid_pn_cache.get_current_lid(phone).await.is_none(),
             "Cache should NOT be populated for messages without sender_lid"
         );
-
-        println!("✅ test_lid_pn_cache_not_populated_without_sender_lid passed:");
-        println!("   - Received DM without sender_lid attribute");
-        println!("   - Cache correctly remains empty");
     }
 
     /// Test that messages from LID senders with participant_pn DO populate the cache.
@@ -3048,10 +2914,6 @@ mod tests {
             phone,
             "Cached phone number should match"
         );
-
-        println!("✅ test_lid_pn_cache_populated_for_lid_sender_with_participant_pn passed:");
-        println!("   - Received message from LID sender with participant_pn");
-        println!("   - Cache correctly populated with bidirectional mapping");
     }
 
     /// Test that multiple messages from the same sender update the cache correctly.
@@ -3104,10 +2966,6 @@ mod tests {
             lid,
             "Cached LID should be correct after multiple messages"
         );
-
-        println!("✅ test_lid_pn_cache_handles_repeated_messages passed:");
-        println!("   - Received 3 messages from same sender");
-        println!("   - Cache correctly maintains the mapping");
     }
 
     /// Test that PN-addressed messages use LID for session lookup when LID mapping is known.
@@ -3255,10 +3113,6 @@ mod tests {
             format!("{}@lid.0", lid),
             "Protocol address should be in LID format"
         );
-
-        println!("✅ test_pn_message_uses_lid_for_session_lookup_when_mapping_known passed:");
-        println!("   - PN message with sender_lid attribute correctly uses LID for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
     /// Test that PN-addressed messages use cached LID even without sender_lid attribute.
@@ -3368,10 +3222,6 @@ mod tests {
             format!("{}@lid.0", lid),
             "Protocol address should be in LID format from cached mapping"
         );
-
-        println!("✅ test_pn_message_uses_cached_lid_without_sender_lid_attribute passed:");
-        println!("   - PN message without sender_lid attribute uses cached LID for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
     /// Test that PN-addressed messages use PN when no LID mapping is known.
@@ -3468,10 +3318,6 @@ mod tests {
             format!("{}@c.us.0", phone),
             "Protocol address should be in PN format when no LID mapping"
         );
-
-        println!("✅ test_pn_message_uses_pn_when_no_lid_mapping passed:");
-        println!("   - PN message without LID mapping uses PN for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
     // and PDO fallback behavior to ensure robust message recovery.
@@ -4002,7 +3848,6 @@ mod tests {
     /// must be a hard error rather than defaulting to an empty string.
     #[tokio::test]
     async fn test_parse_message_info_missing_id_returns_error() {
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_missing_id_test?mode=memory&cache=shared")
                 .await
@@ -4015,17 +3860,14 @@ mod tests {
         );
         let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
 
-        // 2. Create a message node WITHOUT the "id" attribute
         let node = NodeBuilder::new("message")
             .attr("from", "15551234567@s.whatsapp.net")
             .attr("t", "1759295366")
             .attr("type", "text")
             .build();
 
-        // 3. Run the function under test - should return an error
         let result = client.parse_message_info(&node).await;
 
-        // 4. Assert that it returns an error about missing id
         assert!(
             result.is_err(),
             "parse_message_info should fail when 'id' is missing"

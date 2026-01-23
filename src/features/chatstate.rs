@@ -9,13 +9,10 @@ use wacore_binary::jid::Jid;
 /// Chat state type for typing indicators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum ChatStateType {
-    /// User is typing a text message.
     #[str = "composing"]
     Composing,
-    /// User is recording an audio message.
     #[str = "recording"]
     Recording,
-    /// User has stopped typing.
     #[str = "paused"]
     Paused,
 }
@@ -42,17 +39,14 @@ impl<'a> Chatstate<'a> {
         self.client.send_node(node).await
     }
 
-    /// Send "composing" (typing) state.
     pub async fn send_composing(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Composing).await
     }
 
-    /// Send "recording" (voice message) state.
     pub async fn send_recording(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Recording).await
     }
 
-    /// Send "paused" (stopped typing) state.
     pub async fn send_paused(&self, to: &Jid) -> Result<(), crate::client::ClientError> {
         self.send(to, ChatStateType::Paused).await
     }
@@ -86,7 +80,6 @@ mod tests {
 
     #[test]
     fn test_chat_state_type_string_enum() {
-        // Verify StringEnum derive works correctly
         assert_eq!(ChatStateType::Composing.as_str(), "composing");
         assert_eq!(ChatStateType::Recording.to_string(), "recording");
         assert_eq!(

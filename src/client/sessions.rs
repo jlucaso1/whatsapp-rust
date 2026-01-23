@@ -61,17 +61,9 @@ impl Client {
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
                 match device_guard.contains_session(&signal_addr).await {
-                    Ok(true) => {
-                        // Session exists, skip
-                    }
-                    Ok(false) => {
-                        // No session, need to establish one
-                        jids_needing_sessions.push(jid);
-                    }
-                    Err(e) => {
-                        // Storage error - log and skip this JID rather than treating as missing
-                        log::warn!("Failed to check session for {}: {}", jid, e);
-                    }
+                    Ok(true) => {}
+                    Ok(false) => jids_needing_sessions.push(jid),
+                    Err(e) => log::warn!("Failed to check session for {}: {}", jid, e),
                 }
             }
         }
