@@ -1,0 +1,230 @@
+//! Dirty bits IQ specification.
+//!
+//! Used to acknowledge and clear "dirty bits" - flags indicating pending server-side data
+//! that needs to be synced (contacts, account settings, etc.).
+//!
+//! ## Wire Format
+//! ```xml
+//! <!-- Request -->
+//! <iq xmlns="urn:xmpp:whatsapp:dirty" type="set" to="s.whatsapp.net" id="...">
+//!   <clean type="account_sync" timestamp="1234567890"/>
+//! </iq>
+//!
+//! <!-- Response -->
+//! <iq from="s.whatsapp.net" id="..." type="result"/>
+//! ```
+//!
+//! Verified against WhatsApp Web JS (clearDirtyBits in 5Yec01dI04o.js).
+
+use crate::iq::spec::IqSpec;
+use crate::request::InfoQuery;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::node::{Node, NodeContent};
+
+/// IQ namespace for dirty bits.
+pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
+
+/// Known dirty bit types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirtyType {
+    /// Account sync dirty bit
+    AccountSync,
+    /// Groups dirty bit
+    Groups,
+    /// Other/unknown type
+    Other(String),
+}
+
+impl DirtyType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            DirtyType::AccountSync => "account_sync",
+            DirtyType::Groups => "groups",
+            DirtyType::Other(s) => s.as_str(),
+        }
+    }
+}
+
+impl From<&str> for DirtyType {
+    fn from(s: &str) -> Self {
+        match s {
+            "account_sync" => DirtyType::AccountSync,
+            "groups" => DirtyType::Groups,
+            other => DirtyType::Other(other.to_string()),
+        }
+    }
+}
+
+/// A dirty bit to clean.
+#[derive(Debug, Clone)]
+pub struct DirtyBit {
+    /// The type of dirty bit.
+    pub dirty_type: DirtyType,
+    /// Optional timestamp for the dirty bit.
+    pub timestamp: Option<u64>,
+}
+
+impl DirtyBit {
+    /// Create a new dirty bit with just a type.
+    pub fn new(dirty_type: impl Into<DirtyType>) -> Self {
+        Self {
+            dirty_type: dirty_type.into(),
+            timestamp: None,
+        }
+    }
+
+    /// Create a new dirty bit with a type and timestamp.
+    pub fn with_timestamp(dirty_type: impl Into<DirtyType>, timestamp: u64) -> Self {
+        Self {
+            dirty_type: dirty_type.into(),
+            timestamp: Some(timestamp),
+        }
+    }
+}
+
+/// Clears dirty bits on the server.
+#[derive(Debug, Clone)]
+pub struct CleanDirtyBitsSpec {
+    /// The dirty bits to clean.
+    pub bits: Vec<DirtyBit>,
+}
+
+impl CleanDirtyBitsSpec {
+    /// Create a spec to clean a single dirty bit.
+    pub fn single(dirty_type: &str, timestamp: Option<&str>) -> Self {
+        let bit = if let Some(ts) = timestamp {
+            if let Ok(ts_num) = ts.parse() {
+                DirtyBit::with_timestamp(DirtyType::from(dirty_type), ts_num)
+            } else {
+                DirtyBit::new(DirtyType::from(dirty_type))
+            }
+        } else {
+            DirtyBit::new(DirtyType::from(dirty_type))
+        };
+        Self { bits: vec![bit] }
+    }
+
+    /// Create a spec to clean multiple dirty bits.
+    pub fn multiple(bits: Vec<DirtyBit>) -> Self {
+        Self { bits }
+    }
+}
+
+impl IqSpec for CleanDirtyBitsSpec {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let children: Vec<Node> = self
+            .bits
+            .iter()
+            .map(|bit| {
+                let mut builder =
+                    NodeBuilder::new("clean").attr("type", bit.dirty_type.as_str().to_string());
+                if let Some(ts) = bit.timestamp {
+                    builder = builder.attr("timestamp", ts.to_string());
+                }
+                builder.build()
+            })
+            .collect();
+
+        InfoQuery::set(
+            DIRTY_NAMESPACE,
+            Jid::new("", SERVER_JID),
+            Some(NodeContent::Nodes(children)),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+        // Clean dirty bits just needs a successful response
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_dirty_bits_spec_single() {
+        let spec = CleanDirtyBitsSpec::single("account_sync", None);
+        let iq = spec.build_iq();
+
+        assert_eq!(iq.namespace, DIRTY_NAMESPACE);
+        assert_eq!(iq.query_type, crate::request::InfoQueryType::Set);
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].tag, "clean");
+            assert_eq!(
+                nodes[0].attrs.get("type"),
+                Some(&"account_sync".to_string())
+            );
+            assert!(nodes[0].attrs.get("timestamp").is_none());
+        } else {
+            panic!("Expected NodeContent::Nodes");
+        }
+    }
+
+    #[test]
+    fn test_clean_dirty_bits_spec_with_timestamp() {
+        let spec = CleanDirtyBitsSpec::single("groups", Some("1234567890"));
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].attrs.get("type"), Some(&"groups".to_string()));
+            assert_eq!(
+                nodes[0].attrs.get("timestamp"),
+                Some(&"1234567890".to_string())
+            );
+        } else {
+            panic!("Expected NodeContent::Nodes");
+        }
+    }
+
+    #[test]
+    fn test_clean_dirty_bits_spec_multiple() {
+        let bits = vec![
+            DirtyBit::new(DirtyType::AccountSync),
+            DirtyBit::with_timestamp(DirtyType::Groups, 9876543210),
+        ];
+        let spec = CleanDirtyBitsSpec::multiple(bits);
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes.len(), 2);
+            assert_eq!(
+                nodes[0].attrs.get("type"),
+                Some(&"account_sync".to_string())
+            );
+            assert!(nodes[0].attrs.get("timestamp").is_none());
+            assert_eq!(nodes[1].attrs.get("type"), Some(&"groups".to_string()));
+            assert_eq!(
+                nodes[1].attrs.get("timestamp"),
+                Some(&"9876543210".to_string())
+            );
+        } else {
+            panic!("Expected NodeContent::Nodes");
+        }
+    }
+
+    #[test]
+    fn test_clean_dirty_bits_spec_parse_response() {
+        let spec = CleanDirtyBitsSpec::single("account_sync", None);
+        let response = NodeBuilder::new("iq").attr("type", "result").build();
+
+        let result = spec.parse_response(&response);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dirty_type_from_str() {
+        assert_eq!(DirtyType::from("account_sync"), DirtyType::AccountSync);
+        assert_eq!(DirtyType::from("groups"), DirtyType::Groups);
+        assert_eq!(
+            DirtyType::from("other"),
+            DirtyType::Other("other".to_string())
+        );
+    }
+}
