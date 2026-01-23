@@ -3,13 +3,11 @@
 //! Protocol types are defined in `wacore::iq::prekeys`.
 
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::InfoQuery;
 use anyhow;
 use log;
 use rand::TryRngCore;
 use rand_core::OsRng;
-use wacore::iq::prekeys::{PreKeyCountSpec, PreKeyFetchSpec};
+use wacore::iq::prekeys::{PreKeyCountSpec, PreKeyFetchSpec, PreKeyUploadSpec};
 use wacore::libsignal::protocol::{KeyPair, PreKeyBundle};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
 use wacore_binary::jid::Jid;
@@ -137,13 +135,13 @@ impl Client {
             return Ok(());
         }
 
-        // Step 3: Build upload request nodes using the centralized utility
-        let mut pre_key_pairs = Vec::new();
-        for (_id, key_pair) in &key_pairs_to_upload {
-            pre_key_pairs.push((*_id, key_pair.public_key.public_key_bytes().to_vec()));
-        }
+        // Step 3: Build upload request using type-safe IqSpec
+        let pre_key_pairs: Vec<(u32, Vec<u8>)> = key_pairs_to_upload
+            .iter()
+            .map(|(id, key_pair)| (*id, key_pair.public_key.public_key_bytes().to_vec()))
+            .collect();
 
-        let iq_content = PreKeyUtils::build_upload_prekeys_request(
+        let spec = PreKeyUploadSpec::new(
             device_snapshot.registration_id,
             device_snapshot
                 .identity_key
@@ -157,19 +155,11 @@ impl Client {
                 .public_key_bytes()
                 .to_vec(),
             device_snapshot.signed_pre_key_signature.to_vec(),
-            &pre_key_pairs,
-        );
-
-        let iq = InfoQuery::set(
-            "encrypt",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(iq_content)),
+            pre_key_pairs,
         );
 
         // Step 4: Send IQ to upload pre-keys
-        if let Err(e) = self.send_iq(iq).await {
-            return Err(e.into());
-        }
+        self.execute(spec).await?;
 
         // Step 5: Store the new pre-keys using existing backend interface
         for (id, record) in keys_to_upload {
