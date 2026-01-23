@@ -303,7 +303,10 @@ pub fn build_create_group_node(options: &GroupCreateOptions) -> Node {
         );
     }
 
-    for participant in &options.participants {
+    // Normalize participants to avoid sending phone_number for non-LID JIDs
+    let participants = normalize_participants(&options.participants);
+
+    for participant in &participants {
         let mut attrs = vec![("jid", participant.jid.to_string())];
         if let Some(pn) = &participant.phone_number {
             attrs.push(("phone_number", pn.to_string()));
@@ -403,7 +406,9 @@ impl ProtocolNode for GroupParticipantResponse {
             .optional_jid("jid")
             .ok_or_else(|| anyhow!("participant missing required 'jid' attribute"))?;
         let phone_number = node.attrs().optional_jid("phone_number");
-        let participant_type = ParticipantType::try_from(node.attrs().optional_string("type"))?;
+        // Default to Member for unknown participant types to avoid failing the whole group parse
+        let participant_type = ParticipantType::try_from(node.attrs().optional_string("type"))
+            .unwrap_or(ParticipantType::Member);
 
         Ok(Self {
             jid,

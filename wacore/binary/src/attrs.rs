@@ -57,6 +57,26 @@ impl<'a> AttrParserRef<'a> {
         self.get_raw(key, false).and_then(|v| v.as_str())
     }
 
+    /// Get a required string attribute, returning an error if missing.
+    ///
+    /// Prefer this over `string()` for required attributes as it makes
+    /// the error explicit rather than silently defaulting to empty string.
+    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+        self.optional_string(key)
+            .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
+    }
+
+    /// Get string, defaulting to empty string if missing.
+    ///
+    /// # Deprecation
+    ///
+    /// This method silently defaults to an empty string when the attribute is missing.
+    /// Use `optional_string()` with explicit error handling or `required_string()`
+    /// to avoid silent failures.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use optional_string() with explicit handling or required_string() instead"
+    )]
     pub fn string(&mut self, key: &str) -> String {
         self.get_raw(key, true)
             .map(|v| v.to_string_cow().into_owned())
@@ -194,6 +214,26 @@ impl<'a> AttrParser<'a> {
         self.get_raw(key, false).map(|s| s.as_str())
     }
 
+    /// Get a required string attribute, returning an error if missing.
+    ///
+    /// Prefer this over `string()` for required attributes as it makes
+    /// the error explicit rather than silently defaulting to empty string.
+    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+        self.optional_string(key)
+            .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
+    }
+
+    /// Get string, defaulting to empty string if missing.
+    ///
+    /// # Deprecation
+    ///
+    /// This method silently defaults to an empty string when the attribute is missing.
+    /// Use `optional_string()` with explicit error handling or `required_string()`
+    /// to avoid silent failures.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use optional_string() with explicit handling or required_string() instead"
+    )]
     pub fn string(&mut self, key: &str) -> String {
         self.get_raw(key, true).cloned().unwrap_or_default()
     }
