@@ -24,19 +24,17 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export types for convenience
-pub use crate::types::spam_report::{SpamFlow, SpamReportRequest as Request, SpamReportResult as Response};
+pub use crate::types::spam_report::{
+    SpamFlow, SpamReportRequest as Request, SpamReportResult as Response,
+};
 
-/// Spam report IQ specification.
-///
 /// Sends a spam report for one or more messages to WhatsApp.
 #[derive(Debug, Clone)]
 pub struct SpamReportSpec {
-    /// The spam report request.
     pub request: SpamReportRequest,
 }
 
 impl SpamReportSpec {
-    /// Create a new spam report spec.
     pub fn new(request: SpamReportRequest) -> Self {
         Self { request }
     }

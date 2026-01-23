@@ -26,32 +26,23 @@ use wacore_binary::node::{Node, NodeContent};
 /// Media connection host information.
 #[derive(Debug, Clone)]
 pub struct MediaConnHost {
-    /// The hostname for media uploads/downloads.
     pub hostname: String,
 }
 
 /// Media connection response containing auth token and hosts.
 #[derive(Debug, Clone)]
 pub struct MediaConnResponse {
-    /// Authentication token for media operations.
     pub auth: String,
-    /// Time-to-live in seconds for this connection info.
     pub ttl: u64,
-    /// Maximum number of buckets (optional).
     pub max_buckets: Option<u64>,
-    /// List of available media hosts.
     pub hosts: Vec<MediaConnHost>,
 }
 
-/// Media connection IQ specification.
-///
-/// Requests media server connection details including authentication token
-/// and available hosts for uploading/downloading media.
+/// Requests media server connection details (auth token and hosts).
 #[derive(Debug, Clone, Default)]
 pub struct MediaConnSpec;
 
 impl MediaConnSpec {
-    /// Create a new media connection spec.
     pub fn new() -> Self {
         Self
     }
@@ -76,17 +67,22 @@ impl IqSpec for MediaConnSpec {
             .ok_or_else(|| anyhow!("Missing media_conn node in response"))?;
 
         let mut attrs = media_conn_node.attrs();
-        let auth = attrs.string("auth");
+        let auth = attrs
+            .optional_string("auth")
+            .ok_or_else(|| anyhow!("Missing 'auth' attribute in media_conn response"))?
+            .to_string();
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
         let max_buckets = attrs.optional_u64("max_buckets");
 
-        let hosts = media_conn_node
-            .get_children_by_tag("host")
-            .iter()
-            .map(|host_node| MediaConnHost {
-                hostname: host_node.attrs().string("hostname"),
-            })
-            .collect();
+        let mut hosts = Vec::new();
+        for host_node in media_conn_node.get_children_by_tag("host") {
+            let hostname = host_node
+                .attrs()
+                .optional_string("hostname")
+                .ok_or_else(|| anyhow!("Missing 'hostname' attribute in host node"))?
+                .to_string();
+            hosts.push(MediaConnHost { hostname });
+        }
 
         Ok(MediaConnResponse {
             auth,

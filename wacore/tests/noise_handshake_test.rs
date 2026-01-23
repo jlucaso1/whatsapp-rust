@@ -174,7 +174,7 @@ fn test_full_handshake_flow_with_go_data() {
     assert_eq!(*nh.hash(), hash_after_prologue, "Mismatch after prologue");
 
     println!("Step 2: Auth Client Ephemeral");
-    let _ = nh.authenticate(&client_eph_pub);
+    nh.authenticate(&client_eph_pub);
     assert_eq!(
         *nh.hash(),
         hash_after_auth_client_eph,
@@ -182,7 +182,7 @@ fn test_full_handshake_flow_with_go_data() {
     );
 
     println!("Step 3: Auth Server Ephemeral");
-    let _ = nh.authenticate(&server_eph_pub);
+    nh.authenticate(&server_eph_pub);
     assert_eq!(
         *nh.hash(),
         hash_after_auth_server_eph,

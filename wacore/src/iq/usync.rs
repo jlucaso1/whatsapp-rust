@@ -45,6 +45,7 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
+use log::warn;
 use std::collections::HashMap;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
@@ -91,58 +92,68 @@ impl UsyncContext {
     }
 }
 
+/// Build user nodes with phone number contact children.
+fn build_phone_user_nodes(phones: &[String]) -> Vec<Node> {
+    phones
+        .iter()
+        .map(|phone| {
+            let phone_content = if phone.starts_with('+') {
+                phone.clone()
+            } else {
+                format!("+{}", phone)
+            };
+            NodeBuilder::new("user")
+                .children(vec![
+                    NodeBuilder::new("contact")
+                        .string_content(phone_content)
+                        .build(),
+                ])
+                .build()
+        })
+        .collect()
+}
+
 /// Result of checking if a phone number is on WhatsApp.
 #[derive(Debug, Clone)]
 pub struct IsOnWhatsAppResult {
-    /// The JID of the user (if registered).
     pub jid: Jid,
-    /// Whether the number is registered on WhatsApp.
     pub is_registered: bool,
 }
 
 /// Contact information from usync.
 #[derive(Debug, Clone)]
 pub struct ContactInfo {
-    /// The JID of the contact.
     pub jid: Jid,
-    /// The LID (Linked ID) if available.
     pub lid: Option<Jid>,
-    /// Whether the number is registered on WhatsApp.
     pub is_registered: bool,
-    /// Whether this is a business account.
     pub is_business: bool,
-    /// Status message if available.
     pub status: Option<String>,
-    /// Picture ID if available.
     pub picture_id: Option<u64>,
 }
 
 /// User information from usync.
+///
+/// Note: `picture_id` is `Option<String>` here vs `Option<u64>` in `ContactInfo`.
+/// The server returns picture IDs in different formats depending on the usync mode:
+/// - Query mode (ContactInfo): numeric ID that fits in u64
+/// - Full mode (UserInfo): may include non-numeric prefixes, kept as String for safety
 #[derive(Debug, Clone)]
 pub struct UserInfo {
-    /// The JID of the user.
     pub jid: Jid,
-    /// The LID (Linked ID) if available.
     pub lid: Option<Jid>,
-    /// Status message if available.
     pub status: Option<String>,
-    /// Picture ID if available.
     pub picture_id: Option<String>,
-    /// Whether this is a business account.
     pub is_business: bool,
 }
 
 /// Check if phone numbers are registered on WhatsApp.
 #[derive(Debug, Clone)]
 pub struct IsOnWhatsAppSpec {
-    /// Phone numbers to check.
     pub phones: Vec<String>,
-    /// Session ID for the request.
     pub sid: String,
 }
 
 impl IsOnWhatsAppSpec {
-    /// Create a new spec with the given phone numbers and session ID.
     pub fn new(phones: Vec<String>, sid: impl Into<String>) -> Self {
         Self {
             phones,
@@ -159,23 +170,7 @@ impl IqSpec for IsOnWhatsAppSpec {
             .children(vec![NodeBuilder::new("contact").build()])
             .build();
 
-        let user_nodes: Vec<Node> = self
-            .phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.clone()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![NodeBuilder::new("contact")
-                        .string_content(phone_content)
-                        .build()])
-                    .build()
-            })
-            .collect();
-
+        let user_nodes = build_phone_user_nodes(&self.phones);
         let list_node = NodeBuilder::new("list").children(user_nodes).build();
 
         let usync_node = NodeBuilder::new("usync")
@@ -227,14 +222,11 @@ impl IqSpec for IsOnWhatsAppSpec {
 /// Get contact information for phone numbers.
 #[derive(Debug, Clone)]
 pub struct ContactInfoSpec {
-    /// Phone numbers to get info for.
     pub phones: Vec<String>,
-    /// Session ID for the request.
     pub sid: String,
 }
 
 impl ContactInfoSpec {
-    /// Create a new spec with the given phone numbers and session ID.
     pub fn new(phones: Vec<String>, sid: impl Into<String>) -> Self {
         Self {
             phones,
@@ -257,23 +249,7 @@ impl IqSpec for ContactInfoSpec {
             ])
             .build();
 
-        let user_nodes: Vec<Node> = self
-            .phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.clone()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![NodeBuilder::new("contact")
-                        .string_content(phone_content)
-                        .build()])
-                    .build()
-            })
-            .collect();
-
+        let user_nodes = build_phone_user_nodes(&self.phones);
         let list_node = NodeBuilder::new("list").children(user_nodes).build();
 
         let usync_node = NodeBuilder::new("usync")
@@ -362,14 +338,11 @@ impl IqSpec for ContactInfoSpec {
 /// Get user information by JID.
 #[derive(Debug, Clone)]
 pub struct UserInfoSpec {
-    /// JIDs to get info for.
     pub jids: Vec<Jid>,
-    /// Session ID for the request.
     pub sid: String,
 }
 
 impl UserInfoSpec {
-    /// Create a new spec with the given JIDs and session ID.
     pub fn new(jids: Vec<Jid>, sid: impl Into<String>) -> Self {
         Self {
             jids,
@@ -492,14 +465,10 @@ impl IqSpec for UserInfoSpec {
 // Re-export types from wacore::usync for convenience
 pub use crate::usync::{UserDeviceList, UsyncLidMapping};
 
-/// Response from device list query.
-///
-/// Contains both device lists and any LID mappings that were returned.
+/// Response from device list query containing device lists and any LID mappings.
 #[derive(Debug, Clone)]
 pub struct DeviceListResponse {
-    /// Device lists for each user.
     pub device_lists: Vec<UserDeviceList>,
-    /// LID mappings learned from the response (if any).
     pub lid_mappings: Vec<UsyncLidMapping>,
 }
 
@@ -537,14 +506,11 @@ pub struct DeviceListResponse {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DeviceListSpec {
-    /// JIDs to get device lists for.
     pub jids: Vec<Jid>,
-    /// Session ID for the request.
     pub sid: String,
 }
 
 impl DeviceListSpec {
-    /// Create a new spec with the given JIDs and session ID.
     pub fn new(jids: Vec<Jid>, sid: impl Into<String>) -> Self {
         Self {
             jids,
@@ -558,9 +524,9 @@ impl IqSpec for DeviceListSpec {
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let query_node = NodeBuilder::new("query")
-            .children(vec![NodeBuilder::new("devices")
-                .attr("version", "2")
-                .build()])
+            .children(vec![
+                NodeBuilder::new("devices").attr("version", "2").build(),
+            ])
             .build();
 
         let user_nodes: Vec<Node> = self
@@ -621,10 +587,16 @@ impl IqSpec for DeviceListSpec {
                 }
             }
 
-            // Extract device list
-            let device_list_node = user_node
+            // Extract device list - skip user if not present
+            let device_list_node = match user_node
                 .get_optional_child_by_tag(&["devices", "device-list"])
-                .ok_or_else(|| anyhow!("<device-list> not found for user {user_jid}"))?;
+            {
+                Some(node) => node,
+                None => {
+                    warn!(target: "usync", "<device-list> not found for user {user_jid}, skipping");
+                    continue;
+                }
+            };
 
             // Extract phash from device-list node attributes
             let phash = device_list_node
@@ -634,13 +606,14 @@ impl IqSpec for DeviceListSpec {
 
             let mut devices = Vec::new();
             for device_node in device_list_node.get_children_by_tag("device") {
-                let device_id_str = device_node
-                    .attrs()
-                    .optional_string("id")
-                    .ok_or_else(|| anyhow!("device node missing 'id' attribute for user {user_jid}"))?;
-                let device_id: u16 = device_id_str
-                    .parse()
-                    .map_err(|e| anyhow!("invalid device id '{}' for user {}: {}", device_id_str, user_jid, e))?;
+                let Some(device_id_str) = device_node.attrs().optional_string("id") else {
+                    warn!(target: "usync", "device node missing 'id' attribute for user {user_jid}, skipping device");
+                    continue;
+                };
+                let Ok(device_id) = device_id_str.parse::<u16>() else {
+                    warn!(target: "usync", "invalid device id '{}' for user {user_jid}, skipping device", device_id_str);
+                    continue;
+                };
 
                 let mut device_jid = user_jid.clone();
                 device_jid.device = device_id;
@@ -1015,9 +988,7 @@ mod tests {
                             NodeBuilder::new("devices")
                                 .children([NodeBuilder::new("device-list")
                                     .attr("hash", "2:abcdef")
-                                    .children([
-                                        NodeBuilder::new("device").attr("id", "0").build()
-                                    ])
+                                    .children([NodeBuilder::new("device").attr("id", "0").build()])
                                     .build()])
                                 .build(),
                         ])

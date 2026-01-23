@@ -13,18 +13,8 @@ use log::warn;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
-
-// ============================================================================
-// Constants
-// ============================================================================
-
 /// IQ namespace for blocklist operations.
 pub const BLOCKLIST_IQ_NAMESPACE: &str = "blocklist";
-
-// ============================================================================
-// Enums
-// ============================================================================
-
 /// Action to perform on a blocklist entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum BlocklistAction {
@@ -33,11 +23,6 @@ pub enum BlocklistAction {
     #[str = "unblock"]
     Unblock,
 }
-
-// ============================================================================
-// Request Types
-// ============================================================================
-
 /// Request node for updating blocklist.
 ///
 /// Wire format: `<item action="block|unblock" jid="...@s.whatsapp.net"/>`
@@ -81,20 +66,17 @@ impl ProtocolNode for BlocklistItemRequest {
             return Err(anyhow!("expected <item>, got <{}>", node.tag));
         }
 
-        let action_str = optional_attr(node, "action").unwrap_or("block");
+        let action_str = optional_attr(node, "action").unwrap_or_else(|| {
+            warn!(target: "blocklist", "missing 'action' attribute, defaulting to 'block'");
+            "block"
+        });
         let action = BlocklistAction::try_from(action_str)?;
-        let jid_str = optional_attr(node, "jid")
-            .ok_or_else(|| anyhow!("missing jid attribute"))?;
+        let jid_str = optional_attr(node, "jid").ok_or_else(|| anyhow!("missing jid attribute"))?;
         let jid = jid_str.parse()?;
 
         Ok(Self { jid, action })
     }
 }
-
-// ============================================================================
-// Response Types
-// ============================================================================
-
 /// A single blocklist entry from the response.
 ///
 /// Wire format: `<item jid="...@s.whatsapp.net" t="1234567890"/>`
@@ -122,8 +104,7 @@ impl ProtocolNode for BlocklistEntry {
             return Err(anyhow!("expected <item>, got <{}>", node.tag));
         }
 
-        let jid_str = optional_attr(node, "jid")
-            .ok_or_else(|| anyhow!("missing jid attribute"))?;
+        let jid_str = optional_attr(node, "jid").ok_or_else(|| anyhow!("missing jid attribute"))?;
         let jid = jid_str.parse()?;
         let timestamp = optional_u64(node, "t");
 
@@ -176,16 +157,7 @@ impl ProtocolNode for BlocklistResponse {
         Ok(Self { entries })
     }
 }
-
-// ============================================================================
-// IqSpec Implementations
-// ============================================================================
-
-/// IQ spec for fetching the blocklist.
-///
-/// Wire format:
-/// - Request: `<iq type="get" xmlns="blocklist" to="@s.whatsapp.net"/>`
-/// - Response: `<list><item jid="..." t="..."/>...</list>`
+/// Fetches the blocklist.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GetBlocklistSpec;
 
@@ -202,11 +174,7 @@ impl IqSpec for GetBlocklistSpec {
     }
 }
 
-/// IQ spec for updating the blocklist (block/unblock).
-///
-/// Wire format:
-/// - Request: `<iq type="set" xmlns="blocklist"><item action="block|unblock" jid="..."/></iq>`
-/// - Response: Empty (just success acknowledgement)
+/// Updates the blocklist (block/unblock).
 #[derive(Debug, Clone)]
 pub struct UpdateBlocklistSpec {
     request: BlocklistItemRequest,
@@ -247,11 +215,6 @@ impl IqSpec for UpdateBlocklistSpec {
         Ok(())
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,8 +223,14 @@ mod tests {
     fn test_blocklist_action_string_enum() {
         assert_eq!(BlocklistAction::Block.as_str(), "block");
         assert_eq!(BlocklistAction::Unblock.as_str(), "unblock");
-        assert_eq!(BlocklistAction::try_from("block").unwrap(), BlocklistAction::Block);
-        assert_eq!(BlocklistAction::try_from("unblock").unwrap(), BlocklistAction::Unblock);
+        assert_eq!(
+            BlocklistAction::try_from("block").unwrap(),
+            BlocklistAction::Block
+        );
+        assert_eq!(
+            BlocklistAction::try_from("unblock").unwrap(),
+            BlocklistAction::Unblock
+        );
     }
 
     #[test]

@@ -32,7 +32,9 @@ impl<'a> Blocking<'a> {
     /// Unblock a contact.
     pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError> {
         debug!(target: "Blocking", "Unblocking contact: {}", jid);
-        self.client.execute(UpdateBlocklistSpec::unblock(jid)).await?;
+        self.client
+            .execute(UpdateBlocklistSpec::unblock(jid))
+            .await?;
         debug!(target: "Blocking", "Successfully unblocked contact: {}", jid);
         Ok(())
     }

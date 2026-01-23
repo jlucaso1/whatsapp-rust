@@ -130,7 +130,10 @@ mod tests {
     #[test]
     fn test_spam_flow_string_enum() {
         assert_eq!(SpamFlow::MessageMenu.as_str(), "MessageMenu");
-        assert_eq!(SpamFlow::GroupSpamBannerReport.to_string(), "GroupSpamBannerReport");
+        assert_eq!(
+            SpamFlow::GroupSpamBannerReport.to_string(),
+            "GroupSpamBannerReport"
+        );
         assert_eq!(SpamFlow::default(), SpamFlow::MessageMenu);
     }
 
