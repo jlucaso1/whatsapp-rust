@@ -287,12 +287,20 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
                 Ok(())
             })?;
 
-            if let Some(name) = attr_name {
-                return Ok(Some(AttrFieldInfo {
-                    field_ident,
-                    attr_name: name,
-                    default,
-                }));
+            match attr_name {
+                Some(name) => {
+                    return Ok(Some(AttrFieldInfo {
+                        field_ident,
+                        attr_name: name,
+                        default,
+                    }));
+                }
+                None => {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "missing required `name` in #[attr(...)]",
+                    ));
+                }
             }
         }
     }
@@ -383,6 +391,14 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
         };
 
         if is_default {
+            if default_variant.is_some() {
+                return syn::Error::new_spanned(
+                    variant_ident,
+                    "Multiple #[string_default] attributes found; only one variant may be the default",
+                )
+                .to_compile_error()
+                .into();
+            }
             default_variant = Some(variant_ident.clone());
         }
 
