@@ -260,7 +260,7 @@ impl GroupSubject {
 
 Constants from WhatsApp Web A/B props (`wacore/src/iq/groups.rs`):
 - `GROUP_SUBJECT_MAX_LENGTH`: 100 characters
-- `GROUP_DESCRIPTION_MAX_LENGTH`: 512 characters
+- `GROUP_DESCRIPTION_MAX_LENGTH`: 2048 characters
 - `GROUP_SIZE_LIMIT`: 257 participants
 
 ### Strongly Typed Enums
