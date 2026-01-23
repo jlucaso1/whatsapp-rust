@@ -18,7 +18,7 @@ pub const GROUP_IQ_NAMESPACE: &str = "w:g2";
 pub const GROUP_SUBJECT_MAX_LENGTH: usize = 100;
 
 /// Maximum length for a WhatsApp group description (from `group_description_length` A/B prop).
-pub const GROUP_DESCRIPTION_MAX_LENGTH: usize = 512;
+pub const GROUP_DESCRIPTION_MAX_LENGTH: usize = 2048;
 
 /// Maximum number of participants in a group (from `group_size_limit` A/B prop).
 pub const GROUP_SIZE_LIMIT: usize = 257;
