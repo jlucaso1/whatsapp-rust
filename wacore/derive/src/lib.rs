@@ -358,6 +358,16 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
 
     for variant in variants {
         let variant_ident = &variant.ident;
+
+        if !matches!(variant.fields, syn::Fields::Unit) {
+            return syn::Error::new_spanned(
+                variant_ident,
+                "StringEnum only supports unit variants",
+            )
+            .to_compile_error()
+            .into();
+        }
+
         let mut str_value = None;
         let mut is_default = false;
 
