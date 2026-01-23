@@ -173,7 +173,6 @@ impl Client {
                 .await;
             let _session_guard = session_mutex.lock().await;
 
-            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -185,7 +184,6 @@ impl Client {
                 request_id,
             )
             .await?
-            // Lock released here automatically
         } else if to.is_group() {
             // Group messages: No client-level lock needed.
             // Each participant device is encrypted separately with its own per-device lock
@@ -470,7 +468,6 @@ impl Client {
                 .await;
             let _session_guard = session_mutex.lock().await;
 
-            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -494,9 +491,8 @@ impl Client {
                 extra_stanza_nodes,
             )
             .await?
-            // Lock released here automatically
         };
-        // Network send happens with NO lock held
+
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
     }
 }

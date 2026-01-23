@@ -55,7 +55,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
 
     let name = &input.ident;
 
-    // Extract tag from #[protocol(tag = "...")]
     let tag = match extract_tag(&input.attrs) {
         Some(tag) => tag,
         None => {
@@ -68,14 +67,10 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Get fields for struct
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
-            Fields::Unit => {
-                // Unit struct - no fields
-                return generate_empty_impl(name, &tag).into();
-            }
+            Fields::Unit => return generate_empty_impl(name, &tag).into(),
             _ => {
                 return syn::Error::new_spanned(
                     &input.ident,
@@ -95,7 +90,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Collect field info
     let mut attr_fields = Vec::new();
     for field in fields {
         if let Some(attr_info) = extract_attr_info(field) {
@@ -103,7 +97,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         }
     }
 
-    // Generate into_node() body
     let attr_setters: Vec<_> = attr_fields
         .iter()
         .map(|info| {
@@ -115,7 +108,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Generate try_from_node() body
     let field_parsers: Vec<_> = attr_fields
         .iter()
         .map(|info| {
@@ -137,7 +129,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Generate Default impl field initializers
     let default_fields: Vec<_> = attr_fields
         .iter()
         .map(|info| {
@@ -203,7 +194,6 @@ pub fn derive_empty_node(input: TokenStream) -> TokenStream {
 
     let name = &input.ident;
 
-    // Extract tag from #[protocol(tag = "...")]
     let tag = match extract_tag(&input.attrs) {
         Some(tag) => tag,
         None => {
@@ -276,7 +266,6 @@ fn extract_attr_info(field: &syn::Field) -> Option<AttrFieldInfo> {
 
     for attr in &field.attrs {
         if attr.path().is_ident("attr") {
-            // Parse the attribute arguments
             let mut attr_name = None;
             let mut default = None;
 

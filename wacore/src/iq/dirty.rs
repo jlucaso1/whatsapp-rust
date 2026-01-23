@@ -28,11 +28,8 @@ pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 /// Known dirty bit types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirtyType {
-    /// Account sync dirty bit
     AccountSync,
-    /// Groups dirty bit
     Groups,
-    /// Other/unknown type
     Other(String),
 }
 
@@ -59,14 +56,11 @@ impl From<&str> for DirtyType {
 /// A dirty bit to clean.
 #[derive(Debug, Clone)]
 pub struct DirtyBit {
-    /// The type of dirty bit.
     pub dirty_type: DirtyType,
-    /// Optional timestamp for the dirty bit.
     pub timestamp: Option<u64>,
 }
 
 impl DirtyBit {
-    /// Create a new dirty bit with just a type.
     pub fn new(dirty_type: impl Into<DirtyType>) -> Self {
         Self {
             dirty_type: dirty_type.into(),
@@ -74,7 +68,6 @@ impl DirtyBit {
         }
     }
 
-    /// Create a new dirty bit with a type and timestamp.
     pub fn with_timestamp(dirty_type: impl Into<DirtyType>, timestamp: u64) -> Self {
         Self {
             dirty_type: dirty_type.into(),
@@ -86,15 +79,11 @@ impl DirtyBit {
 /// Clears dirty bits on the server.
 #[derive(Debug, Clone)]
 pub struct CleanDirtyBitsSpec {
-    /// The dirty bits to clean.
     pub bits: Vec<DirtyBit>,
 }
 
 impl CleanDirtyBitsSpec {
-    /// Create a spec to clean a single dirty bit.
-    ///
-    /// # Errors
-    /// Returns an error if `timestamp` is provided but cannot be parsed as `u64`.
+    /// Returns error if `timestamp` cannot be parsed as `u64`.
     pub fn single(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
         let bit = if let Some(ts) = timestamp {
             let ts_num: u64 = ts
@@ -107,7 +96,6 @@ impl CleanDirtyBitsSpec {
         Ok(Self { bits: vec![bit] })
     }
 
-    /// Create a spec to clean multiple dirty bits.
     pub fn multiple(bits: Vec<DirtyBit>) -> Self {
         Self { bits }
     }

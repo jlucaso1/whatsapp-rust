@@ -38,9 +38,6 @@ impl StanzaHandler for MessageHandler {
             }
         };
 
-        // Node is already Arc-wrapped - no cloning needed!
-        // This is the key optimization: we pass the same Arc through the system.
-
         // CRITICAL: Acquire the enqueue lock BEFORE getting/creating the queue.
         // This ensures that messages are enqueued in the exact order they arrive,
         // even when multiple messages arrive concurrently and the queue needs

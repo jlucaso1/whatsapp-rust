@@ -15,17 +15,14 @@ impl Client {
         let mut jids_to_fetch: HashSet<Jid> = HashSet::new();
         let mut all_devices = Vec::new();
 
-        // 1. Check the cache first
         for jid in jids.iter().map(|j| j.to_non_ad()) {
             if let Some(cached_devices) = self.get_device_cache().await.get(&jid).await {
                 all_devices.extend(cached_devices);
-                continue; // Found fresh entry, skip network fetch
+                continue;
             }
-            // Not in cache or stale, add to the fetch set (de-duplicated)
             jids_to_fetch.insert(jid);
         }
 
-        // 2. Fetch missing JIDs from the network
         if !jids_to_fetch.is_empty() {
             debug!(
                 "get_user_devices: Cache miss, fetching from network for {} unique users",
@@ -60,7 +57,6 @@ impl Client {
                 );
             }
 
-            // 3. Update the cache with the newly fetched data (now with phash)
             for user_list in &response.device_lists {
                 self.get_device_cache()
                     .await
