@@ -759,76 +759,36 @@ impl Client {
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
-        use crate::request::InfoQuery;
-
-        let tag = if passive { "passive" } else { "active" };
-
-        let query = InfoQuery::set(
-            "passive",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(vec![
-                NodeBuilder::new(tag).build(),
-            ])),
-        );
-
-        self.send_iq(query).await.map(|_| ())
+        use wacore::iq::passive::PassiveModeSpec;
+        self.execute(PassiveModeSpec::new(passive)).await
     }
 
     pub async fn clean_dirty_bits(
         &self,
         type_: &str,
         timestamp: Option<&str>,
-    ) -> Result<(), ClientError> {
-        let id = self.generate_request_id();
-        let mut clean_builder = NodeBuilder::new("clean").attr("type", type_);
-        if let Some(ts) = timestamp {
-            clean_builder = clean_builder.attr("timestamp", ts);
-        }
+    ) -> Result<(), crate::request::IqError> {
+        use wacore::iq::dirty::CleanDirtyBitsSpec;
 
-        let node = NodeBuilder::new("iq")
-            .attr("to", server_jid().to_string())
-            .attr("type", "set")
-            .attr("xmlns", "urn:xmpp:whatsapp:dirty")
-            .attr("id", id)
-            .children([clean_builder.build()])
-            .build();
-
-        self.send_node(node).await
+        self.execute(CleanDirtyBitsSpec::single(type_, timestamp))
+            .await
     }
 
     pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::InfoQuery;
+        use wacore::iq::props::PropsSpec;
 
         debug!(target: "Client", "Fetching properties (props)...");
 
-        let props_node = NodeBuilder::new("props")
-            .attr("protocol", "2")
-            .attr("hash", "") // TODO: load hash from persistence
-            .build();
-
-        let iq = InfoQuery::get(
-            "w",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(vec![props_node])),
-        );
-
-        self.send_iq(iq).await.map(|_| ())
+        // TODO: load hash from persistence for delta updates
+        self.execute(PropsSpec::new()).await.map(|_| ())
     }
 
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::InfoQuery;
+        use wacore::iq::privacy::PrivacySettingsSpec;
 
         debug!(target: "Client", "Fetching privacy settings...");
 
-        let iq = InfoQuery::get(
-            "privacy",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(vec![
-                NodeBuilder::new("privacy").build(),
-            ])),
-        );
-
-        self.send_iq(iq).await.map(|_| ())
+        self.execute(PrivacySettingsSpec::new()).await.map(|_| ())
     }
 
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
