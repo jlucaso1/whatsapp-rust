@@ -66,10 +66,8 @@ impl ProtocolNode for BlocklistItemRequest {
             return Err(anyhow!("expected <item>, got <{}>", node.tag));
         }
 
-        let action_str = optional_attr(node, "action").unwrap_or_else(|| {
-            warn!(target: "blocklist", "missing 'action' attribute, defaulting to 'block'");
-            "block"
-        });
+        let action_str =
+            optional_attr(node, "action").ok_or_else(|| anyhow!("missing action attribute"))?;
         let action = BlocklistAction::try_from(action_str)?;
         let jid_str = optional_attr(node, "jid").ok_or_else(|| anyhow!("missing jid attribute"))?;
         let jid = jid_str.parse()?;

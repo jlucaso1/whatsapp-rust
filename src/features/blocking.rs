@@ -50,7 +50,7 @@ impl<'a> Blocking<'a> {
     /// Check if a contact is blocked.
     pub async fn is_blocked(&self, jid: &Jid) -> Result<bool> {
         let blocklist = self.get_blocklist().await?;
-        Ok(blocklist.iter().any(|e| e.jid.user == jid.user))
+        Ok(blocklist.iter().any(|e| &e.jid == jid))
     }
 }
 

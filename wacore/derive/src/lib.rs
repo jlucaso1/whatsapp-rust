@@ -129,7 +129,9 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 }
             } else {
                 quote! {
-                    #field_ident: node.attrs().string(#attr_name).to_string()
+                    #field_ident: node.attrs().optional_string(#attr_name)
+                        .ok_or_else(|| anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                        .to_string()
                 }
             }
         })
