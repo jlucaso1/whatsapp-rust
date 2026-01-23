@@ -56,8 +56,8 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     let tag = match extract_tag(&input.attrs) {
-        Some(tag) => tag,
-        None => {
+        Ok(Some(tag)) => tag,
+        Ok(None) => {
             return syn::Error::new_spanned(
                 &input.ident,
                 "ProtocolNode requires #[protocol(tag = \"...\")]",
@@ -65,6 +65,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        Err(e) => return e.to_compile_error().into(),
     };
 
     let fields = match &input.data {
@@ -92,8 +93,10 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
 
     let mut attr_fields = Vec::new();
     for field in fields {
-        if let Some(attr_info) = extract_attr_info(field) {
-            attr_fields.push(attr_info);
+        match extract_attr_info(field) {
+            Ok(Some(attr_info)) => attr_fields.push(attr_info),
+            Ok(None) => {}
+            Err(e) => return e.to_compile_error().into(),
         }
     }
 
@@ -195,8 +198,8 @@ pub fn derive_empty_node(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     let tag = match extract_tag(&input.attrs) {
-        Some(tag) => tag,
-        None => {
+        Ok(Some(tag)) => tag,
+        Ok(None) => {
             return syn::Error::new_spanned(
                 &input.ident,
                 "EmptyNode requires #[protocol(tag = \"...\")]",
@@ -204,6 +207,7 @@ pub fn derive_empty_node(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        Err(e) => return e.to_compile_error().into(),
     };
 
     generate_empty_impl(name, &tag).into()
@@ -242,34 +246,37 @@ struct AttrFieldInfo {
     default: Option<String>,
 }
 
-fn extract_tag(attrs: &[syn::Attribute]) -> Option<String> {
+fn extract_tag(attrs: &[syn::Attribute]) -> Result<Option<String>, syn::Error> {
     for attr in attrs {
         if attr.path().is_ident("protocol") {
             let mut tag = None;
-            let _ = attr.parse_nested_meta(|meta| {
+            attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("tag") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     tag = Some(value.value());
                 }
                 Ok(())
-            });
+            })?;
             if tag.is_some() {
-                return tag;
+                return Ok(tag);
             }
         }
     }
-    None
+    Ok(None)
 }
 
-fn extract_attr_info(field: &syn::Field) -> Option<AttrFieldInfo> {
-    let field_ident = field.ident.clone()?;
+fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::Error> {
+    let field_ident = match field.ident.clone() {
+        Some(ident) => ident,
+        None => return Ok(None),
+    };
 
     for attr in &field.attrs {
         if attr.path().is_ident("attr") {
             let mut attr_name = None;
             let mut default = None;
 
-            let _ = attr.parse_nested_meta(|meta| {
+            attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     attr_name = Some(value.value());
@@ -278,18 +285,18 @@ fn extract_attr_info(field: &syn::Field) -> Option<AttrFieldInfo> {
                     default = Some(value.value());
                 }
                 Ok(())
-            });
+            })?;
 
             if let Some(name) = attr_name {
-                return Some(AttrFieldInfo {
+                return Ok(Some(AttrFieldInfo {
                     field_ident,
                     attr_name: name,
                     default,
-                });
+                }));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Derive macro for enums with string representations.
