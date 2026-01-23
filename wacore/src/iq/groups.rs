@@ -1,5 +1,5 @@
 use crate::StringEnum;
-use crate::iq::node::{optional_attr, required_attr, required_child};
+use crate::iq::node::{collect_children, optional_attr, required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
@@ -88,70 +88,18 @@ impl TryFrom<Option<&str>> for ParticipantType {
         }
     }
 }
-/// A validated group subject string.
-///
-/// WhatsApp limits group subjects to [`GROUP_SUBJECT_MAX_LENGTH`] characters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupSubject(String);
-
-impl GroupSubject {
-    /// Create a new validated group subject.
-    pub fn new(subject: impl Into<String>) -> Result<Self> {
-        let s = subject.into();
-        if s.chars().count() > GROUP_SUBJECT_MAX_LENGTH {
-            return Err(anyhow!(
-                "Group subject exceeds {} characters",
-                GROUP_SUBJECT_MAX_LENGTH
-            ));
-        }
-        Ok(Self(s))
-    }
-
-    /// Create a group subject without validation (for parsing responses).
-    pub fn new_unchecked(subject: impl Into<String>) -> Self {
-        Self(subject.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
+crate::define_validated_string! {
+    /// A validated group subject string.
+    ///
+    /// WhatsApp limits group subjects to [`GROUP_SUBJECT_MAX_LENGTH`] characters.
+    pub struct GroupSubject(max_len = GROUP_SUBJECT_MAX_LENGTH, name = "Group subject")
 }
 
-/// A validated group description string.
-///
-/// WhatsApp limits group descriptions to [`GROUP_DESCRIPTION_MAX_LENGTH`] characters.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct GroupDescription(String);
-
-impl GroupDescription {
-    /// Create a new validated group description.
-    pub fn new(description: impl Into<String>) -> Result<Self> {
-        let s = description.into();
-        if s.chars().count() > GROUP_DESCRIPTION_MAX_LENGTH {
-            return Err(anyhow!(
-                "Group description exceeds {} characters",
-                GROUP_DESCRIPTION_MAX_LENGTH
-            ));
-        }
-        Ok(Self(s))
-    }
-
-    /// Create a group description without validation (for parsing responses).
-    pub fn new_unchecked(description: impl Into<String>) -> Self {
-        Self(description.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
+crate::define_validated_string! {
+    /// A validated group description string.
+    ///
+    /// WhatsApp limits group descriptions to [`GROUP_DESCRIPTION_MAX_LENGTH`] characters.
+    pub struct GroupDescription(max_len = GROUP_DESCRIPTION_MAX_LENGTH, name = "Group description")
 }
 /// Options for a participant when creating a group.
 #[derive(Debug, Clone, TypedBuilder)]
@@ -464,11 +412,7 @@ impl ProtocolNode for GroupInfoResponse {
         let addressing_mode =
             AddressingMode::try_from(optional_attr(node, "addressing_mode").unwrap_or("pn"))?;
 
-        let participants = node
-            .get_children_by_tag("participant")
-            .iter()
-            .map(|child| GroupParticipantResponse::try_from_node(child))
-            .collect::<Result<Vec<_>>>()?;
+        let participants = collect_children::<GroupParticipantResponse>(node, "participant")?;
 
         Ok(Self {
             id,
@@ -545,11 +489,7 @@ impl ProtocolNode for GroupParticipatingResponse {
             return Err(anyhow!("expected <groups>, got <{}>", node.tag));
         }
 
-        let groups = node
-            .get_children_by_tag("group")
-            .iter()
-            .map(|child| GroupInfoResponse::try_from_node(child))
-            .collect::<Result<Vec<_>>>()?;
+        let groups = collect_children::<GroupInfoResponse>(node, "group")?;
 
         Ok(Self { groups })
     }

@@ -138,3 +138,77 @@ macro_rules! define_empty_node {
         }
     };
 }
+
+/// Macro for defining validated string newtypes with a maximum length constraint.
+///
+/// This generates a newtype wrapper around `String` that validates length on construction.
+///
+/// # Example
+///
+/// ```ignore
+/// define_validated_string! {
+///     /// A validated group subject with 100 character limit.
+///     pub struct GroupSubject(max_len = GROUP_SUBJECT_MAX_LENGTH, name = "Group subject");
+/// }
+/// ```
+///
+/// This generates:
+/// - A tuple struct wrapping `String`
+/// - `new(s: impl Into<String>) -> Result<Self>` that validates length
+/// - `new_unchecked(s: impl Into<String>) -> Self` for parsing responses
+/// - `as_str() -> &str`
+/// - `into_string() -> String`
+/// - Derives: `Debug, Clone, PartialEq, Eq, Hash`
+#[macro_export]
+macro_rules! define_validated_string {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident(max_len = $max_len:expr, name = $display_name:literal)
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        $vis struct $name(String);
+
+        impl $name {
+            /// Create a new validated string, returning an error if it exceeds the maximum length.
+            pub fn new(value: impl Into<String>) -> anyhow::Result<Self> {
+                let s = value.into();
+                if s.chars().count() > $max_len {
+                    return Err(anyhow::anyhow!(
+                        "{} exceeds {} characters",
+                        $display_name,
+                        $max_len
+                    ));
+                }
+                Ok(Self(s))
+            }
+
+            /// Create a new string without validation (for parsing responses).
+            pub fn new_unchecked(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            /// Get the string as a slice.
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            /// Consume self and return the inner string.
+            pub fn into_string(self) -> String {
+                self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+    };
+}
