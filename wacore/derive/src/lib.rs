@@ -132,17 +132,31 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let default_fields: Vec<_> = attr_fields
-        .iter()
-        .map(|info| {
-            let field_ident = &info.field_ident;
-            if let Some(default) = &info.default {
+    // Only generate Default impl if all fields have defaults
+    let all_have_defaults = attr_fields.iter().all(|info| info.default.is_some());
+
+    let default_impl = if all_have_defaults {
+        let default_fields: Vec<_> = attr_fields
+            .iter()
+            .map(|info| {
+                let field_ident = &info.field_ident;
+                let default = info.default.as_ref().unwrap();
                 quote! { #field_ident: #default.to_string() }
-            } else {
-                quote! { #field_ident: String::new() }
+            })
+            .collect();
+
+        quote! {
+            impl ::core::default::Default for #name {
+                fn default() -> Self {
+                    Self {
+                        #(#default_fields),*
+                    }
+                }
             }
-        })
-        .collect();
+        }
+    } else {
+        quote! {}
+    };
 
     let expanded = quote! {
         impl ::wacore::protocol::ProtocolNode for #name {
@@ -166,13 +180,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl ::core::default::Default for #name {
-            fn default() -> Self {
-                Self {
-                    #(#default_fields),*
-                }
-            }
-        }
+        #default_impl
     };
 
     expanded.into()
