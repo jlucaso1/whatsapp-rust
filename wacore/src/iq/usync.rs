@@ -113,10 +113,6 @@ fn build_phone_user_nodes(phones: &[String]) -> Vec<Node> {
         .collect()
 }
 
-// ============================================================================
-// User Node Parsing Helpers
-// ============================================================================
-
 /// Common fields parsed from a usync user node.
 struct ParsedUserFields {
     jid: Jid,
@@ -195,10 +191,6 @@ fn parse_picture_id_string(user_node: &Node) -> Option<String> {
                 .map(|s| s.to_string())
         })
 }
-
-// ============================================================================
-// Types
-// ============================================================================
 
 /// Result of checking if a phone number is on WhatsApp.
 #[derive(Debug, Clone)]

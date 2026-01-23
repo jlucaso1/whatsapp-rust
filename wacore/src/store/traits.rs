@@ -13,10 +13,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use wacore_appstate::processor::AppStateMutationMAC;
 
-// ============================================================================
-// Data Structures
-// ============================================================================
-
 /// App state synchronization key for WhatsApp's app state protocol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppStateSyncKey {
@@ -61,10 +57,6 @@ pub struct DeviceListRecord {
     /// Participant hash from usync, if available
     pub phash: Option<String>,
 }
-
-// ============================================================================
-// SignalStore - Signal Protocol Cryptographic Operations
-// ============================================================================
 
 /// Signal protocol cryptographic storage operations.
 ///
@@ -136,10 +128,6 @@ pub trait SignalStore: Send + Sync {
     async fn delete_sender_key(&self, address: &str) -> Result<()>;
 }
 
-// ============================================================================
-// AppSyncStore - WhatsApp App State Synchronization
-// ============================================================================
-
 /// WhatsApp app state synchronization storage.
 ///
 /// Handles sync keys, version tracking, and mutation MACs for the app state protocol.
@@ -171,10 +159,6 @@ pub trait AppSyncStore: Send + Sync {
     /// Delete mutation MACs by their index MACs.
     async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
 }
-
-// ============================================================================
-// ProtocolStore - WhatsApp Web Protocol Alignment
-// ============================================================================
 
 /// WhatsApp Web protocol alignment storage.
 ///
@@ -241,10 +225,6 @@ pub trait ProtocolStore: Send + Sync {
     async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
 }
 
-// ============================================================================
-// DeviceStore - Device Persistence
-// ============================================================================
-
 /// Device data persistence operations.
 #[async_trait]
 pub trait DeviceStore: Send + Sync {
@@ -260,10 +240,6 @@ pub trait DeviceStore: Send + Sync {
     /// Create a new device row and return its generated device_id.
     async fn create(&self) -> Result<i32>;
 }
-
-// ============================================================================
-// Backend - Combined Trait
-// ============================================================================
 
 /// Combined storage backend trait.
 ///

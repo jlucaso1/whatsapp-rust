@@ -61,6 +61,21 @@ impl<'a> InfoQuery<'a> {
         self.timeout = Some(timeout);
         self
     }
+
+    /// Create a GET query from a Jid reference (avoids clone at call site).
+    pub fn get_ref(namespace: &'a str, to: &Jid, content: Option<NodeContent>) -> Self {
+        Self::get(namespace, to.clone(), content)
+    }
+
+    /// Create a SET query from a Jid reference (avoids clone at call site).
+    pub fn set_ref(namespace: &'a str, to: &Jid, content: Option<NodeContent>) -> Self {
+        Self::set(namespace, to.clone(), content)
+    }
+
+    /// Set target from a Jid reference (avoids clone at call site).
+    pub fn with_target_ref(self, target: &Jid) -> Self {
+        self.with_target(target.clone())
+    }
 }
 
 #[derive(Debug, Error)]

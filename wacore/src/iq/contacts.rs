@@ -96,7 +96,7 @@ impl IqSpec for ProfilePictureSpec {
             Jid::new("", SERVER_JID),
             Some(NodeContent::Nodes(vec![picture_node])),
         )
-        .with_target(self.jid.clone())
+        .with_target_ref(&self.jid)
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {

@@ -1282,10 +1282,6 @@ mod tests {
         .expect("Failed to create PreKeyBundle")
     }
 
-    // ==========================================
-    // LID-PN Session Mismatch Fix Tests
-    // ==========================================
-    //
     // These tests validate the fix for the LID-PN session mismatch issue.
     // When a message is received with sender_lid, the session is stored under the LID address.
     // When sending a reply using the phone number, we must reuse the existing LID session

@@ -3480,9 +3480,6 @@ mod tests {
         println!("   - Protocol address: {}", protocol_address);
     }
 
-    // ==================== RETRY LOGIC TESTS ====================
-    //
-    // These tests verify the retry count tracking, max retry limits,
     // and PDO fallback behavior to ensure robust message recovery.
 
     /// Helper to create a test MessageInfo with customizable fields
