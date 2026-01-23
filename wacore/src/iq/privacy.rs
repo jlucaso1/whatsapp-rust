@@ -169,7 +169,9 @@ impl IqSpec for PrivacySettingsSpec {
         InfoQuery::get(
             PRIVACY_NAMESPACE,
             Jid::new("", SERVER_JID),
-            Some(NodeContent::Nodes(vec![NodeBuilder::new("privacy").build()])),
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("privacy").build(),
+            ])),
         )
     }
 

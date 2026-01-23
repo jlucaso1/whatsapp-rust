@@ -137,7 +137,8 @@ impl IqSpec for PropsSpec {
             let config_value = optional_attr(child, "config_value")
                 .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?
                 .to_string();
-            let config_expo_key = optional_attr(child, "config_expo_key").and_then(|s| s.parse().ok());
+            let config_expo_key =
+                optional_attr(child, "config_expo_key").and_then(|s| s.parse().ok());
 
             props.push(AbProp {
                 config_code,

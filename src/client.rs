@@ -792,18 +792,11 @@ impl Client {
     }
 
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
-        use crate::request::InfoQuery;
+        use wacore::iq::prekeys::DigestKeyBundleSpec;
 
         debug!(target: "Client", "Sending digest key bundle...");
 
-        let digest_node = NodeBuilder::new("digest").build();
-        let iq = InfoQuery::get(
-            "encrypt",
-            server_jid(),
-            Some(wacore_binary::node::NodeContent::Nodes(vec![digest_node])),
-        );
-
-        self.send_iq(iq).await.map(|_| ())
+        self.execute(DigestKeyBundleSpec::new()).await.map(|_| ())
     }
 
     pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::Node) {
