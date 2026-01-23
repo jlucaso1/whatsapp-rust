@@ -858,19 +858,15 @@ impl Client {
 
             info!(target: "Client", "Starting post-login initialization sequence (gen={})...", task_generation);
 
-            let mut force_initial_sync = false;
+            // Check if we need initial app state sync (empty pushname indicates fresh pairing
+            // where pushname will come from app state sync's setting_pushName mutation)
             let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
-            if device_snapshot.push_name.is_empty() {
-                const DEFAULT_PUSH_NAME: &str = "WhatsApp Rust";
-                warn!(
+            let needs_pushname_from_sync = device_snapshot.push_name.is_empty();
+            if needs_pushname_from_sync {
+                debug!(
                     target: "Client",
-                    "Push name is empty! Setting default to '{DEFAULT_PUSH_NAME}' to allow presence."
+                    "Push name is empty - will be set from app state sync (setting_pushName)"
                 );
-                client_clone
-                    .persistence_manager
-                    .process_command(DeviceCommand::SetPushName(DEFAULT_PUSH_NAME.to_string()))
-                    .await;
-                force_initial_sync = true;
             }
 
             // Check connection before network operations.
@@ -944,14 +940,18 @@ impl Client {
                 return;
             }
 
-            // Send presence (like WhatsApp Web's sendPresenceAvailable after passive tasks)
-            if let Err(e) = client_clone.presence().set_available().await {
-                warn!("Failed to send initial presence: {e:?}");
+            // Send presence if we have a pushname (like WhatsApp Web's sendPresenceAvailable).
+            // If pushname is empty, we'll send presence after app state sync provides it.
+            let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
+            if !device_snapshot.push_name.is_empty() {
+                if let Err(e) = client_clone.presence().set_available().await {
+                    warn!("Failed to send initial presence: {e:?}");
+                } else {
+                    info!("Initial presence sent successfully.");
+                }
             } else {
-                info!("Initial presence sent successfully.");
+                debug!(target: "Client", "Deferring presence until pushname is available from app state sync");
             }
-
-            // === End of Passive Tasks ===
 
             check_generation!();
 
@@ -1006,10 +1006,10 @@ impl Client {
             check_generation!();
 
             let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
-            if flag_set || force_initial_sync {
+            if flag_set || needs_pushname_from_sync {
                 info!(
                     target: "Client/AppState",
-                    "Starting Initial App State Sync (flag_set={flag_set}, force={force_initial_sync})"
+                    "Starting Initial App State Sync (flag_set={flag_set}, needs_pushname={needs_pushname_from_sync})"
                 );
 
                 if !client_clone
@@ -1327,10 +1327,18 @@ impl Client {
                         bus.dispatch(&Event::SelfPushNameUpdated(
                             crate::types::events::SelfPushNameUpdated {
                                 from_server: true,
-                                old_name: old,
+                                old_name: old.clone(),
                                 new_name: new_name.clone(),
                             },
                         ));
+
+                        // WhatsApp Web sends presence immediately when receiving pushname from
+                        if old.is_empty() && !new_name.is_empty() {
+                            info!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
+                            if let Err(e) = self.presence().set_available().await {
+                                warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
+                            }
+                        }
                     } else {
                         debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
                     }
