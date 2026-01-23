@@ -13,7 +13,13 @@ impl Client {
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
-        let id = attrs.string("id");
+        let id = match attrs.optional_string("id") {
+            Some(id) => id.to_string(),
+            None => {
+                log::warn!("Receipt stanza missing required 'id' attribute");
+                return;
+            }
+        };
         let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
         let participant = attrs.optional_jid("participant");
 

@@ -30,6 +30,7 @@ fn test_node_with_attributes_and_content_with_ref() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_attr_parser_ref_zero_copy_access() {
     let original_node = NodeBuilder::new("iq")
         .attrs([("xmlns", "test"), ("type", "result"), ("id", "123")])

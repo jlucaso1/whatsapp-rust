@@ -34,7 +34,13 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
         match child.tag.as_str() {
             "dirty" => {
                 let mut attrs = child.attrs();
-                let dirty_type = attrs.string("type");
+                let dirty_type = match attrs.optional_string("type") {
+                    Some(t) => t.to_string(),
+                    None => {
+                        warn!(target: "Client", "Dirty notification missing 'type' attribute");
+                        continue;
+                    }
+                };
                 let timestamp = attrs.optional_string("timestamp").map(|s| s.to_string());
 
                 info!(

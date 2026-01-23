@@ -360,7 +360,10 @@ impl Client {
         if let Some(participants_node) = participants {
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
-                let to_jid = to_node.attrs().string("jid");
+                let to_jid = match to_node.attrs().optional_string("jid") {
+                    Some(jid) => jid.to_string(),
+                    None => continue,
+                };
                 let own_jid = self.get_pn().await;
 
                 if let Some(our_jid) = own_jid
@@ -381,7 +384,13 @@ impl Client {
         let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
 
         for &enc_node in &all_enc_nodes {
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = match enc_node.attrs().optional_string("type") {
+                Some(t) => t.to_string(),
+                None => {
+                    log::warn!("Enc node missing 'type' attribute, skipping");
+                    continue;
+                }
+            };
 
             if let Some(handler) = self.custom_enc_handlers.get(&enc_type) {
                 let handler_clone = handler.clone();
@@ -553,7 +562,13 @@ impl Client {
                     continue;
                 }
             };
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = match enc_node.attrs().optional_string("type") {
+                Some(t) => t.to_string(),
+                None => {
+                    log::warn!("Enc node missing 'type' attribute (batch session)");
+                    continue;
+                }
+            };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
             let parsed_message = if enc_type == "pkmsg" {
@@ -1123,9 +1138,17 @@ impl Client {
             .map(|s| s.to_string())
             .unwrap_or_default();
 
+        let id = match attrs.optional_string("id") {
+            Some(id) => id.to_string(),
+            None => {
+                log::warn!("Message missing 'id' attribute");
+                String::new()
+            }
+        };
+
         Ok(MessageInfo {
             source,
-            id: attrs.string("id"),
+            id,
             push_name: attrs
                 .optional_string("notify")
                 .map(|s| s.to_string())

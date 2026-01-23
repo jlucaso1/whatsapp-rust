@@ -123,10 +123,10 @@ fn bench_attr_parser(marshaled: Vec<u8>) {
     let node_ref = unmarshal_ref(&marshaled[1..]).unwrap();
 
     let mut parser = node_ref.attr_parser();
-    black_box(parser.string("xmlns"));
+    black_box(parser.optional_string("xmlns"));
     black_box(parser.optional_string("type"));
     black_box(parser.optional_jid("from"));
-    black_box(parser.bool("has_flag"));
+    black_box(parser.optional_bool("has_flag"));
     black_box(parser.optional_u64("timestamp"));
     black_box(parser.finish().is_ok());
 }

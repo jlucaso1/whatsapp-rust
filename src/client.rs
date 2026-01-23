@@ -644,7 +644,10 @@ impl Client {
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
-            let name = collection_node.attrs().string("name");
+            let name = collection_node
+                .attrs()
+                .optional_string("name")
+                .unwrap_or("<unknown>");
             info!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
             info!(target: "Client/Recv","{}", DisplayableNode(&node));
@@ -1574,7 +1577,7 @@ impl Client {
             info!(target: "Client", "Received ping, sending pong.");
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
-            let id = parser.string("id");
+            let id = parser.optional_string("id").unwrap_or("").to_string();
             let pong = NodeBuilder::new("iq")
                 .attrs([
                     ("to", from_jid.to_string()),
