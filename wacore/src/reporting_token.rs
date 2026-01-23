@@ -612,6 +612,7 @@ pub fn extract_message_secret(message: &wa::Message) -> Option<&[u8]> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

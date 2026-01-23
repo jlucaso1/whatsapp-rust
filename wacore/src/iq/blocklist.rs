@@ -214,6 +214,7 @@ impl IqSpec for UpdateBlocklistSpec {
     }
 }
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

@@ -64,7 +64,10 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Just acknowledge without syncing.
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name = collection_node.attrs().string("name");
+                    let name = collection_node
+                        .attrs()
+                        .optional_string("name")
+                        .unwrap_or("<unknown>");
                     let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
                     debug!(
                         target: "Client/AppState",

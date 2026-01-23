@@ -65,7 +65,11 @@ impl Client {
             .get_optional_child("retry")
             .ok_or_else(|| anyhow::anyhow!("<retry> child missing from receipt"))?;
 
-        let message_id = retry_child.attrs().string("id");
+        let message_id = retry_child
+            .attrs()
+            .optional_string("id")
+            .ok_or_else(|| anyhow::anyhow!("<retry> missing 'id' attribute"))?
+            .to_string();
         let retry_count: u8 = retry_child
             .attrs()
             .optional_string("count")

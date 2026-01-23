@@ -59,7 +59,10 @@ pub fn parse_patch_list(node: &Node) -> Result<PatchList> {
         .get_optional_child_by_tag(&["sync", "collection"]) // naive path descent
         .ok_or_else(|| anyhow!("missing sync/collection"))?;
     let mut ag = collection.attrs();
-    let name_str = ag.string("name");
+    let name_str = ag
+        .optional_string("name")
+        .ok_or_else(|| anyhow!("collection missing 'name' attribute"))?
+        .to_string();
     let has_more = ag.optional_bool("has_more_patches");
     ag.finish()?; // propagate attr parse errors
 

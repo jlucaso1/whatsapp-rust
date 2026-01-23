@@ -51,7 +51,11 @@ mod tests {
             enc_node: &Node,
             _info: &MessageInfo,
         ) -> Result<()> {
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = enc_node
+                .attrs()
+                .optional_string("type")
+                .unwrap_or("unknown")
+                .to_string();
             self.calls.lock().await.push(enc_type);
             Ok(())
         }

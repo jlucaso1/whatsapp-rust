@@ -27,14 +27,16 @@ impl StanzaHandler for MessageHandler {
     }
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        // Extract the chat ID (from attribute) to serialize processing for this chat.
+        // Extract the chat ID to serialize processing for this chat.
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
-        let chat_id = node.attrs().string("from");
-
-        if chat_id.is_empty() {
-            return false;
-        }
+        let chat_id = match node.attrs().optional_string("from") {
+            Some(id) => id.to_string(),
+            None => {
+                log::warn!("Message stanza missing required 'from' attribute");
+                return false;
+            }
+        };
 
         // Node is already Arc-wrapped - no cloning needed!
         // This is the key optimization: we pass the same Arc through the system.
