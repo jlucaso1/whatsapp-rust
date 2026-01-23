@@ -81,7 +81,13 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
                     continue;
                 }
             };
-            let device_id: u16 = device_id_str.parse()?;
+            let device_id: u16 = match device_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    log::warn!(target: "usync", "invalid device id '{device_id_str}' for user {user_jid}, skipping");
+                    continue;
+                }
+            };
 
             let mut device_jid = user_jid.clone();
             device_jid.device = device_id;

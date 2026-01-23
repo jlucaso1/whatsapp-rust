@@ -113,6 +113,93 @@ fn build_phone_user_nodes(phones: &[String]) -> Vec<Node> {
         .collect()
 }
 
+// ============================================================================
+// User Node Parsing Helpers
+// ============================================================================
+
+/// Common fields parsed from a usync user node.
+struct ParsedUserFields {
+    jid: Jid,
+    lid: Option<Jid>,
+    is_registered: bool,
+    is_business: bool,
+    status: Option<String>,
+}
+
+/// Parse common fields from a usync `<user>` node.
+fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
+    let jid = user_node
+        .attrs()
+        .optional_string("jid")?
+        .parse::<Jid>()
+        .ok()?;
+
+    let contact_node = user_node.get_optional_child("contact");
+    let is_registered = contact_node
+        .map(|c| c.attrs().optional_string("type") == Some("in"))
+        .unwrap_or(false);
+
+    let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
+        lid_node
+            .attrs()
+            .optional_string("val")
+            .and_then(|val| val.parse::<Jid>().ok())
+    });
+
+    let status = user_node
+        .get_optional_child("status")
+        .and_then(|status_node| {
+            if status_node.get_optional_child("error").is_some() {
+                return None;
+            }
+            match &status_node.content {
+                Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            }
+        });
+
+    let is_business = user_node.get_optional_child("business").is_some();
+
+    Some(ParsedUserFields {
+        jid,
+        lid,
+        is_registered,
+        is_business,
+        status,
+    })
+}
+
+/// Parse picture ID as u64 (used in ContactInfo).
+fn parse_picture_id_u64(user_node: &Node) -> Option<u64> {
+    user_node
+        .get_optional_child("picture")
+        .and_then(|pic_node| {
+            if pic_node.get_optional_child("error").is_some() {
+                return None;
+            }
+            pic_node.attrs().optional_u64("id")
+        })
+}
+
+/// Parse picture ID as String (used in UserInfo).
+fn parse_picture_id_string(user_node: &Node) -> Option<String> {
+    user_node
+        .get_optional_child("picture")
+        .and_then(|pic_node| {
+            if pic_node.get_optional_child("error").is_some() {
+                return None;
+            }
+            pic_node
+                .attrs()
+                .optional_string("id")
+                .map(|s| s.to_string())
+        })
+}
+
+// ============================================================================
+// Types
+// ============================================================================
+
 /// Result of checking if a phone number is on WhatsApp.
 #[derive(Debug, Clone)]
 pub struct IsOnWhatsAppResult {
@@ -280,53 +367,14 @@ impl IqSpec for ContactInfoSpec {
         let mut results = Vec::new();
 
         for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let contact_node = user_node.get_optional_child("contact");
-                let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
-                    .unwrap_or(false);
-
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node.attrs().optional_u64("id")
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
+            if let Some(fields) = parse_user_common_fields(user_node) {
                 results.push(ContactInfo {
-                    jid,
-                    lid,
-                    is_registered,
-                    is_business,
-                    status,
-                    picture_id,
+                    jid: fields.jid,
+                    lid: fields.lid,
+                    is_registered: fields.is_registered,
+                    is_business: fields.is_business,
+                    status: fields.status,
+                    picture_id: parse_picture_id_u64(user_node),
                 });
             }
         }
@@ -407,52 +455,15 @@ impl IqSpec for UserInfoSpec {
         let mut results = HashMap::new();
 
         for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node
-                            .attrs()
-                            .optional_string("id")
-                            .map(|s| s.to_string())
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
+            if let Some(fields) = parse_user_common_fields(user_node) {
                 results.insert(
-                    jid.clone(),
+                    fields.jid.clone(),
                     UserInfo {
-                        jid,
-                        lid,
-                        status,
-                        picture_id,
-                        is_business,
+                        jid: fields.jid,
+                        lid: fields.lid,
+                        status: fields.status,
+                        picture_id: parse_picture_id_string(user_node),
+                        is_business: fields.is_business,
                     },
                 );
             }
