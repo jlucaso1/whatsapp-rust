@@ -48,9 +48,12 @@ impl<'a> Blocking<'a> {
     }
 
     /// Check if a contact is blocked.
+    ///
+    /// Compares only the user part of the JID, ignoring device ID,
+    /// since blocking applies to the entire user account, not individual devices.
     pub async fn is_blocked(&self, jid: &Jid) -> Result<bool> {
         let blocklist = self.get_blocklist().await?;
-        Ok(blocklist.iter().any(|e| &e.jid == jid))
+        Ok(blocklist.iter().any(|e| e.jid.user == jid.user))
     }
 }
 
