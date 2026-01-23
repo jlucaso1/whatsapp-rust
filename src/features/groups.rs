@@ -57,7 +57,7 @@ impl<'a> Groups<'a> {
             return Ok(cached);
         }
 
-        let group = self.client.execute(GroupQueryIq::new(jid.clone())).await?;
+        let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
         let participants: Vec<Jid> = group.participants.iter().map(|p| p.jid.clone()).collect();
 
@@ -111,7 +111,7 @@ impl<'a> Groups<'a> {
     }
 
     pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
-        let group = self.client.execute(GroupQueryIq::new(jid.clone())).await?;
+        let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
         Ok(GroupMetadata {
             id: group.id,

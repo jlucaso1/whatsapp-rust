@@ -501,8 +501,10 @@ pub struct GroupQueryIq {
 }
 
 impl GroupQueryIq {
-    pub fn new(group_jid: Jid) -> Self {
-        Self { group_jid }
+    pub fn new(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+        }
     }
 }
 
@@ -510,9 +512,9 @@ impl IqSpec for GroupQueryIq {
     type Response = GroupInfoResponse;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        InfoQuery::get(
+        InfoQuery::get_ref(
             GROUP_IQ_NAMESPACE,
-            self.group_jid.clone(),
+            &self.group_jid,
             Some(NodeContent::Nodes(vec![
                 GroupQueryRequest::default().into_node(),
             ])),

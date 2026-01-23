@@ -2297,15 +2297,6 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // PDO Session Establishment Timing Tests
-    // =========================================================================
-    // These tests verify the critical timing behavior for PDO:
-    // - Session with device 0 must be established BEFORE offline messages arrive
-    // - ensure_e2e_sessions() waits for offline sync (for normal message sending)
-    // - establish_primary_phone_session_immediate() does NOT wait (for login)
-    // =========================================================================
-
     /// Test that wait_for_offline_delivery_end returns immediately when the flag is already set.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_returns_immediately_when_flag_set() {

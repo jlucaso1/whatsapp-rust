@@ -172,7 +172,7 @@ impl Client {
     /// ```ignore
     /// use wacore::iq::groups::GroupQueryIq;
     ///
-    /// let group_info = client.execute(GroupQueryIq::new(group_jid)).await?;
+    /// let group_info = client.execute(GroupQueryIq::new(&group_jid)).await?;
     /// println!("Group subject: {}", group_info.subject);
     /// ```
     pub async fn execute<S>(&self, spec: S) -> Result<S::Response, IqError>
