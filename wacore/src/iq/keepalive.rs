@@ -14,15 +14,11 @@ use crate::request::InfoQuery;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::Node;
 
-/// Keepalive ping IQ specification.
-///
-/// This is a simple ping to keep the connection alive. The server responds
-/// with an empty result to confirm the connection is still active.
+/// Keepalive ping to keep the connection alive.
 #[derive(Debug, Clone, Default)]
 pub struct KeepaliveSpec;
 
 impl KeepaliveSpec {
-    /// Create a new keepalive spec.
     pub fn new() -> Self {
         Self
     }

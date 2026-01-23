@@ -28,34 +28,25 @@ use wacore_binary::node::{Node, NodeContent};
 /// MEX GraphQL error extensions.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MexErrorExtensions {
-    /// Error code from the server.
     pub error_code: Option<i32>,
-    /// Whether this is a summary/fatal error.
     pub is_summary: Option<bool>,
-    /// Whether the request can be retried.
-    #[serde(default)]
     pub is_retryable: Option<bool>,
-    /// Severity level of the error.
     pub severity: Option<String>,
 }
 
 /// MEX GraphQL error.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MexGraphQLError {
-    /// Error message.
     pub message: String,
-    /// Error extensions with additional metadata.
     pub extensions: Option<MexErrorExtensions>,
 }
 
 impl MexGraphQLError {
-    /// Get the error code if available.
     #[inline]
     pub fn error_code(&self) -> Option<i32> {
         self.extensions.as_ref()?.error_code
     }
 
-    /// Check if this is a fatal error.
     #[inline]
     pub fn is_fatal(&self) -> bool {
         self.extensions
@@ -67,32 +58,26 @@ impl MexGraphQLError {
 /// MEX GraphQL response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MexResponse {
-    /// Response data (if successful).
     pub data: Option<Value>,
-    /// List of errors (if any).
     pub errors: Option<Vec<MexGraphQLError>>,
 }
 
 impl MexResponse {
-    /// Check if the response contains data.
     #[inline]
     pub fn has_data(&self) -> bool {
         self.data.is_some()
     }
 
-    /// Check if the response contains errors.
     #[inline]
     pub fn has_errors(&self) -> bool {
         self.errors.as_ref().is_some_and(|e| !e.is_empty())
     }
 
-    /// Find the fatal error if present.
     pub fn fatal_error(&self) -> Option<&MexGraphQLError> {
         self.errors.as_ref()?.iter().find(|e| e.is_fatal())
     }
 }
 
-/// Internal payload structure for MEX requests.
 #[derive(Serialize)]
 struct MexPayload<'a> {
     variables: &'a Value,
@@ -101,14 +86,11 @@ struct MexPayload<'a> {
 /// MEX GraphQL query IQ specification.
 #[derive(Debug, Clone)]
 pub struct MexQuerySpec {
-    /// The GraphQL document ID (query_id).
     pub doc_id: String,
-    /// Variables for the GraphQL query.
     pub variables: Value,
 }
 
 impl MexQuerySpec {
-    /// Create a new MEX query spec.
     pub fn new(doc_id: impl Into<String>, variables: Value) -> Self {
         Self {
             doc_id: doc_id.into(),
@@ -124,6 +106,8 @@ impl IqSpec for MexQuerySpec {
         let payload = MexPayload {
             variables: &self.variables,
         };
+        // Safety: MexPayload wraps &serde_json::Value, and serde_json::to_vec
+        // cannot fail for Value (no custom serializers or non-string map keys).
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
 
         let query_node = NodeBuilder::new("query")
@@ -143,12 +127,12 @@ impl IqSpec for MexQuerySpec {
             .get_optional_child("result")
             .ok_or_else(|| anyhow!("Missing <result> node in MEX response"))?;
 
-        let result_bytes = match &result_node.content {
-            Some(NodeContent::Bytes(bytes)) => bytes,
-            _ => return Err(anyhow!("MEX result node content is not binary")),
+        // Handle both binary and string content from the server
+        let mex_response: MexResponse = match &result_node.content {
+            Some(NodeContent::Bytes(bytes)) => serde_json::from_slice(bytes)?,
+            Some(NodeContent::String(s)) => serde_json::from_str(s)?,
+            _ => return Err(anyhow!("MEX result node content is not binary or string")),
         };
-
-        let mex_response: MexResponse = serde_json::from_slice(result_bytes)?;
 
         // Check for fatal errors
         if let Some(fatal) = mex_response.fatal_error() {

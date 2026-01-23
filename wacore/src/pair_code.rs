@@ -19,8 +19,8 @@
 //! - Ephemeral encryption: AES-256-CTR
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
-use crate::libsignal::protocol::{KeyPair, PublicKey};
 use crate::StringEnum;
+use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
@@ -680,7 +680,6 @@ mod tests {
         // Different salts should produce different keys
         assert_ne!(key1, key2);
     }
-
 
     #[test]
     fn test_pair_code_options_default() {

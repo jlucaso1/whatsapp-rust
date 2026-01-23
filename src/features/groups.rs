@@ -65,7 +65,11 @@ impl<'a> Groups<'a> {
             group
                 .participants
                 .iter()
-                .filter_map(|p| p.phone_number.as_ref().map(|pn| (p.jid.user.clone(), pn.clone())))
+                .filter_map(|p| {
+                    p.phone_number
+                        .as_ref()
+                        .map(|pn| (p.jid.user.clone(), pn.clone()))
+                })
                 .collect()
         } else {
             HashMap::new()

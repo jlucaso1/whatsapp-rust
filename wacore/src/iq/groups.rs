@@ -11,11 +11,6 @@ use wacore_binary::node::{Node, NodeContent};
 
 // Re-export AddressingMode from types::message for convenience
 pub use crate::types::message::AddressingMode;
-
-// ============================================================================
-// Constants (from WhatsApp Web A/B props)
-// ============================================================================
-
 /// IQ namespace for group operations.
 pub const GROUP_IQ_NAMESPACE: &str = "w:g2";
 
@@ -27,11 +22,6 @@ pub const GROUP_DESCRIPTION_MAX_LENGTH: usize = 512;
 
 /// Maximum number of participants in a group (from `group_size_limit` A/B prop).
 pub const GROUP_SIZE_LIMIT: usize = 257;
-
-// ============================================================================
-// Enums with StringEnum derive
-// ============================================================================
-
 /// Member link mode for group invite links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum MemberLinkMode {
@@ -98,11 +88,6 @@ impl TryFrom<Option<&str>> for ParticipantType {
         }
     }
 }
-
-// ============================================================================
-// Validated Newtypes
-// ============================================================================
-
 /// A validated group subject string.
 ///
 /// WhatsApp limits group subjects to [`GROUP_SUBJECT_MAX_LENGTH`] characters.
@@ -168,11 +153,6 @@ impl GroupDescription {
         self.0
     }
 }
-
-// ============================================================================
-// Group Create Options (with TypedBuilder)
-// ============================================================================
-
 /// Options for a participant when creating a group.
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(build_method(into))]
@@ -365,11 +345,6 @@ pub fn build_create_group_node(options: &GroupCreateOptions) -> Node {
         .children(children)
         .build()
 }
-
-// ============================================================================
-// Query Request/Response Types
-// ============================================================================
-
 /// Request to query group information.
 #[derive(Debug, Clone, Default)]
 pub struct GroupQueryRequest {
@@ -498,11 +473,6 @@ impl ProtocolNode for GroupInfoResponse {
         })
     }
 }
-
-// ============================================================================
-// Participating Request/Response Types
-// ============================================================================
-
 /// Request to get all groups the user is participating in.
 #[derive(Debug, Clone)]
 pub struct GroupParticipatingRequest {
@@ -579,11 +549,6 @@ impl ProtocolNode for GroupParticipatingResponse {
         Ok(Self { groups })
     }
 }
-
-// ============================================================================
-// IqSpec Implementations
-// ============================================================================
-
 /// IQ specification for querying a specific group's info.
 #[derive(Debug, Clone)]
 pub struct GroupQueryIq {
@@ -680,11 +645,6 @@ impl IqSpec for GroupCreateIq {
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;

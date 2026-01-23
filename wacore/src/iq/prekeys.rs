@@ -51,18 +51,14 @@ pub use crate::libsignal::protocol::PreKeyBundle;
 /// Pre-key count response.
 #[derive(Debug, Clone)]
 pub struct PreKeyCountResponse {
-    /// Number of pre-keys available on the server.
     pub count: usize,
 }
 
-/// Pre-key count IQ specification.
-///
-/// Queries the server for how many pre-keys are currently stored for this device.
+/// Queries the server for how many pre-keys are currently stored.
 #[derive(Debug, Clone, Default)]
 pub struct PreKeyCountSpec;
 
 impl PreKeyCountSpec {
-    /// Create a new pre-key count spec.
     pub fn new() -> Self {
         Self
     }
@@ -86,34 +82,27 @@ impl IqSpec for PreKeyCountSpec {
             .get_optional_child("count")
             .ok_or_else(|| anyhow!("Missing <count> node in response"))?;
 
-        let count_str = count_node
-            .attrs()
-            .optional_string("value")
-            .unwrap_or("0");
+        // Server may return <count/> without value attribute when count is 0,
+        // or return an unparseable value. Default to 0 in these cases.
+        let count_str = count_node.attrs().optional_string("value").unwrap_or("0");
         let count = count_str.parse::<usize>().unwrap_or(0);
 
         Ok(PreKeyCountResponse { count })
     }
 }
 
-/// Pre-key fetch IQ specification.
-///
-/// Fetches pre-key bundles for a list of JIDs from the server.
+/// Fetches pre-key bundles for a list of JIDs.
 #[derive(Debug, Clone)]
 pub struct PreKeyFetchSpec {
-    /// JIDs to fetch pre-keys for.
     pub jids: Vec<Jid>,
-    /// Optional reason for the fetch (e.g., "retry").
     pub reason: Option<String>,
 }
 
 impl PreKeyFetchSpec {
-    /// Create a new pre-key fetch spec.
     pub fn new(jids: Vec<Jid>) -> Self {
         Self { jids, reason: None }
     }
 
-    /// Create a new pre-key fetch spec with a reason.
     pub fn with_reason(jids: Vec<Jid>, reason: impl Into<String>) -> Self {
         Self {
             jids,
@@ -126,8 +115,7 @@ impl IqSpec for PreKeyFetchSpec {
     type Response = std::collections::HashMap<Jid, PreKeyBundle>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let content =
-            PreKeyUtils::build_fetch_prekeys_request(&self.jids, self.reason.as_deref());
+        let content = PreKeyUtils::build_fetch_prekeys_request(&self.jids, self.reason.as_deref());
 
         InfoQuery::get(
             "encrypt",

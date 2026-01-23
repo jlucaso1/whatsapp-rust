@@ -30,21 +30,16 @@ use wacore_binary::node::{Node, NodeContent};
 /// Profile picture information.
 #[derive(Debug, Clone)]
 pub struct ProfilePicture {
-    /// Picture ID.
     pub id: String,
-    /// URL to download the picture.
     pub url: String,
-    /// Direct path for the picture (optional).
     pub direct_path: Option<String>,
 }
 
-/// Profile picture type.
+/// Profile picture type (preview thumbnail or full-size).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProfilePictureType {
-    /// Preview/thumbnail image.
     #[default]
     Preview,
-    /// Full-size image.
     Full,
 }
 
@@ -57,19 +52,14 @@ impl ProfilePictureType {
     }
 }
 
-/// Profile picture IQ specification.
-///
 /// Fetches the profile picture URL for a given JID.
 #[derive(Debug, Clone)]
 pub struct ProfilePictureSpec {
-    /// JID to get the profile picture for.
     pub jid: Jid,
-    /// Whether to get preview or full image.
     pub picture_type: ProfilePictureType,
 }
 
 impl ProfilePictureSpec {
-    /// Create a new profile picture spec for preview image.
     pub fn preview(jid: &Jid) -> Self {
         Self {
             jid: jid.clone(),
@@ -77,7 +67,6 @@ impl ProfilePictureSpec {
         }
     }
 
-    /// Create a new profile picture spec for full image.
     pub fn full(jid: &Jid) -> Self {
         Self {
             jid: jid.clone(),
@@ -85,7 +74,6 @@ impl ProfilePictureSpec {
         }
     }
 
-    /// Create a new profile picture spec with custom type.
     pub fn new(jid: &Jid, picture_type: ProfilePictureType) -> Self {
         Self {
             jid: jid.clone(),
@@ -134,7 +122,7 @@ impl IqSpec for ProfilePictureSpec {
             .attrs()
             .optional_string("id")
             .map(|s| s.to_string())
-            .unwrap_or_default();
+            .ok_or_else(|| anyhow!("Picture response missing 'id' attribute"))?;
 
         let url = picture_node
             .attrs()
@@ -172,7 +160,10 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "picture");
-            assert_eq!(nodes[0].attrs.get("type").map(|s| s.as_str()), Some("preview"));
+            assert_eq!(
+                nodes[0].attrs.get("type").map(|s| s.as_str()),
+                Some("preview")
+            );
         }
     }
 
@@ -185,7 +176,10 @@ mod tests {
 
         let iq = spec.build_iq();
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(nodes[0].attrs.get("type").map(|s| s.as_str()), Some("image"));
+            assert_eq!(
+                nodes[0].attrs.get("type").map(|s| s.as_str()),
+                Some("image")
+            );
         }
     }
 

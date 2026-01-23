@@ -5,6 +5,7 @@ use waproto::whatsapp as wa;
 
 /// Addressing mode for a group (phone number vs LID).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AddressingMode {
     #[default]
     Pn,

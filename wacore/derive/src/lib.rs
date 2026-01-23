@@ -56,7 +56,17 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     // Extract tag from #[protocol(tag = "...")]
-    let tag = extract_tag(&input.attrs).expect("ProtocolNode requires #[protocol(tag = \"...\")]");
+    let tag = match extract_tag(&input.attrs) {
+        Some(tag) => tag,
+        None => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "ProtocolNode requires #[protocol(tag = \"...\")]",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
 
     // Get fields for struct
     let fields = match &input.data {
@@ -66,9 +76,23 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 // Unit struct - no fields
                 return generate_empty_impl(name, &tag).into();
             }
-            _ => panic!("ProtocolNode only supports named fields or unit structs"),
+            _ => {
+                return syn::Error::new_spanned(
+                    &input.ident,
+                    "ProtocolNode only supports named fields or unit structs",
+                )
+                .to_compile_error()
+                .into();
+            }
         },
-        _ => panic!("ProtocolNode can only be derived for structs"),
+        _ => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "ProtocolNode can only be derived for structs",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     // Collect field info
@@ -178,7 +202,17 @@ pub fn derive_empty_node(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     // Extract tag from #[protocol(tag = "...")]
-    let tag = extract_tag(&input.attrs).expect("EmptyNode requires #[protocol(tag = \"...\")]");
+    let tag = match extract_tag(&input.attrs) {
+        Some(tag) => tag,
+        None => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "EmptyNode requires #[protocol(tag = \"...\")]",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
 
     generate_empty_impl(name, &tag).into()
 }
@@ -303,7 +337,14 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
 
     let variants = match &input.data {
         Data::Enum(data) => &data.variants,
-        _ => panic!("StringEnum can only be derived for enums"),
+        _ => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "StringEnum can only be derived for enums",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let mut variant_infos = Vec::new();
@@ -328,12 +369,20 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
             }
         }
 
-        let str_val = str_value.unwrap_or_else(|| {
-            panic!(
-                "StringEnum variant {} requires #[str = \"...\"] attribute",
-                variant_ident
-            )
-        });
+        let str_val = match str_value {
+            Some(v) => v,
+            None => {
+                return syn::Error::new_spanned(
+                    variant_ident,
+                    format!(
+                        "StringEnum variant {} requires #[str = \"...\"] attribute",
+                        variant_ident
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
 
         if is_default {
             default_variant = Some(variant_ident.clone());
