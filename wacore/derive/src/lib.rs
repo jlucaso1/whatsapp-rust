@@ -355,6 +355,8 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
 
     let mut variant_infos = Vec::new();
     let mut default_variant = None;
+    let mut seen_str_values: std::collections::HashMap<String, syn::Ident> =
+        std::collections::HashMap::new();
 
     for variant in variants {
         let variant_ident = &variant.ident;
@@ -373,7 +375,6 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
 
         for attr in &variant.attrs {
             if attr.path().is_ident("str") {
-                // Parse #[str = "value"]
                 if let syn::Meta::NameValue(nv) = &attr.meta
                     && let syn::Expr::Lit(expr_lit) = &nv.value
                     && let syn::Lit::Str(lit_str) = &expr_lit.lit
@@ -399,6 +400,19 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
                 .into();
             }
         };
+
+        if let Some(prev_variant) = seen_str_values.get(&str_val) {
+            return syn::Error::new_spanned(
+                variant_ident,
+                format!(
+                    "duplicate #[str = \"{}\"] value; already used by variant `{}`",
+                    str_val, prev_variant
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+        seen_str_values.insert(str_val.clone(), variant_ident.clone());
 
         if is_default {
             if default_variant.is_some() {
