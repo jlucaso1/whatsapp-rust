@@ -888,3 +888,371 @@ impl SessionRecord {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ratchet::keys::MessageKeyGenerator;
+    use crate::protocol::{IdentityKey, KeyPair};
+
+    fn rng() -> impl rand::CryptoRng + rand::Rng {
+        rand::rng()
+    }
+
+    /// Creates a minimal valid SessionState for testing.
+    fn create_test_session_state(version: u8, base_key: &PublicKey) -> SessionState {
+        let mut csprng = rng();
+        let identity_keypair = KeyPair::generate(&mut csprng);
+        let their_identity = IdentityKey::new(identity_keypair.public_key);
+        let our_identity = IdentityKey::new(KeyPair::generate(&mut csprng).public_key);
+        let root_key = crate::protocol::ratchet::RootKey::new([0u8; 32]);
+
+        let mut state = SessionState::new(
+            version,
+            &our_identity,
+            &their_identity,
+            &root_key,
+            base_key,
+        );
+
+        // Add a sender chain to make it usable
+        let sender_keypair = KeyPair::generate(&mut csprng);
+        let chain_key = crate::protocol::ratchet::ChainKey::new([1u8; 32], 0);
+        state.set_sender_chain(&sender_keypair, &chain_key);
+
+        state
+    }
+
+    /// Creates a SessionRecord with N previous sessions for testing.
+    fn create_record_with_previous_sessions(count: usize) -> SessionRecord {
+        let mut csprng = rng();
+        let mut record = SessionRecord::new_fresh();
+
+        for _ in 0..count {
+            let base_key = KeyPair::generate(&mut csprng).public_key;
+            let state = create_test_session_state(3, &base_key);
+            record.promote_state(state);
+        }
+
+        record
+    }
+
+    // ==========================================================================
+    // Risk Point 1: Take/Restore Pattern Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_take_restore_preserves_order() {
+        let mut record = create_record_with_previous_sessions(5);
+
+        // Collect base keys before take
+        let original_base_keys: Vec<Vec<u8>> = record
+            .previous_session_states()
+            .map(|s| s.unwrap().alice_base_key().to_vec())
+            .collect();
+
+        // Take and restore each session in order
+        for _ in 0..5 {
+            let session = record.take_previous_session(0).unwrap();
+            record.restore_previous_session(0, session);
+        }
+
+        // Verify order is preserved
+        let after_base_keys: Vec<Vec<u8>> = record
+            .previous_session_states()
+            .map(|s| s.unwrap().alice_base_key().to_vec())
+            .collect();
+
+        assert_eq!(original_base_keys, after_base_keys);
+    }
+
+    #[test]
+    fn test_take_restore_at_various_indices() {
+        let mut record = create_record_with_previous_sessions(5);
+        let original_count = record.previous_session_count();
+
+        // Take from middle
+        let session_at_2 = record.take_previous_session(2).unwrap();
+        assert_eq!(record.previous_session_count(), original_count - 1);
+
+        // Restore at same index
+        record.restore_previous_session(2, session_at_2);
+        assert_eq!(record.previous_session_count(), original_count);
+    }
+
+    #[test]
+    fn test_take_restore_maintains_count() {
+        // create_record_with_previous_sessions(N) creates:
+        // - 1 current session (the Nth one)
+        // - N-1 previous sessions (the first N-1 ones)
+        let mut record = create_record_with_previous_sessions(10);
+        let original_count = record.previous_session_count();
+        assert_eq!(original_count, 9); // 10 promotes = 1 current + 9 previous
+
+        // Simulate the decryption loop pattern
+        let mut idx = 0;
+        while idx < original_count {
+            let session = record.take_previous_session(idx).unwrap();
+            // Simulate failed decryption
+            record.restore_previous_session(idx, session);
+            idx += 1;
+        }
+
+        // Count should be unchanged after take/restore loop
+        assert_eq!(record.previous_session_count(), original_count);
+    }
+
+    #[test]
+    fn test_take_then_promote() {
+        // create_record_with_previous_sessions(5) creates:
+        // - 1 current session
+        // - 4 previous sessions
+        let mut record = create_record_with_previous_sessions(5);
+        assert_eq!(record.previous_session_count(), 4);
+
+        // Take a previous session (removes from list)
+        let session = record.take_previous_session(2).unwrap();
+        assert_eq!(record.previous_session_count(), 3);
+
+        // Promote it (archives current, sets taken session as new current)
+        record.promote_state(session);
+
+        // Verify it's now current
+        assert!(record.session_state().is_some());
+        // previous = original 4 - 1 taken + 1 archived current = 4
+        assert_eq!(record.previous_session_count(), 4);
+    }
+
+    #[test]
+    fn test_take_out_of_bounds() {
+        let mut record = create_record_with_previous_sessions(4);
+        // 4 promotes = 1 current + 3 previous
+        assert_eq!(record.previous_session_count(), 3);
+        assert!(record.take_previous_session(10).is_none());
+        assert!(record.take_previous_session(3).is_none());
+    }
+
+    // ==========================================================================
+    // Risk Point 2: set_message_keys Order Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_message_keys_lookup_by_counter_not_order() {
+        let base_key = KeyPair::generate(&mut rng()).public_key;
+        let mut state = create_test_session_state(3, &base_key);
+
+        // Add a receiver chain
+        let sender_key = KeyPair::generate(&mut rng()).public_key;
+        let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
+        state.add_receiver_chain(&sender_key, &chain_key);
+
+        // Add message keys with counters 0, 1, 2
+        for counter in 0..3u32 {
+            let keys = create_test_message_key_generator(counter);
+            state.set_message_keys(&sender_key, keys).unwrap();
+        }
+
+        // Verify we can retrieve by counter value, not insertion order
+        let key_2 = state.get_message_keys(&sender_key, 2).unwrap();
+        assert!(key_2.is_some());
+
+        let key_0 = state.get_message_keys(&sender_key, 0).unwrap();
+        assert!(key_0.is_some());
+
+        // Key 1 should also be retrievable
+        let key_1 = state.get_message_keys(&sender_key, 1).unwrap();
+        assert!(key_1.is_some());
+    }
+
+    #[test]
+    fn test_message_keys_eviction_at_max() {
+        let base_key = KeyPair::generate(&mut rng()).public_key;
+        let mut state = create_test_session_state(3, &base_key);
+
+        let sender_key = KeyPair::generate(&mut rng()).public_key;
+        let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
+        state.add_receiver_chain(&sender_key, &chain_key);
+
+        // Add MAX_MESSAGE_KEYS + 10 keys
+        for counter in 0..(consts::MAX_MESSAGE_KEYS + 10) as u32 {
+            let keys = create_test_message_key_generator(counter);
+            state.set_message_keys(&sender_key, keys).unwrap();
+        }
+
+        // Verify oldest keys are evicted (first 10 should be gone)
+        for counter in 0..10u32 {
+            let key = state.get_message_keys(&sender_key, counter).unwrap();
+            assert!(key.is_none(), "Key {} should have been evicted", counter);
+        }
+
+        // Newer keys should still exist
+        for counter in 10..(consts::MAX_MESSAGE_KEYS + 10) as u32 {
+            let key = state.get_message_keys(&sender_key, counter).unwrap();
+            assert!(key.is_some(), "Key {} should exist", counter);
+        }
+    }
+
+    fn create_test_message_key_generator(counter: u32) -> MessageKeyGenerator {
+        // Create a MessageKeyGenerator with the given counter using a seed
+        let mut seed = [0u8; 32];
+        seed[0] = counter as u8;
+        seed[1] = (counter >> 8) as u8;
+        MessageKeyGenerator::new_from_seed(&seed, counter)
+    }
+
+    // ==========================================================================
+    // Risk Point 3: Byte Comparison Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_receiver_chain_lookup_by_bytes() {
+        let base_key = KeyPair::generate(&mut rng()).public_key;
+        let mut state = create_test_session_state(3, &base_key);
+
+        // Add a receiver chain
+        let sender_keypair = KeyPair::generate(&mut rng());
+        let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
+        state.add_receiver_chain(&sender_keypair.public_key, &chain_key);
+
+        // Retrieve chain key using same public key
+        let chain = state
+            .get_receiver_chain_key(&sender_keypair.public_key)
+            .unwrap();
+        assert!(chain.is_some());
+
+        // Different key should not find the chain
+        let other_key = KeyPair::generate(&mut rng()).public_key;
+        let chain = state.get_receiver_chain_key(&other_key).unwrap();
+        assert!(chain.is_none());
+    }
+
+    #[test]
+    fn test_receiver_chain_lookup_with_serialized_key() {
+        let base_key = KeyPair::generate(&mut rng()).public_key;
+        let mut state = create_test_session_state(3, &base_key);
+
+        let sender_keypair = KeyPair::generate(&mut rng());
+        let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
+        state.add_receiver_chain(&sender_keypair.public_key, &chain_key);
+
+        // Deserialize the same key from bytes and look up
+        let serialized = sender_keypair.public_key.serialize();
+        let deserialized = PublicKey::deserialize(&serialized).unwrap();
+
+        let chain = state.get_receiver_chain_key(&deserialized).unwrap();
+        assert!(chain.is_some());
+    }
+
+    // ==========================================================================
+    // Risk Point 4: promote_matching_session Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_promote_matching_session_finds_correct_session() {
+        let mut record = SessionRecord::new_fresh();
+
+        // Create sessions with distinct version + base_key combinations
+        let keys: Vec<PublicKey> = (0..5)
+            .map(|_| KeyPair::generate(&mut rng()).public_key)
+            .collect();
+
+        for key in keys.iter() {
+            let state = create_test_session_state(3, key);
+            record.promote_state(state);
+        }
+
+        // The current session should have keys[4]'s base_key
+        // Try to promote a session matching keys[2]
+        let target_base_key = keys[2].serialize();
+        let result = record.promote_matching_session(3, &target_base_key).unwrap();
+
+        assert!(result, "Should find matching session");
+
+        // Verify the promoted session has the correct base_key
+        let current = record.session_state().unwrap();
+        assert_eq!(current.alice_base_key(), target_base_key.as_slice());
+    }
+
+    #[test]
+    fn test_promote_matching_session_version_mismatch() {
+        let mut record = SessionRecord::new_fresh();
+
+        let key = KeyPair::generate(&mut rng()).public_key;
+        let state = create_test_session_state(3, &key);
+        record.promote_state(state);
+
+        // Archive the current session
+        record.archive_current_state().unwrap();
+
+        // Try to find with wrong version
+        let base_key = key.serialize();
+        let result = record.promote_matching_session(2, &base_key).unwrap();
+
+        assert!(!result, "Should not find session with wrong version");
+    }
+
+    #[test]
+    fn test_promote_matching_session_already_current() {
+        let key = KeyPair::generate(&mut rng()).public_key;
+        let state = create_test_session_state(3, &key);
+        let mut record = SessionRecord::new(state);
+
+        // The matching session is already current
+        let base_key = key.serialize();
+        let result = record.promote_matching_session(3, &base_key).unwrap();
+
+        assert!(result, "Should return true for already-current session");
+        assert_eq!(record.previous_session_count(), 0);
+    }
+
+    // ==========================================================================
+    // Risk Point 5: SessionRecord Serialization Roundtrip
+    // ==========================================================================
+
+    #[test]
+    fn test_session_record_serialization_preserves_previous_sessions() {
+        let record = create_record_with_previous_sessions(10);
+
+        // Collect state before serialization
+        let original_count = record.previous_session_count();
+        let original_base_keys: Vec<Vec<u8>> = record
+            .previous_session_states()
+            .map(|s| s.unwrap().alice_base_key().to_vec())
+            .collect();
+
+        // Serialize and deserialize
+        let bytes = record.serialize().unwrap();
+        let restored = SessionRecord::deserialize(&bytes).unwrap();
+
+        // Verify
+        assert_eq!(restored.previous_session_count(), original_count);
+        let restored_base_keys: Vec<Vec<u8>> = restored
+            .previous_session_states()
+            .map(|s| s.unwrap().alice_base_key().to_vec())
+            .collect();
+        assert_eq!(original_base_keys, restored_base_keys);
+    }
+
+    #[test]
+    fn test_session_record_truncates_on_deserialize() {
+        // This tests the ARCHIVED_STATES_MAX_LENGTH enforcement on load
+        let mut record = SessionRecord::new_fresh();
+
+        // Manually add more sessions than the limit
+        for _ in 0..(consts::ARCHIVED_STATES_MAX_LENGTH + 10) {
+            let key = KeyPair::generate(&mut rng()).public_key;
+            let state = create_test_session_state(3, &key);
+            record.previous_sessions.push(state.session);
+        }
+
+        // Serialize
+        let bytes = record.serialize().unwrap();
+
+        // Deserialize should truncate
+        let restored = SessionRecord::deserialize(&bytes).unwrap();
+        assert_eq!(
+            restored.previous_session_count(),
+            consts::ARCHIVED_STATES_MAX_LENGTH
+        );
+    }
+}
