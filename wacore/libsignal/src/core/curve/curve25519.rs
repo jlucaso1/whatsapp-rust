@@ -18,6 +18,12 @@ pub const PRIVATE_KEY_LENGTH: usize = 32;
 pub const PUBLIC_KEY_LENGTH: usize = 32;
 pub const SIGNATURE_LENGTH: usize = 64;
 
+/// Sentinel value for `sign_bit` indicating the Edwards cache was not initialized.
+/// Valid sign_bit values are only 0x00 or 0x80 (the MSB of the compressed Edwards Y coordinate).
+/// Using 0xFF as an invalid sentinel allows `calculate_signature` to detect and panic
+/// instead of silently producing invalid signatures.
+const SIGN_BIT_NOT_INITIALIZED: u8 = 0xFF;
+
 /// XEdDSA hash prefix as per the specification.
 /// This is 0xFE followed by 31 bytes of 0xFF.
 /// See: https://signal.org/docs/specifications/xeddsa/#xeddsa
@@ -29,6 +35,9 @@ static XEDDSA_HASH_PREFIX: [u8; 32] = [
 #[derive(Clone)]
 pub struct PrivateKey {
     secret: StaticSecret,
+    /// Cached scalar representation of the private key for signing.
+    /// Avoids `from_bytes_mod_order` on every signature.
+    scalar: Scalar,
     /// Cached Edwards public key (compressed form) derived from the X25519 key.
     /// Caching this avoids an expensive scalar multiplication on every signature.
     /// See: https://signal.org/docs/specifications/xeddsa/#curve25519
@@ -38,15 +47,15 @@ pub struct PrivateKey {
 }
 
 impl PrivateKey {
-    /// Computes the cached Edwards public key and sign bit from a StaticSecret.
+    /// Computes the cached scalar, Edwards public key, and sign bit from a StaticSecret.
     #[inline]
-    fn compute_ed_public_key(secret: &StaticSecret) -> (CompressedEdwardsY, u8) {
+    fn compute_edwards_cache(secret: &StaticSecret) -> (Scalar, CompressedEdwardsY, u8) {
         let key_data = secret.to_bytes();
-        let a = Scalar::from_bytes_mod_order(key_data);
-        let ed_public_key_point = &a * ED25519_BASEPOINT_TABLE;
+        let scalar = Scalar::from_bytes_mod_order(key_data);
+        let ed_public_key_point = &scalar * ED25519_BASEPOINT_TABLE;
         let ed_public_key = ed_public_key_point.compress();
         let sign_bit = ed_public_key.as_bytes()[31] & 0b1000_0000_u8;
-        (ed_public_key, sign_bit)
+        (scalar, ed_public_key, sign_bit)
     }
 
     /// Generates a new random private key with eagerly-computed Edwards cache.
@@ -63,9 +72,10 @@ impl PrivateKey {
         bytes = scalar::clamp_integer(bytes);
 
         let secret = StaticSecret::from(bytes);
-        let (ed_public_key, sign_bit) = Self::compute_ed_public_key(&secret);
+        let (scalar, ed_public_key, sign_bit) = Self::compute_edwards_cache(&secret);
         PrivateKey {
             secret,
+            scalar,
             ed_public_key,
             sign_bit,
         }
@@ -73,17 +83,15 @@ impl PrivateKey {
 
     /// Generates a new random private key WITHOUT computing the Edwards cache.
     ///
-    /// # Safety Contract
-    /// This function is for internal use when the key will be wrapped in a higher-level
-    /// type with lazy initialization (e.g., `curve::PrivateKey` with `OnceLock`).
+    /// This skips the expensive scalar multiplication required for XEdDSA signing.
+    /// Use this when the key will be wrapped in a higher-level type with lazy
+    /// initialization (e.g., `curve::PrivateKey` with `OnceLock`).
     ///
-    /// **WARNING**: Do NOT call `calculate_signature` on a `PrivateKey` created with this
-    /// function - it will produce INVALID signatures. The `ed_public_key` and `sign_bit`
-    /// fields contain dummy values (all zeros) that are not valid for signing.
+    /// # Panics
     ///
-    /// Safe operations: `private_key_bytes()`, `derive_public_key_bytes()`, `calculate_agreement()`
+    /// Calling `calculate_signature` on a key created with this function will panic.
     #[inline]
-    pub fn new_without_cache<R>(csprng: &mut R) -> Self
+    pub(super) fn new_without_cache<R>(csprng: &mut R) -> Self
     where
         R: CryptoRng + Rng,
     {
@@ -92,25 +100,29 @@ impl PrivateKey {
         bytes = scalar::clamp_integer(bytes);
 
         let secret = StaticSecret::from(bytes);
-        // Dummy values - signing with these will produce INVALID signatures
+        // Sentinel values - calculate_signature will panic if called
         PrivateKey {
             secret,
+            scalar: Scalar::ZERO,
             ed_public_key: CompressedEdwardsY::default(),
-            sign_bit: 0,
+            sign_bit: SIGN_BIT_NOT_INITIALIZED,
         }
     }
 
-    /// Creates a PrivateKey from raw bytes with pre-computed cached values.
-    /// This avoids the expensive scalar multiplication when the cached values are already known.
+    /// Creates a PrivateKey from raw bytes with ALL pre-computed cached values.
+    /// This is the most efficient constructor - avoids scalar multiplication AND
+    /// scalar modular reduction when all cached values are already available.
     #[inline]
     pub fn from_bytes_with_cache(
         private_key: [u8; PRIVATE_KEY_LENGTH],
+        scalar: Scalar,
         ed_public_key: CompressedEdwardsY,
         sign_bit: u8,
     ) -> Self {
         let secret = StaticSecret::from(scalar::clamp_integer(private_key));
         PrivateKey {
             secret,
+            scalar,
             ed_public_key,
             // Mask to ensure only valid sign bit values (0x00 or 0x80)
             sign_bit: sign_bit & 0b1000_0000_u8,
@@ -129,16 +141,29 @@ impl PrivateKey {
         self.sign_bit
     }
 
-    /// Creates a PrivateKey from raw bytes WITHOUT computing the Edwards cache.
-    /// Use this for operations that don't need signatures (e.g., key agreement, public key derivation).
+    /// Returns the cached scalar representation.
     #[inline]
-    pub fn from_bytes_without_cache(private_key: [u8; PRIVATE_KEY_LENGTH]) -> Self {
+    pub fn cached_scalar(&self) -> Scalar {
+        self.scalar
+    }
+
+    /// Creates a PrivateKey from raw bytes WITHOUT computing the Edwards cache.
+    ///
+    /// Use this for operations that don't need signatures (key agreement, public key
+    /// derivation). Use `from_bytes_with_cache` if you need signing.
+    ///
+    /// # Panics
+    ///
+    /// Calling `calculate_signature` on a key created with this function will panic.
+    #[inline]
+    pub(super) fn from_bytes_without_cache(private_key: [u8; PRIVATE_KEY_LENGTH]) -> Self {
         let secret = StaticSecret::from(scalar::clamp_integer(private_key));
-        // Use dummy values - these should never be accessed for non-signature operations
+        // Sentinel values - calculate_signature will panic if called
         PrivateKey {
             secret,
+            scalar: Scalar::ZERO,
             ed_public_key: CompressedEdwardsY::default(),
-            sign_bit: 0,
+            sign_bit: SIGN_BIT_NOT_INITIALIZED,
         }
     }
 
@@ -163,6 +188,12 @@ impl PrivateKey {
     ///
     /// Performance: This implementation caches the Edwards public key point to avoid
     /// the expensive scalar multiplication on every signature (roughly 2x speedup).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key was created with `new_without_cache` or `from_bytes_without_cache`.
+    /// These constructors skip Edwards cache computation for performance; use
+    /// `from_bytes_with_cache` or the higher-level `curve::PrivateKey` API instead.
     pub fn calculate_signature<R>(
         &self,
         csprng: &mut R,
@@ -171,12 +202,17 @@ impl PrivateKey {
     where
         R: CryptoRng + Rng,
     {
+        assert!(
+            self.sign_bit != SIGN_BIT_NOT_INITIALIZED,
+            "cannot sign with a PrivateKey created via new_without_cache or from_bytes_without_cache; \
+             use from_bytes_with_cache or the higher-level curve::PrivateKey API"
+        );
+
         let mut random_bytes = [0u8; 64];
         csprng.fill_bytes(&mut random_bytes);
 
+        // Use cached scalar instead of recomputing from_bytes_mod_order
         let key_data = self.secret.to_bytes();
-        let a = Scalar::from_bytes_mod_order(key_data);
-        // Use cached Edwards public key instead of recomputing: &a * ED25519_BASEPOINT_TABLE
 
         let mut hash1 = Sha512::new();
         // Use static hash prefix instead of allocating on every call
@@ -192,13 +228,15 @@ impl PrivateKey {
 
         let mut hash = Sha512::new();
         hash.update(cap_r.as_bytes());
+        // Use cached Edwards public key instead of recomputing: &a * ED25519_BASEPOINT_TABLE
         hash.update(self.ed_public_key.as_bytes());
         for message_piece in message {
             hash.update(message_piece);
         }
 
         let h = Scalar::from_hash(hash);
-        let s = (h * a) + r;
+        // Use cached scalar for final computation
+        let s = (h * self.scalar) + r;
 
         let mut result = [0u8; SIGNATURE_LENGTH];
         result[..32].copy_from_slice(cap_r.as_bytes());
@@ -261,9 +299,10 @@ impl PrivateKey {
 impl From<[u8; PRIVATE_KEY_LENGTH]> for PrivateKey {
     fn from(private_key: [u8; 32]) -> Self {
         let secret = StaticSecret::from(scalar::clamp_integer(private_key));
-        let (ed_public_key, sign_bit) = Self::compute_ed_public_key(&secret);
+        let (scalar, ed_public_key, sign_bit) = Self::compute_edwards_cache(&secret);
         PrivateKey {
             secret,
+            scalar,
             ed_public_key,
             sign_bit,
         }
