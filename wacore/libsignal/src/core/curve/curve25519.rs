@@ -67,6 +67,27 @@ impl PrivateKey {
         }
     }
 
+    /// Generates a new random private key WITHOUT computing the Edwards cache.
+    /// Use this when the key will be wrapped in a higher-level type with lazy initialization.
+    /// The Edwards cache fields are set to dummy values and should not be used directly.
+    #[inline]
+    pub fn new_without_cache<R>(csprng: &mut R) -> Self
+    where
+        R: CryptoRng + Rng,
+    {
+        let mut bytes = [0u8; 32];
+        csprng.fill_bytes(&mut bytes);
+        bytes = scalar::clamp_integer(bytes);
+
+        let secret = StaticSecret::from(bytes);
+        // Dummy values - should not be used directly
+        PrivateKey {
+            secret,
+            ed_public_key: CompressedEdwardsY::default(),
+            sign_bit: 0,
+        }
+    }
+
     /// Creates a PrivateKey from raw bytes with pre-computed cached values.
     /// This avoids the expensive scalar multiplication when the cached values are already known.
     #[inline]
