@@ -2282,7 +2282,9 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "hex",
  "hkdf",
+ "log",
  "prost",
  "serde",
  "serde-big-array",

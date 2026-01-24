@@ -66,6 +66,8 @@ impl AppStateProcessor {
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
         let mut pl = parse_patch_list(stanza_root)?;
+
+        // Download external snapshot if present (matches WhatsApp Web behavior)
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
             && let Ok(data) = download(ext)
@@ -73,6 +75,76 @@ impl AppStateProcessor {
         {
             pl.snapshot = Some(snapshot);
         }
+
+        // Download external mutations for each patch (matches WhatsApp Web behavior)
+        // WhatsApp Web: if (r.externalMutations) { n = yield downloadExternalPatch(e, r) }
+        for patch in &mut pl.patches {
+            if let Some(ext) = &patch.external_mutations {
+                let patch_version = patch
+                    .version
+                    .as_ref()
+                    .and_then(|v| v.version)
+                    .unwrap_or(0);
+                match download(ext) {
+                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                        Ok(ext_mutations) => {
+                            log::debug!(
+                                target: "AppState",
+                                "Downloaded external mutations for patch v{}: {} mutations (inline had {})",
+                                patch_version,
+                                ext_mutations.mutations.len(),
+                                patch.mutations.len()
+                            );
+                            // Log mutation details for debugging
+                            for (i, m) in ext_mutations.mutations.iter().enumerate() {
+                                let op = m.operation.unwrap_or(0);
+                                let op_str = if op == 0 { "SET" } else { "REMOVE" };
+                                let has_value = m
+                                    .record
+                                    .as_ref()
+                                    .and_then(|r| r.value.as_ref())
+                                    .and_then(|v| v.blob.as_ref())
+                                    .map(|b| b.len())
+                                    .unwrap_or(0);
+                                let has_index = m
+                                    .record
+                                    .as_ref()
+                                    .and_then(|r| r.index.as_ref())
+                                    .and_then(|idx| idx.blob.as_ref())
+                                    .map(|b| format!("{}bytes", b.len()))
+                                    .unwrap_or_else(|| "NONE".to_string());
+                                log::debug!(
+                                    target: "AppState",
+                                    "  External mutation {}: op={}, value_blob_len={}, index_blob={}",
+                                    i,
+                                    op_str,
+                                    has_value,
+                                    has_index
+                                );
+                            }
+                            patch.mutations = ext_mutations.mutations;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                target: "AppState",
+                                "Failed to decode external mutations for patch v{}: {}",
+                                patch_version,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            target: "AppState",
+                            "Failed to download external mutations for patch v{}: {}",
+                            patch_version,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         self.process_patch_list(pl, validate_macs).await
     }
 
@@ -521,9 +593,9 @@ mod tests {
             version: 1,
             ..Default::default()
         };
-        let (warnings, res) =
+        let (hash_result, res) =
             initial_state.update_hash(std::slice::from_ref(&original_mutation), |_, _| Ok(None));
-        assert!(res.is_ok() && warnings.is_empty());
+        assert!(res.is_ok() && !hash_result.has_missing_remove);
         backend
             .set_version(collection_name.as_str(), initial_state.clone())
             .await

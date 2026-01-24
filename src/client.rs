@@ -1162,30 +1162,59 @@ impl Client {
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
             let _decode_start = std::time::Instant::now();
-            let pre_downloaded_snapshot: Option<Vec<u8>> =
-                match wacore::appstate::patch_decode::parse_patch_list(&resp) {
-                    Ok(pl) => {
-                        debug!(target: "Client/AppState", "Parsed patch list for {:?}: has_snapshot_ref={} has_more_patches={}", name, pl.snapshot_ref.is_some(), pl.has_more_patches);
-                        if let Some(ext) = &pl.snapshot_ref {
-                            match self.download(ext).await {
-                                Ok(bytes) => Some(bytes),
-                                Err(e) => {
-                                    warn!("Failed to download external snapshot: {e}");
-                                    None
-                                }
+
+            // Pre-download all external blobs (snapshot and patch mutations)
+            // We use directPath as the key to identify each blob
+            let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
+                std::collections::HashMap::new();
+
+            if let Ok(pl) = wacore::appstate::patch_decode::parse_patch_list(&resp) {
+                debug!(target: "Client/AppState", "Parsed patch list for {:?}: has_snapshot_ref={} has_more_patches={} patches_count={}",
+                    name, pl.snapshot_ref.is_some(), pl.has_more_patches, pl.patches.len());
+
+                // Download external snapshot if present
+                if let Some(ext) = &pl.snapshot_ref {
+                    if let Some(path) = &ext.direct_path {
+                        match self.download(ext).await {
+                            Ok(bytes) => {
+                                debug!(target: "Client/AppState", "Downloaded external snapshot ({} bytes)", bytes.len());
+                                pre_downloaded.insert(path.clone(), bytes);
                             }
-                        } else {
-                            None
+                            Err(e) => {
+                                warn!("Failed to download external snapshot: {e}");
+                            }
                         }
                     }
-                    Err(_) => None,
-                };
+                }
 
-            let download = |_: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
-                if let Some(bytes) = &pre_downloaded_snapshot {
-                    Ok(bytes.clone())
+                // Download external mutations for each patch that has them
+                for patch in &pl.patches {
+                    if let Some(ext) = &patch.external_mutations {
+                        if let Some(path) = &ext.direct_path {
+                            let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                            match self.download(ext).await {
+                                Ok(bytes) => {
+                                    debug!(target: "Client/AppState", "Downloaded external mutations for patch v{} ({} bytes)", patch_version, bytes.len());
+                                    pre_downloaded.insert(path.clone(), bytes);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to download external mutations for patch v{}: {e}", patch_version);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let download = |ext: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
+                if let Some(path) = &ext.direct_path {
+                    if let Some(bytes) = pre_downloaded.get(path) {
+                        Ok(bytes.clone())
+                    } else {
+                        Err(anyhow::anyhow!("external blob not pre-downloaded: {}", path))
+                    }
                 } else {
-                    Err(anyhow::anyhow!("snapshot not pre-downloaded"))
+                    Err(anyhow::anyhow!("external blob has no directPath"))
                 }
             };
 
