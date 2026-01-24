@@ -447,11 +447,15 @@ impl SessionState {
             .expect("called set_message_keys for a non-existent chain");
 
         let chain = &mut self.session.receiver_chains[chain_idx];
-        chain.message_keys.insert(0, message_keys.into_pb());
 
-        if chain.message_keys.len() > consts::MAX_MESSAGE_KEYS {
-            chain.message_keys.pop();
+        // OPTIMIZATION: Use push() instead of insert(0) to avoid O(n) shift on every insert.
+        // The lookup in get_message_keys() does a linear search by counter value, so order
+        // doesn't matter. Eviction now uses remove(0) which is O(n) but only happens when
+        // exceeding MAX_MESSAGE_KEYS, not on every insert.
+        if chain.message_keys.len() >= consts::MAX_MESSAGE_KEYS {
+            chain.message_keys.remove(0);
         }
+        chain.message_keys.push(message_keys.into_pb());
 
         Ok(())
     }
@@ -629,19 +633,14 @@ impl SessionRecord {
             return Ok(true);
         }
 
-        let mut session_to_promote = None;
-        for (i, previous) in self.previous_session_states().enumerate() {
-            let previous = previous?;
-            if previous.session_version()? == version
-                && alice_base_key.ct_eq(previous.alice_base_key()).into()
-            {
-                session_to_promote = Some((i, previous));
-                break;
-            }
-        }
-
-        if let Some((i, state)) = session_to_promote {
-            self.promote_old_session(i, state);
+        // OPTIMIZATION: Find matching session by index without cloning all sessions.
+        // Only take ownership of the matching session when found.
+        if let Some(index) = self.find_matching_previous_session_index(version, alice_base_key)? {
+            // Take only the session we need to promote
+            let state = self
+                .take_previous_session(index)
+                .expect("index was just validated");
+            self.promote_state(state);
             return Ok(true);
         }
 
@@ -705,6 +704,36 @@ impl SessionRecord {
         self.previous_sessions
             .iter()
             .map(|structure| Ok(structure.clone().into()))
+    }
+
+    /// Find the index of a previous session matching the given version and alice_base_key.
+    /// This method avoids cloning by checking fields directly on the protobuf structure.
+    ///
+    /// Returns `Ok(Some(index))` if found, `Ok(None)` if not found, or
+    /// `Err(InvalidSessionError)` if an invalid session is encountered.
+    fn find_matching_previous_session_index(
+        &self,
+        version: u32,
+        alice_base_key: &[u8],
+    ) -> Result<Option<usize>, InvalidSessionError> {
+        for (i, session) in self.previous_sessions.iter().enumerate() {
+            // Check version directly from protobuf
+            let session_version = match session.session_version.unwrap_or(0) {
+                0 => 2, // Default version
+                v => v,
+            };
+
+            if session_version != version {
+                continue;
+            }
+
+            // Check alice_base_key directly from protobuf
+            let session_base_key = session.alice_base_key.as_deref().unwrap_or(&[]);
+            if alice_base_key.ct_eq(session_base_key).into() {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
     }
 
     pub fn promote_old_session(&mut self, old_session: usize, updated_session: SessionState) {
