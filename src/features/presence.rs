@@ -51,6 +51,10 @@ impl<'a> Presence<'a> {
             ));
         }
 
+        if status == PresenceStatus::Available {
+            self.client.send_unified_session().await;
+        }
+
         let presence_type = status.as_str();
 
         let node = NodeBuilder::new("presence")
