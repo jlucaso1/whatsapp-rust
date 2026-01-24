@@ -202,22 +202,43 @@ impl fmt::Debug for PublicKey {
 }
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
+use std::sync::OnceLock;
 
-/// Stores the private key bytes along with cached values for XEdDSA signing.
-/// The cached Edwards public key avoids an expensive scalar multiplication on every signature.
+/// Cached Edwards public key data for XEdDSA signing.
+/// This avoids an expensive scalar multiplication on every signature.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct EdwardsCacheData {
+    ed_public_key: CompressedEdwardsY,
+    sign_bit: u8,
+}
+
+/// Stores the private key bytes with lazy-initialized cached values for XEdDSA signing.
+/// The Edwards public key is computed on first signature, not at key creation.
+/// This keeps key generation fast while subsequent signatures benefit from caching.
+#[derive(Debug, Clone)]
 enum PrivateKeyData {
     DjbPrivateKey {
         /// The raw 32-byte private key
         key: [u8; curve25519::PRIVATE_KEY_LENGTH],
-        /// Cached compressed Edwards public key (avoids scalar mult per signature)
-        ed_public_key: CompressedEdwardsY,
-        /// Cached sign bit from Edwards public key
-        sign_bit: u8,
+        /// Lazily-initialized Edwards cache (computed on first signature)
+        edwards_cache: OnceLock<EdwardsCacheData>,
     },
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+impl PartialEq for PrivateKeyData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                PrivateKeyData::DjbPrivateKey { key: k1, .. },
+                PrivateKeyData::DjbPrivateKey { key: k2, .. },
+            ) => k1 == k2,
+        }
+    }
+}
+
+impl Eq for PrivateKeyData {}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct PrivateKey {
     key: PrivateKeyData,
 }
@@ -229,6 +250,22 @@ impl From<PrivateKeyData> for PrivateKey {
 }
 
 impl PrivateKey {
+    /// Lazily computes and caches the Edwards public key data.
+    #[inline]
+    fn get_edwards_cache(&self) -> &EdwardsCacheData {
+        match &self.key {
+            PrivateKeyData::DjbPrivateKey { key, edwards_cache } => {
+                edwards_cache.get_or_init(|| {
+                    let temp = curve25519::PrivateKey::from(*key);
+                    EdwardsCacheData {
+                        ed_public_key: temp.cached_ed_public_key(),
+                        sign_bit: temp.cached_sign_bit(),
+                    }
+                })
+            }
+        }
+    }
+
     pub fn deserialize(value: &[u8]) -> Result<Self, CurveError> {
         if value.len() != curve25519::PRIVATE_KEY_LENGTH {
             Err(CurveError::BadKeyLength(KeyType::Djb, value.len()))
@@ -237,15 +274,11 @@ impl PrivateKey {
             key.copy_from_slice(&value[..curve25519::PRIVATE_KEY_LENGTH]);
             // Clamping is not necessary but is kept for backward compatibility
             key = scalar::clamp_integer(key);
-            // Create a temporary PrivateKey to compute and cache the Ed public key
-            let temp = curve25519::PrivateKey::from(key);
-            let ed_public_key = temp.cached_ed_public_key();
-            let sign_bit = temp.cached_sign_bit();
+            // Edwards cache will be computed lazily on first signature
             Ok(Self {
                 key: PrivateKeyData::DjbPrivateKey {
                     key,
-                    ed_public_key,
-                    sign_bit,
+                    edwards_cache: OnceLock::new(),
                 },
             })
         }
@@ -259,14 +292,10 @@ impl PrivateKey {
 
     pub fn public_key(&self) -> Result<PublicKey, CurveError> {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey {
-                key,
-                ed_public_key,
-                sign_bit,
-            } => {
-                // Reconstruct with cached values (no scalar mult)
-                let private_key =
-                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
+            PrivateKeyData::DjbPrivateKey { key, .. } => {
+                // For public key derivation, we need the X25519 public key, not Edwards
+                // Use from_bytes_without_cache since we don't need the Edwards cache
+                let private_key = curve25519::PrivateKey::from_bytes_without_cache(*key);
                 let public_key = private_key.derive_public_key_bytes();
                 Ok(PublicKey::new(PublicKeyData::DjbPublicKey(public_key)))
             }
@@ -293,14 +322,15 @@ impl PrivateKey {
         csprng: &mut R,
     ) -> Result<[u8; 64], CurveError> {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey {
-                key,
-                ed_public_key,
-                sign_bit,
-            } => {
-                // Reconstruct with cached values (no scalar mult)
-                let private_key =
-                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
+            PrivateKeyData::DjbPrivateKey { key, .. } => {
+                // Get or compute the Edwards cache (lazy initialization)
+                let cache = self.get_edwards_cache();
+                // Reconstruct with cached values (no scalar mult after first call)
+                let private_key = curve25519::PrivateKey::from_bytes_with_cache(
+                    *key,
+                    cache.ed_public_key,
+                    cache.sign_bit,
+                );
                 Ok(private_key.calculate_signature(csprng, message))
             }
         }
@@ -308,17 +338,9 @@ impl PrivateKey {
 
     pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError> {
         match (&self.key, their_key.key) {
-            (
-                PrivateKeyData::DjbPrivateKey {
-                    key,
-                    ed_public_key,
-                    sign_bit,
-                },
-                PublicKeyData::DjbPublicKey(pub_key),
-            ) => {
-                // Reconstruct with cached values (no scalar mult)
-                let private_key =
-                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
+            (PrivateKeyData::DjbPrivateKey { key, .. }, PublicKeyData::DjbPublicKey(pub_key)) => {
+                // Use from_bytes_without_cache since agreement doesn't need the Edwards cache
+                let private_key = curve25519::PrivateKey::from_bytes_without_cache(*key);
                 Ok(private_key.calculate_agreement(&pub_key))
             }
         }
@@ -333,7 +355,7 @@ impl TryFrom<&[u8]> for PrivateKey {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct KeyPair {
     pub public_key: PublicKey,
     pub private_key: PrivateKey,
@@ -341,17 +363,16 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn generate<R: Rng + CryptoRng>(csprng: &mut R) -> Self {
+        // Generate key without computing Edwards cache (lazy initialization)
         let temp = curve25519::PrivateKey::new(csprng);
         let key = temp.private_key_bytes();
-        let ed_public_key = temp.cached_ed_public_key();
-        let sign_bit = temp.cached_sign_bit();
 
         let public_key =
             PublicKey::from(PublicKeyData::DjbPublicKey(temp.derive_public_key_bytes()));
+        // Edwards cache will be computed lazily on first signature
         let private_key = PrivateKey::from(PrivateKeyData::DjbPrivateKey {
             key,
-            ed_public_key,
-            sign_bit,
+            edwards_cache: OnceLock::new(),
         });
 
         Self {

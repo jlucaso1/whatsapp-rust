@@ -191,7 +191,7 @@ macro_rules! impl_store_wrapper {
 #[async_trait]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
-        Ok(self.identity_key.into())
+        Ok(self.identity_key.clone().into())
     }
 
     async fn get_local_registration_id(&self) -> SignalResult<u32> {

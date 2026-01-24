@@ -120,7 +120,7 @@ async fn process_prekey_impl(
 
     let parameters = BobSignalProtocolParameters::new(
         identity_store.get_identity_key_pair().await?,
-        our_signed_pre_key_pair, // signed pre key
+        our_signed_pre_key_pair.clone(), // signed pre key
         our_one_time_pre_key_pair,
         our_signed_pre_key_pair, // ratchet key
         *message.identity_key(),
@@ -173,6 +173,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         .unwrap_or_else(SessionRecord::new_fresh);
 
     let our_base_key_pair = KeyPair::generate(&mut csprng);
+    let our_base_public_key = our_base_key_pair.public_key; // Save before moving
     let their_signed_prekey = bundle.signed_pre_key_public()?;
 
     let their_one_time_prekey_id = bundle.pre_key_id()?;
@@ -202,7 +203,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
     session.set_unacknowledged_pre_key_message(
         their_one_time_prekey_id,
         bundle.signed_pre_key_id()?,
-        &our_base_key_pair.public_key,
+        &our_base_public_key,
     );
 
     session.set_local_registration_id(identity_store.get_local_registration_id().await?);

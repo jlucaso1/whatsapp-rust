@@ -54,7 +54,7 @@ pub fn initialize_alice_session<R: Rng + CryptoRng>(
     secrets[..32].copy_from_slice(&[0xFFu8; 32]);
     secrets_len += 32;
 
-    let our_base_private_key = parameters.our_base_key_pair().private_key;
+    let our_base_private_key = parameters.our_base_key_pair().private_key.clone();
 
     // Each agreement is 32 bytes. We have: discontinuity (32) + up to 4 agreements (128) = 160 max.
     // The buffer is [u8; 160], so bounds are statically guaranteed.
