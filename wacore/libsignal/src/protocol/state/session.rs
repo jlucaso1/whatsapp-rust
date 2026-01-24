@@ -890,6 +890,7 @@ impl SessionRecord {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::protocol::ratchet::keys::MessageKeyGenerator;
@@ -907,13 +908,8 @@ mod tests {
         let our_identity = IdentityKey::new(KeyPair::generate(&mut csprng).public_key);
         let root_key = crate::protocol::ratchet::RootKey::new([0u8; 32]);
 
-        let mut state = SessionState::new(
-            version,
-            &our_identity,
-            &their_identity,
-            &root_key,
-            base_key,
-        );
+        let mut state =
+            SessionState::new(version, &our_identity, &their_identity, &root_key, base_key);
 
         // Add a sender chain to make it usable
         let sender_keypair = KeyPair::generate(&mut csprng);
@@ -1164,7 +1160,9 @@ mod tests {
         // The current session should have keys[4]'s base_key
         // Try to promote a session matching keys[2]
         let target_base_key = keys[2].serialize();
-        let result = record.promote_matching_session(3, &target_base_key).unwrap();
+        let result = record
+            .promote_matching_session(3, &target_base_key)
+            .unwrap();
 
         assert!(result, "Should find matching session");
 
