@@ -423,3 +423,198 @@ impl TryFrom<PrivateKey> for KeyPair {
         Ok(Self::new(public_key, value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rng() -> impl rand::CryptoRng + rand::Rng {
+        rand::rng()
+    }
+
+    // ==========================================================================
+    // XEdDSA Edwards Caching Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_signature_with_lazy_cache() {
+        let mut csprng = rng();
+
+        // Generate key with lazy cache (no Edwards computation yet)
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Test message for signature";
+
+        // First signature should compute and cache Edwards point
+        let signature1 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 1");
+
+        // Verify signature is valid
+        assert!(keypair.public_key.verify_signature(message, &signature1));
+
+        // Second signature should use cached Edwards point
+        let signature2 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 2");
+
+        // Both signatures should verify (may differ due to random nonce)
+        assert!(keypair.public_key.verify_signature(message, &signature2));
+    }
+
+    #[test]
+    fn test_signature_consistency_after_serialization() {
+        let mut csprng = rng();
+
+        // Generate key and sign
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Test message";
+        let signature = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature");
+
+        // Serialize and deserialize private key
+        let serialized = keypair.private_key.serialize();
+        let restored_private = PrivateKey::deserialize(serialized).expect("deserialize");
+
+        // Sign again with restored key (should have fresh lazy cache)
+        let signature2 = restored_private
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 2");
+
+        // Both signatures should verify against original public key
+        assert!(keypair.public_key.verify_signature(message, &signature));
+        assert!(keypair.public_key.verify_signature(message, &signature2));
+    }
+
+    #[test]
+    fn test_cloned_key_signatures() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Clone test message";
+
+        // First signature initializes cache
+        let sig1 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("sig1");
+
+        // Clone the keypair
+        let cloned = keypair.clone();
+
+        // Cloned key should also produce valid signatures
+        let sig2 = cloned
+            .calculate_signature(message, &mut csprng)
+            .expect("sig2");
+
+        // Both should verify
+        assert!(keypair.public_key.verify_signature(message, &sig1));
+        assert!(cloned.public_key.verify_signature(message, &sig2));
+        assert!(keypair.public_key.verify_signature(message, &sig2));
+    }
+
+    #[test]
+    fn test_multiple_signatures_same_key() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Sign many messages
+        for i in 0..100 {
+            let message = format!("Message number {}", i);
+            let signature = keypair
+                .calculate_signature(message.as_bytes(), &mut csprng)
+                .expect("signature");
+
+            // Each signature should verify
+            assert!(
+                keypair
+                    .public_key
+                    .verify_signature(message.as_bytes(), &signature),
+                "Signature {} failed to verify",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_key_agreement_works_without_signing() {
+        let mut csprng = rng();
+
+        // Create two keypairs
+        let alice = KeyPair::generate(&mut csprng);
+        let bob = KeyPair::generate(&mut csprng);
+
+        // Key agreement should work without ever signing (no Edwards cache needed)
+        let alice_shared = alice
+            .calculate_agreement(&bob.public_key)
+            .expect("alice agreement");
+        let bob_shared = bob
+            .calculate_agreement(&alice.public_key)
+            .expect("bob agreement");
+
+        // Shared secrets should match
+        assert_eq!(alice_shared, bob_shared);
+    }
+
+    #[test]
+    fn test_public_key_derivation_without_signing() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Public key should be derivable without signing (no Edwards cache needed)
+        let derived_public = keypair.private_key.public_key().expect("public key");
+
+        // Should match the original public key
+        assert_eq!(derived_public, keypair.public_key);
+    }
+
+    #[test]
+    fn test_signature_sign_bit_preserved() {
+        let mut csprng = rng();
+
+        // Generate many keys and verify sign bit handling
+        for _ in 0..20 {
+            let keypair = KeyPair::generate(&mut csprng);
+            let message = b"Sign bit test";
+
+            let signature = keypair
+                .calculate_signature(message, &mut csprng)
+                .expect("signature");
+
+            // Signature should be exactly 64 bytes
+            assert_eq!(signature.len(), 64);
+
+            // The sign bit is encoded in the MSB of the last byte
+            // Verify the signature is valid (which tests that sign bit is correct)
+            assert!(keypair.public_key.verify_signature(message, &signature));
+        }
+    }
+
+    #[test]
+    fn test_multipart_signature() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Sign a multipart message
+        let part1 = b"Hello, ";
+        let part2 = b"World!";
+
+        let signature = keypair
+            .private_key
+            .calculate_signature_for_multipart_message(&[part1, part2], &mut csprng)
+            .expect("multipart signature");
+
+        // Verify with concatenated message
+        let full_message = [&part1[..], &part2[..]].concat();
+        assert!(keypair
+            .public_key
+            .verify_signature(&full_message, &signature));
+
+        // Also verify with multipart verification
+        assert!(keypair
+            .public_key
+            .verify_signature_for_multipart_message(&[part1, part2], &signature));
+    }
+}
