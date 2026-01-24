@@ -203,12 +203,16 @@ impl fmt::Debug for PublicKey {
 }
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
+use curve25519_dalek::scalar::Scalar;
 use std::sync::OnceLock;
 
-/// Cached Edwards public key data for XEdDSA signing.
-/// This avoids an expensive scalar multiplication on every signature.
+/// Cached data for XEdDSA signing.
+/// This avoids an expensive scalar multiplication on every signature
+/// and caches the scalar representation to avoid repeated modular reduction.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct EdwardsCacheData {
+    /// Cached scalar representation of the private key
+    scalar: Scalar,
     ed_public_key: CompressedEdwardsY,
     sign_bit: u8,
 }
@@ -251,7 +255,7 @@ impl From<PrivateKeyData> for PrivateKey {
 }
 
 impl PrivateKey {
-    /// Lazily computes and caches the Edwards public key data.
+    /// Lazily computes and caches the signing data (scalar + Edwards public key).
     #[inline]
     fn get_edwards_cache(&self) -> &EdwardsCacheData {
         match &self.key {
@@ -259,6 +263,7 @@ impl PrivateKey {
                 edwards_cache.get_or_init(|| {
                     let temp = curve25519::PrivateKey::from(*key);
                     EdwardsCacheData {
+                        scalar: temp.cached_scalar(),
                         ed_public_key: temp.cached_ed_public_key(),
                         sign_bit: temp.cached_sign_bit(),
                     }
@@ -324,11 +329,12 @@ impl PrivateKey {
     ) -> Result<[u8; 64], CurveError> {
         match &self.key {
             PrivateKeyData::DjbPrivateKey { key, .. } => {
-                // Get or compute the Edwards cache (lazy initialization)
+                // Get or compute the full signing cache (lazy initialization)
                 let cache = self.get_edwards_cache();
-                // Reconstruct with cached values (no scalar mult after first call)
+                // Reconstruct with ALL cached values (no scalar computation after first call)
                 let private_key = curve25519::PrivateKey::from_bytes_with_cache(
                     *key,
+                    cache.scalar,
                     cache.ed_public_key,
                     cache.sign_bit,
                 );
