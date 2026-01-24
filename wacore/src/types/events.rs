@@ -199,18 +199,48 @@ pub enum DeviceListUpdateType {
     Update,
 }
 
+impl From<crate::stanza::devices::DeviceNotificationType> for DeviceListUpdateType {
+    fn from(t: crate::stanza::devices::DeviceNotificationType) -> Self {
+        match t {
+            crate::stanza::devices::DeviceNotificationType::Add => Self::Add,
+            crate::stanza::devices::DeviceNotificationType::Remove => Self::Remove,
+            crate::stanza::devices::DeviceNotificationType::Update => Self::Update,
+        }
+    }
+}
+
+/// Device information from notification.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceNotificationInfo {
+    /// Device ID (extracted from JID)
+    pub device_id: u32,
+    /// Optional key index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_index: Option<u32>,
+}
+
 /// Device list update notification.
 /// Emitted when a user's device list changes (device added/removed/updated).
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceListUpdate {
-    /// The user whose device list changed
+    /// The user whose device list changed (from attribute)
     pub user: Jid,
+    /// Optional LID user (for LID-PN mapping)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lid_user: Option<Jid>,
     /// Type of update (add/remove/update)
     pub update_type: DeviceListUpdateType,
-    /// List of device IDs affected
-    pub devices: Vec<u32>,
-    /// Hash for cache validation (if provided)
-    pub hash: Option<String>,
+    /// Affected devices with detailed info
+    pub devices: Vec<DeviceNotificationInfo>,
+    /// Key index info (for add/remove)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_index: Option<crate::stanza::devices::KeyIndexInfo>,
+    /// Device hash (for add/remove)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_hash: Option<String>,
+    /// Contact hash (for update - lookup)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

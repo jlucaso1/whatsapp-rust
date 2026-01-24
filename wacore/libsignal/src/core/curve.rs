@@ -436,10 +436,6 @@ mod tests {
         rand::rng()
     }
 
-    // ==========================================================================
-    // XEdDSA Edwards Caching Tests
-    // ==========================================================================
-
     #[test]
     fn test_signature_with_lazy_cache() {
         let mut csprng = rng();

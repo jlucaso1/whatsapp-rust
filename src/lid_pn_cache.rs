@@ -328,6 +328,7 @@ mod tests {
             (LearningSource::BlocklistActive, "blocklist_active"),
             (LearningSource::BlocklistInactive, "blocklist_inactive"),
             (LearningSource::Pairing, "pairing"),
+            (LearningSource::DeviceNotification, "device_notification"),
             (LearningSource::Other, "other"),
         ];
 

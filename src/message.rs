@@ -3744,7 +3744,6 @@ mod tests {
 
     /// Test: Status broadcast messages should always try skmsg even if pkmsg fails
     ///
-    /// Based on WhatsApp Web behavior from `.cargo/captured-js/lx-whGBdTEw.js`:
     /// - WhatsApp Web tracks pkmsg and skmsg failures separately
     /// - If pkmsg fails but skmsg succeeds, result is SUCCESS
     /// - For status@broadcast, we might have sender key cached from previous status

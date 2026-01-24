@@ -26,6 +26,7 @@ pub mod reporting_token;
 pub mod request;
 pub mod runtime;
 pub mod send;
+pub mod stanza;
 pub mod store;
 pub mod types;
 pub mod upload;

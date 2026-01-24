@@ -741,14 +741,6 @@ fn bench_key_generation() {
     }
 }
 
-// =============================================================================
-// Session Optimization Benchmarks
-// These benchmarks specifically target the session state optimizations:
-// - Decryption with previous (archived) sessions
-// - promote_matching_session during PreKey processing
-// - Out-of-order message handling
-// =============================================================================
-
 /// Creates a session with multiple archived previous sessions.
 /// This simulates a scenario where Alice has re-keyed multiple times.
 fn setup_with_archived_sessions() -> (User, User, Vec<Vec<u8>>) {

@@ -933,10 +933,6 @@ mod tests {
         record
     }
 
-    // ==========================================================================
-    // Risk Point 1: Take/Restore Pattern Tests
-    // ==========================================================================
-
     #[test]
     fn test_take_restore_preserves_order() {
         let mut record = create_record_with_previous_sessions(5);
@@ -1028,10 +1024,6 @@ mod tests {
         assert!(record.take_previous_session(3).is_none());
     }
 
-    // ==========================================================================
-    // Risk Point 2: set_message_keys Order Tests
-    // ==========================================================================
-
     #[test]
     fn test_message_keys_lookup_by_counter_not_order() {
         let base_key = KeyPair::generate(&mut rng()).public_key;
@@ -1096,10 +1088,6 @@ mod tests {
         MessageKeyGenerator::new_from_seed(&seed, counter)
     }
 
-    // ==========================================================================
-    // Risk Point 3: Byte Comparison Tests
-    // ==========================================================================
-
     #[test]
     fn test_receiver_chain_lookup_by_bytes() {
         let base_key = KeyPair::generate(&mut rng()).public_key;
@@ -1138,10 +1126,6 @@ mod tests {
         let chain = state.get_receiver_chain_key(&deserialized).unwrap();
         assert!(chain.is_some());
     }
-
-    // ==========================================================================
-    // Risk Point 4: promote_matching_session Tests
-    // ==========================================================================
 
     #[test]
     fn test_promote_matching_session_finds_correct_session() {
@@ -1202,10 +1186,6 @@ mod tests {
         assert!(result, "Should return true for already-current session");
         assert_eq!(record.previous_session_count(), 0);
     }
-
-    // ==========================================================================
-    // Risk Point 5: SessionRecord Serialization Roundtrip
-    // ==========================================================================
 
     #[test]
     fn test_session_record_serialization_preserves_previous_sessions() {

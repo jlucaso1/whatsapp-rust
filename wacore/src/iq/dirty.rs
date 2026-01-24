@@ -1,21 +1,3 @@
-//! Dirty bits IQ specification.
-//!
-//! Used to acknowledge and clear "dirty bits" - flags indicating pending server-side data
-//! that needs to be synced (contacts, account settings, etc.).
-//!
-//! ## Wire Format
-//! ```xml
-//! <!-- Request -->
-//! <iq xmlns="urn:xmpp:whatsapp:dirty" type="set" to="s.whatsapp.net" id="...">
-//!   <clean type="account_sync" timestamp="1234567890"/>
-//! </iq>
-//!
-//! <!-- Response -->
-//! <iq from="s.whatsapp.net" id="..." type="result"/>
-//! ```
-//!
-//! Verified against WhatsApp Web JS (clearDirtyBits in 5Yec01dI04o.js).
-
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;

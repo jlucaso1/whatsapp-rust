@@ -215,10 +215,6 @@ mod tests {
     use super::*;
     use wacore_binary::jid::{DEFAULT_USER_SERVER, HIDDEN_USER_SERVER, JidExt};
 
-    // Tests verify session management matches WhatsApp Web's behavior:
-    // - hasSignalSessions() via containSessions() (GysEGRAXCvh.js:48394)
-    // - ensureE2ESessions() (MpTzv7av1aW.js:32760)
-
     #[test]
     fn test_primary_phone_jid_creation_from_pn() {
         let own_pn = Jid::pn("559999999999");
