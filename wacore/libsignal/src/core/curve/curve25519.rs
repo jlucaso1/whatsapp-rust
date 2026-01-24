@@ -211,11 +211,10 @@ impl PrivateKey {
         let mut random_bytes = [0u8; 64];
         csprng.fill_bytes(&mut random_bytes);
 
-        // Use cached scalar instead of recomputing from_bytes_mod_order
         let key_data = self.secret.to_bytes();
 
+        // hash1 = SHA512(prefix || privKey || message || random)
         let mut hash1 = Sha512::new();
-        // Use static hash prefix instead of allocating on every call
         hash1.update(&XEDDSA_HASH_PREFIX[..]);
         hash1.update(&key_data[..]);
         for message_piece in message {
@@ -226,16 +225,15 @@ impl PrivateKey {
         let r = Scalar::from_hash(hash1);
         let cap_r = (&r * ED25519_BASEPOINT_TABLE).compress();
 
+        // hash = SHA512(R || edPubKey || message)
         let mut hash = Sha512::new();
         hash.update(cap_r.as_bytes());
-        // Use cached Edwards public key instead of recomputing: &a * ED25519_BASEPOINT_TABLE
         hash.update(self.ed_public_key.as_bytes());
         for message_piece in message {
             hash.update(message_piece);
         }
 
         let h = Scalar::from_hash(hash);
-        // Use cached scalar for final computation
         let s = (h * self.scalar) + r;
 
         let mut result = [0u8; SIGNATURE_LENGTH];

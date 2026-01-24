@@ -209,7 +209,7 @@ impl Client {
             pairing_ref,
             phone_jid: phone_number,
             pair_code: code.clone(),
-            ephemeral_keypair,
+            ephemeral_keypair: Box::new(ephemeral_keypair),
         };
 
         // Dispatch event for user to display the code

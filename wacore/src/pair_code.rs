@@ -122,7 +122,7 @@ pub enum PairCodeState {
         /// The 8-character pair code (needed to decrypt primary's ephemeral key).
         pair_code: String,
         /// Ephemeral keypair generated for this session.
-        ephemeral_keypair: KeyPair,
+        ephemeral_keypair: Box<KeyPair>,
     },
     /// Pairing completed (success or failure).
     Completed,

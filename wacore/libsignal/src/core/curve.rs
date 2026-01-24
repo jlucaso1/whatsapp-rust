@@ -329,9 +329,7 @@ impl PrivateKey {
     ) -> Result<[u8; 64], CurveError> {
         match &self.key {
             PrivateKeyData::DjbPrivateKey { key, .. } => {
-                // Get or compute the full signing cache (lazy initialization)
                 let cache = self.get_edwards_cache();
-                // Reconstruct with ALL cached values (no scalar computation after first call)
                 let private_key = curve25519::PrivateKey::from_bytes_with_cache(
                     *key,
                     cache.scalar,
