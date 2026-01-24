@@ -364,8 +364,9 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn generate<R: Rng + CryptoRng>(csprng: &mut R) -> Self {
-        // Generate key without computing Edwards cache (lazy initialization)
-        let temp = curve25519::PrivateKey::new(csprng);
+        // Generate key WITHOUT computing Edwards cache (lazy initialization).
+        // The Edwards point computation is deferred until first signature.
+        let temp = curve25519::PrivateKey::new_without_cache(csprng);
         let key = temp.private_key_bytes();
 
         let public_key =
