@@ -8,6 +8,7 @@ use std::result::Result;
 use prost::Message;
 use subtle::ConstantTimeEq;
 
+use crate::core::curve::KeyType;
 use crate::protocol::ratchet::keys::MessageKeyGenerator;
 use crate::protocol::ratchet::{ChainKey, RootKey};
 use crate::protocol::state::{PreKeyId, SignedPreKeyId};
@@ -224,6 +225,10 @@ impl SessionState {
         results
     }
 
+    /// Expected serialized public key length: 1 type byte + 32 key bytes
+    /// This matches the size of `PublicKey::serialize()` return type.
+    const SERIALIZED_PUBLIC_KEY_LEN: usize = 33;
+
     /// Returns the index of the receiver chain for the given sender, without cloning.
     /// This is more efficient than get_receiver_chain when you only need the index.
     ///
@@ -241,6 +246,14 @@ impl SessionState {
                 .sender_ratchet_key
                 .as_ref()
                 .ok_or(InvalidSessionError("missing receiver chain ratchet key"))?;
+
+            // Validate the stored key has the expected serialized format
+            // before comparing bytes to catch corrupted data early
+            if key_bytes.len() != Self::SERIALIZED_PUBLIC_KEY_LEN
+                || key_bytes.first() != Some(&KeyType::Djb.value())
+            {
+                return Err(InvalidSessionError("invalid receiver chain ratchet key"));
+            }
 
             // Compare raw bytes directly instead of deserializing to PublicKey
             // The stored key_bytes are already in serialized format (type byte + key bytes)

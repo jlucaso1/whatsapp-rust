@@ -25,7 +25,8 @@ impl fmt::Display for KeyType {
 }
 
 impl KeyType {
-    fn value(&self) -> u8 {
+    /// Returns the byte value used in serialized key format.
+    pub fn value(&self) -> u8 {
         match &self {
             KeyType::Djb => 0x05u8,
         }
