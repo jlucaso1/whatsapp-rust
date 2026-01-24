@@ -67,12 +67,8 @@ impl HashState {
                     Ok(Some(prev)) => removed.push(prev),
                     Ok(None) => {
                         if op == wa::syncd_mutation::SyncdOperation::Remove as i32 {
-                            // WhatsApp Web: hasMissingRemove = true
-                            // This happens when server has an entry we don't have locally.
-                            // We can't subtract a value we don't have, so our ltHash will
-                            // diverge from the server's, causing MAC validation to fail.
                             result.has_missing_remove = true;
-                            log::warn!(
+                            log::trace!(
                                 target: "AppState",
                                 "REMOVE mutation missing previous value (hasMissingRemove=true)"
                             );

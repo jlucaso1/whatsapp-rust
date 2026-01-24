@@ -1173,33 +1173,37 @@ impl Client {
                     name, pl.snapshot_ref.is_some(), pl.has_more_patches, pl.patches.len());
 
                 // Download external snapshot if present
-                if let Some(ext) = &pl.snapshot_ref {
-                    if let Some(path) = &ext.direct_path {
-                        match self.download(ext).await {
-                            Ok(bytes) => {
-                                debug!(target: "Client/AppState", "Downloaded external snapshot ({} bytes)", bytes.len());
-                                pre_downloaded.insert(path.clone(), bytes);
-                            }
-                            Err(e) => {
-                                warn!("Failed to download external snapshot: {e}");
-                            }
+                if let Some(ext) = &pl.snapshot_ref
+                    && let Some(path) = &ext.direct_path
+                {
+                    match self.download(ext).await {
+                        Ok(bytes) => {
+                            debug!(target: "Client/AppState", "Downloaded external snapshot ({} bytes)", bytes.len());
+                            pre_downloaded.insert(path.clone(), bytes);
+                        }
+                        Err(e) => {
+                            warn!("Failed to download external snapshot: {e}");
                         }
                     }
                 }
 
                 // Download external mutations for each patch that has them
                 for patch in &pl.patches {
-                    if let Some(ext) = &patch.external_mutations {
-                        if let Some(path) = &ext.direct_path {
-                            let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
-                            match self.download(ext).await {
-                                Ok(bytes) => {
-                                    debug!(target: "Client/AppState", "Downloaded external mutations for patch v{} ({} bytes)", patch_version, bytes.len());
-                                    pre_downloaded.insert(path.clone(), bytes);
-                                }
-                                Err(e) => {
-                                    warn!("Failed to download external mutations for patch v{}: {e}", patch_version);
-                                }
+                    if let Some(ext) = &patch.external_mutations
+                        && let Some(path) = &ext.direct_path
+                    {
+                        let patch_version =
+                            patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                        match self.download(ext).await {
+                            Ok(bytes) => {
+                                debug!(target: "Client/AppState", "Downloaded external mutations for patch v{} ({} bytes)", patch_version, bytes.len());
+                                pre_downloaded.insert(path.clone(), bytes);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to download external mutations for patch v{}: {e}",
+                                    patch_version
+                                );
                             }
                         }
                     }
@@ -1211,7 +1215,10 @@ impl Client {
                     if let Some(bytes) = pre_downloaded.get(path) {
                         Ok(bytes.clone())
                     } else {
-                        Err(anyhow::anyhow!("external blob not pre-downloaded: {}", path))
+                        Err(anyhow::anyhow!(
+                            "external blob not pre-downloaded: {}",
+                            path
+                        ))
                     }
                 } else {
                     Err(anyhow::anyhow!("external blob has no directPath"))

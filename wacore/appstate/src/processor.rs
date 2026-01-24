@@ -324,12 +324,10 @@ pub fn validate_patch_macs(
             } else {
                 debug!(
                     target: "AppState",
-                    "Patch {} v{} snapshotMAC MISMATCH! ltHash=...{}, version={}, collection={}",
+                    "Patch {} v{} snapshotMAC MISMATCH! ltHash=...{}",
                     collection_name,
                     state.version,
-                    hex::encode(&state.hash[120..]),
-                    state.version,
-                    collection_name
+                    hex::encode(&state.hash[120..])
                 );
                 return Err(AppStateError::PatchSnapshotMACMismatch);
             }
