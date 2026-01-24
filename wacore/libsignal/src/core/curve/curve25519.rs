@@ -79,7 +79,8 @@ impl PrivateKey {
         PrivateKey {
             secret,
             ed_public_key,
-            sign_bit,
+            // Mask to ensure only valid sign bit values (0x00 or 0x80)
+            sign_bit: sign_bit & 0b1000_0000_u8,
         }
     }
 
