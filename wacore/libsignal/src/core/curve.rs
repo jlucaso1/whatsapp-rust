@@ -201,14 +201,31 @@ impl fmt::Debug for PublicKey {
     }
 }
 
+use curve25519_dalek::edwards::CompressedEdwardsY;
+
+/// Stores the private key bytes along with cached values for XEdDSA signing.
+/// The cached Edwards public key avoids an expensive scalar multiplication on every signature.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum PrivateKeyData {
-    DjbPrivateKey([u8; curve25519::PRIVATE_KEY_LENGTH]),
+    DjbPrivateKey {
+        /// The raw 32-byte private key
+        key: [u8; curve25519::PRIVATE_KEY_LENGTH],
+        /// Cached compressed Edwards public key (avoids scalar mult per signature)
+        ed_public_key: CompressedEdwardsY,
+        /// Cached sign bit from Edwards public key
+        sign_bit: u8,
+    },
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, derive_more::From)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct PrivateKey {
     key: PrivateKeyData,
+}
+
+impl From<PrivateKeyData> for PrivateKey {
+    fn from(key: PrivateKeyData) -> Self {
+        Self { key }
+    }
 }
 
 impl PrivateKey {
@@ -220,23 +237,37 @@ impl PrivateKey {
             key.copy_from_slice(&value[..curve25519::PRIVATE_KEY_LENGTH]);
             // Clamping is not necessary but is kept for backward compatibility
             key = scalar::clamp_integer(key);
+            // Create a temporary PrivateKey to compute and cache the Ed public key
+            let temp = curve25519::PrivateKey::from(key);
+            let ed_public_key = temp.cached_ed_public_key();
+            let sign_bit = temp.cached_sign_bit();
             Ok(Self {
-                key: PrivateKeyData::DjbPrivateKey(key),
+                key: PrivateKeyData::DjbPrivateKey {
+                    key,
+                    ed_public_key,
+                    sign_bit,
+                },
             })
         }
     }
 
     pub fn serialize(&self) -> &[u8; 32] {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(v) => v,
+            PrivateKeyData::DjbPrivateKey { key, .. } => key,
         }
     }
 
     pub fn public_key(&self) -> Result<PublicKey, CurveError> {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(private_key) => {
-                let public_key =
-                    curve25519::PrivateKey::from(*private_key).derive_public_key_bytes();
+            PrivateKeyData::DjbPrivateKey {
+                key,
+                ed_public_key,
+                sign_bit,
+            } => {
+                // Reconstruct with cached values (no scalar mult)
+                let private_key =
+                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
+                let public_key = private_key.derive_public_key_bytes();
                 Ok(PublicKey::new(PublicKeyData::DjbPublicKey(public_key)))
             }
         }
@@ -244,7 +275,7 @@ impl PrivateKey {
 
     pub fn key_type(&self) -> KeyType {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(_) => KeyType::Djb,
+            PrivateKeyData::DjbPrivateKey { .. } => KeyType::Djb,
         }
     }
 
@@ -261,18 +292,33 @@ impl PrivateKey {
         message: &[&[u8]],
         csprng: &mut R,
     ) -> Result<[u8; 64], CurveError> {
-        match self.key {
-            PrivateKeyData::DjbPrivateKey(k) => {
-                let private_key = curve25519::PrivateKey::from(k);
+        match &self.key {
+            PrivateKeyData::DjbPrivateKey {
+                key,
+                ed_public_key,
+                sign_bit,
+            } => {
+                // Reconstruct with cached values (no scalar mult)
+                let private_key =
+                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
                 Ok(private_key.calculate_signature(csprng, message))
             }
         }
     }
 
     pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError> {
-        match (self.key, their_key.key) {
-            (PrivateKeyData::DjbPrivateKey(priv_key), PublicKeyData::DjbPublicKey(pub_key)) => {
-                let private_key = curve25519::PrivateKey::from(priv_key);
+        match (&self.key, their_key.key) {
+            (
+                PrivateKeyData::DjbPrivateKey {
+                    key,
+                    ed_public_key,
+                    sign_bit,
+                },
+                PublicKeyData::DjbPublicKey(pub_key),
+            ) => {
+                // Reconstruct with cached values (no scalar mult)
+                let private_key =
+                    curve25519::PrivateKey::from_bytes_with_cache(*key, *ed_public_key, *sign_bit);
                 Ok(private_key.calculate_agreement(&pub_key))
             }
         }
@@ -295,14 +341,18 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn generate<R: Rng + CryptoRng>(csprng: &mut R) -> Self {
-        let private_key = curve25519::PrivateKey::new(csprng);
+        let temp = curve25519::PrivateKey::new(csprng);
+        let key = temp.private_key_bytes();
+        let ed_public_key = temp.cached_ed_public_key();
+        let sign_bit = temp.cached_sign_bit();
 
-        let public_key = PublicKey::from(PublicKeyData::DjbPublicKey(
-            private_key.derive_public_key_bytes(),
-        ));
-        let private_key = PrivateKey::from(PrivateKeyData::DjbPrivateKey(
-            private_key.private_key_bytes(),
-        ));
+        let public_key =
+            PublicKey::from(PublicKeyData::DjbPublicKey(temp.derive_public_key_bytes()));
+        let private_key = PrivateKey::from(PrivateKeyData::DjbPrivateKey {
+            key,
+            ed_public_key,
+            sign_bit,
+        });
 
         Self {
             public_key,
