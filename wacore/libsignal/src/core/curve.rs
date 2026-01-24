@@ -232,7 +232,7 @@ impl PartialEq for PrivateKeyData {
             (
                 PrivateKeyData::DjbPrivateKey { key: k1, .. },
                 PrivateKeyData::DjbPrivateKey { key: k2, .. },
-            ) => k1 == k2,
+            ) => k1.ct_eq(k2).into(),
         }
     }
 }
@@ -608,13 +608,17 @@ mod tests {
 
         // Verify with concatenated message
         let full_message = [&part1[..], &part2[..]].concat();
-        assert!(keypair
-            .public_key
-            .verify_signature(&full_message, &signature));
+        assert!(
+            keypair
+                .public_key
+                .verify_signature(&full_message, &signature)
+        );
 
         // Also verify with multipart verification
-        assert!(keypair
-            .public_key
-            .verify_signature_for_multipart_message(&[part1, part2], &signature));
+        assert!(
+            keypair
+                .public_key
+                .verify_signature_for_multipart_message(&[part1, part2], &signature)
+        );
     }
 }
