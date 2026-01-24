@@ -49,6 +49,10 @@ impl PrivateKey {
         (ed_public_key, sign_bit)
     }
 
+    /// Generates a new random private key with eagerly-computed Edwards cache.
+    /// Use this when you plan to sign immediately after key creation.
+    /// For lazy initialization, use `new_without_cache()` with a higher-level wrapper.
+    #[allow(dead_code)]
     pub fn new<R>(csprng: &mut R) -> Self
     where
         R: CryptoRng + Rng,
@@ -68,8 +72,16 @@ impl PrivateKey {
     }
 
     /// Generates a new random private key WITHOUT computing the Edwards cache.
-    /// Use this when the key will be wrapped in a higher-level type with lazy initialization.
-    /// The Edwards cache fields are set to dummy values and should not be used directly.
+    ///
+    /// # Safety Contract
+    /// This function is for internal use when the key will be wrapped in a higher-level
+    /// type with lazy initialization (e.g., `curve::PrivateKey` with `OnceLock`).
+    ///
+    /// **WARNING**: Do NOT call `calculate_signature` on a `PrivateKey` created with this
+    /// function - it will produce INVALID signatures. The `ed_public_key` and `sign_bit`
+    /// fields contain dummy values (all zeros) that are not valid for signing.
+    ///
+    /// Safe operations: `private_key_bytes()`, `derive_public_key_bytes()`, `calculate_agreement()`
     #[inline]
     pub fn new_without_cache<R>(csprng: &mut R) -> Self
     where
@@ -80,7 +92,7 @@ impl PrivateKey {
         bytes = scalar::clamp_integer(bytes);
 
         let secret = StaticSecret::from(bytes);
-        // Dummy values - should not be used directly
+        // Dummy values - signing with these will produce INVALID signatures
         PrivateKey {
             secret,
             ed_public_key: CompressedEdwardsY::default(),
