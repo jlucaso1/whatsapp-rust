@@ -688,6 +688,59 @@ fn bench_full_dm_conversation(data: (User, User)) {
     black_box((alice, bob));
 }
 
+// Signature-specific benchmarks to measure the XEdDSA optimization
+fn setup_keypair_with_message() -> (KeyPair, [u8; 64]) {
+    let mut rng = rand::rng();
+    let keypair = KeyPair::generate(&mut rng);
+    let message = [0x42u8; 64]; // Fixed message for consistent benchmarking
+    (keypair, message)
+}
+
+// Benchmark raw signature creation (the main target of the caching optimization).
+// This measures signing with a pre-created key, which is the common case in real usage.
+#[library_benchmark]
+#[bench::sign(setup = setup_keypair_with_message)]
+fn bench_signature_creation(data: (KeyPair, [u8; 64])) {
+    let (keypair, message) = data;
+    let mut rng = rand::rng();
+
+    // Sign multiple times to amortize any setup overhead
+    for _ in 0..10 {
+        let signature = keypair
+            .calculate_signature(&message, &mut rng)
+            .expect("signature");
+        black_box(signature);
+    }
+}
+
+// Benchmark signature verification
+#[library_benchmark]
+#[bench::verify(setup = setup_keypair_with_message)]
+fn bench_signature_verification(data: (KeyPair, [u8; 64])) {
+    let (keypair, message) = data;
+    let mut rng = rand::rng();
+    let signature = keypair
+        .calculate_signature(&message, &mut rng)
+        .expect("signature");
+
+    // Verify multiple times
+    for _ in 0..10 {
+        let valid = keypair.public_key.verify_signature(&message, &signature);
+        black_box(valid);
+    }
+}
+
+// Benchmark key generation (shows the added cost of caching)
+#[library_benchmark]
+#[bench::keygen()]
+fn bench_key_generation() {
+    let mut rng = rand::rng();
+    for _ in 0..10 {
+        let keypair = KeyPair::generate(&mut rng);
+        black_box(keypair);
+    }
+}
+
 library_benchmark_group!(
     name = dm_group;
     benchmarks =
@@ -710,11 +763,20 @@ library_benchmark_group!(
     benchmarks = bench_full_dm_conversation
 );
 
+library_benchmark_group!(
+    name = signature_group;
+    benchmarks =
+        bench_signature_creation,
+        bench_signature_verification,
+        bench_key_generation
+);
+
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
     library_benchmark_groups =
         dm_group,
         group_messaging_group,
-        conversation_group
+        conversation_group,
+        signature_group
 );
