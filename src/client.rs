@@ -2765,17 +2765,6 @@ mod tests {
     /// - BUG (before fix): Called process_prekey_bundle() unconditionally,
     ///   replacing the existing session with a new one
     /// - RESULT: Remote device still uses old session state, causing MAC failures
-    ///
-    /// WhatsApp Web Reference (MpTzv7av1aW.js, lines 32828-32834):
-    /// ```javascript
-    /// S.forEach(function (e, t) {
-    ///   if (k[t]) {         // If session exists
-    ///     h.delete(e);      // Just remove from pending - NO fetch
-    ///   } else {
-    ///     I.push(e);        // Only fetch prekeys for devices WITHOUT sessions
-    ///   }
-    /// });
-    /// ```
     #[tokio::test]
     async fn test_establish_session_skips_when_exists() {
         use wacore::libsignal::protocol::SessionRecord;
