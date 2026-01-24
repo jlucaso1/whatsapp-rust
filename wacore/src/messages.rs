@@ -25,13 +25,13 @@ impl MessageUtils {
 
         let concatenated_jids = jids.join("");
 
+        // Use finalize_sha256_array() for zero-allocation hash finalization
         let full_hash = {
             let mut h = CryptographicHash::new("SHA-256")
                 .map_err(|e| anyhow!("failed to initialize SHA-256 hasher: {:?}", e))?;
             h.update(concatenated_jids.as_bytes());
-            let v = h.finalize();
-            <[u8; 32]>::try_from(v.as_slice())
-                .map_err(|_| anyhow!("unexpected SHA-256 hash length"))?
+            h.finalize_sha256_array()
+                .map_err(|e| anyhow!("failed to finalize hash: {:?}", e))?
         };
 
         let truncated_hash = &full_hash[..6];
