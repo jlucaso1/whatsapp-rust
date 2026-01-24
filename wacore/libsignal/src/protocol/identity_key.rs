@@ -79,7 +79,7 @@ impl TryFrom<&[u8]> for IdentityKey {
 /// The private identity of a user.
 ///
 /// Can be converted to and from [`KeyPair`].
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct IdentityKeyPair {
     identity_key: IdentityKey,
     private_key: PrivateKey,

@@ -95,6 +95,19 @@ impl PrivateKey {
         self.sign_bit
     }
 
+    /// Creates a PrivateKey from raw bytes WITHOUT computing the Edwards cache.
+    /// Use this for operations that don't need signatures (e.g., key agreement, public key derivation).
+    #[inline]
+    pub fn from_bytes_without_cache(private_key: [u8; PRIVATE_KEY_LENGTH]) -> Self {
+        let secret = StaticSecret::from(scalar::clamp_integer(private_key));
+        // Use dummy values - these should never be accessed for non-signature operations
+        PrivateKey {
+            secret,
+            ed_public_key: CompressedEdwardsY::default(),
+            sign_bit: 0,
+        }
+    }
+
     pub fn calculate_agreement(
         &self,
         their_public_key: &[u8; PUBLIC_KEY_LENGTH],

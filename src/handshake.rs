@@ -35,7 +35,7 @@ pub async fn do_handshake(
     let client_payload = device.core.get_client_payload().encode_to_vec();
 
     let mut handshake_state = HandshakeState::new(
-        device.core.noise_key,
+        device.core.noise_key.clone(),
         client_payload,
         NOISE_START_PATTERN,
         &WA_CONN_HEADER,

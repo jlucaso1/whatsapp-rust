@@ -16,8 +16,8 @@ pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let device_state = DeviceState {
-        identity_key: store.identity_key,
-        noise_key: store.noise_key,
+        identity_key: store.identity_key.clone(),
+        noise_key: store.noise_key.clone(),
         adv_secret_key: store.adv_secret_key,
     };
     PairUtils::make_qr_data(&device_state, ref_str)
@@ -49,8 +49,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 
                     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
                     let device_state = DeviceState {
-                        identity_key: device_snapshot.identity_key,
-                        noise_key: device_snapshot.noise_key,
+                        identity_key: device_snapshot.identity_key.clone(),
+                        noise_key: device_snapshot.noise_key.clone(),
                         adv_secret_key: device_snapshot.adv_secret_key,
                     };
 
@@ -182,8 +182,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -332,8 +332,8 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 

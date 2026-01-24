@@ -138,7 +138,7 @@ impl Device {
 
         let identity_key: KeyPair = KeyPair::new(
             *identity_key_pair.public_key(),
-            *identity_key_pair.private_key(),
+            identity_key_pair.private_key().clone(),
         );
         let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
         let signature_box = identity_key_pair

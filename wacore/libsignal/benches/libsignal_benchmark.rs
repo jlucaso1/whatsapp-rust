@@ -37,7 +37,7 @@ impl IdentityKeyStore for InMemoryIdentityKeyStore {
     async fn get_identity_key_pair(
         &self,
     ) -> wacore_libsignal::protocol::error::Result<IdentityKeyPair> {
-        Ok(self.identity_key_pair)
+        Ok(self.identity_key_pair.clone())
     }
 
     async fn get_local_registration_id(&self) -> wacore_libsignal::protocol::error::Result<u32> {
