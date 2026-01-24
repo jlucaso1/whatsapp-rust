@@ -100,10 +100,21 @@ async fn process_prekey_impl(
         .key_pair()?;
 
     let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
-        log::info!("processing PreKey message from {remote_address}");
+        log::info!(
+            "processing PreKey message from {remote_address} with one-time prekey {pre_key_id}"
+        );
         Some(pre_key_store.get_pre_key(pre_key_id).await?.key_pair()?)
     } else {
-        log::warn!("processing PreKey message from {remote_address} which had no one-time prekey");
+        // This is normal Signal Protocol behavior - one-time prekeys are optional.
+        // Common scenarios:
+        // - Newly paired device hasn't uploaded prekeys yet
+        // - Server's one-time prekey pool is exhausted
+        // - App state sync messages during initial pairing
+        // Security: Session still provides strong guarantees via signed prekey.
+        // Perfect forward secrecy begins after first reply exchange.
+        log::debug!(
+            "processing PreKey message from {remote_address} without one-time prekey (using signed prekey only)"
+        );
         None
     };
 
