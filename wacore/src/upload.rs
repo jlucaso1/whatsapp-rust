@@ -12,12 +12,13 @@ pub struct EncryptedMedia {
 }
 
 pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<EncryptedMedia> {
+    // Use finalize_sha256_array() for zero-allocation hash finalization
     let file_sha256 = {
         let mut hasher = CryptographicHash::new("SHA-256").map_err(|e| anyhow::anyhow!(e))?;
         hasher.update(plaintext);
-        let out = hasher.finalize();
-        <[u8; 32]>::try_from(out.as_slice())
-            .map_err(|_| anyhow::anyhow!("Invalid SHA-256 length"))?
+        hasher
+            .finalize_sha256_array()
+            .map_err(|e| anyhow::anyhow!(e))?
     };
 
     let mut media_key = [0u8; 32];
@@ -28,25 +29,26 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
     let mut data = Vec::new();
     aes_256_cbc_encrypt_into(plaintext, &cipher_key, &iv, &mut data)?;
 
+    // Use finalize_sha256_array() for zero-allocation MAC finalization
     let mac_full = {
         let mut mac =
             CryptographicMac::new("HmacSha256", &mac_key).map_err(|e| anyhow::anyhow!(e))?;
         mac.update(&iv);
         mac.update(&data);
-        let v = mac.finalize();
-        <[u8; 32]>::try_from(v.as_slice())
-            .map_err(|_| anyhow::anyhow!("Invalid HMAC-SHA256 length"))?
+        mac.finalize_sha256_array()
+            .map_err(|e| anyhow::anyhow!(e))?
     };
 
     let mut upload = data;
     upload.extend_from_slice(&mac_full[..10]);
 
+    // Use finalize_sha256_array() for zero-allocation hash finalization
     let file_enc_sha256 = {
         let mut hasher = CryptographicHash::new("SHA-256").map_err(|e| anyhow::anyhow!(e))?;
         hasher.update(&upload);
-        let out = hasher.finalize();
-        <[u8; 32]>::try_from(out.as_slice())
-            .map_err(|_| anyhow::anyhow!("Invalid SHA-256 length"))?
+        hasher
+            .finalize_sha256_array()
+            .map_err(|e| anyhow::anyhow!(e))?
     };
 
     Ok(EncryptedMedia {

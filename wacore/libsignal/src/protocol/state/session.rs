@@ -226,35 +226,30 @@ impl SessionState {
 
     /// Returns the index of the receiver chain for the given sender, without cloning.
     /// This is more efficient than get_receiver_chain when you only need the index.
+    ///
+    /// Optimization: Compares serialized bytes directly instead of deserializing
+    /// each chain key to PublicKey, avoiding allocation and validation overhead.
     fn get_receiver_chain_index(
         &self,
         sender: &PublicKey,
     ) -> Result<Option<usize>, InvalidSessionError> {
+        // Pre-compute the serialized form of the sender key once
+        let sender_bytes = sender.serialize();
+
         for (idx, chain) in self.session.receiver_chains.iter().enumerate() {
             let key_bytes = chain
                 .sender_ratchet_key
                 .as_ref()
                 .ok_or(InvalidSessionError("missing receiver chain ratchet key"))?;
-            let chain_ratchet_key = PublicKey::deserialize(key_bytes)
-                .map_err(|_| InvalidSessionError("invalid receiver chain ratchet key"))?;
 
-            if &chain_ratchet_key == sender {
+            // Compare raw bytes directly instead of deserializing to PublicKey
+            // The stored key_bytes are already in serialized format (type byte + key bytes)
+            if key_bytes.as_slice() == sender_bytes.as_slice() {
                 return Ok(Some(idx));
             }
         }
 
         Ok(None)
-    }
-
-    pub fn get_receiver_chain(
-        &self,
-        sender: &PublicKey,
-    ) -> Result<Option<(session_structure::Chain, usize)>, InvalidSessionError> {
-        if let Some(idx) = self.get_receiver_chain_index(sender)? {
-            Ok(Some((self.session.receiver_chains[idx].clone(), idx)))
-        } else {
-            Ok(None)
-        }
     }
 
     pub fn get_receiver_chain_key(
