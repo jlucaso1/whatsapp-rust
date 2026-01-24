@@ -14,6 +14,7 @@ pub mod protocol;
 pub use wacore_noise::framing;
 pub mod handshake;
 pub mod history_sync;
+pub mod ib;
 pub use wacore_libsignal as libsignal;
 pub mod messages;
 pub mod net;

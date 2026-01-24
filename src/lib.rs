@@ -29,6 +29,7 @@ pub mod pdo;
 pub mod prekeys;
 pub mod receipt;
 pub mod retry;
+pub mod unified_session;
 
 pub mod appstate_sync;
 pub mod history_sync;

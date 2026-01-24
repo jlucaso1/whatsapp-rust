@@ -89,6 +89,8 @@ pub struct Client {
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
 
+    pub(crate) unified_session: crate::unified_session::UnifiedSessionManager,
+
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
@@ -223,6 +225,7 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
+            unified_session: crate::unified_session::UnifiedSessionManager::new(),
 
             session_locks: Cache::builder()
                 .time_to_live(Duration::from_secs(300)) // 5 minute TTL
@@ -826,6 +829,8 @@ impl Client {
         *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
+        self.update_server_time_offset(node);
+
         if let Some(lid_str) = node.attrs.get("lid") {
             if let Ok(lid) = lid_str.parse::<Jid>() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -878,6 +883,9 @@ impl Client {
                 );
                 return;
             }
+
+            check_generation!();
+            client_clone.send_unified_session().await;
 
             // === Establish session with primary phone for PDO ===
             // This must happen BEFORE we exit passive mode (before offline messages arrive).
@@ -1568,6 +1576,26 @@ impl Client {
 
     pub fn is_logged_in(&self) -> bool {
         self.is_logged_in.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::node::Node) {
+        self.unified_session.update_server_time_offset(node);
+    }
+
+    pub(crate) async fn send_unified_session(&self) {
+        if !self.is_connected() {
+            debug!(target: "Client/UnifiedSession", "Skipping: not connected");
+            return;
+        }
+
+        let Some((node, _sequence)) = self.unified_session.prepare_send().await else {
+            return;
+        };
+
+        if let Err(e) = self.send_node(node).await {
+            debug!(target: "Client/UnifiedSession", "Send failed: {e}");
+            self.unified_session.clear_last_sent().await;
+        }
     }
 
     /// Waits for the noise socket to be established.
@@ -2692,5 +2720,223 @@ mod tests {
         );
 
         info!("✅ test_immediate_session_does_not_wait_for_offline_sync passed");
+    }
+
+    #[test]
+    fn test_unified_session_id_calculation() {
+        // Test the mathematical calculation of the unified session ID.
+        // Formula: (now_ms + server_offset_ms + 3_days_ms) % 7_days_ms
+
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        const WEEK_MS: i64 = 7 * DAY_MS;
+        const OFFSET_MS: i64 = 3 * DAY_MS;
+
+        // Helper function matching the implementation
+        fn calculate_session_id(now_ms: i64, server_offset_ms: i64) -> i64 {
+            let adjusted_now = now_ms + server_offset_ms;
+            (adjusted_now + OFFSET_MS) % WEEK_MS
+        }
+
+        // Test 1: Zero offset
+        let now_ms = 1706000000000_i64; // Some arbitrary timestamp
+        let id = calculate_session_id(now_ms, 0);
+        assert!(
+            (0..WEEK_MS).contains(&id),
+            "Session ID should be in [0, WEEK_MS)"
+        );
+
+        // Test 2: Positive server offset (server is ahead)
+        let id_with_positive_offset = calculate_session_id(now_ms, 5000);
+        assert!(
+            (0..WEEK_MS).contains(&id_with_positive_offset),
+            "Session ID should be in [0, WEEK_MS)"
+        );
+        // The ID should be different from zero offset (unless wrap-around)
+        // Not testing exact value as it depends on the offset
+
+        // Test 3: Negative server offset (server is behind)
+        let id_with_negative_offset = calculate_session_id(now_ms, -5000);
+        assert!(
+            (0..WEEK_MS).contains(&id_with_negative_offset),
+            "Session ID should be in [0, WEEK_MS)"
+        );
+
+        // Test 4: Verify modulo wrap-around
+        // If adjusted_now + OFFSET_MS >= WEEK_MS, it should wrap
+        let wrap_test_now = WEEK_MS - OFFSET_MS + 1000; // Should produce small result
+        let wrapped_id = calculate_session_id(wrap_test_now, 0);
+        assert_eq!(wrapped_id, 1000, "Should wrap around correctly");
+
+        // Test 5: Edge case - at exact boundary
+        let boundary_now = WEEK_MS - OFFSET_MS;
+        let boundary_id = calculate_session_id(boundary_now, 0);
+        assert_eq!(boundary_id, 0, "At exact boundary should be 0");
+    }
+
+    #[tokio::test]
+    async fn test_server_time_offset_extraction() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Initially, offset should be 0
+        assert_eq!(
+            client.unified_session.server_time_offset_ms(),
+            0,
+            "Initial offset should be 0"
+        );
+
+        // Create a node with a 't' attribute
+        let server_time = chrono::Utc::now().timestamp() + 10; // Server is 10 seconds ahead
+        let node = NodeBuilder::new("success")
+            .attr("t", server_time.to_string())
+            .build();
+
+        // Update the offset
+        client.update_server_time_offset(&node);
+
+        // The offset should be approximately 10 * 1000 = 10000 ms
+        // Allow some tolerance for timing differences during the test
+        let offset = client.unified_session.server_time_offset_ms();
+        assert!(
+            (offset - 10000).abs() < 1000, // Allow 1 second tolerance
+            "Offset should be approximately 10000ms, got {}",
+            offset
+        );
+
+        // Test with no 't' attribute - should not change offset
+        let node_no_t = NodeBuilder::new("success").build();
+        client.update_server_time_offset(&node_no_t);
+        let offset_after = client.unified_session.server_time_offset_ms();
+        assert!(
+            (offset_after - offset).abs() < 100, // Should be same (or very close)
+            "Offset should not change when 't' is missing"
+        );
+
+        // Test with invalid 't' attribute - should not change offset
+        let node_invalid = NodeBuilder::new("success")
+            .attr("t", "not_a_number")
+            .build();
+        client.update_server_time_offset(&node_invalid);
+        let offset_after_invalid = client.unified_session.server_time_offset_ms();
+        assert!(
+            (offset_after_invalid - offset).abs() < 100,
+            "Offset should not change when 't' is invalid"
+        );
+
+        // Test with negative/zero 't' - should not change offset
+        let node_zero = NodeBuilder::new("success").attr("t", "0").build();
+        client.update_server_time_offset(&node_zero);
+        let offset_after_zero = client.unified_session.server_time_offset_ms();
+        assert!(
+            (offset_after_zero - offset).abs() < 100,
+            "Offset should not change when 't' is 0"
+        );
+
+        info!("✅ test_server_time_offset_extraction passed");
+    }
+
+    #[tokio::test]
+    async fn test_unified_session_manager_integration() {
+        // Test the unified session manager through the client
+
+        let backend = Arc::new(
+            crate::store::SqliteStore::new(":memory:")
+                .await
+                .expect("Failed to create in-memory backend for test"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Initially, sequence should be 0
+        assert_eq!(
+            client.unified_session.sequence(),
+            0,
+            "Initial sequence should be 0"
+        );
+
+        // First prepare_send should succeed and return sequence 1 (pre-increment like WhatsApp Web)
+        let result = client.unified_session.prepare_send().await;
+        assert!(result.is_some(), "First send should succeed");
+        let (node, seq) = result.unwrap();
+        assert_eq!(node.tag, "ib", "Should be an IB stanza");
+        assert_eq!(seq, 1, "First sequence should be 1 (pre-increment)");
+
+        // Sequence counter should now be 1
+        assert_eq!(client.unified_session.sequence(), 1);
+
+        // Second prepare_send should be blocked (duplicate prevention)
+        let result2 = client.unified_session.prepare_send().await;
+        assert!(result2.is_none(), "Duplicate should be prevented");
+
+        // Sequence should still be 1 (not incremented for duplicates)
+        assert_eq!(client.unified_session.sequence(), 1);
+
+        // Clear last sent and try again - sequence resets on "new" session ID
+        client.unified_session.clear_last_sent().await;
+        let result3 = client.unified_session.prepare_send().await;
+        assert!(result3.is_some(), "Should succeed after clearing");
+        let (_, seq3) = result3.unwrap();
+        assert_eq!(seq3, 1, "Sequence resets when session ID changes");
+        assert_eq!(client.unified_session.sequence(), 1);
+
+        info!("✅ test_unified_session_manager_integration passed");
+    }
+
+    #[test]
+    fn test_unified_session_protocol_node() {
+        // Test the type-safe protocol node implementation
+        use wacore::ib::{IbStanza, UnifiedSession};
+        use wacore::protocol::ProtocolNode;
+
+        // Create a unified session
+        let session = UnifiedSession::new("123456789");
+        assert_eq!(session.id, "123456789");
+        assert_eq!(session.tag(), "unified_session");
+
+        // Convert to node
+        let node = session.into_node();
+        assert_eq!(node.tag, "unified_session");
+        assert_eq!(node.attrs.get("id"), Some(&"123456789".to_string()));
+
+        // Create an IB stanza
+        let stanza = IbStanza::unified_session(UnifiedSession::new("987654321"));
+        assert_eq!(stanza.tag(), "ib");
+
+        // Convert to node and verify structure
+        let ib_node = stanza.into_node();
+        assert_eq!(ib_node.tag, "ib");
+        let children = ib_node.children().expect("IB stanza should have children");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].tag, "unified_session");
+        assert_eq!(children[0].attrs.get("id"), Some(&"987654321".to_string()));
+
+        info!("✅ test_unified_session_protocol_node passed");
     }
 }

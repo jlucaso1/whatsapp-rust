@@ -128,6 +128,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
     // Clear pair code state if active
     *client.pair_code_state.lock().await = wacore::pair_code::PairCodeState::Completed;
 
+    client.update_server_time_offset(request_node);
+
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
         None => {
@@ -271,6 +273,11 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 error!("Failed to send pair-device-sign: {e}");
                 return;
             }
+
+            let client_for_unified = client.clone();
+            tokio::spawn(async move {
+                client_for_unified.send_unified_session().await;
+            });
 
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.
