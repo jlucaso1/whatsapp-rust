@@ -136,11 +136,10 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     for op in &notification.operations {
         debug!(
             target: "Client",
-            "Device notification: user={}, type={:?}, devices={:?}, device_hash={:?}",
+            "Device notification: user={}, type={:?}, devices={:?}",
             notification.user(),
             op.operation_type,
-            op.device_ids(),
-            op.device_hash
+            op.device_ids()
         );
 
         // Invalidate the device cache for this user
@@ -161,7 +160,6 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
                 })
                 .collect(),
             key_index: op.key_index.clone(),
-            device_hash: op.device_hash.clone(),
             contact_hash: op.contact_hash.clone(),
         });
         client.core.event_bus.dispatch(&event);
@@ -314,21 +312,18 @@ mod tests {
 
     #[test]
     fn test_parse_device_add_notification() {
-        // Use the new stanza format with jid attribute instead of id
+        // Per WhatsApp Web: add operation has single device + key-index-list
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([NodeBuilder::new("add")
-                .attr("device_hash", "2:abc123")
                 .children([
                     NodeBuilder::new("device")
                         .attr("jid", "1234567890:1@s.whatsapp.net")
                         .build(),
-                    NodeBuilder::new("device")
-                        .attr("jid", "1234567890:2@s.whatsapp.net")
-                        .build(),
                     NodeBuilder::new("key-index-list")
                         .attr("ts", "1000")
+                        .bytes(vec![0x01, 0x02, 0x03])
                         .build(),
                 ])
                 .build()])
@@ -340,10 +335,12 @@ mod tests {
             parsed.operations[0].operation_type,
             DeviceNotificationType::Add
         );
-        assert_eq!(parsed.operations[0].device_ids(), vec![1, 2]);
+        assert_eq!(parsed.operations[0].device_ids(), vec![1]);
+        // Verify key index info
+        assert!(parsed.operations[0].key_index.is_some());
         assert_eq!(
-            parsed.operations[0].device_hash,
-            Some("2:abc123".to_string())
+            parsed.operations[0].key_index.as_ref().unwrap().timestamp,
+            1000
         );
     }
 
@@ -353,7 +350,6 @@ mod tests {
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([NodeBuilder::new("remove")
-                .attr("device_hash", "2:xyz789")
                 .children([
                     NodeBuilder::new("device")
                         .attr("jid", "1234567890:3@s.whatsapp.net")
@@ -411,12 +407,12 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_device_operations() {
+        // Multiple operations in a single notification
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([
                 NodeBuilder::new("add")
-                    .attr("device_hash", "2:add_hash")
                     .children([
                         NodeBuilder::new("device")
                             .attr("jid", "1234567890:5@s.whatsapp.net")
@@ -427,7 +423,6 @@ mod tests {
                     ])
                     .build(),
                 NodeBuilder::new("remove")
-                    .attr("device_hash", "2:remove_hash")
                     .children([
                         NodeBuilder::new("device")
                             .attr("jid", "1234567890:2@s.whatsapp.net")
