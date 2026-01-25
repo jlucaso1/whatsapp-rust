@@ -235,10 +235,7 @@ pub struct DeviceListUpdate {
     /// Key index info (for add/remove)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_index: Option<crate::stanza::devices::KeyIndexInfo>,
-    /// Device hash (for add/remove)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_hash: Option<String>,
-    /// Contact hash (for update - lookup)
+    /// Contact hash (for update - used for contact lookup)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_hash: Option<String>,
 }

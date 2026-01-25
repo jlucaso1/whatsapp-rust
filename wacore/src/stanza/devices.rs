@@ -1,5 +1,10 @@
+//! Device notification stanza types.
+//!
+//! Parses `<notification type="devices">` stanzas for device add/remove/update.
+//!
+
 use crate::StringEnum;
-use crate::iq::node::{collect_children_lenient, optional_attr, optional_child};
+use crate::iq::node::{optional_attr, required_child};
 use crate::protocol::ProtocolNode;
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -60,11 +65,12 @@ impl ProtocolNode for KeyIndexInfo {
         if node.tag != "key-index-list" {
             return Err(anyhow!("expected <key-index-list>, got <{}>", node.tag));
         }
-        let timestamp = node
+        let ts_u64 = node
             .attrs()
             .optional_u64("ts")
-            .ok_or_else(|| anyhow!("key-index-list missing required 'ts' attribute"))?
-            as i64;
+            .ok_or_else(|| anyhow!("key-index-list missing required 'ts' attribute"))?;
+        let timestamp = i64::try_from(ts_u64)
+            .map_err(|_| anyhow!("key-index-list 'ts' value {} exceeds i64::MAX", ts_u64))?;
         let signed_bytes = match &node.content {
             Some(NodeContent::Bytes(b)) if !b.is_empty() => Some(b.clone()),
             _ => None,
@@ -84,6 +90,9 @@ impl ProtocolNode for KeyIndexInfo {
 /// ```
 ///
 /// Device ID is extracted from the JID's device part (e.g., 75 from "user:75@lid").
+///
+/// Per WhatsApp Web: if both `jid` and `lid` attributes are present, the device IDs
+/// must match or the notification is rejected.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceElement {
     /// Device JID (contains user and device ID)
@@ -91,7 +100,7 @@ pub struct DeviceElement {
     /// Optional key index
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_index: Option<u32>,
-    /// Optional LID (should match jid device ID if present)
+    /// Optional LID (device ID must match jid's device ID if present)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lid: Option<Jid>,
 }
@@ -128,8 +137,32 @@ impl ProtocolNode for DeviceElement {
             .attrs()
             .optional_jid("jid")
             .ok_or_else(|| anyhow!("device missing required 'jid' attribute"))?;
-        let key_index = node.attrs().optional_u64("key-index").map(|v| v as u32);
+
+        // Parse key-index with checked conversion (u64 -> u32)
+        let key_index = match node.attrs().optional_u64("key-index") {
+            Some(v) => Some(
+                u32::try_from(v)
+                    .map_err(|_| anyhow!("device 'key-index' value {} exceeds u32::MAX", v))?,
+            ),
+            None => None,
+        };
+
         let lid = node.attrs().optional_jid("lid");
+
+        // Per WhatsApp Web: validate device ID matches between jid and lid attributes
+        // Reference: 5Yec01dI04o.js:23169-23175
+        if let Some(ref lid_jid) = lid {
+            let jid_device_id = jid.device;
+            let lid_device_id = lid_jid.device;
+            if jid_device_id != lid_device_id {
+                return Err(anyhow!(
+                    "device id mismatch between jid ({}) and lid ({}) attributes",
+                    jid_device_id,
+                    lid_device_id
+                ));
+            }
+        }
+
         Ok(Self {
             jid,
             key_index,
@@ -140,63 +173,83 @@ impl ProtocolNode for DeviceElement {
 
 /// Operation content (add/remove/update child element).
 ///
-/// Wire format:
+/// Wire format per WhatsApp Web (5Yec01dI04o.js:23141-23180):
 /// ```xml
-/// <add device_hash="2:nivm0MNH">
-///   <device jid="user:75@lid"/>
+/// <add>
+///   <device jid="user:75@lid" key-index="2"/>
 ///   <key-index-list ts="...">SIGNED_BYTES</key-index-list>
 /// </add>
 /// <!-- OR -->
-/// <remove device_hash="2:nivm0MNH">
+/// <remove>
 ///   <device jid="user:75@lid"/>
-///   <key-index-list ts="..."/>
+///   <key-index-list ts="..."/>  <!-- ts required for remove -->
 /// </remove>
 /// <!-- OR -->
 /// <update hash="CONTACT_HASH"/>
 /// ```
+///
+/// Note: WhatsApp Web does NOT read any attributes from add/remove nodes.
+/// The `device_hash` attribute (if present) is not used by the official client.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceOperation {
     /// Operation type (add/remove/update)
     pub operation_type: DeviceNotificationType,
-    /// Device hash (for add/remove) - from `device_hash` attribute
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_hash: Option<String>,
-    /// Contact hash (for update) - from `hash` attribute, used for contact lookup
+    /// Contact hash (for update only) - from `hash` attribute, used for contact lookup
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_hash: Option<String>,
-    /// Device elements (for add/remove)
+    /// Device elements (for add/remove, single device per WhatsApp Web)
     pub devices: Vec<DeviceElement>,
-    /// Key index info (required for add/remove)
+    /// Key index info (required for add/remove per WhatsApp Web)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_index: Option<KeyIndexInfo>,
 }
 
 impl DeviceOperation {
     /// Parse from an add/remove/update child node.
+    ///
+    /// Per WhatsApp Web (5Yec01dI04o.js:23141-23157):
+    /// - `key-index-list` is REQUIRED for add/remove operations
+    /// - `ts` attribute is REQUIRED for remove operations
     pub fn try_from_child(node: &Node) -> Result<Self> {
         let operation_type = DeviceNotificationType::try_from(node.tag.as_str())
             .map_err(|_| anyhow!("unknown device operation: {}", node.tag))?;
 
-        let (device_hash, contact_hash) = match operation_type {
+        match operation_type {
             DeviceNotificationType::Add | DeviceNotificationType::Remove => {
-                (optional_attr(node, "device_hash").map(String::from), None)
+                // Per WhatsApp Web: key-index-list is required for add/remove
+                let key_index_node = required_child(node, "key-index-list")?;
+                let key_index = KeyIndexInfo::try_from_node(key_index_node)?;
+
+                // Per WhatsApp Web: timestamp is required for remove
+                if operation_type == DeviceNotificationType::Remove && key_index.timestamp == 0 {
+                    return Err(anyhow!(
+                        "timestamp is required to handle device remove notification"
+                    ));
+                }
+
+                // Parse device element
+                let device_node = required_child(node, "device")?;
+                let device = DeviceElement::try_from_node(device_node)?;
+
+                Ok(Self {
+                    operation_type,
+                    contact_hash: None,
+                    devices: vec![device],
+                    key_index: Some(key_index),
+                })
             }
-            DeviceNotificationType::Update => (None, optional_attr(node, "hash").map(String::from)),
-        };
+            DeviceNotificationType::Update => {
+                // Update only has hash attribute, no children needed
+                let contact_hash = optional_attr(node, "hash").map(String::from);
 
-        let devices = collect_children_lenient::<DeviceElement>(node, "device");
-
-        let key_index = optional_child(node, "key-index-list")
-            .map(KeyIndexInfo::try_from_node)
-            .transpose()?;
-
-        Ok(Self {
-            operation_type,
-            device_hash,
-            contact_hash,
-            devices,
-            key_index,
-        })
+                Ok(Self {
+                    operation_type,
+                    contact_hash,
+                    devices: Vec::new(),
+                    key_index: None,
+                })
+            }
+        }
     }
 
     /// Get device IDs as a Vec (convenience method for logging).
@@ -210,14 +263,14 @@ impl DeviceOperation {
 /// Wire format:
 /// ```xml
 /// <notification from="185169143189667@lid" id="..." t="..." type="devices" lid="...">
-///   <remove device_hash="2:nivm0MNH">
+///   <remove>
 ///     <device jid="185169143189667:75@lid"/>
 ///     <key-index-list ts="1769296600"/>
 ///   </remove>
 /// </notification>
 /// ```
 ///
-/// Reference: WhatsApp Web `WAWebHandleDeviceNotification` parser (lines 23125-23183)
+/// Reference: WhatsApp Web `WAWebHandleDeviceNotification` parser (5Yec01dI04o.js:23125-23183)
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceNotification {
     /// User JID (from attribute)
@@ -251,7 +304,13 @@ impl DeviceNotification {
         let stanza_id = optional_attr(node, "id")
             .map(String::from)
             .unwrap_or_default();
-        let timestamp = node.attrs().optional_u64("t").unwrap_or(0) as i64;
+
+        // Parse timestamp with checked conversion
+        let timestamp = match node.attrs().optional_u64("t") {
+            Some(t) => i64::try_from(t)
+                .map_err(|_| anyhow!("notification timestamp {} exceeds i64::MAX", t))?,
+            None => 0,
+        };
 
         let mut operations = Vec::new();
         if let Some(children) = node.children() {
@@ -327,7 +386,6 @@ mod tests {
             .attr("id", "511477682")
             .attr("t", "1769296817")
             .children([NodeBuilder::new("remove")
-                .attr("device_hash", "2:nivm0MNH")
                 .children([
                     NodeBuilder::new("device")
                         .attr("jid", "185169143189667:75@lid")
@@ -347,7 +405,6 @@ mod tests {
 
         let op = &parsed.operations[0];
         assert_eq!(op.operation_type, DeviceNotificationType::Remove);
-        assert_eq!(op.device_hash, Some("2:nivm0MNH".to_string()));
         assert_eq!(op.devices.len(), 1);
         assert_eq!(op.devices[0].device_id(), 75);
         assert_eq!(op.key_index.as_ref().unwrap().timestamp, 1769296600);
@@ -363,7 +420,6 @@ mod tests {
             .attr("id", "123")
             .attr("t", "1000")
             .children([NodeBuilder::new("add")
-                .attr("device_hash", "2:abc123")
                 .children([
                     NodeBuilder::new("device")
                         .attr("jid", "15551234567:64@s.whatsapp.net")
@@ -412,7 +468,6 @@ mod tests {
         let op = &parsed.operations[0];
         assert_eq!(op.operation_type, DeviceNotificationType::Update);
         assert_eq!(op.contact_hash, Some("contact_hash_value".to_string()));
-        assert!(op.device_hash.is_none());
         assert!(op.devices.is_empty());
     }
 
@@ -432,51 +487,105 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_operations() {
+    fn test_missing_key_index_list_fails() {
+        // Per WhatsApp Web: key-index-list is required for add/remove
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "15551234567@s.whatsapp.net")
-            .attr("id", "789")
-            .attr("t", "3000")
-            .children([
-                NodeBuilder::new("add")
-                    .attr("device_hash", "2:hash1")
-                    .children([
-                        NodeBuilder::new("device")
-                            .attr("jid", "15551234567:64@s.whatsapp.net")
-                            .build(),
-                        NodeBuilder::new("key-index-list")
-                            .attr("ts", "2999")
-                            .build(),
-                    ])
-                    .build(),
-                NodeBuilder::new("remove")
-                    .attr("device_hash", "2:hash2")
-                    .children([
-                        NodeBuilder::new("device")
-                            .attr("jid", "15551234567:32@s.whatsapp.net")
-                            .build(),
-                        NodeBuilder::new("key-index-list")
-                            .attr("ts", "2998")
-                            .build(),
-                    ])
-                    .build(),
-            ])
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([NodeBuilder::new("add")
+                .children([NodeBuilder::new("device")
+                    .attr("jid", "15551234567:64@s.whatsapp.net")
+                    .build()])
+                .build()])
+            .build();
+
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("key-index-list"));
+    }
+
+    #[test]
+    fn test_remove_without_timestamp_fails() {
+        // Per WhatsApp Web: timestamp is required for remove
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([NodeBuilder::new("remove")
+                .children([
+                    NodeBuilder::new("device")
+                        .attr("jid", "15551234567:64@s.whatsapp.net")
+                        .build(),
+                    NodeBuilder::new("key-index-list")
+                        .attr("ts", "0") // Zero timestamp should fail for remove
+                        .build(),
+                ])
+                .build()])
+            .build();
+
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("timestamp is required")
+        );
+    }
+
+    #[test]
+    fn test_device_id_mismatch_fails() {
+        // Per WhatsApp Web: device ID must match between jid and lid attributes
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([NodeBuilder::new("add")
+                .children([
+                    NodeBuilder::new("device")
+                        .attr("jid", "15551234567:64@s.whatsapp.net")
+                        .attr("lid", "100000000000001:99@lid") // Different device ID
+                        .build(),
+                    NodeBuilder::new("key-index-list").attr("ts", "999").build(),
+                ])
+                .build()])
+            .build();
+
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("device id mismatch")
+        );
+    }
+
+    #[test]
+    fn test_device_with_matching_lid() {
+        // Device IDs match - should succeed
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([NodeBuilder::new("add")
+                .children([
+                    NodeBuilder::new("device")
+                        .attr("jid", "15551234567:64@s.whatsapp.net")
+                        .attr("lid", "100000000000001:64@lid") // Same device ID
+                        .build(),
+                    NodeBuilder::new("key-index-list").attr("ts", "999").build(),
+                ])
+                .build()])
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 2);
-
-        assert_eq!(
-            parsed.operations[0].operation_type,
-            DeviceNotificationType::Add
-        );
-        assert_eq!(parsed.operations[0].device_ids(), vec![64]);
-
-        assert_eq!(
-            parsed.operations[1].operation_type,
-            DeviceNotificationType::Remove
-        );
-        assert_eq!(parsed.operations[1].device_ids(), vec![32]);
+        assert_eq!(parsed.operations[0].devices[0].device_id(), 64);
+        assert!(parsed.operations[0].devices[0].lid.is_some());
     }
 }
