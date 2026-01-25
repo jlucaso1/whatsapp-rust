@@ -448,12 +448,14 @@ impl SessionState {
 
         let chain = &mut self.session.receiver_chains[chain_idx];
 
-        // OPTIMIZATION: Use push() instead of insert(0) to avoid O(n) shift on every insert.
+        // AMORTIZED EVICTION: Only prune when exceeding MAX + threshold.
+        // This reduces O(n) drain() calls from every insert to once every PRUNE_THRESHOLD inserts.
         // The lookup in get_message_keys() does a linear search by counter value, so order
-        // doesn't matter. Eviction now uses remove(0) which is O(n) but only happens when
-        // exceeding MAX_MESSAGE_KEYS, not on every insert.
-        if chain.message_keys.len() >= consts::MAX_MESSAGE_KEYS {
-            chain.message_keys.remove(0);
+        // doesn't matter for correctness.
+        let len = chain.message_keys.len();
+        if len > consts::MAX_MESSAGE_KEYS + consts::MESSAGE_KEY_PRUNE_THRESHOLD {
+            let excess = len - consts::MAX_MESSAGE_KEYS;
+            chain.message_keys.drain(..excess);
         }
         chain.message_keys.push(message_keys.into_pb());
 
@@ -1061,20 +1063,28 @@ mod tests {
         let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
         state.add_receiver_chain(&sender_key, &chain_key);
 
-        // Add MAX_MESSAGE_KEYS + 10 keys
-        for counter in 0..(consts::MAX_MESSAGE_KEYS + 10) as u32 {
+        // Amortized eviction uses MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Eviction triggers when len > MAX_MESSAGE_KEYS + MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Add MAX_MESSAGE_KEYS + 100 keys to ensure eviction happens.
+        let total_keys = consts::MAX_MESSAGE_KEYS + 100;
+        for counter in 0..total_keys as u32 {
             let keys = create_test_message_key_generator(counter);
             state.set_message_keys(&sender_key, keys).unwrap();
         }
 
-        // Verify oldest keys are evicted (first 10 should be gone)
-        for counter in 0..10u32 {
+        // After adding 2100 keys:
+        // - At 2051: prune to 2000 (removes first 51 keys: 0-50)
+        // - Continue adding keys 2051-2099 (49 more)
+        // - Final len = 2049, no second prune since 2049 <= 2050
+        // So keys 0-50 (51 keys) should be evicted.
+        let evicted_count = consts::MESSAGE_KEY_PRUNE_THRESHOLD + 1; // 51
+        for counter in 0..evicted_count as u32 {
             let key = state.get_message_keys(&sender_key, counter).unwrap();
             assert!(key.is_none(), "Key {} should have been evicted", counter);
         }
 
         // Newer keys should still exist
-        for counter in 10..(consts::MAX_MESSAGE_KEYS + 10) as u32 {
+        for counter in evicted_count as u32..total_keys as u32 {
             let key = state.get_message_keys(&sender_key, counter).unwrap();
             assert!(key.is_some(), "Key {} should exist", counter);
         }

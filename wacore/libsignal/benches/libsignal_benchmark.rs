@@ -7,12 +7,13 @@ use iai_callgrind::{
 };
 use std::hint::black_box;
 use wacore_libsignal::protocol::{
-    CiphertextMessage, Direction, GenericSignedPreKey, IdentityChange, IdentityKey,
-    IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore,
-    ProtocolAddress, SenderKeyRecord, SenderKeyStore, SessionRecord, SessionStore, SignedPreKeyId,
-    SignedPreKeyRecord, SignedPreKeyStore, Timestamp, UsePQRatchet,
-    create_sender_key_distribution_message, group_decrypt, group_encrypt, message_decrypt,
-    message_encrypt, process_prekey_bundle, process_sender_key_distribution_message,
+    ChainKey, CiphertextMessage, Direction, GenericSignedPreKey, IdentityChange, IdentityKey,
+    IdentityKeyPair, IdentityKeyStore, KeyPair, MessageKeyGenerator, PreKeyBundle, PreKeyId,
+    PreKeyRecord, PreKeyStore, ProtocolAddress, RootKey, SenderKeyRecord, SenderKeyStore,
+    SessionRecord, SessionState, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
+    SignedPreKeyStore, Timestamp, UsePQRatchet, consts, create_sender_key_distribution_message,
+    group_decrypt, group_encrypt, message_decrypt, message_encrypt, process_prekey_bundle,
+    process_sender_key_distribution_message,
 };
 use wacore_libsignal::store::sender_key_name::SenderKeyName;
 
@@ -1159,6 +1160,80 @@ fn bench_promote_matching_session(data: (User, User, Vec<u8>)) {
     });
 }
 
+/// Helper function to create a test message key generator.
+fn create_test_message_key_generator(counter: u32) -> MessageKeyGenerator {
+    let mut seed = [0u8; 32];
+    seed[0] = counter as u8;
+    seed[1] = (counter >> 8) as u8;
+    seed[2] = (counter >> 16) as u8;
+    seed[3] = (counter >> 24) as u8;
+    MessageKeyGenerator::new_from_seed(&seed, counter)
+}
+
+/// Helper function to create a minimal valid SessionState for testing.
+fn create_test_session_state(
+    version: u8,
+    base_key: &wacore_libsignal::protocol::PublicKey,
+) -> SessionState {
+    let mut csprng = rand::rng();
+    let identity_keypair = KeyPair::generate(&mut csprng);
+    let their_identity = IdentityKey::new(identity_keypair.public_key);
+    let our_identity = IdentityKey::new(KeyPair::generate(&mut csprng).public_key);
+    let root_key = RootKey::new([0u8; 32]);
+
+    let mut state = SessionState::new(version, &our_identity, &their_identity, &root_key, base_key);
+
+    // Add a sender chain to make it usable
+    let sender_keypair = KeyPair::generate(&mut csprng);
+    let chain_key = ChainKey::new([1u8; 32], 0);
+    state.set_sender_chain(&sender_keypair, &chain_key);
+
+    state
+}
+
+/// Setup for message key eviction benchmark.
+/// Creates a session with a receiver chain pre-filled near capacity.
+fn setup_message_key_eviction() -> (SessionState, wacore_libsignal::protocol::PublicKey) {
+    let mut csprng = rand::rng();
+    let base_key = KeyPair::generate(&mut csprng).public_key;
+    let mut state = create_test_session_state(3, &base_key);
+
+    // Add a receiver chain
+    let sender_key = KeyPair::generate(&mut csprng).public_key;
+    let chain_key = ChainKey::new([2u8; 32], 0);
+    state.add_receiver_chain(&sender_key, &chain_key);
+
+    // Pre-fill the chain to MAX_MESSAGE_KEYS - 1 (one less than capacity)
+    // This simulates a session that has been receiving out-of-order messages
+    // and is about to hit the eviction threshold
+    for counter in 0..(consts::MAX_MESSAGE_KEYS - 1) as u32 {
+        let keys = create_test_message_key_generator(counter);
+        state.set_message_keys(&sender_key, keys).unwrap();
+    }
+
+    (state, sender_key)
+}
+
+// Benchmark message key insertion with amortized eviction.
+// This tests the set_message_keys optimization with PRUNE_THRESHOLD.
+// We insert 200 keys beyond MAX_MESSAGE_KEYS to measure multiple eviction cycles.
+#[library_benchmark]
+#[bench::eviction(setup = setup_message_key_eviction)]
+fn bench_message_key_eviction(data: (SessionState, wacore_libsignal::protocol::PublicKey)) {
+    let (mut state, sender_key) = data;
+    let start_counter = (consts::MAX_MESSAGE_KEYS - 1) as u32;
+
+    // Insert 200 keys beyond capacity - this will trigger eviction cycles
+    // With PRUNE_THRESHOLD=50, we expect ~4 eviction events
+    for i in 0..200u32 {
+        let counter = start_counter + i;
+        let keys = create_test_message_key_generator(counter);
+        state.set_message_keys(&sender_key, keys).unwrap();
+    }
+
+    black_box(state);
+}
+
 library_benchmark_group!(
     name = dm_group;
     benchmarks =
@@ -1194,7 +1269,8 @@ library_benchmark_group!(
     benchmarks =
         bench_decrypt_with_previous_session,
         bench_out_of_order_decryption,
-        bench_promote_matching_session
+        bench_promote_matching_session,
+        bench_message_key_eviction
 );
 
 main!(

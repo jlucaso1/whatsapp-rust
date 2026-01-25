@@ -17,7 +17,7 @@
 #![warn(clippy::unwrap_used)]
 #![deny(unsafe_code)]
 
-mod consts;
+pub mod consts;
 mod crypto;
 pub mod error;
 mod group_cipher;
@@ -51,8 +51,8 @@ pub use protocol::{
     PreKeySignalMessage, SenderKeyDistributionMessage, SenderKeyMessage, SignalMessage,
 };
 pub use ratchet::{
-    AliceSignalProtocolParameters, BobSignalProtocolParameters, ChainKey, RootKey, UsePQRatchet,
-    derive_keys, initialize_alice_session_record, initialize_bob_session,
+    AliceSignalProtocolParameters, BobSignalProtocolParameters, ChainKey, MessageKeyGenerator,
+    RootKey, UsePQRatchet, derive_keys, initialize_alice_session_record, initialize_bob_session,
     initialize_bob_session_record,
 };
 pub use sender_keys::{SenderKeyRecord, SenderKeyState};

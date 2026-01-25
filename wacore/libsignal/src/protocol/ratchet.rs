@@ -8,7 +8,7 @@ mod params;
 
 use rand::{CryptoRng, Rng};
 
-pub use self::keys::{ChainKey, RootKey};
+pub use self::keys::{ChainKey, MessageKeyGenerator, RootKey};
 pub use self::params::{AliceSignalProtocolParameters, BobSignalProtocolParameters, UsePQRatchet};
 use crate::protocol::state::SessionState;
 use crate::protocol::{KeyPair, Result, SessionRecord};

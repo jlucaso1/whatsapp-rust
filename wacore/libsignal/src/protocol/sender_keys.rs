@@ -261,10 +261,10 @@ impl SenderKeyState {
         self.state
             .sender_message_keys
             .push(sender_message_key.as_protobuf());
-        // Remove oldest keys if we exceed capacity.
-        // Using drain() is O(n) once vs remove(0) in a loop which is O(n) per removal.
+        // AMORTIZED EVICTION: Only prune when exceeding MAX + threshold.
+        // This reduces O(n) drain() calls from every insert to once every PRUNE_THRESHOLD inserts.
         let len = self.state.sender_message_keys.len();
-        if len > consts::MAX_MESSAGE_KEYS {
+        if len > consts::MAX_MESSAGE_KEYS + consts::MESSAGE_KEY_PRUNE_THRESHOLD {
             let excess = len - consts::MAX_MESSAGE_KEYS;
             self.state.sender_message_keys.drain(..excess);
         }
@@ -622,15 +622,22 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        // Add more than MAX_MESSAGE_KEYS
-        for i in 0..(consts::MAX_MESSAGE_KEYS + 100) {
+        // Amortized eviction uses MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Eviction triggers when len > MAX_MESSAGE_KEYS + MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Add MAX_MESSAGE_KEYS + 100 keys to ensure eviction happens.
+        let total_keys = consts::MAX_MESSAGE_KEYS + 100;
+        for i in 0..total_keys {
             let smk = SenderMessageKey::new(i as u32, [0xBB; 32]);
             state.add_sender_message_key(&smk);
         }
 
-        // Old keys should have been evicted
-        // The first keys should be gone
-        for i in 0..100 {
+        // After adding 2100 keys:
+        // - At 2051: prune to 2000 (removes first 51 keys: 0-50)
+        // - Continue adding keys 2051-2099 (49 more)
+        // - Final len = 2049, no second prune since 2049 <= 2050
+        // So keys 0-50 (51 keys) should be evicted.
+        let evicted_count = consts::MESSAGE_KEY_PRUNE_THRESHOLD + 1; // 51
+        for i in 0..evicted_count {
             let not_found = state.remove_sender_message_key(i as u32);
             assert!(
                 not_found.is_none(),
