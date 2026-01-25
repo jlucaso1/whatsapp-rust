@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 /// Invokes a callback macro with the list of all message types that have `context_info`.
@@ -268,17 +268,28 @@ impl MessageExt for wa::Message {
 /// directly if you need to modify a message in place.
 fn strip_nested_context_info(msg: &mut wa::Message) {
     fn clear_nested_context(ctx: &mut wa::ContextInfo) {
-        // Clear mentions (prevents accidental tagging)
+        // Always clear mentions (prevents accidental tagging)
         ctx.mentioned_jid.clear();
         ctx.group_mentions.clear();
 
-        // Clear quote-chain fields (matches WhatsApp Web behavior)
-        // This breaks the quote chain at the first level - when you quote a reply,
-        // the nested reply's quote info is stripped
-        ctx.quoted_message = None;
-        ctx.stanza_id = None;
-        ctx.remote_jid = None;
-        ctx.participant = None;
+        // Check if participant is a bot - if so, preserve quote chain
+        // WhatsApp Web (3JJWKHeu5-P.js:48737-48742) only clears quote-chain fields
+        // if the participant is NOT a bot
+        let is_bot = ctx
+            .participant
+            .as_ref()
+            .and_then(|p| Jid::from_str(p).ok())
+            .is_some_and(|jid| jid.is_bot());
+
+        if !is_bot {
+            // Clear quote-chain fields (matches WhatsApp Web behavior)
+            // This breaks the quote chain at the first level - when you quote a reply,
+            // the nested reply's quote info is stripped
+            ctx.quoted_message = None;
+            ctx.stanza_id = None;
+            ctx.remote_jid = None;
+            ctx.participant = None;
+        }
     }
 
     for_each_context_info_message!(msg, ctx, {
@@ -352,6 +363,60 @@ pub fn build_quote_context(
     wa::ContextInfo {
         stanza_id: Some(message_id.into()),
         participant: Some(sender_jid.into()),
+        quoted_message: Some(quoted_message.prepare_for_quote()),
+        ..Default::default()
+    }
+}
+
+/// Builds a quote context with proper participant resolution for special message types.
+///
+/// This matches WhatsApp Web's `getQuotedParticipantForContextInfo` (3JJWKHeu5-P.js:144304-144311)
+/// which resolves the participant based on message type:
+/// - Newsletter messages: uses the chat JID (the newsletter itself)
+/// - Group status messages: uses the sender (author field not available here)
+/// - Normal messages: uses the sender JID
+///
+/// # Arguments
+/// * `message_id` - The ID of the message being quoted
+/// * `sender_jid` - The JID of the sender of the message being quoted
+/// * `chat_jid` - The JID of the chat where the message was sent
+/// * `quoted_message` - The message being quoted
+///
+/// # Example
+///
+/// ```ignore
+/// use wacore::proto_helpers::{build_quote_context_with_info, MessageExt};
+///
+/// let context = build_quote_context_with_info(
+///     "3EB0123456789",
+///     &sender_jid,
+///     &chat_jid,
+///     &original_message,
+/// );
+/// ```
+pub fn build_quote_context_with_info(
+    message_id: impl Into<String>,
+    sender_jid: &Jid,
+    chat_jid: &Jid,
+    quoted_message: &wa::Message,
+) -> wa::ContextInfo {
+    // Resolve the correct participant based on message type
+    // (matches WhatsApp Web's getQuotedParticipantForContextInfo)
+    let participant = if chat_jid.is_newsletter() {
+        // Newsletter: use the chat JID (newsletter itself)
+        chat_jid.to_string()
+    } else if chat_jid.is_status_broadcast() {
+        // Group status: ideally use author, but we fall back to sender
+        // (author field not available in this context)
+        sender_jid.to_string()
+    } else {
+        // Normal: use sender
+        sender_jid.to_string()
+    };
+
+    wa::ContextInfo {
+        stanza_id: Some(message_id.into()),
+        participant: Some(participant),
         quoted_message: Some(quoted_message.prepare_for_quote()),
         ..Default::default()
     }
@@ -1033,5 +1098,153 @@ mod tests {
                 "set_context_info should succeed for this message type"
             );
         }
+    }
+
+    /// Test: Bot quote chains are preserved (matches WhatsApp Web behavior)
+    ///
+    /// WhatsApp Web (3JJWKHeu5-P.js:48737-48742) only clears quote-chain fields
+    /// if the participant is NOT a bot. Bot responses should preserve their
+    /// quote chains to maintain context.
+    #[test]
+    fn test_prepare_for_quote_preserves_bot_quote_chain() {
+        // Create message with bot participant in context (phone-number based bot)
+        let msg = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Bot reply".to_string()),
+                context_info: Some(Box::new(wa::ContextInfo {
+                    // Bot JID - starts with 1313555
+                    participant: Some("131355512345@s.whatsapp.net".to_string()),
+                    stanza_id: Some("bot-msg-id".to_string()),
+                    remote_jid: Some("chat@g.us".to_string()),
+                    quoted_message: Some(Box::new(wa::Message {
+                        conversation: Some("Original user message".to_string()),
+                        ..Default::default()
+                    })),
+                    mentioned_jid: vec!["user@s.whatsapp.net".to_string()],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let prepared = msg.prepare_for_quote();
+        let ctx = prepared
+            .extended_text_message
+            .as_ref()
+            .unwrap()
+            .context_info
+            .as_ref()
+            .unwrap();
+
+        // Bot quote chain should be preserved
+        assert!(
+            ctx.quoted_message.is_some(),
+            "Bot quote chain should be preserved"
+        );
+        assert!(ctx.stanza_id.is_some(), "Bot stanza_id should be preserved");
+        assert!(
+            ctx.participant.is_some(),
+            "Bot participant should be preserved"
+        );
+        assert!(
+            ctx.remote_jid.is_some(),
+            "Bot remote_jid should be preserved"
+        );
+
+        // But mentions should still be cleared
+        assert!(
+            ctx.mentioned_jid.is_empty(),
+            "Mentions should still be cleared even for bots"
+        );
+    }
+
+    /// Test: Bot with @bot server also has quote chain preserved
+    #[test]
+    fn test_prepare_for_quote_preserves_bot_server_quote_chain() {
+        let msg = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Bot reply".to_string()),
+                context_info: Some(Box::new(wa::ContextInfo {
+                    // Bot JID with @bot server
+                    participant: Some("mybot@bot".to_string()),
+                    stanza_id: Some("bot-msg-id".to_string()),
+                    quoted_message: Some(Box::new(wa::Message {
+                        conversation: Some("Original".to_string()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let prepared = msg.prepare_for_quote();
+        let ctx = prepared
+            .extended_text_message
+            .as_ref()
+            .unwrap()
+            .context_info
+            .as_ref()
+            .unwrap();
+
+        // Bot quote chain should be preserved
+        assert!(
+            ctx.quoted_message.is_some(),
+            "Bot (@bot server) quote chain should be preserved"
+        );
+    }
+
+    /// Test: Newsletter participant resolution uses chat JID
+    #[test]
+    fn test_build_quote_context_newsletter() {
+        let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "1234567890@newsletter".parse().unwrap();
+        let msg = wa::Message::default();
+
+        let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
+
+        // Newsletter should use chat JID as participant
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("1234567890@newsletter"),
+            "Newsletter participant should be the newsletter JID"
+        );
+        assert_eq!(ctx.stanza_id.as_deref(), Some("msg-id"));
+    }
+
+    /// Test: Normal message participant resolution uses sender JID
+    #[test]
+    fn test_build_quote_context_normal_message() {
+        let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "group@g.us".parse().unwrap();
+        let msg = wa::Message::default();
+
+        let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
+
+        // Normal message should use sender JID as participant
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("123456@s.whatsapp.net"),
+            "Normal message participant should be the sender JID"
+        );
+    }
+
+    /// Test: Status broadcast participant resolution uses sender JID (fallback)
+    #[test]
+    fn test_build_quote_context_status_broadcast() {
+        let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "status@broadcast".parse().unwrap();
+        let msg = wa::Message::default();
+
+        let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
+
+        // Status broadcast uses sender as fallback (author not available)
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("123456@s.whatsapp.net"),
+            "Status broadcast participant should fall back to sender"
+        );
     }
 }

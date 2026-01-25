@@ -32,17 +32,21 @@ impl MessageContext {
     /// Build a properly-formatted quote context for this message.
     ///
     /// This handles:
-    /// - Setting the correct stanza_id and participant
+    /// - Setting the correct stanza_id and participant (with special handling
+    ///   for newsletters and group status messages)
     /// - Stripping nested mentions from the quoted message to avoid
     ///   accidentally tagging people from the original message
+    /// - Preserving quote chains for bot messages (matching WhatsApp Web behavior)
     ///
     /// Use this if you need custom control over the message structure but
     /// still want correct quote handling.
     pub fn build_quote_context(&self) -> wa::ContextInfo {
-        // Use the standalone function from wacore for code reuse
-        wacore::proto_helpers::build_quote_context(
+        // Use the standalone function from wacore with full message info
+        // This handles newsletter/group status participant resolution
+        wacore::proto_helpers::build_quote_context_with_info(
             &self.info.id,
-            self.info.source.sender.to_string(),
+            &self.info.source.sender,
+            &self.info.source.chat,
             &self.message,
         )
     }
