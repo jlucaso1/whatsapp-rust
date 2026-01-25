@@ -873,10 +873,8 @@ mod tests {
         let node = build_reporting_node(&result);
         assert_eq!(node.tag, "reporting");
 
-        let children: Vec<_> = node.get_children_by_tag("reporting_token");
-        assert_eq!(children.len(), 1);
+        let token_node = node.get_children_by_tag("reporting_token").next().unwrap();
 
-        let token_node = children[0];
         assert_eq!(token_node.attrs().string("v"), "2");
 
         // CRITICAL: Verify the token content is BINARY BYTES, not a hex string.

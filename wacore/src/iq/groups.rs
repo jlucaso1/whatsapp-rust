@@ -680,7 +680,7 @@ mod tests {
             Some("Test Subject")
         );
 
-        let link_mode = node.get_children_by_tag("member_link_mode")[0];
+        let link_mode = node.get_children_by_tag("member_link_mode").next().unwrap();
         assert_eq!(
             link_mode.content.as_ref().and_then(|c| match c {
                 NodeContent::String(s) => Some(s.as_str()),

@@ -98,7 +98,6 @@ pub fn optional_attr_skipping_error(node: &Node, child_tag: &str, attr: &str) ->
 /// ```
 pub fn collect_children<T: ProtocolNode>(node: &Node, tag: &str) -> Result<Vec<T>, anyhow::Error> {
     node.get_children_by_tag(tag)
-        .iter()
         .map(|child| T::try_from_node(child))
         .collect()
 }
@@ -113,7 +112,6 @@ pub fn collect_children<T: ProtocolNode>(node: &Node, tag: &str) -> Result<Vec<T
 /// ```
 pub fn collect_children_lenient<T: ProtocolNode>(node: &Node, tag: &str) -> Vec<T> {
     node.get_children_by_tag(tag)
-        .iter()
         .filter_map(|child| match T::try_from_node(child) {
             Ok(item) => Some(item),
             Err(e) => {

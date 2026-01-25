@@ -257,12 +257,11 @@ impl Node {
         Some(current_node)
     }
 
-    pub fn get_children_by_tag(&self, tag: &str) -> Vec<&Node> {
-        if let Some(children) = self.children() {
-            children.iter().filter(|c| c.tag == tag).collect()
-        } else {
-            Vec::new()
-        }
+    pub fn get_children_by_tag<'a>(&'a self, tag: &'a str) -> impl Iterator<Item = &'a Node> {
+        self.children()
+            .into_iter()
+            .flatten()
+            .filter(move |c| c.tag == tag)
     }
 
     pub fn get_optional_child(&self, tag: &str) -> Option<&Node> {
@@ -319,12 +318,14 @@ impl<'a> NodeRef<'a> {
         Some(current_node)
     }
 
-    pub fn get_children_by_tag(&self, tag: &str) -> Vec<&NodeRef<'a>> {
-        if let Some(children) = self.children() {
-            children.iter().filter(|c| c.tag == tag).collect()
-        } else {
-            Vec::new()
-        }
+    pub fn get_children_by_tag<'b>(&'b self, tag: &'b str) -> impl Iterator<Item = &'b NodeRef<'a>>
+    where
+        'a: 'b,
+    {
+        self.children()
+            .into_iter()
+            .flatten()
+            .filter(move |c| c.tag == tag)
     }
 
     pub fn get_optional_child(&self, tag: &str) -> Option<&NodeRef<'a>> {

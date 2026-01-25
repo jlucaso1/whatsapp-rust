@@ -132,25 +132,22 @@ impl ProtocolNode for BlocklistResponse {
         // Response can be either:
         // 1. <list><item .../></list>
         // 2. Direct <item .../> children in the response node
-        let items = if let Some(list) = optional_child(node, "list") {
+        let entries = if let Some(list) = optional_child(node, "list") {
             list.get_children_by_tag("item")
         } else {
             node.get_children_by_tag("item")
-        };
-
-        let entries = items
-            .iter()
-            .filter_map(|item| match BlocklistEntry::try_from_node(item) {
-                Ok(entry) => Some(entry),
-                Err(e) => {
-                    warn!(
-                        target: "blocklist",
-                        "Failed to parse blocklist entry: {e}"
-                    );
-                    None
-                }
-            })
-            .collect();
+        }
+        .filter_map(|item| match BlocklistEntry::try_from_node(item) {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                warn!(
+                    target: "blocklist",
+                    "Failed to parse blocklist entry: {e}"
+                );
+                None
+            }
+        })
+        .collect();
 
         Ok(Self { entries })
     }
