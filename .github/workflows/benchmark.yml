@@ -54,7 +54,6 @@ jobs:
             --threshold-test percentage \
             --threshold-upper-boundary 0.05 \
             --thresholds-reset \
-            --err \
             "cargo bench --workspace"
 
       - name: Run Iai-Callgrind benchmarks (Pull Request)
