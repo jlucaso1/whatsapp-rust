@@ -67,6 +67,8 @@ impl PartialEq<str> for NodeValue {
     fn eq(&self, other: &str) -> bool {
         match self {
             NodeValue::String(s) => s == other,
+            // For JID, format and compare. This is rare since JIDs are typically
+            // accessed via optional_jid() or to_jid(), not string comparison.
             NodeValue::Jid(j) => j.to_string() == other,
         }
     }
