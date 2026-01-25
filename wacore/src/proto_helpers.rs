@@ -281,7 +281,16 @@ fn strip_nested_mentions(msg: &mut wa::Message) {
         view_once_message,
         view_once_message_v2,
         document_with_caption_message,
+        edited_message,
     );
+
+    // device_sent_message has a different structure (DeviceSentMessage vs FutureProofMessage)
+    // but also contains a nested message field that needs to be processed
+    if let Some(ref mut wrapper) = msg.device_sent_message
+        && let Some(ref mut inner) = wrapper.message
+    {
+        strip_nested_mentions(inner);
+    }
 }
 
 /// Builds a quote context for replying to a message.
@@ -394,13 +403,44 @@ mod tests {
         }
     }
 
-    /// Test: prepare_for_quote strips mentions from extended_text_message
+    /// Test: prepare_for_quote strips mentions from extended_text_message while preserving other fields
     ///
     /// WhatsApp Web behavior: When quoting a message, the new message's contextInfo
     /// should NOT carry over mentions from the quoted message's nested context_info.
+    /// However, all other message content (text, urls, captions, etc.) MUST be preserved.
     #[test]
-    fn test_prepare_for_quote_strips_mentions() {
-        let original = create_message_with_mentions();
+    fn test_prepare_for_quote_strips_mentions_preserves_content() {
+        use wa::message::extended_text_message::{FontType, PreviewType};
+
+        // Create a message with mentions AND other fields that should be preserved
+        let original = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("Hello @user1 @user2".to_string()),
+                matched_text: Some("https://example.com".to_string()),
+                description: Some("Example description".to_string()),
+                title: Some("Example Title".to_string()),
+                text_argb: Some(0xFFFFFF),
+                background_argb: Some(0x000000),
+                font: Some(FontType::SystemBold.into()),
+                preview_type: Some(PreviewType::Video.into()),
+                context_info: Some(Box::new(wa::ContextInfo {
+                    mentioned_jid: vec![
+                        "111111@s.whatsapp.net".to_string(),
+                        "222222@s.whatsapp.net".to_string(),
+                    ],
+                    group_mentions: vec![wa::GroupMention {
+                        group_jid: Some("120363012345@g.us".to_string()),
+                        group_subject: Some("Test Group".to_string()),
+                    }],
+                    // Other context_info fields that should be preserved
+                    is_forwarded: Some(true),
+                    forwarding_score: Some(5),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
 
         // Verify original has mentions
         let ext = original.extended_text_message.as_ref().unwrap();
@@ -423,8 +463,62 @@ mod tests {
             "group_mentions should be empty after prepare_for_quote"
         );
 
-        // Verify text is preserved
+        // Verify ALL other fields are preserved
         assert_eq!(ext.text.as_deref(), Some("Hello @user1 @user2"));
+        assert_eq!(ext.matched_text.as_deref(), Some("https://example.com"));
+        assert_eq!(ext.description.as_deref(), Some("Example description"));
+        assert_eq!(ext.title.as_deref(), Some("Example Title"));
+        assert_eq!(ext.text_argb, Some(0xFFFFFF));
+        assert_eq!(ext.background_argb, Some(0x000000));
+        assert_eq!(ext.font(), FontType::SystemBold);
+        assert_eq!(ext.preview_type(), PreviewType::Video);
+
+        // Other context_info fields should also be preserved (only mentions are cleared)
+        assert_eq!(ctx.is_forwarded, Some(true));
+        assert_eq!(ctx.forwarding_score, Some(5));
+    }
+
+    /// Test: prepare_for_quote preserves media message fields (caption, url, dimensions, etc.)
+    #[test]
+    fn test_prepare_for_quote_preserves_media_fields() {
+        let original = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                url: Some("https://mmg.whatsapp.net/...".to_string()),
+                mimetype: Some("image/jpeg".to_string()),
+                caption: Some("Check out this image!".to_string()),
+                file_sha256: Some(vec![1, 2, 3, 4]),
+                file_length: Some(12345),
+                height: Some(1080),
+                width: Some(1920),
+                media_key: Some(vec![5, 6, 7, 8]),
+                direct_path: Some("/v/t62.1234-5/...".to_string()),
+                context_info: Some(Box::new(wa::ContextInfo {
+                    mentioned_jid: vec!["someone@s.whatsapp.net".to_string()],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let prepared = original.prepare_for_quote();
+
+        let img = prepared.image_message.as_ref().unwrap();
+        let ctx = img.context_info.as_ref().unwrap();
+
+        // Mentions should be stripped
+        assert!(ctx.mentioned_jid.is_empty());
+
+        // All media fields should be preserved
+        assert_eq!(img.url.as_deref(), Some("https://mmg.whatsapp.net/..."));
+        assert_eq!(img.mimetype.as_deref(), Some("image/jpeg"));
+        assert_eq!(img.caption.as_deref(), Some("Check out this image!"));
+        assert_eq!(img.file_sha256, Some(vec![1, 2, 3, 4]));
+        assert_eq!(img.file_length, Some(12345));
+        assert_eq!(img.height, Some(1080));
+        assert_eq!(img.width, Some(1920));
+        assert_eq!(img.media_key, Some(vec![5, 6, 7, 8]));
+        assert_eq!(img.direct_path.as_deref(), Some("/v/t62.1234-5/..."));
     }
 
     /// Test: prepare_for_quote handles nested quoted messages recursively
@@ -663,6 +757,169 @@ mod tests {
             ctx.mentioned_jid.is_empty(),
             "Mentions inside view_once wrapper should be stripped"
         );
+    }
+
+    /// Test: prepare_for_quote handles device_sent_message wrapper
+    ///
+    /// DeviceSentMessage is used when a message is sent from another device
+    /// and synced to the current device. It wraps the actual message content.
+    #[test]
+    fn test_prepare_for_quote_device_sent_message() {
+        let device_sent_msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("1234567890@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                        text: Some("Message from other device".to_string()),
+                        context_info: Some(Box::new(wa::ContextInfo {
+                            mentioned_jid: vec![
+                                "user1@s.whatsapp.net".to_string(),
+                                "user2@s.whatsapp.net".to_string(),
+                            ],
+                            group_mentions: vec![wa::GroupMention {
+                                group_jid: Some("group@g.us".to_string()),
+                                group_subject: Some("Group Name".to_string()),
+                            }],
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
+                phash: Some("somephash".to_string()),
+            })),
+            ..Default::default()
+        };
+
+        let prepared = device_sent_msg.prepare_for_quote();
+
+        // Navigate through device_sent_message wrapper
+        let wrapper = prepared.device_sent_message.as_ref().unwrap();
+        let inner = wrapper.message.as_ref().unwrap();
+        let ext = inner.extended_text_message.as_ref().unwrap();
+        let ctx = ext.context_info.as_ref().unwrap();
+
+        // Mentions should be stripped
+        assert!(
+            ctx.mentioned_jid.is_empty(),
+            "mentioned_jid inside device_sent_message should be stripped"
+        );
+        assert!(
+            ctx.group_mentions.is_empty(),
+            "group_mentions inside device_sent_message should be stripped"
+        );
+
+        // Other fields should be preserved
+        assert_eq!(ext.text.as_deref(), Some("Message from other device"));
+        assert_eq!(
+            wrapper.destination_jid.as_deref(),
+            Some("1234567890@s.whatsapp.net")
+        );
+        assert_eq!(wrapper.phash.as_deref(), Some("somephash"));
+    }
+
+    /// Test: prepare_for_quote handles edited_message wrapper
+    ///
+    /// EditedMessage (FutureProofMessage) wraps messages that have been edited.
+    /// The nested message inside should also have its mentions stripped.
+    #[test]
+    fn test_prepare_for_quote_edited_message() {
+        let edited_msg = wa::Message {
+            edited_message: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message {
+                    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                        text: Some("Edited message text".to_string()),
+                        context_info: Some(Box::new(wa::ContextInfo {
+                            mentioned_jid: vec!["mentioned@s.whatsapp.net".to_string()],
+                            group_mentions: vec![wa::GroupMention {
+                                group_jid: Some("editedgroup@g.us".to_string()),
+                                group_subject: Some("Edited Group".to_string()),
+                            }],
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
+            })),
+            ..Default::default()
+        };
+
+        let prepared = edited_msg.prepare_for_quote();
+
+        // Navigate through edited_message wrapper
+        let inner = prepared
+            .edited_message
+            .as_ref()
+            .unwrap()
+            .message
+            .as_ref()
+            .unwrap();
+        let ext = inner.extended_text_message.as_ref().unwrap();
+        let ctx = ext.context_info.as_ref().unwrap();
+
+        // Mentions should be stripped
+        assert!(
+            ctx.mentioned_jid.is_empty(),
+            "mentioned_jid inside edited_message should be stripped"
+        );
+        assert!(
+            ctx.group_mentions.is_empty(),
+            "group_mentions inside edited_message should be stripped"
+        );
+
+        // Text should be preserved
+        assert_eq!(ext.text.as_deref(), Some("Edited message text"));
+    }
+
+    /// Test: prepare_for_quote handles nested wrappers (e.g., device_sent containing ephemeral)
+    ///
+    /// This tests the scenario where multiple wrapper layers exist, such as
+    /// a device_sent_message containing an ephemeral_message containing the actual content.
+    #[test]
+    fn test_prepare_for_quote_nested_wrappers() {
+        let nested_wrapper_msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("dest@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                        message: Some(Box::new(wa::Message {
+                            image_message: Some(Box::new(wa::message::ImageMessage {
+                                caption: Some("Nested image".to_string()),
+                                context_info: Some(Box::new(wa::ContextInfo {
+                                    mentioned_jid: vec!["deep@s.whatsapp.net".to_string()],
+                                    ..Default::default()
+                                })),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        })),
+                    })),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let prepared = nested_wrapper_msg.prepare_for_quote();
+
+        // Navigate through: device_sent -> ephemeral -> image
+        let device_sent = prepared.device_sent_message.as_ref().unwrap();
+        let device_inner = device_sent.message.as_ref().unwrap();
+        let ephemeral = device_inner.ephemeral_message.as_ref().unwrap();
+        let ephemeral_inner = ephemeral.message.as_ref().unwrap();
+        let img = ephemeral_inner.image_message.as_ref().unwrap();
+        let ctx = img.context_info.as_ref().unwrap();
+
+        // Mentions should be stripped even through multiple wrapper layers
+        assert!(
+            ctx.mentioned_jid.is_empty(),
+            "Mentions in deeply nested wrappers should be stripped"
+        );
+
+        // Content should be preserved
+        assert_eq!(img.caption.as_deref(), Some("Nested image"));
     }
 
     /// Test: Multiple message types with context_info can have it set
