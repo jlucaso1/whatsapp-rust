@@ -20,6 +20,7 @@ impl Default for NodeValue {
 
 impl NodeValue {
     /// Get the value as a string slice, if it's a string variant.
+    #[inline]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             NodeValue::String(s) => Some(s.as_ref()),
@@ -28,6 +29,7 @@ impl NodeValue {
     }
 
     /// Get the value as a Jid reference, if it's a JID variant.
+    #[inline]
     pub fn as_jid(&self) -> Option<&Jid> {
         match self {
             NodeValue::Jid(j) => Some(j),
@@ -36,6 +38,7 @@ impl NodeValue {
     }
 
     /// Convert to an owned Jid, parsing from string if necessary.
+    #[inline]
     pub fn to_jid(&self) -> Option<Jid> {
         match self {
             NodeValue::Jid(j) => Some(j.clone()),
@@ -44,6 +47,7 @@ impl NodeValue {
     }
 
     /// Convert to a string, formatting the JID if necessary.
+    #[inline]
     pub fn to_string_value(&self) -> String {
         match self {
             NodeValue::String(s) => s.clone(),
@@ -87,18 +91,21 @@ impl PartialEq<String> for NodeValue {
 }
 
 impl From<String> for NodeValue {
+    #[inline]
     fn from(s: String) -> Self {
         NodeValue::String(s)
     }
 }
 
 impl From<&str> for NodeValue {
+    #[inline]
     fn from(s: &str) -> Self {
         NodeValue::String(s.to_string())
     }
 }
 
 impl From<Jid> for NodeValue {
+    #[inline]
     fn from(jid: Jid) -> Self {
         NodeValue::Jid(jid)
     }
@@ -136,6 +143,7 @@ impl Attrs {
     }
 
     /// Insert a key-value pair. If the key already exists, update the value.
+    #[inline]
     pub fn insert(&mut self, key: String, value: impl Into<NodeValue>) {
         let value = value.into();
         if let Some(pos) = self.0.iter().position(|(k, _)| k == &key) {
