@@ -75,6 +75,41 @@ fn create_long_string_node() -> Node {
         .build()
 }
 
+/// Creates a node structure that simulates a usync response with many children
+/// for testing child iteration performance.
+fn create_usync_like_node() -> Node {
+    NodeBuilder::new("iq")
+        .attr("type", "result")
+        .children(vec![
+            NodeBuilder::new("usync")
+                .children(vec![
+                    NodeBuilder::new("list")
+                        .children((0..50).map(|i| {
+                            NodeBuilder::new("user")
+                                .attr("jid", format!("{}@s.whatsapp.net", i))
+                                .children(vec![
+                                    NodeBuilder::new("devices")
+                                        .children(vec![
+                                            NodeBuilder::new("device-list")
+                                                .children((0..3).map(|d| {
+                                                    NodeBuilder::new("device")
+                                                        .attr("id", d.to_string())
+                                                        .build()
+                                                }))
+                                                .build(),
+                                        ])
+                                        .build(),
+                                    NodeBuilder::new("contact").attr("type", "in").build(),
+                                ])
+                                .build()
+                        }))
+                        .build(),
+                ])
+                .build(),
+        ])
+        .build()
+}
+
 // Marshal benchmarks - self-contained, no setup needed
 #[library_benchmark]
 fn bench_marshal_allocating() -> Vec<u8> {
@@ -166,6 +201,31 @@ fn bench_roundtrip(marshaled: Vec<u8>) -> Vec<u8> {
     black_box(marshal_ref(&node_ref).unwrap())
 }
 
+// Child iteration benchmark: tests get_children_by_tag performance
+// Simulates the recursive traversal pattern used in usync parsing
+#[library_benchmark]
+fn bench_get_children_by_tag() {
+    let node = create_usync_like_node();
+
+    // Get the list node containing user children
+    let usync = node.get_optional_child("usync").unwrap();
+    let list = usync.get_optional_child("list").unwrap();
+
+    // Iterate over all "user" children (simulates usync parsing)
+    let mut count = 0;
+    for user in black_box(list.get_children_by_tag("user")) {
+        // For each user, get their device children (nested iteration)
+        if let Some(devices) = user.get_optional_child("devices") {
+            if let Some(device_list) = devices.get_optional_child("device-list") {
+                for _device in black_box(device_list.get_children_by_tag("device")) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    black_box(count);
+}
+
 library_benchmark_group!(
     name = marshal_group;
     benchmarks = bench_marshal_allocating, bench_marshal_reusing_buffer, bench_marshal_long_string
@@ -191,6 +251,11 @@ library_benchmark_group!(
     benchmarks = bench_roundtrip
 );
 
+library_benchmark_group!(
+    name = child_iteration_group;
+    benchmarks = bench_get_children_by_tag
+);
+
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
@@ -199,5 +264,6 @@ main!(
         unmarshal_group,
         unpack_group,
         attr_parser_group,
-        roundtrip_group
+        roundtrip_group,
+        child_iteration_group
 );

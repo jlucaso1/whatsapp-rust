@@ -844,10 +844,8 @@ mod tests {
         {
             let list1 = n1[0].get_optional_child("list").unwrap();
             let list2 = n2[0].get_optional_child("list").unwrap();
-            let users1 = list1.get_children_by_tag("user");
-            let users2 = list2.get_children_by_tag("user");
-            let user1 = users1.first().unwrap();
-            let user2 = users2.first().unwrap();
+            let user1 = list1.get_children_by_tag("user").next().unwrap();
+            let user2 = list2.get_children_by_tag("user").next().unwrap();
             let contact1 = user1.get_optional_child("contact").unwrap();
             let contact2 = user2.get_optional_child("contact").unwrap();
 
