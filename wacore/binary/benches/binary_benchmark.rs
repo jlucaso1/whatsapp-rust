@@ -62,9 +62,10 @@ fn create_attr_node() -> Node {
 // Creates a node with long string content to test the JID parsing optimization.
 // Long strings (> 256 chars) should skip JID parsing for better performance.
 fn create_long_string_node() -> Node {
-    // A 500+ character string that contains '@' but is NOT a valid JID.
-    // Without the optimization, parse_jid would scan the entire string looking for JID format.
-    let long_text = "This is a long text message containing special characters like @ symbol that might trigger JID parsing. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Email: test@example.com and other patterns.";
+    // Generate a 500+ character string that contains '@' but is NOT a valid JID.
+    // Without the optimization, parse_jid would scan the entire string.
+    let base_pattern = "Lorem ipsum with email user@example.com in text. ";
+    let long_text = base_pattern.repeat(11); // ~550 characters
 
     NodeBuilder::new("message")
         .attr("to", "1234567890@s.whatsapp.net")
