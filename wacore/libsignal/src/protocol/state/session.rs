@@ -452,9 +452,8 @@ impl SessionState {
         // This reduces O(n) drain() calls from every insert to once every PRUNE_THRESHOLD inserts.
         // The lookup in get_message_keys() does a linear search by counter value, so order
         // doesn't matter for correctness.
-        const PRUNE_THRESHOLD: usize = 50;
         let len = chain.message_keys.len();
-        if len > consts::MAX_MESSAGE_KEYS + PRUNE_THRESHOLD {
+        if len > consts::MAX_MESSAGE_KEYS + consts::MESSAGE_KEY_PRUNE_THRESHOLD {
             let excess = len - consts::MAX_MESSAGE_KEYS;
             chain.message_keys.drain(..excess);
         }
@@ -1064,10 +1063,9 @@ mod tests {
         let chain_key = crate::protocol::ratchet::ChainKey::new([2u8; 32], 0);
         state.add_receiver_chain(&sender_key, &chain_key);
 
-        // Amortized eviction uses PRUNE_THRESHOLD of 50.
-        // Eviction triggers when len > MAX_MESSAGE_KEYS + PRUNE_THRESHOLD.
+        // Amortized eviction uses MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Eviction triggers when len > MAX_MESSAGE_KEYS + MESSAGE_KEY_PRUNE_THRESHOLD.
         // Add MAX_MESSAGE_KEYS + 100 keys to ensure eviction happens.
-        const PRUNE_THRESHOLD: usize = 50;
         let total_keys = consts::MAX_MESSAGE_KEYS + 100;
         for counter in 0..total_keys as u32 {
             let keys = create_test_message_key_generator(counter);
@@ -1079,7 +1077,7 @@ mod tests {
         // - Continue adding keys 2051-2099 (49 more)
         // - Final len = 2049, no second prune since 2049 <= 2050
         // So keys 0-50 (51 keys) should be evicted.
-        let evicted_count = PRUNE_THRESHOLD + 1; // 51
+        let evicted_count = consts::MESSAGE_KEY_PRUNE_THRESHOLD + 1; // 51
         for counter in 0..evicted_count as u32 {
             let key = state.get_message_keys(&sender_key, counter).unwrap();
             assert!(key.is_none(), "Key {} should have been evicted", counter);
