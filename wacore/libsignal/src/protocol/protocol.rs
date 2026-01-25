@@ -7,6 +7,7 @@ use hmac::{Hmac, Mac};
 use prost::Message;
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
+use std::sync::OnceLock;
 use subtle::ConstantTimeEq;
 
 use crate::protocol::state::{PreKeyId, SignedPreKeyId};
@@ -374,15 +375,31 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SenderKeyMessage {
     message_version: u8,
     chain_id: u32,
     iteration: u32,
-    // Note: ciphertext is not stored separately; it's extracted on-demand
-    // from `serialized` to reduce memory usage. The serialized bytes contain
-    // [version_byte || protobuf(id, iteration, ciphertext) || signature].
     serialized: Box<[u8]>,
+    // Ciphertext is cached after the first parse to avoid re-decoding.
+    ciphertext_cache: OnceLock<Box<[u8]>>,
+}
+
+impl Clone for SenderKeyMessage {
+    fn clone(&self) -> Self {
+        let ciphertext_cache = OnceLock::new();
+        if let Some(ciphertext) = self.ciphertext_cache.get() {
+            let _ = ciphertext_cache.set(ciphertext.clone());
+        }
+
+        Self {
+            message_version: self.message_version,
+            chain_id: self.chain_id,
+            iteration: self.iteration,
+            serialized: self.serialized.clone(),
+            ciphertext_cache,
+        }
+    }
 }
 
 impl SenderKeyMessage {
@@ -423,6 +440,7 @@ impl SenderKeyMessage {
             chain_id,
             iteration,
             serialized: serialized.into_boxed_slice(),
+            ciphertext_cache: OnceLock::new(),
         })
     }
 
@@ -450,25 +468,30 @@ impl SenderKeyMessage {
         self.iteration
     }
 
-    /// Returns the ciphertext by parsing it from the serialized message.
+    /// Returns the ciphertext, parsing and caching it on first access.
     ///
-    /// The ciphertext is extracted on-demand from the protobuf-encoded `serialized`
-    /// bytes to avoid storing a redundant copy in memory. This method is typically
-    /// called only once during decryption.
+    /// The ciphertext is extracted from the protobuf-encoded `serialized` bytes
+    /// and cached to avoid repeated parsing.
     ///
     /// # Performance Note
     ///
-    /// This method parses the protobuf on each call. Callers should cache the result
-    /// if multiple accesses are needed.
-    pub fn ciphertext(&self) -> Vec<u8> {
+    /// Callers should avoid calling this in hot loops when possible.
+    pub fn ciphertext(&self) -> &[u8] {
+        self.ciphertext_cache
+            .get_or_init(|| self.decode_ciphertext())
+            .as_ref()
+    }
+
+    fn decode_ciphertext(&self) -> Box<[u8]> {
         // serialized layout: [version_byte || protobuf || signature]
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
-        // Parse the protobuf to extract ciphertext.
-        // This should always succeed since we validated on construction/deserialization.
-        let proto = waproto::whatsapp::SenderKeyMessage::decode(proto_bytes).expect(
-            "SenderKeyMessage: protobuf decode failed; serialized data was corrupted after validation",
-        );
-        proto.ciphertext.unwrap_or_default()
+        match waproto::whatsapp::SenderKeyMessage::decode(proto_bytes) {
+            Ok(proto) => proto.ciphertext.unwrap_or_default().into_boxed_slice(),
+            Err(err) => {
+                log::error!("SenderKeyMessage: protobuf decode failed: {err}");
+                Vec::new().into_boxed_slice()
+            }
+        }
     }
 
     #[inline]
@@ -512,17 +535,20 @@ impl TryFrom<&[u8]> for SenderKeyMessage {
         let iteration = proto_structure
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        // Validate that ciphertext is present, but don't store it separately.
-        // It will be extracted on-demand from `serialized` via `ciphertext()`.
-        if proto_structure.ciphertext.is_none() {
-            return Err(SignalProtocolError::InvalidProtobufEncoding);
-        }
+        let ciphertext = proto_structure
+            .ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
+            .into_boxed_slice();
+
+        let ciphertext_cache = OnceLock::new();
+        let _ = ciphertext_cache.set(ciphertext);
 
         Ok(SenderKeyMessage {
             message_version,
             chain_id,
             iteration,
             serialized: Box::from(value),
+            ciphertext_cache,
         })
     }
 }
