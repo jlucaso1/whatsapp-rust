@@ -421,14 +421,16 @@ impl Client {
         let identity_key = PublicKey::from_djb_public_key_bytes(identity_bytes)?;
 
         // Extract prekey (optional in some cases).
-        let prekey_data = keys_node
+        let prekey_node = keys_node
             .get_optional_child("key")
-            .and_then(|key_node| OneTimePreKeyNode::try_from_node(key_node).ok())
-            .and_then(|prekey_node| {
-                let prekey_public =
-                    PublicKey::from_djb_public_key_bytes(&prekey_node.public_bytes).ok()?;
-                Some((prekey_node.id.into(), prekey_public))
-            });
+            .map(OneTimePreKeyNode::try_from_node)
+            .transpose()?;
+        let prekey_data = if let Some(prekey_node) = prekey_node {
+            let prekey_public = PublicKey::from_djb_public_key_bytes(&prekey_node.public_bytes)?;
+            Some((prekey_node.id.into(), prekey_public))
+        } else {
+            None
+        };
 
         // Extract signed prekey.
         let skey_node = keys_node
@@ -566,7 +568,7 @@ impl Client {
 
             let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
 
-            let skey_id = 1u32;
+            let skey_id = device_snapshot.signed_pre_key_id;
             let skey_value_bytes = device_snapshot
                 .signed_pre_key
                 .public_key

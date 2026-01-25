@@ -38,6 +38,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// - `#[protocol(tag = "tagname")]` - Required. Specifies the XML tag name.
 /// - `#[attr(name = "attrname")]` - Marks a String field as an XML attribute.
 /// - `#[attr(name = "attrname", default = "value")]` - Attribute with default value.
+///   For `Option<String>` fields, a default always yields `Some(default)`.
 /// - `#[attr(name = "attrname", jid)]` - Marks a Jid field as a JID attribute (required).
 /// - `#[attr(name = "attrname", jid, optional)]` - Marks an Option<Jid> field as optional.
 ///
@@ -185,11 +186,11 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     }
                 }
                 (AttrType::String, true, Some(default)) => {
-                    // Optional String with default
+                    // Optional String with default (always Some)
                     quote! {
                         #field_ident: node.attrs().optional_string(#attr_name)
-                            .map(|s| Some(s.to_string()))
-                            .unwrap_or_else(|| Some(#default.to_string()))
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(#default.to_string()))
                     }
                 }
                 (AttrType::String, true, None) => {
@@ -218,7 +219,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     (AttrType::String, false, Some(default)) => {
                         quote! { #field_ident: #default.to_string() }
                     }
-                    _ => quote! {}, // This shouldn't happen if all_have_defaults is true
+                    _ => unreachable!("all_have_defaults check should prevent this branch"),
                 }
             })
             .collect();

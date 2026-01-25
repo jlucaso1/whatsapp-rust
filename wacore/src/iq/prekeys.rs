@@ -288,6 +288,7 @@ impl IqSpec for PreKeyUploadSpec {
 
 /// Helper function to truncate u32 to 3-byte big-endian representation.
 fn truncate_to_3bytes(id: u32) -> Vec<u8> {
+    debug_assert!(id <= 0x00FF_FFFF, "prekey id exceeds 3-byte range: {id}");
     id.to_be_bytes()[1..].to_vec()
 }
 
@@ -368,6 +369,9 @@ impl ProtocolNode for SignedPreKeyNode {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+        if public_bytes.len() != 32 {
+            return Err(anyhow!("signed prekey public key must be 32 bytes"));
+        }
 
         let sig_node = required_child(node, "signature")?;
         let signature = sig_node
@@ -378,6 +382,9 @@ impl ProtocolNode for SignedPreKeyNode {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("missing bytes in <signature>"))?;
+        if signature.len() != 64 {
+            return Err(anyhow!("signed prekey signature must be 64 bytes"));
+        }
 
         Ok(Self {
             id,
@@ -449,6 +456,9 @@ impl ProtocolNode for OneTimePreKeyNode {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+        if public_bytes.len() != 32 {
+            return Err(anyhow!("one-time prekey public key must be 32 bytes"));
+        }
 
         Ok(Self { id, public_bytes })
     }
@@ -604,23 +614,28 @@ impl ProtocolNode for PreKeyBundleUserNode {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("missing bytes in <identity>"))?;
+        if identity_key.len() != 32 {
+            return Err(anyhow!("identity key must be 32 bytes"));
+        }
 
         // Parse signed prekey
         let skey_node = required_child(node, "skey")?;
         let signed_pre_key = SignedPreKeyNode::try_from_node(skey_node)?;
 
         // Parse optional one-time prekey
-        let one_time_pre_key = node
-            .get_optional_child("key")
-            .and_then(|n| OneTimePreKeyNode::try_from_node(n).ok());
+        let one_time_pre_key = match node.get_optional_child("key") {
+            Some(n) => Some(OneTimePreKeyNode::try_from_node(n)?),
+            None => None,
+        };
 
         // Parse optional device identity
-        let device_identity =
-            node.get_optional_child("device-identity")
-                .and_then(|n| match &n.content {
-                    Some(NodeContent::Bytes(b)) => Some(b.clone()),
-                    _ => None,
-                });
+        let device_identity = match node.get_optional_child("device-identity") {
+            Some(n) => match &n.content {
+                Some(NodeContent::Bytes(b)) => Some(b.clone()),
+                _ => return Err(anyhow!("device-identity must be bytes")),
+            },
+            None => None,
+        };
 
         Ok(Self {
             jid,
@@ -812,9 +827,9 @@ mod tests {
 
     #[test]
     fn test_truncate_to_3bytes() {
-        assert_eq!(truncate_to_3bytes(0x12345678), vec![0x34, 0x56, 0x78]);
+        assert_eq!(truncate_to_3bytes(0x00345678), vec![0x34, 0x56, 0x78]);
         assert_eq!(truncate_to_3bytes(0x00000001), vec![0x00, 0x00, 0x01]);
-        assert_eq!(truncate_to_3bytes(0xFFABCDEF), vec![0xAB, 0xCD, 0xEF]);
+        assert_eq!(truncate_to_3bytes(0x00ABCDEF), vec![0xAB, 0xCD, 0xEF]);
     }
 
     #[test]

@@ -74,7 +74,7 @@ impl MediaConnHostExtended {
         download_buckets: Vec<String>,
     ) -> Self {
         Self {
-            hostname: hostname.clone(),
+            hostname,
             host_type: "primary".to_string(),
             fallback_hostname: Some(fallback_hostname),
             ip4: Some(ip4.clone()),

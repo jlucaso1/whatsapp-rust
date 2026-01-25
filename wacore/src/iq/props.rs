@@ -74,6 +74,9 @@ impl crate::protocol::ProtocolNode for AbProp {
         let config_code: u32 = optional_attr(node, "config_code")
             .ok_or_else(|| anyhow::anyhow!("missing config_code in prop"))?
             .parse()?;
+        if config_code == 0 {
+            return Err(anyhow::anyhow!("config_code must be >= 1"));
+        }
         let config_value = optional_attr(node, "config_value")
             .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?
             .to_string();
