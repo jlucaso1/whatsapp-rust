@@ -156,20 +156,9 @@ fn main() {
 
                                 let start = std::time::Instant::now();
 
-                                // Determine participant JID
-                                let participant_jid = if ctx.info.source.is_from_me {
-                                    ctx.client.get_pn().await.unwrap_or_default().to_string()
-                                } else {
-                                    ctx.info.source.sender.to_string()
-                                };
-
-                                // Construct ContextInfo for quoting
-                                let context_info = wa::ContextInfo {
-                                    stanza_id: Some(ctx.info.id.clone()),
-                                    participant: Some(participant_jid),
-                                    quoted_message: Some(ctx.message.clone()),
-                                    ..Default::default()
-                                };
+                                // Use build_quote_context() for proper quote handling
+                                // (automatically strips nested mentions to avoid accidental tagging)
+                                let context_info = ctx.build_quote_context();
 
                                 // Create the initial quoted reply message
                                 let reply_message = wa::Message {
