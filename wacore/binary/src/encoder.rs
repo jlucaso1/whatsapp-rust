@@ -214,8 +214,9 @@ impl<W: Write> Encoder<W> {
             return Ok(());
         }
 
-        // Optimization: JIDs are typically short; skip parse_jid for long strings.
-        let is_likely_jid = s.len() <= 256;
+        // Optimization: JID formats are tightly bounded (max ~41 chars for user+agent+device
+        // with domain). Use a small headroom threshold to avoid scanning long text payloads.
+        let is_likely_jid = s.len() <= 48;
 
         if let Some(token) = token::index_of_single_token(s) {
             self.write_u8(token)?;
