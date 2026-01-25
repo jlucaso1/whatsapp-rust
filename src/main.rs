@@ -156,8 +156,7 @@ fn main() {
 
                                 let start = std::time::Instant::now();
 
-                                // Use build_quote_context() for proper quote handling
-                                // (automatically strips nested mentions to avoid accidental tagging)
+                                // Use build_quote_context() to strip nested mentions.
                                 let context_info = ctx.build_quote_context();
 
                                 // Create the initial quoted reply message

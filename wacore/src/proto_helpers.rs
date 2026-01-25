@@ -98,13 +98,9 @@ pub trait MessageExt {
     /// Gets the primary text content of a message (from conversation or extendedTextMessage).
     fn text_content(&self) -> Option<&str>;
 
-    /// Prepares a message for use as a quoted message by stripping nested mentions.
+    /// Prepares a message to be quoted by stripping nested mentions and quote-chain fields.
     ///
-    /// When quoting a message, WhatsApp Web builds a fresh `ContextInfo` and does NOT
-    /// carry over mentions from the original message's nested `context_info` fields.
-    /// Without this, if someone quotes a message that contained mentions or was itself
-    /// a reply with mentions, those mentions would be preserved and WhatsApp would
-    /// tag those people in the new reply.
+    /// WhatsApp Web builds a fresh `ContextInfo` and does not carry over nested mentions.
     ///
     /// # Example
     ///
@@ -120,11 +116,9 @@ pub trait MessageExt {
     /// ```
     fn prepare_for_quote(&self) -> Box<wa::Message>;
 
-    /// Sets the context_info on this message for quoting/replying.
+    /// Sets context_info on the first supported message field.
     ///
-    /// This method finds the appropriate message field (image, video, text, etc.)
-    /// and sets its context_info. Returns `true` if context was set successfully,
-    /// `false` if the message type doesn't support context_info.
+    /// Returns `true` if context was set, otherwise `false`.
     ///
     /// # Example
     ///
@@ -247,34 +241,18 @@ impl MessageExt for wa::Message {
     }
 }
 
-/// Strips nested context_info fields from a message to match WhatsApp Web behavior.
+/// Strips nested context_info fields to match WhatsApp Web.
 ///
-/// WhatsApp Web (when `drop_inner_message_context_infos_when_sending` is enabled,
-/// which is the default) clears these fields from nested context_info:
-/// - `quoted_message` - Breaks the quote chain
-/// - `stanza_id` - The quoted message ID
-/// - `remote_jid` - The chat where the quoted message was sent
-/// - `participant` - Who sent the quoted message
-/// - `mentioned_jid` - Mentions in the nested message
-/// - `group_mentions` - Group mentions in the nested message
-///
-/// This prevents:
-/// 1. Infinite quote chains in deeply nested replies
-/// 2. Accidental mentions from quoted messages
-/// 3. Excessive message size from nested content
-///
-///
-/// This is used internally by `MessageExt::prepare_for_quote()` but can also be called
-/// directly if you need to modify a message in place.
-fn strip_nested_context_info(msg: &mut wa::Message) {
+/// Clears quote-chain fields plus `mentioned_jid`/`group_mentions` to avoid
+/// nested quote chains and accidental mentions. Used by
+/// `MessageExt::prepare_for_quote()`.
+pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     fn clear_nested_context(ctx: &mut wa::ContextInfo) {
-        // Always clear mentions (prevents accidental tagging)
+        // Always clear mentions to avoid accidental tagging.
         ctx.mentioned_jid.clear();
         ctx.group_mentions.clear();
 
-        // Check if participant is a bot - if so, preserve quote chain
-        // WhatsApp Web (3JJWKHeu5-P.js:48737-48742) only clears quote-chain fields
-        // if the participant is NOT a bot
+        // WhatsApp Web preserves quote chains for bot participants.
         let is_bot = ctx
             .participant
             .as_ref()
@@ -282,9 +260,7 @@ fn strip_nested_context_info(msg: &mut wa::Message) {
             .is_some_and(|jid| jid.is_bot());
 
         if !is_bot {
-            // Clear quote-chain fields (matches WhatsApp Web behavior)
-            // This breaks the quote chain at the first level - when you quote a reply,
-            // the nested reply's quote info is stripped
+            // Break the nested quote chain.
             ctx.quoted_message = None;
             ctx.stanza_id = None;
             ctx.remote_jid = None;
@@ -296,7 +272,7 @@ fn strip_nested_context_info(msg: &mut wa::Message) {
         clear_nested_context(ctx);
     });
 
-    // Handle wrapper messages that contain nested messages
+    // Recurse into wrapper messages.
     macro_rules! recurse_into_wrapper {
         ($($wrapper:ident),+ $(,)?) => {
             $(
@@ -316,8 +292,7 @@ fn strip_nested_context_info(msg: &mut wa::Message) {
         edited_message,
     );
 
-    // device_sent_message has a different structure (DeviceSentMessage vs FutureProofMessage)
-    // but also contains a nested message field that needs to be processed
+    // device_sent_message also contains a nested message.
     if let Some(ref mut wrapper) = msg.device_sent_message
         && let Some(ref mut inner) = wrapper.message
     {
@@ -400,17 +375,13 @@ pub fn build_quote_context_with_info(
     chat_jid: &Jid,
     quoted_message: &wa::Message,
 ) -> wa::ContextInfo {
-    // Resolve the correct participant based on message type
-    // (matches WhatsApp Web's getQuotedParticipantForContextInfo)
+    // Match WhatsApp Web's participant resolution.
     let participant = if chat_jid.is_newsletter() {
-        // Newsletter: use the chat JID (newsletter itself)
         chat_jid.to_string()
     } else if chat_jid.is_status_broadcast() {
-        // Group status: ideally use author, but we fall back to sender
-        // (author field not available in this context)
+        // Author isn't available here; fall back to sender.
         sender_jid.to_string()
     } else {
-        // Normal: use sender
         sender_jid.to_string()
     };
 
@@ -453,12 +424,12 @@ impl ConversationExt for wa::Conversation {
     }
 
     fn is_locked(&self) -> bool {
-        // Placeholder: actual state should come from SyncActionValue in GroupInfoUpdate
+        // TODO: derive from SyncActionValue in GroupInfoUpdate.
         false
     }
 
     fn is_announce_only(&self) -> bool {
-        // Placeholder: actual state should come from SyncActionValue in GroupInfoUpdate
+        // TODO: derive from SyncActionValue in GroupInfoUpdate.
         false
     }
 }
@@ -467,7 +438,7 @@ impl ConversationExt for wa::Conversation {
 mod tests {
     use super::*;
 
-    /// Helper to create a message with mentions in its context_info
+    /// Creates a message with mentions in context_info.
     fn create_message_with_mentions() -> wa::Message {
         wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
@@ -489,16 +460,11 @@ mod tests {
         }
     }
 
-    /// Test: prepare_for_quote strips mentions from extended_text_message while preserving other fields
-    ///
-    /// WhatsApp Web behavior: When quoting a message, the new message's contextInfo
-    /// should NOT carry over mentions from the quoted message's nested context_info.
-    /// However, all other message content (text, urls, captions, etc.) MUST be preserved.
+    /// Test: prepare_for_quote strips nested mentions and preserves content.
     #[test]
     fn test_prepare_for_quote_strips_mentions_preserves_content() {
         use wa::message::extended_text_message::{FontType, PreviewType};
 
-        // Create a message with mentions AND other fields that should be preserved
         let original = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some("Hello @user1 @user2".to_string()),
@@ -528,16 +494,13 @@ mod tests {
             ..Default::default()
         };
 
-        // Verify original has mentions
         let ext = original.extended_text_message.as_ref().unwrap();
         let ctx = ext.context_info.as_ref().unwrap();
         assert_eq!(ctx.mentioned_jid.len(), 2);
         assert_eq!(ctx.group_mentions.len(), 1);
 
-        // Prepare for quote
         let prepared = original.prepare_for_quote();
 
-        // Verify mentions were stripped
         let ext = prepared.extended_text_message.as_ref().unwrap();
         let ctx = ext.context_info.as_ref().unwrap();
         assert!(
@@ -549,8 +512,6 @@ mod tests {
             "group_mentions should be empty after prepare_for_quote"
         );
 
-        // Verify quote-chain fields are also cleared (matches WhatsApp Web)
-        // Note: The original message didn't have these, but we verify they remain None
         assert!(
             ctx.quoted_message.is_none(),
             "quoted_message should be None after prepare_for_quote"
@@ -568,7 +529,6 @@ mod tests {
             "remote_jid should be None after prepare_for_quote"
         );
 
-        // Verify ALL other message fields are preserved
         assert_eq!(ext.text.as_deref(), Some("Hello @user1 @user2"));
         assert_eq!(ext.matched_text.as_deref(), Some("https://example.com"));
         assert_eq!(ext.description.as_deref(), Some("Example description"));
@@ -578,7 +538,6 @@ mod tests {
         assert_eq!(ext.font(), FontType::SystemBold);
         assert_eq!(ext.preview_type(), PreviewType::Video);
 
-        // Other context_info fields should be preserved (only mentions + quote-chain are cleared)
         assert_eq!(ctx.is_forwarded, Some(true));
         assert_eq!(ctx.forwarding_score, Some(5));
     }
@@ -611,10 +570,8 @@ mod tests {
         let img = prepared.image_message.as_ref().unwrap();
         let ctx = img.context_info.as_ref().unwrap();
 
-        // Mentions should be stripped
         assert!(ctx.mentioned_jid.is_empty());
 
-        // All media fields should be preserved
         assert_eq!(img.url.as_deref(), Some("https://mmg.whatsapp.net/..."));
         assert_eq!(img.mimetype.as_deref(), Some("image/jpeg"));
         assert_eq!(img.caption.as_deref(), Some("Check out this image!"));
@@ -626,24 +583,13 @@ mod tests {
         assert_eq!(img.direct_path.as_deref(), Some("/v/t62.1234-5/..."));
     }
 
-    /// Test: prepare_for_quote breaks quote chains (matches WhatsApp Web behavior)
-    ///
-    /// WhatsApp Web (3JJWKHeu5-P.js:48734-48742) clears these fields from nested context_info:
-    /// - quoted_message (breaks the chain)
-    /// - stanza_id
-    /// - remote_jid
-    /// - participant
-    ///
-    /// This means when you quote a message that was itself a reply, the nested
-    /// reply's quote info is stripped - preventing infinite quote chains.
+    /// Test: prepare_for_quote breaks quote chains (Web: 3JJWKHeu5-P.js:48734-48742).
     #[test]
     fn test_prepare_for_quote_breaks_quote_chain() {
-        // Create a message that is a reply to another message (has quote context)
         let original = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some("This is a reply".to_string()),
                 context_info: Some(Box::new(wa::ContextInfo {
-                    // This message quotes another message
                     stanza_id: Some("original-msg-id".to_string()),
                     participant: Some("original-sender@s.whatsapp.net".to_string()),
                     remote_jid: Some("chat@s.whatsapp.net".to_string()),
@@ -652,7 +598,6 @@ mod tests {
                         ..Default::default()
                     })),
                     mentioned_jid: vec!["user@s.whatsapp.net".to_string()],
-                    // Other fields that SHOULD be preserved
                     is_forwarded: Some(true),
                     forwarding_score: Some(3),
                     ..Default::default()
@@ -667,7 +612,6 @@ mod tests {
         let ext = prepared.extended_text_message.as_ref().unwrap();
         let ctx = ext.context_info.as_ref().unwrap();
 
-        // Quote-chain fields should be cleared (matches WhatsApp Web)
         assert!(
             ctx.quoted_message.is_none(),
             "quoted_message should be None (quote chain broken)"
@@ -689,7 +633,6 @@ mod tests {
             "mentioned_jid should be empty"
         );
 
-        // Other fields should be preserved
         assert_eq!(
             ctx.is_forwarded,
             Some(true),
@@ -701,7 +644,6 @@ mod tests {
             "forwarding_score should be preserved"
         );
 
-        // Text content should be preserved
         assert_eq!(ext.text.as_deref(), Some("This is a reply"));
     }
 
@@ -793,27 +735,22 @@ mod tests {
             ..Default::default()
         };
 
-        // conversation doesn't support context_info
         assert!(!msg.set_context_info(context));
     }
 
-    /// Test: build_quote_context produces correct structure
-    ///
-    /// This tests the standalone function matches WhatsApp Web's approach.
+    /// Test: build_quote_context produces correct structure.
     #[test]
     fn test_build_quote_context() {
         let original = create_message_with_mentions();
 
         let context = build_quote_context("3EB0123456789", "1234567890@s.whatsapp.net", &original);
 
-        // Verify basic fields
         assert_eq!(context.stanza_id.as_deref(), Some("3EB0123456789"));
         assert_eq!(
             context.participant.as_deref(),
             Some("1234567890@s.whatsapp.net")
         );
 
-        // Verify quoted message exists and has stripped mentions
         let quoted = context.quoted_message.as_ref().unwrap();
         let ext = quoted.extended_text_message.as_ref().unwrap();
         let quoted_ctx = ext.context_info.as_ref().unwrap();
@@ -835,7 +772,6 @@ mod tests {
 
         let prepared = ephemeral_msg.prepare_for_quote();
 
-        // Navigate through ephemeral wrapper
         let inner = prepared
             .ephemeral_message
             .as_ref()
@@ -889,10 +825,7 @@ mod tests {
         );
     }
 
-    /// Test: prepare_for_quote handles device_sent_message wrapper
-    ///
-    /// DeviceSentMessage is used when a message is sent from another device
-    /// and synced to the current device. It wraps the actual message content.
+    /// Test: prepare_for_quote handles device_sent_message wrapper (other device).
     #[test]
     fn test_prepare_for_quote_device_sent_message() {
         let device_sent_msg = wa::Message {
@@ -923,13 +856,11 @@ mod tests {
 
         let prepared = device_sent_msg.prepare_for_quote();
 
-        // Navigate through device_sent_message wrapper
         let wrapper = prepared.device_sent_message.as_ref().unwrap();
         let inner = wrapper.message.as_ref().unwrap();
         let ext = inner.extended_text_message.as_ref().unwrap();
         let ctx = ext.context_info.as_ref().unwrap();
 
-        // Mentions should be stripped
         assert!(
             ctx.mentioned_jid.is_empty(),
             "mentioned_jid inside device_sent_message should be stripped"
@@ -939,7 +870,6 @@ mod tests {
             "group_mentions inside device_sent_message should be stripped"
         );
 
-        // Other fields should be preserved
         assert_eq!(ext.text.as_deref(), Some("Message from other device"));
         assert_eq!(
             wrapper.destination_jid.as_deref(),
@@ -948,10 +878,7 @@ mod tests {
         assert_eq!(wrapper.phash.as_deref(), Some("somephash"));
     }
 
-    /// Test: prepare_for_quote handles edited_message wrapper
-    ///
-    /// EditedMessage (FutureProofMessage) wraps messages that have been edited.
-    /// The nested message inside should also have its mentions stripped.
+    /// Test: prepare_for_quote handles edited_message wrapper.
     #[test]
     fn test_prepare_for_quote_edited_message() {
         let edited_msg = wa::Message {
@@ -977,7 +904,6 @@ mod tests {
 
         let prepared = edited_msg.prepare_for_quote();
 
-        // Navigate through edited_message wrapper
         let inner = prepared
             .edited_message
             .as_ref()
@@ -988,7 +914,6 @@ mod tests {
         let ext = inner.extended_text_message.as_ref().unwrap();
         let ctx = ext.context_info.as_ref().unwrap();
 
-        // Mentions should be stripped
         assert!(
             ctx.mentioned_jid.is_empty(),
             "mentioned_jid inside edited_message should be stripped"
@@ -998,14 +923,10 @@ mod tests {
             "group_mentions inside edited_message should be stripped"
         );
 
-        // Text should be preserved
         assert_eq!(ext.text.as_deref(), Some("Edited message text"));
     }
 
-    /// Test: prepare_for_quote handles nested wrappers (e.g., device_sent containing ephemeral)
-    ///
-    /// This tests the scenario where multiple wrapper layers exist, such as
-    /// a device_sent_message containing an ephemeral_message containing the actual content.
+    /// Test: prepare_for_quote handles nested wrappers (device_sent -> ephemeral -> content).
     #[test]
     fn test_prepare_for_quote_nested_wrappers() {
         let nested_wrapper_msg = wa::Message {
@@ -1034,7 +955,6 @@ mod tests {
 
         let prepared = nested_wrapper_msg.prepare_for_quote();
 
-        // Navigate through: device_sent -> ephemeral -> image
         let device_sent = prepared.device_sent_message.as_ref().unwrap();
         let device_inner = device_sent.message.as_ref().unwrap();
         let ephemeral = device_inner.ephemeral_message.as_ref().unwrap();
@@ -1042,46 +962,38 @@ mod tests {
         let img = ephemeral_inner.image_message.as_ref().unwrap();
         let ctx = img.context_info.as_ref().unwrap();
 
-        // Mentions should be stripped even through multiple wrapper layers
         assert!(
             ctx.mentioned_jid.is_empty(),
             "Mentions in deeply nested wrappers should be stripped"
         );
 
-        // Content should be preserved
         assert_eq!(img.caption.as_deref(), Some("Nested image"));
     }
 
-    /// Test: Multiple message types with context_info can have it set
+    /// Test: Multiple message types with context_info can have it set.
     #[test]
     fn test_set_context_info_various_types() {
         let test_cases: Vec<wa::Message> = vec![
-            // Video
             wa::Message {
                 video_message: Some(Box::default()),
                 ..Default::default()
             },
-            // Audio
             wa::Message {
                 audio_message: Some(Box::default()),
                 ..Default::default()
             },
-            // Document
             wa::Message {
                 document_message: Some(Box::default()),
                 ..Default::default()
             },
-            // Sticker
             wa::Message {
                 sticker_message: Some(Box::default()),
                 ..Default::default()
             },
-            // Contact
             wa::Message {
                 contact_message: Some(Box::default()),
                 ..Default::default()
             },
-            // Poll
             wa::Message {
                 poll_creation_message: Some(Box::default()),
                 ..Default::default()
@@ -1100,14 +1012,9 @@ mod tests {
         }
     }
 
-    /// Test: Bot quote chains are preserved (matches WhatsApp Web behavior)
-    ///
-    /// WhatsApp Web (3JJWKHeu5-P.js:48737-48742) only clears quote-chain fields
-    /// if the participant is NOT a bot. Bot responses should preserve their
-    /// quote chains to maintain context.
+    /// Test: Bot quote chains are preserved (Web: 3JJWKHeu5-P.js:48737-48742).
     #[test]
     fn test_prepare_for_quote_preserves_bot_quote_chain() {
-        // Create message with bot participant in context (phone-number based bot)
         let msg = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some("Bot reply".to_string()),
@@ -1137,7 +1044,6 @@ mod tests {
             .as_ref()
             .unwrap();
 
-        // Bot quote chain should be preserved
         assert!(
             ctx.quoted_message.is_some(),
             "Bot quote chain should be preserved"
@@ -1152,14 +1058,13 @@ mod tests {
             "Bot remote_jid should be preserved"
         );
 
-        // But mentions should still be cleared
         assert!(
             ctx.mentioned_jid.is_empty(),
             "Mentions should still be cleared even for bots"
         );
     }
 
-    /// Test: Bot with @bot server also has quote chain preserved
+    /// Test: Bot with @bot server also has quote chain preserved.
     #[test]
     fn test_prepare_for_quote_preserves_bot_server_quote_chain() {
         let msg = wa::Message {
@@ -1189,14 +1094,13 @@ mod tests {
             .as_ref()
             .unwrap();
 
-        // Bot quote chain should be preserved
         assert!(
             ctx.quoted_message.is_some(),
             "Bot (@bot server) quote chain should be preserved"
         );
     }
 
-    /// Test: Newsletter participant resolution uses chat JID
+    /// Test: Newsletter participant resolution uses chat JID.
     #[test]
     fn test_build_quote_context_newsletter() {
         let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
@@ -1205,7 +1109,6 @@ mod tests {
 
         let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
 
-        // Newsletter should use chat JID as participant
         assert_eq!(
             ctx.participant.as_deref(),
             Some("1234567890@newsletter"),
@@ -1214,7 +1117,7 @@ mod tests {
         assert_eq!(ctx.stanza_id.as_deref(), Some("msg-id"));
     }
 
-    /// Test: Normal message participant resolution uses sender JID
+    /// Test: Normal message participant resolution uses sender JID.
     #[test]
     fn test_build_quote_context_normal_message() {
         let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
@@ -1223,7 +1126,6 @@ mod tests {
 
         let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
 
-        // Normal message should use sender JID as participant
         assert_eq!(
             ctx.participant.as_deref(),
             Some("123456@s.whatsapp.net"),
@@ -1231,7 +1133,7 @@ mod tests {
         );
     }
 
-    /// Test: Status broadcast participant resolution uses sender JID (fallback)
+    /// Test: Status broadcast participant resolution uses sender JID (fallback).
     #[test]
     fn test_build_quote_context_status_broadcast() {
         let sender: Jid = "123456@s.whatsapp.net".parse().unwrap();
@@ -1240,7 +1142,6 @@ mod tests {
 
         let ctx = build_quote_context_with_info("msg-id", &sender, &chat, &msg);
 
-        // Status broadcast uses sender as fallback (author not available)
         assert_eq!(
             ctx.participant.as_deref(),
             Some("123456@s.whatsapp.net"),
