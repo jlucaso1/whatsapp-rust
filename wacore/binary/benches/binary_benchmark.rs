@@ -59,6 +59,21 @@ fn create_attr_node() -> Node {
         .build()
 }
 
+// Creates a node with long string content to test the JID parsing optimization.
+// Long strings (> 256 chars) should skip JID parsing for better performance.
+fn create_long_string_node() -> Node {
+    // A 500+ character string that contains '@' but is NOT a valid JID.
+    // Without the optimization, parse_jid would scan the entire string looking for JID format.
+    let long_text = "This is a long text message containing special characters like @ symbol that might trigger JID parsing. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Email: test@example.com and other patterns.";
+
+    NodeBuilder::new("message")
+        .attr("to", "1234567890@s.whatsapp.net")
+        .attr("id", "ABC123DEF456")
+        .attr("type", "text")
+        .string_content(long_text)
+        .build()
+}
+
 // Marshal benchmarks - self-contained, no setup needed
 #[library_benchmark]
 fn bench_marshal_allocating() -> Vec<u8> {
@@ -72,6 +87,14 @@ fn bench_marshal_reusing_buffer() -> Vec<u8> {
     let mut buffer = Vec::with_capacity(4096);
     marshal_to(black_box(&node), &mut buffer).unwrap();
     black_box(buffer)
+}
+
+// Benchmark for marshaling nodes with long string content.
+// This demonstrates the JID parsing optimization: long strings skip parse_jid.
+#[library_benchmark]
+fn bench_marshal_long_string() -> Vec<u8> {
+    let node = create_long_string_node();
+    black_box(marshal(black_box(&node)).unwrap())
 }
 
 // Setup functions for unmarshal benchmarks - pre-compute marshaled data
@@ -144,7 +167,7 @@ fn bench_roundtrip(marshaled: Vec<u8>) -> Vec<u8> {
 
 library_benchmark_group!(
     name = marshal_group;
-    benchmarks = bench_marshal_allocating, bench_marshal_reusing_buffer
+    benchmarks = bench_marshal_allocating, bench_marshal_reusing_buffer, bench_marshal_long_string
 );
 
 library_benchmark_group!(

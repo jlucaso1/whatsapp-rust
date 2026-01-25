@@ -214,6 +214,9 @@ impl<W: Write> Encoder<W> {
             return Ok(());
         }
 
+        // Optimization: JIDs are typically short; skip parse_jid for long strings.
+        let is_likely_jid = s.len() <= 256;
+
         if let Some(token) = token::index_of_single_token(s) {
             self.write_u8(token)?;
         } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
@@ -223,7 +226,7 @@ impl<W: Write> Encoder<W> {
             self.write_packed_bytes(s, token::NIBBLE_8)?;
         } else if Self::validate_hex(s) {
             self.write_packed_bytes(s, token::HEX_8)?;
-        } else if let Some(jid) = parse_jid(s) {
+        } else if is_likely_jid && let Some(jid) = parse_jid(s) {
             self.write_jid(&jid)?;
         } else {
             self.write_bytes_with_len(s.as_bytes())?;
@@ -653,6 +656,65 @@ mod tests {
             Some(NodeContent::Bytes(b)) => assert!(b.is_empty(), "Content should be empty bytes"),
             other => panic!("Expected empty bytes, got {:?}", other),
         }
+        Ok(())
+    }
+
+    /// Test the JID parsing optimization: short JIDs should still be parsed,
+    /// while long strings should be encoded as raw bytes.
+    #[test]
+    fn test_jid_length_heuristic() -> TestResult {
+        use crate::decoder::Decoder;
+        use crate::token;
+
+        // Short JID: should be encoded as JID token (256 bytes or less)
+        let short_jid = "user@s.whatsapp.net";
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_string(short_jid)?;
+
+        // JID_PAIR token indicates JID encoding was used
+        assert_eq!(
+            buffer[1],
+            token::JID_PAIR,
+            "Short JID should be encoded as JID_PAIR token"
+        );
+
+        // Long string (> 256 chars): should be encoded as raw bytes, not as JID
+        let long_text = "x".repeat(300) + "@s.whatsapp.net";
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_string(&long_text)?;
+
+        // BINARY_20 token indicates raw bytes encoding (length > 255)
+        assert_eq!(
+            buffer[1],
+            token::BINARY_20,
+            "Long string should be encoded as BINARY_20, not as JID"
+        );
+
+        // Verify round-trip for long string
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(long_text.clone())),
+        );
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match &decoded.content {
+            Some(NodeContent::Bytes(b)) => {
+                assert_eq!(
+                    String::from_utf8_lossy(b),
+                    long_text,
+                    "Long string should round-trip correctly"
+                );
+            }
+            other => panic!("Expected bytes content, got {:?}", other),
+        }
+
         Ok(())
     }
 }
