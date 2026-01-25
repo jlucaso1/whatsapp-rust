@@ -1475,7 +1475,7 @@ impl Client {
         match (code, conflict_type.as_str()) {
             ("515", _) => {
                 // 515 is expected during registration/pairing phase - server closes stream after pairing
-                info!(target: "Client", "Got 515 stream error, server is closing stream. Will auto-reconnect.");
+                info!(target: "Client", "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect.");
                 self.expect_disconnect().await;
                 // Proactively disconnect transport since server may not close the connection
                 // Clone the transport Arc before spawning to avoid holding the lock
