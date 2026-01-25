@@ -258,6 +258,10 @@ pub trait JidExt {
             || self.server() == BOT_SERVER
     }
 
+    fn is_newsletter(&self) -> bool {
+        self.server() == NEWSLETTER_SERVER
+    }
+
     /// Returns true if this is a hosted/Cloud API device.
     /// Hosted devices have device ID 99 or use @hosted/@hosted.lid server.
     /// These devices should be excluded from group message fanout.

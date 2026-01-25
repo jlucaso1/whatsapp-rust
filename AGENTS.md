@@ -65,6 +65,10 @@ The project is split into three main crates:
   - Use `anyhow::Error` for functions with multiple failure modes.
   - Avoid `.unwrap()` and `.expect()` outside of tests and unrecoverable logic paths.
 
+- **Comments**
+  - Keep comments concise and actionable.
+  - Avoid narrating obvious code; prefer short summaries, invariants, or non-obvious behavior.
+
 - **Protocol Implementation**
   - When in doubt, refer to the **whatsmeow** Go library as the source of truth.
 
