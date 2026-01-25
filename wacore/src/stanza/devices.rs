@@ -2,9 +2,16 @@
 //!
 //! Parses `<notification type="devices">` stanzas for device add/remove/update.
 //!
+//! Reference: WhatsApp Web `WAWebHandleDeviceNotification` (5Yec01dI04o.js:23109-23305)
+//!
+//! Key behaviors:
+//! - Only ONE operation per notification (priority: remove > add > update)
+//! - `key-index-list` is REQUIRED for add/remove
+//! - Timestamp is REQUIRED (non-zero) for remove
+//! - `hash` attribute is REQUIRED for update
 
 use crate::StringEnum;
-use crate::iq::node::{optional_attr, required_child};
+use crate::iq::node::{optional_attr, optional_child, required_attr, required_child};
 use crate::protocol::ProtocolNode;
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -239,12 +246,13 @@ impl DeviceOperation {
                 })
             }
             DeviceNotificationType::Update => {
-                // Update only has hash attribute, no children needed
-                let contact_hash = optional_attr(node, "hash").map(String::from);
+                // Per WhatsApp Web: hash attribute is REQUIRED for update
+                // Uses attrString (not maybeAttrString) which throws if missing
+                let contact_hash = required_attr(node, "hash")?;
 
                 Ok(Self {
                     operation_type,
-                    contact_hash,
+                    contact_hash: Some(contact_hash),
                     devices: Vec::new(),
                     key_index: None,
                 })
@@ -271,6 +279,9 @@ impl DeviceOperation {
 /// ```
 ///
 /// Reference: WhatsApp Web `WAWebHandleDeviceNotification` parser (5Yec01dI04o.js:23125-23183)
+///
+/// Per WhatsApp Web: Only ONE operation per notification is processed.
+/// Priority order: remove > add > update
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceNotification {
     /// User JID (from attribute)
@@ -282,12 +293,16 @@ pub struct DeviceNotification {
     pub stanza_id: String,
     /// Timestamp
     pub timestamp: i64,
-    /// Operations (add/remove/update)
-    pub operations: Vec<DeviceOperation>,
+    /// The operation (one per notification, priority: remove > add > update)
+    pub operation: DeviceOperation,
 }
 
 impl DeviceNotification {
     /// Parse from a `<notification type="devices">` node.
+    ///
+    /// Per WhatsApp Web: Only ONE operation per notification is processed.
+    /// Priority order: remove > add > update
+    /// Returns error if no operation is found.
     pub fn try_parse(node: &Node) -> Result<Self> {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
@@ -312,21 +327,26 @@ impl DeviceNotification {
             None => 0,
         };
 
-        let mut operations = Vec::new();
-        if let Some(children) = node.children() {
-            for child in children.iter() {
-                if matches!(child.tag.as_str(), "add" | "remove" | "update") {
-                    operations.push(DeviceOperation::try_from_child(child)?);
-                }
-            }
-        }
+        // Per WhatsApp Web: Priority order is remove > add > update
+        // Only one operation is processed per notification
+        let operation = if let Some(remove_node) = optional_child(node, "remove") {
+            DeviceOperation::try_from_child(remove_node)?
+        } else if let Some(add_node) = optional_child(node, "add") {
+            DeviceOperation::try_from_child(add_node)?
+        } else if let Some(update_node) = optional_child(node, "update") {
+            DeviceOperation::try_from_child(update_node)?
+        } else {
+            return Err(anyhow!(
+                "device notification missing required operation (add/remove/update)"
+            ));
+        };
 
         Ok(Self {
             from,
             lid_user,
             stanza_id,
             timestamp,
-            operations,
+            operation,
         })
     }
 
@@ -401,9 +421,8 @@ mod tests {
         assert_eq!(parsed.from.user, "185169143189667");
         assert_eq!(parsed.stanza_id, "511477682");
         assert_eq!(parsed.timestamp, 1769296817);
-        assert_eq!(parsed.operations.len(), 1);
 
-        let op = &parsed.operations[0];
+        let op = &parsed.operation;
         assert_eq!(op.operation_type, DeviceNotificationType::Remove);
         assert_eq!(op.devices.len(), 1);
         assert_eq!(op.devices[0].device_id(), 75);
@@ -440,7 +459,7 @@ mod tests {
         assert_eq!(lid, "100000000000001");
         assert_eq!(pn, "15551234567");
 
-        let op = &parsed.operations[0];
+        let op = &parsed.operation;
         assert_eq!(op.operation_type, DeviceNotificationType::Add);
         assert_eq!(op.devices[0].device_id(), 64);
         assert_eq!(op.devices[0].key_index, Some(5));
@@ -463,9 +482,8 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 1);
 
-        let op = &parsed.operations[0];
+        let op = &parsed.operation;
         assert_eq!(op.operation_type, DeviceNotificationType::Update);
         assert_eq!(op.contact_hash, Some("contact_hash_value".to_string()));
         assert!(op.devices.is_empty());
@@ -473,12 +491,15 @@ mod tests {
 
     #[test]
     fn test_lid_pn_mapping_not_detected_when_from_is_lid() {
+        // When from is a LID, we shouldn't learn a LID->PN mapping
+        // (both are LIDs, no phone number to learn)
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "185169143189667@lid")
             .attr("lid", "185169143189667@lid")
             .attr("id", "123")
             .attr("t", "1000")
+            .children([NodeBuilder::new("update").attr("hash", "test_hash").build()])
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
@@ -585,7 +606,81 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations[0].devices[0].device_id(), 64);
-        assert!(parsed.operations[0].devices[0].lid.is_some());
+        assert_eq!(parsed.operation.devices[0].device_id(), 64);
+        assert!(parsed.operation.devices[0].lid.is_some());
+    }
+
+    #[test]
+    fn test_no_operation_fails() {
+        // Per WhatsApp Web: at least one operation (add/remove/update) is required
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .build(); // No operation children
+
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required operation")
+        );
+    }
+
+    #[test]
+    fn test_remove_priority_over_add() {
+        // Per WhatsApp Web: priority is remove > add > update
+        // If both remove and add are present, remove should be processed
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([
+                NodeBuilder::new("add")
+                    .children([
+                        NodeBuilder::new("device")
+                            .attr("jid", "15551234567:64@s.whatsapp.net")
+                            .build(),
+                        NodeBuilder::new("key-index-list").attr("ts", "999").build(),
+                    ])
+                    .build(),
+                NodeBuilder::new("remove")
+                    .children([
+                        NodeBuilder::new("device")
+                            .attr("jid", "15551234567:75@s.whatsapp.net")
+                            .build(),
+                        NodeBuilder::new("key-index-list").attr("ts", "888").build(),
+                    ])
+                    .build(),
+            ])
+            .build();
+
+        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        // Should process remove, not add
+        assert_eq!(
+            parsed.operation.operation_type,
+            DeviceNotificationType::Remove
+        );
+        assert_eq!(parsed.operation.devices[0].device_id(), 75);
+    }
+
+    #[test]
+    fn test_update_without_hash_fails() {
+        // Per WhatsApp Web: hash attribute is required for update
+        let node = NodeBuilder::new("notification")
+            .attr("type", "devices")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("id", "123")
+            .attr("t", "1000")
+            .children([NodeBuilder::new("update").build()]) // Missing hash attribute
+            .build();
+
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("hash"));
     }
 }

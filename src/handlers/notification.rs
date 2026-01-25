@@ -132,38 +132,37 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
         warn!(target: "Client", "Failed to add LID-PN mapping from device notification: {e}");
     }
 
-    // Process each operation
-    for op in &notification.operations {
-        debug!(
-            target: "Client",
-            "Device notification: user={}, type={:?}, devices={:?}",
-            notification.user(),
-            op.operation_type,
-            op.device_ids()
-        );
+    // Process the single operation (per WhatsApp Web: one operation per notification)
+    let op = &notification.operation;
+    debug!(
+        target: "Client",
+        "Device notification: user={}, type={:?}, devices={:?}",
+        notification.user(),
+        op.operation_type,
+        op.device_ids()
+    );
 
-        // Invalidate the device cache for this user
-        // This ensures the next lookup fetches fresh data
-        client.invalidate_device_cache(notification.user()).await;
+    // Invalidate the device cache for this user
+    // This ensures the next lookup fetches fresh data
+    client.invalidate_device_cache(notification.user()).await;
 
-        // Dispatch event to notify application layer
-        let event = Event::DeviceListUpdate(DeviceListUpdate {
-            user: notification.from.clone(),
-            lid_user: notification.lid_user.clone(),
-            update_type: op.operation_type.into(),
-            devices: op
-                .devices
-                .iter()
-                .map(|d| DeviceNotificationInfo {
-                    device_id: d.device_id(),
-                    key_index: d.key_index,
-                })
-                .collect(),
-            key_index: op.key_index.clone(),
-            contact_hash: op.contact_hash.clone(),
-        });
-        client.core.event_bus.dispatch(&event);
-    }
+    // Dispatch event to notify application layer
+    let event = Event::DeviceListUpdate(DeviceListUpdate {
+        user: notification.from.clone(),
+        lid_user: notification.lid_user.clone(),
+        update_type: op.operation_type.into(),
+        devices: op
+            .devices
+            .iter()
+            .map(|d| DeviceNotificationInfo {
+                device_id: d.device_id(),
+                key_index: d.key_index,
+            })
+            .collect(),
+        key_index: op.key_index.clone(),
+        contact_hash: op.contact_hash.clone(),
+    });
+    client.core.event_bus.dispatch(&event);
 }
 
 /// Parsed device info from account_sync notification
@@ -330,18 +329,11 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 1);
-        assert_eq!(
-            parsed.operations[0].operation_type,
-            DeviceNotificationType::Add
-        );
-        assert_eq!(parsed.operations[0].device_ids(), vec![1]);
+        assert_eq!(parsed.operation.operation_type, DeviceNotificationType::Add);
+        assert_eq!(parsed.operation.device_ids(), vec![1]);
         // Verify key index info
-        assert!(parsed.operations[0].key_index.is_some());
-        assert_eq!(
-            parsed.operations[0].key_index.as_ref().unwrap().timestamp,
-            1000
-        );
+        assert!(parsed.operation.key_index.is_some());
+        assert_eq!(parsed.operation.key_index.as_ref().unwrap().timestamp, 1000);
     }
 
     #[test]
@@ -362,12 +354,11 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 1);
         assert_eq!(
-            parsed.operations[0].operation_type,
+            parsed.operation.operation_type,
             DeviceNotificationType::Remove
         );
-        assert_eq!(parsed.operations[0].device_ids(), vec![3]);
+        assert_eq!(parsed.operation.device_ids(), vec![3]);
     }
 
     #[test]
@@ -381,33 +372,40 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 1);
         assert_eq!(
-            parsed.operations[0].operation_type,
+            parsed.operation.operation_type,
             DeviceNotificationType::Update
         );
         assert_eq!(
-            parsed.operations[0].contact_hash,
+            parsed.operation.contact_hash,
             Some("2:abcdef123456".to_string())
         );
         // Update operations don't have devices (just hash for lookup)
-        assert!(parsed.operations[0].devices.is_empty());
+        assert!(parsed.operation.devices.is_empty());
     }
 
     #[test]
-    fn test_parse_empty_device_notification() {
+    fn test_parse_empty_device_notification_fails() {
+        // Per WhatsApp Web: at least one operation (add/remove/update) is required
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert!(parsed.operations.is_empty());
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required operation")
+        );
     }
 
     #[test]
-    fn test_parse_multiple_device_operations() {
-        // Multiple operations in a single notification
+    fn test_parse_multiple_operations_uses_priority() {
+        // Per WhatsApp Web: only ONE operation is processed with priority remove > add > update
+        // If both remove and add are present, remove should be processed
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
@@ -436,17 +434,12 @@ mod tests {
             .build();
 
         let parsed = DeviceNotification::try_parse(&node).unwrap();
-        assert_eq!(parsed.operations.len(), 2);
+        // Should process remove, not add (priority: remove > add > update)
         assert_eq!(
-            parsed.operations[0].operation_type,
-            DeviceNotificationType::Add
-        );
-        assert_eq!(parsed.operations[0].device_ids(), vec![5]);
-        assert_eq!(
-            parsed.operations[1].operation_type,
+            parsed.operation.operation_type,
             DeviceNotificationType::Remove
         );
-        assert_eq!(parsed.operations[1].device_ids(), vec![2]);
+        assert_eq!(parsed.operation.device_ids(), vec![2]);
     }
 
     #[test]
