@@ -476,22 +476,28 @@ impl SenderKeyMessage {
     /// # Performance Note
     ///
     /// Callers should avoid calling this in hot loops when possible.
-    pub fn ciphertext(&self) -> &[u8] {
-        self.ciphertext_cache
-            .get_or_init(|| self.decode_ciphertext())
-            .as_ref()
+    pub fn ciphertext(&self) -> Result<&[u8]> {
+        if let Some(ciphertext) = self.ciphertext_cache.get() {
+            return Ok(ciphertext.as_ref());
+        }
+
+        let ciphertext = self.decode_ciphertext()?;
+        let _ = self.ciphertext_cache.set(ciphertext);
+        match self.ciphertext_cache.get() {
+            Some(ciphertext) => Ok(ciphertext.as_ref()),
+            None => Err(SignalProtocolError::InvalidProtobufEncoding),
+        }
     }
 
-    fn decode_ciphertext(&self) -> Box<[u8]> {
+    fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
         // serialized layout: [version_byte || protobuf || signature]
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
-        match waproto::whatsapp::SenderKeyMessage::decode(proto_bytes) {
-            Ok(proto) => proto.ciphertext.unwrap_or_default().into_boxed_slice(),
-            Err(err) => {
-                log::error!("SenderKeyMessage: protobuf decode failed: {err}");
-                Vec::new().into_boxed_slice()
-            }
-        }
+        let proto = waproto::whatsapp::SenderKeyMessage::decode(proto_bytes)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
+        let ciphertext = proto
+            .ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
+        Ok(ciphertext.into_boxed_slice())
     }
 
     #[inline]
