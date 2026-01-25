@@ -161,7 +161,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "picture");
             assert_eq!(
-                nodes[0].attrs.get("type").map(|s| s.as_str()),
+                nodes[0].attrs.get("type").and_then(|s| s.as_str()),
                 Some("preview")
             );
         }
@@ -177,7 +177,7 @@ mod tests {
         let iq = spec.build_iq();
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(
-                nodes[0].attrs.get("type").map(|s| s.as_str()),
+                nodes[0].attrs.get("type").and_then(|s| s.as_str()),
                 Some("image")
             );
         }

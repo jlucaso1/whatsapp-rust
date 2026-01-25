@@ -65,7 +65,10 @@ impl<'a> Presence<'a> {
         info!(
             "Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
-            node.attrs.get("name").map_or("", |s| s.as_str())
+            node.attrs
+                .get("name")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
         );
 
         self.client.send_node(node).await.map_err(|e| e.into())

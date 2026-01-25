@@ -43,7 +43,7 @@ impl UnifiedSessionManager {
 
     /// Update server time offset from node's `t` attribute (Unix timestamp in seconds).
     pub fn update_server_time_offset(&self, node: &Node) {
-        if let Some(t_str) = node.attrs.get("t")
+        if let Some(t_str) = node.attrs.get("t").and_then(|v| v.as_str())
             && let Ok(server_time) = t_str.parse::<i64>()
             && server_time > 0
         {

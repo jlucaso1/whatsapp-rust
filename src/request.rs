@@ -189,10 +189,10 @@ impl Client {
     /// This method accepts an `Arc<Node>` - if there's a waiter, we clone the Arc (cheap)
     /// and unwrap it if we're the only holder, otherwise clone the inner Node.
     pub(crate) async fn handle_iq_response(&self, node: Arc<Node>) -> bool {
-        let id_opt = node.attrs.get("id").cloned();
+        let id_opt = node.attrs.get("id").map(|v| v.to_string_value());
         if let Some(id) = id_opt {
             // First check if there's a waiter (without cloning)
-            let waiter = self.response_waiters.lock().await.remove(id.as_str());
+            let waiter = self.response_waiters.lock().await.remove(&id);
             if let Some(waiter) = waiter {
                 // Try to unwrap the Arc, or clone if there are other references
                 let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());

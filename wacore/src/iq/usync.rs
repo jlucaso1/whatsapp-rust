@@ -665,10 +665,16 @@ mod tests {
             assert_eq!(nodes.len(), 1);
             let usync = &nodes[0];
             assert_eq!(usync.tag, "usync");
-            assert_eq!(usync.attrs.get("sid").map(|s| s.as_str()), Some("test-sid"));
-            assert_eq!(usync.attrs.get("mode").map(|s| s.as_str()), Some("query"));
             assert_eq!(
-                usync.attrs.get("context").map(|s| s.as_str()),
+                usync.attrs.get("sid").and_then(|s| s.as_str()),
+                Some("test-sid")
+            );
+            assert_eq!(
+                usync.attrs.get("mode").and_then(|s| s.as_str()),
+                Some("query")
+            );
+            assert_eq!(
+                usync.attrs.get("context").and_then(|s| s.as_str()),
                 Some("interactive")
             );
         } else {
@@ -784,9 +790,12 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
-            assert_eq!(usync.attrs.get("mode").map(|s| s.as_str()), Some("full"));
             assert_eq!(
-                usync.attrs.get("context").map(|s| s.as_str()),
+                usync.attrs.get("mode").and_then(|s| s.as_str()),
+                Some("full")
+            );
+            assert_eq!(
+                usync.attrs.get("context").and_then(|s| s.as_str()),
                 Some("background")
             );
         } else {
@@ -869,16 +878,25 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
-            assert_eq!(usync.attrs.get("sid").map(|s| s.as_str()), Some("test-sid"));
-            assert_eq!(usync.attrs.get("mode").map(|s| s.as_str()), Some("query"));
             assert_eq!(
-                usync.attrs.get("context").map(|s| s.as_str()),
+                usync.attrs.get("sid").and_then(|s| s.as_str()),
+                Some("test-sid")
+            );
+            assert_eq!(
+                usync.attrs.get("mode").and_then(|s| s.as_str()),
+                Some("query")
+            );
+            assert_eq!(
+                usync.attrs.get("context").and_then(|s| s.as_str()),
                 Some("message")
             );
 
             let query = usync.get_optional_child("query").unwrap();
             let devices = query.get_optional_child("devices").unwrap();
-            assert_eq!(devices.attrs.get("version").map(|s| s.as_str()), Some("2"));
+            assert_eq!(
+                devices.attrs.get("version").and_then(|s| s.as_str()),
+                Some("2")
+            );
         } else {
             panic!("Expected NodeContent::Nodes");
         }

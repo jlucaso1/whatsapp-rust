@@ -172,7 +172,7 @@ mod tests {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "query");
             assert_eq!(
-                nodes[0].attrs.get("query_id").map(|s| s.as_str()),
+                nodes[0].attrs.get("query_id").and_then(|s| s.as_str()),
                 Some("29829202653362039")
             );
         } else {

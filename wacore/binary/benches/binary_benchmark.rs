@@ -109,6 +109,20 @@ fn create_usync_like_node() -> Node {
         ])
         .build()
 }
+// Creates a node with multiple JID attributes to benchmark JID handling.
+// When marshaled, these strings are encoded as JID tokens (JID_PAIR or AD_JID).
+// The optimization avoids stringify→parse roundtrip when converting NodeRef→Node.
+fn create_jid_heavy_node() -> Node {
+    NodeBuilder::new("message")
+        .attr("from", "15551234567@s.whatsapp.net")
+        .attr("to", "15559876543@s.whatsapp.net")
+        .attr("participant", "15555555555@s.whatsapp.net")
+        .attr("recipient", "15556666666@s.whatsapp.net")
+        .attr("notify", "15557777777@s.whatsapp.net")
+        .attr("id", "ABCDEF123456")
+        .attr("type", "text")
+        .build()
+}
 
 // Marshal benchmarks - self-contained, no setup needed
 #[library_benchmark]
@@ -215,11 +229,11 @@ fn bench_get_children_by_tag() {
     let mut count = 0;
     for user in black_box(list.get_children_by_tag("user")) {
         // For each user, get their device children (nested iteration)
-        if let Some(devices) = user.get_optional_child("devices") {
-            if let Some(device_list) = devices.get_optional_child("device-list") {
-                for _device in black_box(device_list.get_children_by_tag("device")) {
-                    count += 1;
-                }
+        if let Some(devices) = user.get_optional_child("devices")
+            && let Some(device_list) = devices.get_optional_child("device-list")
+        {
+            for _device in black_box(device_list.get_children_by_tag("device")) {
+                count += 1;
             }
         }
     }
@@ -256,6 +270,42 @@ library_benchmark_group!(
     benchmarks = bench_get_children_by_tag
 );
 
+// Setup function for JID optimization benchmark - pre-compute marshaled JID-heavy data
+fn setup_jid_heavy_marshaled() -> Vec<u8> {
+    marshal(&create_jid_heavy_node()).unwrap()
+}
+
+// Benchmark that measures the JID attribute optimization.
+// This tests the flow: unmarshal → to_owned() → access JIDs via AttrParser
+//
+// The optimization benefit:
+// - Before: JID decoded → stringified in to_owned() → re-parsed in optional_jid()
+// - After: JID decoded → preserved as Jid in to_owned() → cloned in optional_jid()
+#[library_benchmark]
+#[bench::jid_access(setup = setup_jid_heavy_marshaled)]
+fn bench_jid_to_owned_access(marshaled: Vec<u8>) {
+    // Skip the flag byte at position 0
+    let node_ref = unmarshal_ref(&marshaled[1..]).unwrap();
+
+    // Convert to owned Node - this is where JIDs are preserved (optimization)
+    let node = node_ref.to_owned();
+
+    // Access JID attributes via AttrParser - if JIDs are preserved, no parsing needed
+    let mut parser = node.attrs();
+    black_box(parser.optional_jid("from"));
+    black_box(parser.optional_jid("to"));
+    black_box(parser.optional_jid("participant"));
+    black_box(parser.optional_jid("recipient"));
+    black_box(parser.optional_jid("notify"));
+    black_box(parser.optional_string("id"));
+    black_box(parser.optional_string("type"));
+}
+
+library_benchmark_group!(
+    name = jid_optimization_group;
+    benchmarks = bench_jid_to_owned_access
+);
+
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
@@ -265,5 +315,6 @@ main!(
         unpack_group,
         attr_parser_group,
         roundtrip_group,
-        child_iteration_group
+        child_iteration_group,
+        jid_optimization_group
 );

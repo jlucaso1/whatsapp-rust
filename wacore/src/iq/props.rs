@@ -173,7 +173,10 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "props");
-            assert_eq!(nodes[0].attrs.get("protocol"), Some(&"1".to_string()));
+            assert_eq!(
+                nodes[0].attrs.get("protocol").and_then(|v| v.as_str()),
+                Some("1")
+            );
             assert!(nodes[0].attrs.get("hash").is_none());
             assert!(nodes[0].attrs.get("refresh_id").is_none());
         } else {
@@ -187,7 +190,10 @@ mod tests {
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(nodes[0].attrs.get("hash"), Some(&"abc123".to_string()));
+            assert_eq!(
+                nodes[0].attrs.get("hash").and_then(|v| v.as_str()),
+                Some("abc123")
+            );
             assert!(nodes[0].attrs.get("refresh_id").is_none());
         } else {
             panic!("Expected NodeContent::Nodes");
@@ -201,7 +207,10 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert!(nodes[0].attrs.get("hash").is_none());
-            assert_eq!(nodes[0].attrs.get("refresh_id"), Some(&"42".to_string()));
+            assert_eq!(
+                nodes[0].attrs.get("refresh_id").and_then(|v| v.as_str()),
+                Some("42")
+            );
         } else {
             panic!("Expected NodeContent::Nodes");
         }
