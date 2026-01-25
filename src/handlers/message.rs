@@ -30,12 +30,8 @@ impl StanzaHandler for MessageHandler {
         // Extract the chat ID to serialize processing for this chat.
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
-        let chat_id = match node.attrs().optional_string("from") {
-            Some(id) if !id.is_empty() => id.to_string(),
-            Some(_) => {
-                warn!("Message stanza has empty 'from' attribute");
-                return false;
-            }
+        let chat_id = match node.attrs().optional_jid("from") {
+            Some(jid) => jid.to_string(),
             None => {
                 warn!("Message stanza missing required 'from' attribute");
                 return false;

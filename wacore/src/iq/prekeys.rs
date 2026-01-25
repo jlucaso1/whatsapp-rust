@@ -37,8 +37,10 @@
 //! </iq>
 //! ```
 
+use crate::iq::node::{required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::prekeys::PreKeyUtils;
+use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
@@ -275,6 +277,362 @@ impl IqSpec for PreKeyUploadSpec {
     }
 }
 
+// ============================================================================
+// Bidirectional ProtocolNode Types for PreKey Responses
+// ============================================================================
+//
+// These types implement ProtocolNode for both building (server-side) and
+// parsing (client-side) prekey bundle responses. The mock-server uses
+// `into_node()` to build responses, while the client can use `try_from_node()`
+// to parse them.
+
+/// Helper function to truncate u32 to 3-byte big-endian representation.
+fn truncate_to_3bytes(id: u32) -> Vec<u8> {
+    id.to_be_bytes()[1..].to_vec()
+}
+
+/// Helper function to expand 3-byte big-endian to u32.
+fn expand_from_3bytes(bytes: &[u8]) -> Result<u32, anyhow::Error> {
+    if bytes.len() != 3 {
+        return Err(anyhow!("Expected 3 bytes for ID, got {}", bytes.len()));
+    }
+    Ok(u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]))
+}
+
+/// Signed prekey node: `<skey><id/><value/><signature/></skey>`
+///
+/// Wire format:
+/// ```xml
+/// <skey>
+///   <id>[3-byte BE u32]</id>
+///   <value>[32-byte public key]</value>
+///   <signature>[64-byte signature]</signature>
+/// </skey>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SignedPreKeyNode {
+    pub id: u32,
+    pub public_bytes: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+impl SignedPreKeyNode {
+    pub fn new(id: u32, public_bytes: Vec<u8>, signature: Vec<u8>) -> Self {
+        Self {
+            id,
+            public_bytes,
+            signature,
+        }
+    }
+}
+
+impl ProtocolNode for SignedPreKeyNode {
+    fn tag(&self) -> &'static str {
+        "skey"
+    }
+
+    fn into_node(self) -> Node {
+        NodeBuilder::new("skey")
+            .children([
+                NodeBuilder::new("id")
+                    .bytes(truncate_to_3bytes(self.id))
+                    .build(),
+                NodeBuilder::new("value").bytes(self.public_bytes).build(),
+                NodeBuilder::new("signature").bytes(self.signature).build(),
+            ])
+            .build()
+    }
+
+    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+        if node.tag != "skey" {
+            return Err(anyhow!("expected <skey>, got <{}>", node.tag));
+        }
+
+        let id_node = required_child(node, "id")?;
+        let id_bytes = id_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <id>"))?;
+        let id = expand_from_3bytes(id_bytes)?;
+
+        let value_node = required_child(node, "value")?;
+        let public_bytes = value_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+
+        let sig_node = required_child(node, "signature")?;
+        let signature = sig_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <signature>"))?;
+
+        Ok(Self {
+            id,
+            public_bytes,
+            signature,
+        })
+    }
+}
+
+/// One-time prekey node: `<key><id/><value/></key>`
+///
+/// Wire format:
+/// ```xml
+/// <key>
+///   <id>[3-byte BE u32]</id>
+///   <value>[32-byte public key]</value>
+/// </key>
+/// ```
+#[derive(Debug, Clone)]
+pub struct OneTimePreKeyNode {
+    pub id: u32,
+    pub public_bytes: Vec<u8>,
+}
+
+impl OneTimePreKeyNode {
+    pub fn new(id: u32, public_bytes: Vec<u8>) -> Self {
+        Self { id, public_bytes }
+    }
+}
+
+impl ProtocolNode for OneTimePreKeyNode {
+    fn tag(&self) -> &'static str {
+        "key"
+    }
+
+    fn into_node(self) -> Node {
+        NodeBuilder::new("key")
+            .children([
+                NodeBuilder::new("id")
+                    .bytes(truncate_to_3bytes(self.id))
+                    .build(),
+                NodeBuilder::new("value").bytes(self.public_bytes).build(),
+            ])
+            .build()
+    }
+
+    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+        if node.tag != "key" {
+            return Err(anyhow!("expected <key>, got <{}>", node.tag));
+        }
+
+        let id_node = required_child(node, "id")?;
+        let id_bytes = id_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <id>"))?;
+        let id = expand_from_3bytes(id_bytes)?;
+
+        let value_node = required_child(node, "value")?;
+        let public_bytes = value_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+
+        Ok(Self { id, public_bytes })
+    }
+}
+
+/// Complete prekey bundle user node: `<user jid="..." type="result">...</user>`
+///
+/// Wire format:
+/// ```xml
+/// <user jid="..." type="result">
+///   <registration>[4-byte BE u32]</registration>
+///   <type>[0x05 = Curve25519]</type>
+///   <identity>[32-byte raw public key]</identity>
+///   <skey>...</skey>
+///   <key>...</key>                              <!-- optional -->
+///   <device-identity>...</device-identity>       <!-- optional, companion only -->
+/// </user>
+/// ```
+///
+/// This node represents a complete prekey bundle response for a single user/device.
+/// Both client and server can use this type:
+/// - **Server**: Use `from_bundle()` + `into_node()` to build responses
+/// - **Client**: Use `try_from_node()` to parse responses
+#[derive(Debug, Clone)]
+pub struct PreKeyBundleUserNode {
+    pub jid: Jid,
+    pub registration_id: u32,
+    pub identity_key: Vec<u8>, // Must be 32 bytes (raw key, not 33-byte serialized)
+    pub signed_pre_key: SignedPreKeyNode,
+    pub one_time_pre_key: Option<OneTimePreKeyNode>,
+    pub device_identity: Option<Vec<u8>>, // ADVSignedDeviceIdentity protobuf (companion only)
+}
+
+impl PreKeyBundleUserNode {
+    /// Create a PreKeyBundleUserNode from a PreKeyBundle.
+    ///
+    /// The `device_identity` parameter should be provided for companion devices
+    /// (device ID != 0) and contains the ADVSignedDeviceIdentity protobuf bytes.
+    pub fn from_bundle(
+        jid: Jid,
+        bundle: &PreKeyBundle,
+        device_identity: Option<Vec<u8>>,
+    ) -> Result<Self, anyhow::Error> {
+        let registration_id = bundle.registration_id()?;
+
+        // Identity key must be 32 bytes (raw key), not 33 bytes (serialized with 0x05 prefix)
+        let identity_key = bundle
+            .identity_key()?
+            .public_key()
+            .public_key_bytes()
+            .to_vec();
+
+        let signed_pre_key_id: u32 = bundle.signed_pre_key_id()?.into();
+        let signed_pre_key_public = bundle.signed_pre_key_public()?.public_key_bytes().to_vec();
+        let signed_pre_key_signature = bundle.signed_pre_key_signature()?.to_vec();
+
+        let signed_pre_key = SignedPreKeyNode::new(
+            signed_pre_key_id,
+            signed_pre_key_public,
+            signed_pre_key_signature,
+        );
+
+        // Optional one-time prekey
+        let one_time_pre_key = match (bundle.pre_key_id()?, bundle.pre_key_public()?) {
+            (Some(id), Some(pk)) => {
+                let pre_key_id: u32 = id.into();
+                let public_bytes = pk.public_key_bytes().to_vec();
+                Some(OneTimePreKeyNode::new(pre_key_id, public_bytes))
+            }
+            _ => None,
+        };
+
+        Ok(Self {
+            jid,
+            registration_id,
+            identity_key,
+            signed_pre_key,
+            one_time_pre_key,
+            device_identity,
+        })
+    }
+}
+
+impl ProtocolNode for PreKeyBundleUserNode {
+    fn tag(&self) -> &'static str {
+        "user"
+    }
+
+    fn into_node(self) -> Node {
+        let mut children = vec![
+            // Registration ID (4 bytes big-endian)
+            NodeBuilder::new("registration")
+                .bytes(self.registration_id.to_be_bytes().to_vec())
+                .build(),
+            // Key type: 0x05 = Curve25519
+            NodeBuilder::new("type").bytes(vec![5]).build(),
+            // Identity key (32 bytes raw public key)
+            NodeBuilder::new("identity")
+                .bytes(self.identity_key)
+                .build(),
+            // Signed prekey
+            self.signed_pre_key.into_node(),
+        ];
+
+        // Add optional one-time prekey
+        if let Some(otpk) = self.one_time_pre_key {
+            children.push(otpk.into_node());
+        }
+
+        // Add optional device identity (required for companion devices)
+        if let Some(dev_id) = self.device_identity {
+            children.push(NodeBuilder::new("device-identity").bytes(dev_id).build());
+        }
+
+        NodeBuilder::new("user")
+            .attr("jid", self.jid.to_string())
+            .attr("type", "result")
+            .children(children)
+            .build()
+    }
+
+    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+        if node.tag != "user" {
+            return Err(anyhow!("expected <user>, got <{}>", node.tag));
+        }
+
+        let jid_str = required_attr(node, "jid")?;
+        let jid = jid_str.parse()?;
+
+        // Parse registration ID (4 bytes big-endian)
+        let reg_node = required_child(node, "registration")?;
+        let reg_bytes = reg_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <registration>"))?;
+        if reg_bytes.len() != 4 {
+            return Err(anyhow!("registration ID must be 4 bytes"));
+        }
+        let registration_id =
+            u32::from_be_bytes([reg_bytes[0], reg_bytes[1], reg_bytes[2], reg_bytes[3]]);
+
+        // Parse identity key (32 bytes)
+        let identity_node = required_child(node, "identity")?;
+        let identity_key = identity_node
+            .content
+            .as_ref()
+            .and_then(|c| match c {
+                NodeContent::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("missing bytes in <identity>"))?;
+
+        // Parse signed prekey
+        let skey_node = required_child(node, "skey")?;
+        let signed_pre_key = SignedPreKeyNode::try_from_node(skey_node)?;
+
+        // Parse optional one-time prekey
+        let one_time_pre_key = node
+            .get_optional_child("key")
+            .and_then(|n| OneTimePreKeyNode::try_from_node(n).ok());
+
+        // Parse optional device identity
+        let device_identity =
+            node.get_optional_child("device-identity")
+                .and_then(|n| match &n.content {
+                    Some(NodeContent::Bytes(b)) => Some(b.clone()),
+                    _ => None,
+                });
+
+        Ok(Self {
+            jid,
+            registration_id,
+            identity_key,
+            signed_pre_key,
+            one_time_pre_key,
+            device_identity,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +804,153 @@ mod tests {
 
         let result = spec.parse_response(&response);
         assert!(result.is_ok());
+    }
+
+    // ========================================================================
+    // Tests for bidirectional ProtocolNode types
+    // ========================================================================
+
+    #[test]
+    fn test_truncate_to_3bytes() {
+        assert_eq!(truncate_to_3bytes(0x12345678), vec![0x34, 0x56, 0x78]);
+        assert_eq!(truncate_to_3bytes(0x00000001), vec![0x00, 0x00, 0x01]);
+        assert_eq!(truncate_to_3bytes(0xFFABCDEF), vec![0xAB, 0xCD, 0xEF]);
+    }
+
+    #[test]
+    fn test_expand_from_3bytes() {
+        assert_eq!(expand_from_3bytes(&[0x34, 0x56, 0x78]).unwrap(), 0x00345678);
+        assert_eq!(expand_from_3bytes(&[0x00, 0x00, 0x01]).unwrap(), 0x00000001);
+        assert_eq!(expand_from_3bytes(&[0xAB, 0xCD, 0xEF]).unwrap(), 0x00ABCDEF);
+    }
+
+    #[test]
+    fn test_signed_prekey_node_round_trip() {
+        // Use an ID that fits in 3 bytes (0x00XXXXXX)
+        let original = SignedPreKeyNode::new(0x00345678, vec![1; 32], vec![2; 64]);
+        let node = original.clone().into_node();
+
+        assert_eq!(node.tag, "skey");
+
+        let parsed = SignedPreKeyNode::try_from_node(&node).unwrap();
+        assert_eq!(parsed.id, original.id);
+        assert_eq!(parsed.public_bytes, original.public_bytes);
+        assert_eq!(parsed.signature, original.signature);
+    }
+
+    #[test]
+    fn test_onetime_prekey_node_round_trip() {
+        let original = OneTimePreKeyNode::new(0xABCDEF, vec![3; 32]);
+        let node = original.clone().into_node();
+
+        assert_eq!(node.tag, "key");
+
+        let parsed = OneTimePreKeyNode::try_from_node(&node).unwrap();
+        assert_eq!(parsed.id, original.id);
+        assert_eq!(parsed.public_bytes, original.public_bytes);
+    }
+
+    #[test]
+    fn test_prekey_bundle_user_node_structure() {
+        let jid: Jid = "1234567890:33@s.whatsapp.net".parse().unwrap();
+        let user_node = PreKeyBundleUserNode {
+            jid: jid.clone(),
+            registration_id: 12345,
+            identity_key: vec![1; 32],
+            signed_pre_key: SignedPreKeyNode::new(100, vec![2; 32], vec![3; 64]),
+            one_time_pre_key: Some(OneTimePreKeyNode::new(200, vec![4; 32])),
+            device_identity: Some(vec![5; 128]),
+        };
+
+        let node = user_node.into_node();
+
+        assert_eq!(node.tag, "user");
+        assert_eq!(
+            node.attrs().optional_string("jid"),
+            Some(jid.to_string().as_str())
+        );
+        assert_eq!(node.attrs().optional_string("type"), Some("result"));
+
+        // Verify children count (registration, type, identity, skey, key, device-identity)
+        if let Some(children) = node.children() {
+            assert_eq!(children.len(), 6);
+            assert_eq!(children[0].tag, "registration");
+            assert_eq!(children[1].tag, "type");
+            assert_eq!(children[2].tag, "identity");
+            assert_eq!(children[3].tag, "skey");
+            assert_eq!(children[4].tag, "key");
+            assert_eq!(children[5].tag, "device-identity");
+        } else {
+            panic!("Expected user node to have children");
+        }
+    }
+
+    #[test]
+    fn test_prekey_bundle_user_node_round_trip() {
+        let jid: Jid = "1234567890:33@s.whatsapp.net".parse().unwrap();
+        let original = PreKeyBundleUserNode {
+            jid: jid.clone(),
+            registration_id: 12345,
+            identity_key: vec![1; 32],
+            signed_pre_key: SignedPreKeyNode::new(100, vec![2; 32], vec![3; 64]),
+            one_time_pre_key: Some(OneTimePreKeyNode::new(200, vec![4; 32])),
+            device_identity: Some(vec![5; 128]),
+        };
+
+        let node = original.clone().into_node();
+        let parsed = PreKeyBundleUserNode::try_from_node(&node).unwrap();
+
+        assert_eq!(parsed.jid, original.jid);
+        assert_eq!(parsed.registration_id, original.registration_id);
+        assert_eq!(parsed.identity_key, original.identity_key);
+        assert_eq!(parsed.signed_pre_key.id, original.signed_pre_key.id);
+        assert_eq!(
+            parsed.signed_pre_key.public_bytes,
+            original.signed_pre_key.public_bytes
+        );
+        assert_eq!(
+            parsed.signed_pre_key.signature,
+            original.signed_pre_key.signature
+        );
+        assert!(parsed.one_time_pre_key.is_some());
+        assert_eq!(
+            parsed.one_time_pre_key.as_ref().unwrap().id,
+            original.one_time_pre_key.as_ref().unwrap().id
+        );
+        assert_eq!(parsed.device_identity, original.device_identity);
+    }
+
+    #[test]
+    fn test_prekey_bundle_user_node_without_optional_fields() {
+        let jid: Jid = "1234567890:0@s.whatsapp.net".parse().unwrap();
+        let original = PreKeyBundleUserNode {
+            jid: jid.clone(),
+            registration_id: 54321,
+            identity_key: vec![9; 32],
+            signed_pre_key: SignedPreKeyNode::new(500, vec![8; 32], vec![7; 64]),
+            one_time_pre_key: None,
+            device_identity: None,
+        };
+
+        let node = original.clone().into_node();
+
+        // Verify structure
+        if let Some(children) = node.children() {
+            // Should have 4 children (registration, type, identity, skey) - no key, no device-identity
+            assert_eq!(children.len(), 4);
+            assert_eq!(children[0].tag, "registration");
+            assert_eq!(children[1].tag, "type");
+            assert_eq!(children[2].tag, "identity");
+            assert_eq!(children[3].tag, "skey");
+        } else {
+            panic!("Expected user node to have children");
+        }
+
+        // Round-trip test
+        let parsed = PreKeyBundleUserNode::try_from_node(&node).unwrap();
+        assert_eq!(parsed.jid, original.jid);
+        assert_eq!(parsed.registration_id, original.registration_id);
+        assert!(parsed.one_time_pre_key.is_none());
+        assert!(parsed.device_identity.is_none());
     }
 }
