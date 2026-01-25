@@ -13,6 +13,12 @@ use whatsapp_rust::upload::UploadResponse;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
+const PING_TRIGGER: &str = "🦀ping";
+const MEDIA_PING_TRIGGER: &str = "ping";
+const PONG_TEXT: &str = "🏓 Pong!";
+const MEDIA_PONG_TEXT: &str = "pong";
+const REACTION_EMOJI: &str = "🏓";
+
 // This is a demo of a simple ping-pong bot with every type of media.
 //
 // Usage:
@@ -120,11 +126,10 @@ fn main() {
                             }
 
                             if let Some(text) = ctx.message.text_content()
-                                && text == "ping"
+                                && text == PING_TRIGGER
                             {
                                 info!("Received text ping, sending pong...");
 
-                                // Send reaction to the ping message
                                 let message_key = wa::MessageKey {
                                     remote_jid: Some(ctx.info.source.chat.to_string()),
                                     id: Some(ctx.info.id.clone()),
@@ -136,11 +141,9 @@ fn main() {
                                     },
                                 };
 
-                                let reaction_emoji = "🏓".to_string();
-
                                 let reaction_message = wa::message::ReactionMessage {
                                     key: Some(message_key),
-                                    text: Some(reaction_emoji),
+                                    text: Some(REACTION_EMOJI.to_string()),
                                     sender_timestamp_ms: Some(Utc::now().timestamp_millis()),
                                     ..Default::default()
                                 };
@@ -156,14 +159,12 @@ fn main() {
 
                                 let start = std::time::Instant::now();
 
-                                // Use build_quote_context() to strip nested mentions.
                                 let context_info = ctx.build_quote_context();
 
-                                // Create the initial quoted reply message
                                 let reply_message = wa::Message {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
-                                            text: Some("🏓 Pong!".to_string()),
+                                            text: Some(PONG_TEXT.to_string()),
                                             context_info: Some(Box::new(context_info.clone())),
                                             ..Default::default()
                                         },
@@ -171,7 +172,6 @@ fn main() {
                                     ..Default::default()
                                 };
 
-                                // 1. Send the initial message and get its ID
                                 let sent_msg_id = match ctx.send_message(reply_message).await {
                                     Ok(id) => id,
                                     Err(e) => {
@@ -180,7 +180,6 @@ fn main() {
                                     }
                                 };
 
-                                // 2. Calculate the duration
                                 let duration = start.elapsed();
                                 let duration_str = format!("{:.2?}", duration);
 
@@ -189,11 +188,13 @@ fn main() {
                                     duration_str, &sent_msg_id
                                 );
 
-                                // 3. Create the new content for the message
                                 let updated_content = wa::Message {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
-                                            text: Some(format!("🏓 Pong!\n`{}`", duration_str)),
+                                            text: Some(format!(
+                                                "{}\n`{}`",
+                                                PONG_TEXT, duration_str
+                                            )),
                                             context_info: Some(Box::new(context_info)),
                                             ..Default::default()
                                         },
@@ -201,7 +202,6 @@ fn main() {
                                     ..Default::default()
                                 };
 
-                                // 4. Edit the original message with the new content
                                 if let Err(e) =
                                     ctx.edit_message(sent_msg_id.clone(), updated_content).await
                                 {
@@ -265,7 +265,7 @@ impl MediaPing for wa::message::ImageMessage {
         wa::Message {
             image_message: Some(Box::new(wa::message::ImageMessage {
                 mimetype: self.mimetype.clone(),
-                caption: Some("pong".to_string()),
+                caption: Some(MEDIA_PONG_TEXT.to_string()),
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key),
@@ -288,7 +288,7 @@ impl MediaPing for wa::message::VideoMessage {
         wa::Message {
             video_message: Some(Box::new(wa::message::VideoMessage {
                 mimetype: self.mimetype.clone(),
-                caption: Some("pong".to_string()),
+                caption: Some(MEDIA_PONG_TEXT.to_string()),
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key),
@@ -311,12 +311,12 @@ fn get_pingable_media<'a>(message: &'a wa::Message) -> Option<&'a (dyn MediaPing
     let base_message = message.get_base_message();
 
     if let Some(msg) = &base_message.image_message
-        && msg.caption.as_deref() == Some("ping")
+        && msg.caption.as_deref() == Some(MEDIA_PING_TRIGGER)
     {
         return Some(&**msg);
     }
     if let Some(msg) = &base_message.video_message
-        && msg.caption.as_deref() == Some("ping")
+        && msg.caption.as_deref() == Some(MEDIA_PING_TRIGGER)
     {
         return Some(&**msg);
     }
