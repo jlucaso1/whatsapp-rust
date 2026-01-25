@@ -214,8 +214,9 @@ pub async fn group_decrypt(
     let plaintext = DECRYPTION_BUFFER.with(|buffer| {
         let mut buf_wrapper = buffer.borrow_mut();
         let buf = buf_wrapper.get_buffer();
+        let ciphertext = skm.ciphertext();
         if let Err(e) = aes_256_cbc_decrypt_into(
-            skm.ciphertext(),
+            &ciphertext,
             sender_key.cipher_key(),
             sender_key.iv(),
             buf,

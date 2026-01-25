@@ -379,7 +379,9 @@ pub struct SenderKeyMessage {
     message_version: u8,
     chain_id: u32,
     iteration: u32,
-    ciphertext: Box<[u8]>,
+    // Note: ciphertext is not stored separately; it's extracted on-demand
+    // from `serialized` to reduce memory usage. The serialized bytes contain
+    // [version_byte || protobuf(id, iteration, ciphertext) || signature].
     serialized: Box<[u8]>,
 }
 
@@ -397,7 +399,7 @@ impl SenderKeyMessage {
         let proto_message = waproto::whatsapp::SenderKeyMessage {
             id: Some(chain_id),
             iteration: Some(iteration),
-            ciphertext: Some(Vec::from(ciphertext.as_ref())),
+            ciphertext: Some(ciphertext.into_vec()),
         };
 
         // Build serialized buffer directly: [version_byte || proto || signature]
@@ -420,7 +422,6 @@ impl SenderKeyMessage {
             message_version,
             chain_id,
             iteration,
-            ciphertext,
             serialized: serialized.into_boxed_slice(),
         })
     }
@@ -449,9 +450,25 @@ impl SenderKeyMessage {
         self.iteration
     }
 
-    #[inline]
-    pub fn ciphertext(&self) -> &[u8] {
-        &self.ciphertext
+    /// Returns the ciphertext by parsing it from the serialized message.
+    ///
+    /// The ciphertext is extracted on-demand from the protobuf-encoded `serialized`
+    /// bytes to avoid storing a redundant copy in memory. This method is typically
+    /// called only once during decryption.
+    ///
+    /// # Performance Note
+    ///
+    /// This method parses the protobuf on each call. Callers should cache the result
+    /// if multiple accesses are needed.
+    pub fn ciphertext(&self) -> Vec<u8> {
+        // serialized layout: [version_byte || protobuf || signature]
+        let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
+        // Parse the protobuf to extract ciphertext.
+        // This should always succeed since we validated on construction/deserialization.
+        let proto = waproto::whatsapp::SenderKeyMessage::decode(proto_bytes).expect(
+            "SenderKeyMessage: protobuf decode failed; serialized data was corrupted after validation",
+        );
+        proto.ciphertext.unwrap_or_default()
     }
 
     #[inline]
@@ -495,16 +512,16 @@ impl TryFrom<&[u8]> for SenderKeyMessage {
         let iteration = proto_structure
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let ciphertext = proto_structure
-            .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .into_boxed_slice();
+        // Validate that ciphertext is present, but don't store it separately.
+        // It will be extracted on-demand from `serialized` via `ciphertext()`.
+        if proto_structure.ciphertext.is_none() {
+            return Err(SignalProtocolError::InvalidProtobufEncoding);
+        }
 
         Ok(SenderKeyMessage {
             message_version,
             chain_id,
             iteration,
-            ciphertext,
             serialized: Box::from(value),
         })
     }
