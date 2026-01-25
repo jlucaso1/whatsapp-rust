@@ -28,7 +28,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     if node
         .attrs
         .get("from")
-        .map(|s| s.as_str())
+        .and_then(|s| s.as_str())
         .unwrap_or_default()
         != SERVER_JID
     {

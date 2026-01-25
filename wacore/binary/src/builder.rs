@@ -1,4 +1,5 @@
-use crate::node::{Attrs, Node, NodeContent};
+use crate::jid::Jid;
+use crate::node::{Attrs, Node, NodeContent, NodeValue};
 
 #[derive(Debug, Default)]
 pub struct NodeBuilder {
@@ -20,11 +21,18 @@ impl NodeBuilder {
         self
     }
 
+    /// Add a JID attribute directly without stringifying.
+    /// This is more efficient than `attr(key, jid.to_string())`.
+    pub fn jid_attr(mut self, key: impl Into<String>, jid: Jid) -> Self {
+        self.attrs.insert(key.into(), NodeValue::Jid(jid));
+        self
+    }
+
     pub fn attrs<I, K, V>(mut self, attrs: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
-        V: Into<String>,
+        V: Into<NodeValue>,
     {
         for (key, value) in attrs.into_iter() {
             self.attrs.insert(key.into(), value.into());

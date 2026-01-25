@@ -669,13 +669,12 @@ impl Client {
             return;
         }
 
-        if node.tag.as_str() == "iq" {
-            let id_opt = node.attrs.get("id");
-            if let Some(id) = id_opt {
-                let has_waiter = self.response_waiters.lock().await.contains_key(id.as_str());
-                if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
-                    return;
-                }
+        if node.tag.as_str() == "iq"
+            && let Some(id) = node.attrs.get("id").and_then(|v| v.as_str())
+        {
+            let has_waiter = self.response_waiters.lock().await.contains_key(id);
+            if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
+                return;
             }
         }
 
@@ -831,8 +830,8 @@ impl Client {
 
         self.update_server_time_offset(node);
 
-        if let Some(lid_str) = node.attrs.get("lid") {
-            if let Ok(lid) = lid_str.parse::<Jid>() {
+        if let Some(lid_value) = node.attrs.get("lid") {
+            if let Some(lid) = lid_value.to_jid() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
                     info!(target: "Client", "Updating LID from server to '{lid}'");
@@ -841,7 +840,7 @@ impl Client {
                         .await;
                 }
             } else {
-                warn!(target: "Client", "Failed to parse LID from success stanza: {lid_str}");
+                warn!(target: "Client", "Failed to parse LID from success stanza: {lid_value}");
             }
         } else {
             warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
@@ -1077,7 +1076,7 @@ impl Client {
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
     pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
-        let id_opt = node.attrs.get("id").cloned();
+        let id_opt = node.attrs.get("id").map(|v| v.to_string_value());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {
@@ -1576,7 +1575,7 @@ impl Client {
     }
 
     pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
-        if let Some("get") = node.attrs.get("type").map(|s| s.as_str())
+        if let Some("get") = node.attrs.get("type").and_then(|s| s.as_str())
             && node.get_optional_child("ping").is_some()
         {
             info!(target: "Client", "Received ping, sending pong.");
@@ -2047,8 +2046,8 @@ mod tests {
         match tokio::time::timeout(Duration::from_secs(1), rx).await {
             Ok(Ok(response_node)) => {
                 assert_eq!(
-                    response_node.attrs.get("id"),
-                    Some(&test_id),
+                    response_node.attrs.get("id").and_then(|v| v.as_str()),
+                    Some(test_id.as_str()),
                     "Response node should have correct ID"
                 );
             }
@@ -3075,7 +3074,10 @@ mod tests {
         // Convert to node
         let node = session.into_node();
         assert_eq!(node.tag, "unified_session");
-        assert_eq!(node.attrs.get("id"), Some(&"123456789".to_string()));
+        assert_eq!(
+            node.attrs.get("id").and_then(|v| v.as_str()),
+            Some("123456789")
+        );
 
         // Create an IB stanza
         let stanza = IbStanza::unified_session(UnifiedSession::new("987654321"));
@@ -3087,7 +3089,10 @@ mod tests {
         let children = ib_node.children().expect("IB stanza should have children");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "unified_session");
-        assert_eq!(children[0].attrs.get("id"), Some(&"987654321".to_string()));
+        assert_eq!(
+            children[0].attrs.get("id").and_then(|v| v.as_str()),
+            Some("987654321")
+        );
 
         info!("✅ test_unified_session_protocol_node passed");
     }

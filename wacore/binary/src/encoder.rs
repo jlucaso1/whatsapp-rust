@@ -4,8 +4,8 @@ use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
-use crate::jid::{self, JidRef};
-use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, ValueRef};
+use crate::jid::{self, Jid, JidRef};
+use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, NodeValue, ValueRef};
 use crate::token;
 
 /// Trait for encoding node structures (both owned Node and borrowed NodeRef).
@@ -39,7 +39,10 @@ impl EncodeNode for Node {
     fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
         for (k, v) in &self.attrs {
             encoder.write_string(k)?;
-            encoder.write_string(v)?;
+            match v {
+                NodeValue::String(s) => encoder.write_string(s)?,
+                NodeValue::Jid(jid) => encoder.write_jid_owned(jid)?,
+            }
         }
         Ok(())
     }
@@ -256,6 +259,28 @@ impl<W: Write> Encoder<W> {
     /// Write a JidRef directly without converting to string first.
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
+        if jid.device > 0 {
+            // AD_JID format: agent/domain_type, device, user
+            self.write_u8(token::AD_JID)?;
+            self.write_u8(jid.agent)?;
+            self.write_u8(jid.device as u8)?;
+            self.write_string(&jid.user)?;
+        } else {
+            // JID_PAIR format: user, server
+            self.write_u8(token::JID_PAIR)?;
+            if jid.user.is_empty() {
+                self.write_u8(token::LIST_EMPTY)?;
+            } else {
+                self.write_string(&jid.user)?;
+            }
+            self.write_string(&jid.server)?;
+        }
+        Ok(())
+    }
+
+    /// Write an owned Jid directly without converting to string first.
+    /// This avoids the allocation that would occur with `jid.to_string()`.
+    fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
             self.write_u8(token::AD_JID)?;
@@ -636,8 +661,8 @@ mod tests {
         use crate::decoder::Decoder;
 
         let mut attrs = Attrs::new();
-        attrs.insert("key".to_string(), "".to_string()); // Empty value
-        attrs.insert("".to_string(), "value".to_string()); // Empty key
+        attrs.insert("key".to_string(), ""); // Empty value
+        attrs.insert("".to_string(), "value"); // Empty key
 
         let node = Node::new("test", attrs, Some(NodeContent::String("".to_string())));
 
@@ -649,8 +674,14 @@ mod tests {
         let decoded = decoder.read_node_ref()?.to_owned();
 
         assert_eq!(decoded.tag, "test");
-        assert_eq!(decoded.attrs.get("key"), Some(&"".to_string()));
-        assert_eq!(decoded.attrs.get(""), Some(&"value".to_string()));
+        assert_eq!(
+            decoded.attrs.get("key"),
+            Some(&NodeValue::String("".to_string()))
+        );
+        assert_eq!(
+            decoded.attrs.get(""),
+            Some(&NodeValue::String("value".to_string()))
+        );
 
         // Empty strings are encoded as BINARY_8 + 0, which decodes as empty bytes
         match &decoded.content {

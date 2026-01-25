@@ -55,7 +55,11 @@ impl ProtocolNode for UnifiedSession {
                 node.tag
             ));
         }
-        let id = node.attrs.get("id").cloned().unwrap_or_default();
+        let id = node
+            .attrs
+            .get("id")
+            .map(|v| v.to_string_value())
+            .unwrap_or_default();
         Ok(Self { id })
     }
 }
@@ -126,7 +130,10 @@ mod tests {
         let node = session.into_node();
 
         assert_eq!(node.tag, "unified_session");
-        assert_eq!(node.attrs.get("id"), Some(&"123456789".to_string()));
+        assert_eq!(
+            node.attrs.get("id").and_then(|v| v.as_str()),
+            Some("123456789")
+        );
     }
 
     #[test]
@@ -148,7 +155,10 @@ mod tests {
         let children = node.children().unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "unified_session");
-        assert_eq!(children[0].attrs.get("id"), Some(&"123456789".to_string()));
+        assert_eq!(
+            children[0].attrs.get("id").and_then(|v| v.as_str()),
+            Some("123456789")
+        );
     }
 
     #[test]
