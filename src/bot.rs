@@ -29,6 +29,24 @@ impl MessageContext {
             .await
     }
 
+    /// Build a properly-formatted quote context for this message.
+    ///
+    /// This handles:
+    /// - Setting the correct stanza_id and participant
+    /// - Stripping nested mentions from the quoted message to avoid
+    ///   accidentally tagging people from the original message
+    ///
+    /// Use this if you need custom control over the message structure but
+    /// still want correct quote handling.
+    pub fn build_quote_context(&self) -> wa::ContextInfo {
+        // Use the standalone function from wacore for code reuse
+        wacore::proto_helpers::build_quote_context(
+            &self.info.id,
+            self.info.source.sender.to_string(),
+            &self.message,
+        )
+    }
+
     pub async fn edit_message(
         &self,
         original_message_id: impl Into<String>,
