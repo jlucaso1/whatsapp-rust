@@ -4,6 +4,9 @@ use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Default WhatsApp Web websocket endpoint.
+pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
+
 /// An event produced by the transport layer.
 #[derive(Debug, Clone)]
 pub enum TransportEvent {

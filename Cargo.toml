@@ -101,6 +101,10 @@ whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
 
+[[example]]
+name = "benchmark"
+required-features = ["danger-skip-tls-verify"]
+
 [profile.release]
 opt-level = "z"
 debug = false
@@ -116,4 +120,3 @@ inherits = "release"
 lto = "thin"
 debug = 1
 strip = false
-
