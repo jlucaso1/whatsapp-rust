@@ -4,7 +4,7 @@
 //! the `ProtocolNode` pattern defined in `wacore/src/protocol.rs`.
 
 use crate::StringEnum;
-use crate::iq::node::{optional_attr, optional_child, optional_u64};
+use crate::iq::node::{optional_child, optional_u64};
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
@@ -66,11 +66,16 @@ impl ProtocolNode for BlocklistItemRequest {
             return Err(anyhow!("expected <item>, got <{}>", node.tag));
         }
 
-        let action_str =
-            optional_attr(node, "action").ok_or_else(|| anyhow!("missing action attribute"))?;
+        let mut attrs = node.attrs();
+        let action_str = attrs
+            .optional_string("action")
+            .ok_or_else(|| anyhow!("missing action attribute"))?;
         let action = BlocklistAction::try_from(action_str)?;
-        let jid_str = optional_attr(node, "jid").ok_or_else(|| anyhow!("missing jid attribute"))?;
-        let jid = jid_str.parse()?;
+        let jid = attrs.optional_jid("jid");
+        if let Err(e) = attrs.finish() {
+            return Err(anyhow!("{e}"));
+        }
+        let jid = jid.ok_or_else(|| anyhow!("missing jid attribute"))?;
 
         Ok(Self { jid, action })
     }
@@ -102,8 +107,12 @@ impl ProtocolNode for BlocklistEntry {
             return Err(anyhow!("expected <item>, got <{}>", node.tag));
         }
 
-        let jid_str = optional_attr(node, "jid").ok_or_else(|| anyhow!("missing jid attribute"))?;
-        let jid = jid_str.parse()?;
+        let mut attrs = node.attrs();
+        let jid = attrs.optional_jid("jid");
+        if let Err(e) = attrs.finish() {
+            return Err(anyhow!("{e}"));
+        }
+        let jid = jid.ok_or_else(|| anyhow!("missing jid attribute"))?;
         let timestamp = optional_u64(node, "t");
 
         Ok(Self { jid, timestamp })
