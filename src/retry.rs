@@ -6,11 +6,13 @@ use prost::Message;
 use rand::TryRngCore;
 use scopeguard;
 use std::sync::Arc;
+use wacore::iq::prekeys::{OneTimePreKeyNode, SignedPreKeyNode};
 use wacore::libsignal::protocol::{
     KeyPair, PreKeyBundle, PublicKey, UsePQRatchet, process_prekey_bundle,
 };
 use wacore::libsignal::store::PreKeyStore;
 use wacore::libsignal::store::SessionStore;
+use wacore::protocol::ProtocolNode;
 use wacore::types::jid::JidExt;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt as _;
@@ -419,51 +421,27 @@ impl Client {
         let identity_key = PublicKey::from_djb_public_key_bytes(identity_bytes)?;
 
         // Extract prekey (optional in some cases).
-        let prekey_data = keys_node.get_optional_child("key").and_then(|key_node| {
-            let id_bytes = key_node
-                .get_optional_child("id")
-                .and_then(get_bytes_content)?;
-            let value_bytes = key_node
-                .get_optional_child("value")
-                .and_then(get_bytes_content)?;
-
-            // PreKey ID is 3 bytes big-endian.
-            let prekey_id = if id_bytes.len() >= 3 {
-                u32::from_be_bytes([0, id_bytes[0], id_bytes[1], id_bytes[2]])
-            } else {
-                return None;
-            };
-
-            let prekey_public = PublicKey::from_djb_public_key_bytes(value_bytes).ok()?;
-            Some((prekey_id.into(), prekey_public))
-        });
+        let prekey_node = keys_node
+            .get_optional_child("key")
+            .map(OneTimePreKeyNode::try_from_node)
+            .transpose()?;
+        let prekey_data = if let Some(prekey_node) = prekey_node {
+            let prekey_public = PublicKey::from_djb_public_key_bytes(&prekey_node.public_bytes)?;
+            Some((prekey_node.id.into(), prekey_public))
+        } else {
+            None
+        };
 
         // Extract signed prekey.
         let skey_node = keys_node
             .get_optional_child("skey")
             .ok_or_else(|| anyhow::anyhow!("Missing signed prekey in retry receipt"))?;
 
-        let skey_id_bytes = skey_node
-            .get_optional_child("id")
-            .and_then(get_bytes_content)
-            .ok_or_else(|| anyhow::anyhow!("Missing signed prekey ID"))?;
-        let skey_id = if skey_id_bytes.len() >= 3 {
-            u32::from_be_bytes([0, skey_id_bytes[0], skey_id_bytes[1], skey_id_bytes[2]])
-        } else {
-            return Err(anyhow::anyhow!("Invalid signed prekey ID length"));
-        };
-
-        let skey_value_bytes = skey_node
-            .get_optional_child("value")
-            .and_then(get_bytes_content)
-            .ok_or_else(|| anyhow::anyhow!("Missing signed prekey value"))?;
-        let skey_public = PublicKey::from_djb_public_key_bytes(skey_value_bytes)?;
-
-        let skey_sig_bytes = skey_node
-            .get_optional_child("signature")
-            .and_then(get_bytes_content)
-            .ok_or_else(|| anyhow::anyhow!("Missing signed prekey signature"))?;
-        let skey_signature: [u8; 64] = skey_sig_bytes
+        let signed_prekey = SignedPreKeyNode::try_from_node(skey_node)?;
+        let skey_public = PublicKey::from_djb_public_key_bytes(&signed_prekey.public_bytes)?;
+        let skey_signature: [u8; 64] = signed_prekey
+            .signature
+            .as_slice()
             .try_into()
             .map_err(|_| anyhow::anyhow!("Invalid signature length"))?;
 
@@ -472,7 +450,7 @@ impl Client {
             registration_id,
             u32::from(requester_jid.device).into(),
             prekey_data,
-            skey_id.into(),
+            signed_prekey.id.into(),
             skey_public,
             skey_signature.into(),
             identity_key.into(),
@@ -588,10 +566,9 @@ impl Client {
                 .public_key_bytes()
                 .to_vec();
 
-            let prekey_id_bytes = new_prekey_id.to_be_bytes()[1..].to_vec();
             let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
 
-            let skey_id_bytes = 1u32.to_be_bytes()[1..].to_vec();
+            let skey_id = device_snapshot.signed_pre_key_id;
             let skey_value_bytes = device_snapshot
                 .signed_pre_key
                 .public_key
@@ -614,19 +591,9 @@ impl Client {
                         NodeBuilder::new("identity")
                             .bytes(identity_key_bytes)
                             .build(),
-                        NodeBuilder::new("key")
-                            .children([
-                                NodeBuilder::new("id").bytes(prekey_id_bytes).build(),
-                                NodeBuilder::new("value").bytes(prekey_value_bytes).build(),
-                            ])
-                            .build(),
-                        NodeBuilder::new("skey")
-                            .children([
-                                NodeBuilder::new("id").bytes(skey_id_bytes).build(),
-                                NodeBuilder::new("value").bytes(skey_value_bytes).build(),
-                                NodeBuilder::new("signature").bytes(skey_sig_bytes).build(),
-                            ])
-                            .build(),
+                        OneTimePreKeyNode::new(new_prekey_id, prekey_value_bytes).into_node(),
+                        SignedPreKeyNode::new(skey_id, skey_value_bytes, skey_sig_bytes)
+                            .into_node(),
                         NodeBuilder::new("device-identity")
                             .bytes(device_identity_bytes)
                             .build(),

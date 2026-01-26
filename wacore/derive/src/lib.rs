@@ -36,17 +36,29 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// # Attributes
 ///
 /// - `#[protocol(tag = "tagname")]` - Required. Specifies the XML tag name.
-/// - `#[attr(name = "attrname")]` - Marks a field as an XML attribute.
+/// - `#[attr(name = "attrname")]` - Marks a String field as an XML attribute.
 /// - `#[attr(name = "attrname", default = "value")]` - Attribute with default value.
+///   For `Option<String>` fields, a default always yields `Some(default)`.
+/// - `#[attr(name = "attrname", jid)]` - Marks a Jid field as a JID attribute (required).
+/// - `#[attr(name = "attrname", jid, optional)]` - Marks an Option<Jid> field as optional.
 ///
 /// # Example
 ///
 /// ```ignore
 /// #[derive(ProtocolNode)]
-/// #[protocol(tag = "query")]
-/// pub struct QueryRequest {
-///     #[attr(name = "request", default = "interactive")]
-///     pub request_type: String,
+/// #[protocol(tag = "message")]
+/// pub struct MessageStanza {
+///     #[attr(name = "from", jid)]
+///     pub from: Jid,
+///     
+///     #[attr(name = "to", jid)]
+///     pub to: Jid,
+///     
+///     #[attr(name = "id")]
+///     pub id: String,
+///     
+///     #[attr(name = "sender_lid", jid, optional)]
+///     pub sender_lid: Option<Jid>,
 /// }
 /// ```
 #[proc_macro_derive(ProtocolNode, attributes(protocol, attr))]
@@ -105,8 +117,36 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         .map(|info| {
             let field_ident = &info.field_ident;
             let attr_name = &info.attr_name;
-            quote! {
-                .attr(#attr_name, self.#field_ident.to_string())
+
+            match (&info.attr_type, info.optional) {
+                (AttrType::Jid, true) => {
+                    // Option<Jid> - only insert if Some
+                    quote! {
+                        if let Some(jid) = self.#field_ident {
+                            builder = builder.jid_attr(#attr_name, jid);
+                        }
+                    }
+                }
+                (AttrType::Jid, false) => {
+                    // Required Jid - always insert
+                    quote! {
+                        builder = builder.jid_attr(#attr_name, self.#field_ident);
+                    }
+                }
+                (AttrType::String, true) => {
+                    // Option<String> - only insert if Some
+                    quote! {
+                        if let Some(s) = self.#field_ident {
+                            builder = builder.attr(#attr_name, s);
+                        }
+                    }
+                }
+                (AttrType::String, false) => {
+                    // Required String - always insert
+                    quote! {
+                        builder = builder.attr(#attr_name, self.#field_ident);
+                    }
+                }
             }
         })
         .collect();
@@ -116,32 +156,71 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         .map(|info| {
             let field_ident = &info.field_ident;
             let attr_name = &info.attr_name;
-            if let Some(default) = &info.default {
-                quote! {
-                    #field_ident: node.attrs().optional_string(#attr_name)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| #default.to_string())
+
+            match (&info.attr_type, info.optional, &info.default) {
+                (AttrType::Jid, false, _) => {
+                    // Required Jid
+                    quote! {
+                        #field_ident: node.attrs().optional_jid(#attr_name)
+                            .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                    }
                 }
-            } else {
-                quote! {
-                    #field_ident: node.attrs().optional_string(#attr_name)
-                        .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
-                        .to_string()
+                (AttrType::Jid, true, _) => {
+                    // Optional Jid
+                    quote! {
+                        #field_ident: node.attrs().optional_jid(#attr_name)
+                    }
+                }
+                (AttrType::String, false, Some(default)) => {
+                    // String with default
+                    quote! {
+                        #field_ident: node.attrs().optional_string(#attr_name)
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| #default.to_string())
+                    }
+                }
+                (AttrType::String, false, None) => {
+                    // Required String
+                    quote! {
+                        #field_ident: node.attrs().required_string(#attr_name)?.to_string()
+                    }
+                }
+                (AttrType::String, true, Some(default)) => {
+                    // Optional String with default (always Some)
+                    quote! {
+                        #field_ident: node.attrs().optional_string(#attr_name)
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(#default.to_string()))
+                    }
+                }
+                (AttrType::String, true, None) => {
+                    // Optional String
+                    quote! {
+                        #field_ident: node.attrs().optional_string(#attr_name).map(|s| s.to_string())
+                    }
                 }
             }
         })
         .collect();
 
-    // Only generate Default impl if all fields have defaults
-    let all_have_defaults = attr_fields.iter().all(|info| info.default.is_some());
+    // Only generate Default impl if all fields have defaults or are optional
+    let all_have_defaults = attr_fields
+        .iter()
+        .all(|info| info.default.is_some() || info.optional);
 
     let default_impl = if all_have_defaults {
         let default_fields: Vec<_> = attr_fields
             .iter()
             .map(|info| {
                 let field_ident = &info.field_ident;
-                let default = info.default.as_ref().unwrap();
-                quote! { #field_ident: #default.to_string() }
+                match (&info.attr_type, info.optional, &info.default) {
+                    (_, true, Some(default)) => quote! { #field_ident: Some(#default.to_string()) },
+                    (_, true, None) => quote! { #field_ident: None },
+                    (AttrType::String, false, Some(default)) => {
+                        quote! { #field_ident: #default.to_string() }
+                    }
+                    _ => unreachable!("all_have_defaults check should prevent this branch"),
+                }
             })
             .collect();
 
@@ -165,9 +244,9 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
             }
 
             fn into_node(self) -> ::wacore_binary::node::Node {
-                ::wacore_binary::builder::NodeBuilder::new(#tag)
-                    #(#attr_setters)*
-                    .build()
+                let mut builder = ::wacore_binary::builder::NodeBuilder::new(#tag);
+                #(#attr_setters)*
+                builder.build()
             }
 
             fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
@@ -248,9 +327,16 @@ fn generate_empty_impl(name: &syn::Ident, tag: &str) -> proc_macro2::TokenStream
     }
 }
 
+enum AttrType {
+    String,
+    Jid,
+}
+
 struct AttrFieldInfo {
     field_ident: syn::Ident,
     attr_name: String,
+    attr_type: AttrType,
+    optional: bool,
     default: Option<String>,
 }
 
@@ -279,10 +365,15 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
         None => return Ok(None),
     };
 
+    // Check if field type is Option<T>
+    let is_optional = is_option_type(&field.ty);
+
     for attr in &field.attrs {
         if attr.path().is_ident("attr") {
             let mut attr_name = None;
             let mut default = None;
+            let mut is_jid = false;
+            let mut explicit_optional = false;
 
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
@@ -291,15 +382,30 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
                 } else if meta.path.is_ident("default") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     default = Some(value.value());
+                } else if meta.path.is_ident("jid") {
+                    is_jid = true;
+                } else if meta.path.is_ident("optional") {
+                    explicit_optional = true;
                 }
                 Ok(())
             })?;
 
             match attr_name {
                 Some(name) => {
+                    let attr_type = if is_jid {
+                        AttrType::Jid
+                    } else {
+                        AttrType::String
+                    };
+
+                    // Determine if optional: either explicit marker or Option<T> type
+                    let optional = explicit_optional || is_optional;
+
                     return Ok(Some(AttrFieldInfo {
                         field_ident,
                         attr_name: name,
+                        attr_type,
+                        optional,
                         default,
                     }));
                 }
@@ -313,6 +419,16 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
         }
     }
     Ok(None)
+}
+
+/// Check if a type is Option<T>
+fn is_option_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Option";
+    }
+    false
 }
 
 /// Derive macro for enums with string representations.

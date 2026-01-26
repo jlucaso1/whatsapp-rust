@@ -724,6 +724,9 @@ impl Client {
 
     /// Build and send an <ack/> node corresponding to the given stanza.
     async fn send_ack_for(&self, node: &Node) -> Result<(), ClientError> {
+        if !self.is_connected() || self.expected_disconnect.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let id = match node.attrs.get("id") {
             Some(v) => v.clone(),
             None => return Ok(()),
@@ -1471,49 +1474,81 @@ impl Client {
             .map(|n| n.attrs().optional_string("type").unwrap_or("").to_string())
             .unwrap_or_default();
 
-        match (code, conflict_type.as_str()) {
-            ("515", _) => {
-                // 515 is expected during registration/pairing phase - server closes stream after pairing
-                info!(target: "Client", "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect.");
-                self.expect_disconnect().await;
-                // Proactively disconnect transport since server may not close the connection
-                // Clone the transport Arc before spawning to avoid holding the lock
-                let transport_opt = self.transport.lock().await.clone();
-                if let Some(transport) = transport_opt {
-                    // Spawn disconnect in background so we don't block the message loop
-                    tokio::spawn(async move {
-                        info!(target: "Client", "Disconnecting transport after 515");
-                        transport.disconnect().await;
-                    });
-                }
-            }
-            ("401", "device_removed") | (_, "replaced") => {
-                info!(target: "Client", "Got stream error indicating client was removed or replaced. Logging out.");
-                self.expect_disconnect().await;
-                self.enable_auto_reconnect.store(false, Ordering::Relaxed);
+        if !conflict_type.is_empty() {
+            info!(
+                target: "Client",
+                "Got stream error indicating client was removed or replaced (conflict={}). Logging out.",
+                conflict_type
+            );
+            self.expect_disconnect().await;
+            self.enable_auto_reconnect.store(false, Ordering::Relaxed);
 
-                let event = if conflict_type == "replaced" {
-                    Event::StreamReplaced(crate::types::events::StreamReplaced)
-                } else {
-                    Event::LoggedOut(crate::types::events::LoggedOut {
-                        on_connect: false,
-                        reason: ConnectFailureReason::LoggedOut,
-                    })
-                };
-                self.core.event_bus.dispatch(&event);
+            let event = if conflict_type == "replaced" {
+                Event::StreamReplaced(crate::types::events::StreamReplaced)
+            } else {
+                Event::LoggedOut(crate::types::events::LoggedOut {
+                    on_connect: false,
+                    reason: ConnectFailureReason::LoggedOut,
+                })
+            };
+            self.core.event_bus.dispatch(&event);
+
+            let transport_opt = self.transport.lock().await.clone();
+            if let Some(transport) = transport_opt {
+                tokio::spawn(async move {
+                    info!(target: "Client", "Disconnecting transport after conflict");
+                    transport.disconnect().await;
+                });
             }
-            ("503", _) => {
-                info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
-            }
-            _ => {
-                error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
-                self.expect_disconnect().await;
-                self.core.event_bus.dispatch(&Event::StreamError(
-                    crate::types::events::StreamError {
-                        code: code.to_string(),
-                        raw: Some(node.clone()),
-                    },
-                ));
+        } else {
+            match code {
+                "515" => {
+                    // 515 is expected during registration/pairing phase - server closes stream after pairing
+                    info!(target: "Client", "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect.");
+                    self.expect_disconnect().await;
+                    // Proactively disconnect transport since server may not close the connection
+                    // Clone the transport Arc before spawning to avoid holding the lock
+                    let transport_opt = self.transport.lock().await.clone();
+                    if let Some(transport) = transport_opt {
+                        // Spawn disconnect in background so we don't block the message loop
+                        tokio::spawn(async move {
+                            info!(target: "Client", "Disconnecting transport after 515");
+                            transport.disconnect().await;
+                        });
+                    }
+                }
+                "516" => {
+                    info!(target: "Client", "Got 516 stream error (device removed). Logging out.");
+                    self.expect_disconnect().await;
+                    self.enable_auto_reconnect.store(false, Ordering::Relaxed);
+                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                        crate::types::events::LoggedOut {
+                            on_connect: false,
+                            reason: ConnectFailureReason::LoggedOut,
+                        },
+                    ));
+
+                    let transport_opt = self.transport.lock().await.clone();
+                    if let Some(transport) = transport_opt {
+                        tokio::spawn(async move {
+                            info!(target: "Client", "Disconnecting transport after 516");
+                            transport.disconnect().await;
+                        });
+                    }
+                }
+                "503" => {
+                    info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
+                }
+                _ => {
+                    error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
+                    self.expect_disconnect().await;
+                    self.core.event_bus.dispatch(&Event::StreamError(
+                        crate::types::events::StreamError {
+                            code: code.to_string(),
+                            raw: Some(node.clone()),
+                        },
+                    ));
+                }
             }
         }
 

@@ -86,7 +86,21 @@ impl PreKeyUtils {
                 continue;
             }
             let mut attrs = user_node.attrs();
-            let jid = attrs.jid("jid");
+            let mut jid = attrs.jid("jid");
+            if jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
+                || jid.server == wacore_binary::jid::HIDDEN_USER_SERVER
+            {
+                jid.agent = 0;
+            }
+            if jid.device == 0
+                && (jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
+                    || jid.server == wacore_binary::jid::HIDDEN_USER_SERVER)
+                && let Some((user_base, device_str)) = jid.user.split_once(':')
+                && let Ok(device) = device_str.parse::<u16>()
+            {
+                jid.user = user_base.to_string();
+                jid.device = device;
+            }
             let bundle = match Self::node_to_pre_key_bundle(&jid, user_node) {
                 Ok(b) => b,
                 Err(_e) => {
@@ -240,5 +254,66 @@ impl PreKeyUtils {
         let mut sig_arr = [0u8; 64];
         sig_arr.copy_from_slice(&signature_bytes);
         Ok((id, public_key_bytes, sig_arr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::iq::prekeys::PreKeyBundleUserNode;
+    use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
+    use crate::protocol::ProtocolNode;
+    use rand::TryRngCore;
+    use wacore_binary::node::NodeValue;
+
+    fn create_mock_bundle(device_id: u32) -> PreKeyBundle {
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let identity_pair = IdentityKeyPair::generate(&mut rng);
+        let signed_prekey_pair = KeyPair::generate(&mut rng);
+        let prekey_pair = KeyPair::generate(&mut rng);
+
+        PreKeyBundle::new(
+            1,
+            device_id.into(),
+            Some((1u32.into(), prekey_pair.public_key)),
+            2u32.into(),
+            signed_prekey_pair.public_key,
+            vec![0u8; 64],
+            *identity_pair.identity_key(),
+        )
+        .expect("Failed to create PreKeyBundle")
+    }
+
+    #[test]
+    fn test_parse_prekeys_response_normalizes_lid_device_jid() {
+        let base_jid = Jid::lid_device("100000012345678", 33);
+        let bundle = create_mock_bundle(33);
+        let mut user_node = PreKeyBundleUserNode::from_bundle(base_jid.clone(), &bundle, None)
+            .expect("build bundle node")
+            .into_node();
+
+        let raw_jid = Jid {
+            user: "100000012345678:33".to_string(),
+            server: "lid".to_string(),
+            agent: 1,
+            device: 0,
+            integrator: 0,
+        };
+        user_node
+            .attrs
+            .insert("jid".to_string(), NodeValue::Jid(raw_jid.clone()));
+
+        let response = NodeBuilder::new("iq")
+            .children([NodeBuilder::new("list").children([user_node]).build()])
+            .build();
+
+        let bundles = PreKeyUtils::parse_prekeys_response(&response).expect("parse bundles");
+        assert!(bundles.contains_key(&base_jid));
+        assert!(!bundles.contains_key(&raw_jid));
+
+        let parsed_jid = bundles.keys().next().expect("parsed jid");
+        assert_eq!(parsed_jid.user, base_jid.user);
+        assert_eq!(parsed_jid.device, base_jid.device);
+        assert_eq!(parsed_jid.agent, 0);
     }
 }

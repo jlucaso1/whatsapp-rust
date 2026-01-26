@@ -25,12 +25,11 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
 
 pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
-    if node
+    if !node
         .attrs
         .get("from")
-        .and_then(|s| s.as_str())
-        .unwrap_or_default()
-        != SERVER_JID
+        .map(|from| from == SERVER_JID)
+        .unwrap_or(false)
     {
         return false;
     }
