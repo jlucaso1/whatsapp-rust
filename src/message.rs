@@ -469,7 +469,7 @@ impl Client {
                 || info.source.chat.is_status_broadcast();
 
             if should_process_skmsg {
-                if let Err(e) = self
+                match self
                     .clone()
                     .process_group_enc_batch(
                         &group_content_enc_nodes,
@@ -478,7 +478,45 @@ impl Client {
                     )
                     .await
                 {
-                    log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                    Ok(true) => {
+                        // Optimization: Re-queue locally!
+                        // The message failed due to NoSession (NoSenderKey), but we haven't retried yet.
+                        // We will sleep briefly and re-queue it to this chat's serial queue.
+                        // This allows a pending pkmsg (in the queue or socket buffer) to be processed first.
+                        let client = self.clone();
+                        let chat_id = info.source.chat.to_string();
+                        let node_clone = node.clone();
+                        let msg_id = info.id.clone();
+
+                        log::info!(
+                            "Re-queueing message {} from {} (NoSession) with 500ms delay",
+                            msg_id,
+                            info.source.chat
+                        );
+
+                        // Mark as local retry in cache prevents infinite loops (handled in process_group_enc_batch)
+                        // But we also double check/insert here to be safe and cleaner
+                        // Actually process_group_enc_batch checks it but doesn't insert it.
+                        // Wait, logic says: "If not cached, return true". So we must insert it here!
+                        self.local_retry_cache.insert(msg_id, ()).await;
+
+                        tokio::spawn(async move {
+                            // Short delay to allow dependent messages (pkmsg) to process
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                            if let Some(sender) = client.message_queues.get(&chat_id).await
+                                && let Err(e) = sender.send(node_clone).await
+                            {
+                                log::warn!("Failed to re-queue message: {}", e);
+                            }
+                        });
+                    }
+                    Ok(false) => {
+                        // Processed successfully or handled errors (e.g. sent retry receipt)
+                    }
+                    Err(e) => {
+                        log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                    }
                 }
             } else {
                 // Only show warning if session messages actually FAILED (not duplicates)
@@ -854,9 +892,9 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
-    ) -> Result<(), DecryptionError> {
+    ) -> Result<bool, DecryptionError> {
         if enc_nodes.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let device_arc = self.persistence_manager.get_device_arc().await;
 
@@ -916,8 +954,18 @@ impl Client {
                     // This is expected when messages are redelivered, just continue silently
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
+                    // Optimization: Check if this message was already re-queued locally
+                    let cache_key = info.id.clone();
+                    let already_requeued = self.local_retry_cache.get(&cache_key).await.is_some();
+
+                    if !already_requeued {
+                        // Signal caller to re-queue this message
+                        // Do NOT send retry receipt yet
+                        return Ok(true);
+                    }
+
                     warn!(
-                        "No sender key state for batched group message [msg:{}] from {}: {}. Sending retry receipt.",
+                        "No sender key state for batched group message [msg:{}] from {}: {}. Sending retry receipt (already requeued).",
                         info.id, info.source.sender, msg
                     );
                     // Use spawn_retry_receipt which has retry count tracking
@@ -935,7 +983,7 @@ impl Client {
                 }
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     async fn handle_decrypted_plaintext(
@@ -3882,6 +3930,236 @@ mod tests {
             err_msg.contains("id"),
             "Error message should mention missing 'id' attribute: {}",
             err_msg
+        );
+    }
+    #[tokio::test]
+    async fn test_local_requeue_optimization() {
+        // Setup integration test environment
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        use crate::store::SqliteStore;
+        use crate::store::persistence_manager::PersistenceManager;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::node::NodeContent;
+
+        // 1. Setup Client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_requeue_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("test backend should initialize"),
+        );
+        // Note: Using None for override_version
+        let (client, _rx) =
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+
+        // 2. Configure Test Data
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+        let msg_id = "TEST_MSG_REQUEUE_1";
+
+        // Manual queue initialization (since it's not created until first message usually)
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        client
+            .message_queues
+            .insert(group_jid.to_string(), tx)
+            .await;
+
+        // 3. Trigger Message Processing (Simulate receiving skmsg BEFORE session)
+        // Construction of mock Signal Message Payload
+        // We need to trigger "NoSenderKeyState" (lookup failure), not "TooShort".
+        // Structure: [Version(1)] + [Protobuf] + [Signature(64)].
+        // Version = 0x33 (3).
+        // Protobuf: Field 1 (KeyID)=1, Field 2 (Iteration)=1, Field 3 (Ciphertext)=Bytes.
+        // 08 01 10 01 1A 00
+        let mut content = vec![0x33, 0x08, 0x01, 0x10, 0x01, 0x1A, 0x00];
+        // Append 64 bytes of dummy signature to satisfy length checks
+        content.extend(vec![0u8; 64]);
+
+        // Build enc node first
+        let mut enc_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .attr("v", "2")
+            .build();
+        enc_node.content = Some(NodeContent::Bytes(content));
+
+        // Build message node containing enc node
+        let valid_skmsg_node = NodeBuilder::new("message")
+            .attr("id", msg_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![enc_node])
+            .build();
+
+        // Run handle_encrypted_message
+        // It will fail decryption. If payload is accepted as valid Signal structure,
+        // it will attempt to load SenderKey. Since store is empty, it returns NoSenderKey.
+        // This triggers our re-queue optimization.
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(valid_skmsg_node.clone()))
+            .await;
+
+        // Verify cache IMMEDIATELY
+        // Asserting presence means we successfully triggered the "NoSenderKey" path.
+        assert!(
+            client.local_retry_cache.contains_key(msg_id),
+            "Message should be in local_retry_cache (Optimization NOT triggered - check error logs)"
+        );
+
+        // 4. Verify Re-Queueing
+        // The re-queued message should appear in `rx` after ~500ms.
+        let queued_msg =
+            tokio::time::timeout(tokio::time::Duration::from_millis(1000), rx.recv()).await;
+        assert!(
+            queued_msg.is_ok(),
+            "Timed out waiting for re-queued message"
+        );
+        assert!(
+            queued_msg.unwrap().is_some(),
+            "Queue should contain the message"
+        );
+
+        // 5. Verify No Network Retry for 1st attempt
+        // message_retry_counts tracks network retries.
+        // It should be EMPTY because we skipped spawn_retry_receipt.
+        let retry_key = format!("{}:{}:{}", group_jid, msg_id, sender_jid);
+        assert!(
+            client.message_retry_counts.get(&retry_key).await.is_none(),
+            "Should NOT have sent network retry receipt yet"
+        );
+
+        // 6. Simulate Second Pass (Re-queued message processed)
+        // Now if we process the re-queued message:
+        // Cache entry exists. So it should trigger network retry (fall back).
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(valid_skmsg_node))
+            .await;
+
+        // Verify retry count allows network retry now
+        // Note: spawn_retry_receipt spawns a task, so we might need to yield slightly to let it update the cache.
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        assert_eq!(
+            client.message_retry_counts.get(&retry_key).await,
+            Some(1),
+            "Should have sent network retry receipt on 2nd attempt"
+        );
+    }
+    #[tokio::test]
+    async fn test_local_requeue_edge_cases() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        use crate::store::SqliteStore;
+        use crate::store::persistence_manager::PersistenceManager;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::node::NodeContent;
+
+        // One-time setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_requeue_edge?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _) = Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+
+        // 1. Garbage Data Test (Too Short)
+        // Should NOT trigger re-queue (cache should remain empty for this ID)
+        let garbage_id = "GARBAGE_u1928";
+        let garbage_node = NodeBuilder::new("message")
+            .attr("id", garbage_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![{
+                let mut n = NodeBuilder::new("enc")
+                    .attr("type", "skmsg")
+                    .attr("v", "2")
+                    .build();
+                n.content = Some(NodeContent::Bytes(vec![1, 2, 3])); // Too short
+                n
+            }])
+            .build();
+
+        client
+            .clone()
+            .handle_encrypted_message(Arc::new(garbage_node))
+            .await;
+
+        assert!(
+            !client.local_retry_cache.contains_key(garbage_id),
+            "Garbage message should NOT be re-queued/cached"
+        );
+
+        // 2. Concurrent/Duplicate Test
+        // Send a valid-format message that triggers NoSenderKey.
+        // Send it TWICE.
+        // 1st -> ReQueued.
+        // 2nd -> Network Retry Fallback.
+        let dup_id = "DUP_MSG_123";
+        // Manual queue init
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        client
+            .message_queues
+            .insert(group_jid.to_string(), tx)
+            .await;
+
+        // Pseudo-valid SenderKeyMessage: Version 3 + Protobuf + Fake Sig
+        let mut content = vec![0x33, 0x08, 0x01, 0x10, 0x01, 0x1A, 0x00];
+        content.extend(vec![0u8; 64]); // fake sig
+
+        let dup_node = NodeBuilder::new("message")
+            .attr("id", dup_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![{
+                let mut n = NodeBuilder::new("enc")
+                    .attr("type", "skmsg")
+                    .attr("v", "2")
+                    .build();
+                n.content = Some(NodeContent::Bytes(content));
+                n
+            }])
+            .build();
+
+        let dup_arc = Arc::new(dup_node);
+
+        // First Pass
+        client
+            .clone()
+            .handle_encrypted_message(dup_arc.clone())
+            .await;
+        assert!(
+            client.local_retry_cache.contains_key(dup_id),
+            "First dup message should be cached/requeued"
+        );
+        let retry_key = format!("{}:{}:{}", group_jid, dup_id, sender_jid);
+        assert!(client.message_retry_counts.get(&retry_key).await.is_none());
+
+        // Second Pass (Immediate duplicate)
+        client.clone().handle_encrypted_message(dup_arc).await;
+
+        // Should have triggered retry receipt logic (increment count)
+        // Wait slightly for spawn to update cache
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            client.message_retry_counts.get(&retry_key).await,
+            Some(1),
+            "Second dup message should trigger network retry fallback"
         );
     }
 }

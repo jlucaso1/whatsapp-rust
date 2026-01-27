@@ -133,7 +133,16 @@ pub struct Client {
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
     /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
+    /// Track retry attempts per message to prevent infinite retry loops.
+    /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
+    /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
     pub(crate) message_retry_counts: Cache<String, u8>,
+
+    /// Cache for tracking local re-queue attempts for NoSession errors.
+    /// Used to tolerate out-of-order delivery where skmsg arrives before pkmsg.
+    /// Key: Message ID, Value: ()
+    /// TTL: 10 seconds (short-lived buffer)
+    pub(crate) local_retry_cache: Cache<String, ()>,
 
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
@@ -264,6 +273,13 @@ impl Client {
             // TTL of 5 minutes to match retry functionality, max 5000 entries.
             message_retry_counts: Cache::builder()
                 .time_to_live(Duration::from_secs(300))
+                .max_capacity(5_000)
+                .build(),
+
+            // Local retry cache for out-of-order message tollerance
+            // 10s TTL is sufficient for packet reordering
+            local_retry_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(10))
                 .max_capacity(5_000)
                 .build(),
 
