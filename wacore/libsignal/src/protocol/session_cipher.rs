@@ -714,6 +714,16 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
     )?;
 
     if !mac_valid {
+        log::error!(
+            "MAC verification failed for message from {}. \
+             Remote Identity: {}, \
+             Local Identity: {}, \
+             MAC Key: {}",
+            remote_address,
+            hex::encode(their_identity_key.public_key().public_key_bytes()),
+            hex::encode(state.local_identity_key()?.public_key().public_key_bytes()),
+            hex::encode(message_keys.mac_key())
+        );
         return Err(SignalProtocolError::InvalidMessage(
             original_message_type,
             "MAC verification failed",

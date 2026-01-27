@@ -43,6 +43,7 @@ type DeviceRow = (
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
     pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(crate) database_path: String,
     device_id: i32,
 }
 
@@ -108,6 +109,7 @@ impl SqliteStore {
         Ok(Self {
             pool,
             db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            database_path: database_url.trim_start_matches("sqlite://").to_string(),
             device_id: 1,
         })
     }
@@ -1729,6 +1731,40 @@ impl DeviceStore for SqliteStore {
 
     async fn create(&self) -> Result<i32> {
         SqliteStore::create_new_device(self).await
+    }
+
+    async fn snapshot_db(&self, name: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let db_path = self.database_path.clone();
+        let name = name.to_string();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            // Construct target path: db_path.snapshot-TIMESTAMP-NAME
+            let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, name);
+
+            // Use VACUUM INTO to create a consistent backup
+            // Note: We escape single quotes in the path just in case
+            let query = format!("VACUUM INTO '{}'", target_path.replace("'", "''"));
+
+            diesel::sql_query(query)
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(())
     }
 }
 

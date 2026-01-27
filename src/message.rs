@@ -643,6 +643,16 @@ impl Client {
 
             let signal_address = sender_encryption_jid.to_protocol_address();
 
+            if enc_type == "pkmsg" {
+                if let Err(e) = self
+                    .persistence_manager
+                    .create_snapshot(&format!("pre_pkmsg_{}", info.id))
+                    .await
+                {
+                    log::warn!("Failed to create snapshot for pkmsg: {}", e);
+                }
+            }
+
             let decrypt_res = message_decrypt(
                 &parsed_message,
                 &signal_address,

@@ -239,6 +239,12 @@ pub trait DeviceStore: Send + Sync {
 
     /// Create a new device row and return its generated device_id.
     async fn create(&self) -> Result<i32>;
+
+    /// Create a snapshot of the database state.
+    /// The argument `name` can be used to label the snapshot file.
+    async fn snapshot_db(&self, _name: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Combined storage backend trait.

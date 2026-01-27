@@ -94,6 +94,23 @@ impl PersistenceManager {
         Ok(())
     }
 
+    /// Triggers a snapshot of the underlying storage backend.
+    /// Useful for debugging critical errors like crypto state corruption.
+    pub async fn create_snapshot(&self, name: &str) -> Result<(), StoreError> {
+        #[cfg(feature = "debug-snapshots")]
+        {
+            // Ensure pending changes are saved first
+            self.save_to_disk().await?;
+            self.backend.snapshot_db(name).await.map_err(db_err)
+        }
+        #[cfg(not(feature = "debug-snapshots"))]
+        {
+            let _ = name;
+            log::warn!("Snapshot requested but 'debug-snapshots' feature is disabled");
+            Ok(())
+        }
+    }
+
     pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
         tokio::spawn(async move {
             loop {
