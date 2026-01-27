@@ -14,6 +14,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: "3.25.3"
+  BENCHER_PROJECT: whatsapp-rust
+  BENCHER_TESTBED: ubuntu-latest
+  BENCHER_ADAPTER: rust_iai_callgrind
 
 jobs:
   benchmark:
@@ -37,41 +40,46 @@ jobs:
 
       - uses: bencherdev/bencher@v0.5.9
 
-      - name: Run Iai-Callgrind benchmarks (Push to main)
-        if: github.event_name == 'push'
+      - name: Run benchmarks
         env:
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bencher run \
-            --project whatsapp-rust \
-            --token "$BENCHER_API_TOKEN" \
-            --branch main \
-            --testbed ubuntu-latest \
-            --adapter rust_iai_callgrind \
-            --github-actions "$GITHUB_TOKEN" \
-            --threshold-measure instructions \
-            --threshold-test percentage \
-            --threshold-upper-boundary 0.05 \
-            --thresholds-reset \
-            "cargo bench --workspace"
+          # Common bencher args (shared across all scenarios)
+          BENCHER_ARGS=(
+            --project "$BENCHER_PROJECT"
+            --testbed "$BENCHER_TESTBED"
+            --adapter "$BENCHER_ADAPTER"
+            --github-actions "$GITHUB_TOKEN"
+          )
 
-      - name: Run Iai-Callgrind benchmarks (Pull Request)
-        if: github.event_name == 'pull_request'
-        env:
-          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bencher run \
-            --project whatsapp-rust \
-            --token "$BENCHER_API_TOKEN" \
-            --branch "${{ github.head_ref }}" \
-            --start-point "${{ github.base_ref }}" \
-            --start-point-hash "${{ github.event.pull_request.base.sha }}" \
-            --start-point-clone-thresholds \
-            --start-point-reset \
-            --testbed ubuntu-latest \
-            --adapter rust_iai_callgrind \
-            --github-actions "$GITHUB_TOKEN" \
-            --ci-only-thresholds \
-            "cargo bench --workspace"
+          if [ "$GITHUB_EVENT_NAME" == "push" ]; then
+            # Push to main: establish baseline
+            bencher run \
+              "${BENCHER_ARGS[@]}" \
+              --token "$BENCHER_API_TOKEN" \
+              --branch main \
+              --threshold-measure instructions \
+              --threshold-test percentage \
+              --threshold-upper-boundary 0.05 \
+              --thresholds-reset \
+              "cargo bench --workspace"
+
+          elif [ -n "$BENCHER_API_TOKEN" ]; then
+            # Pull request with token available: full tracking
+            bencher run \
+              "${BENCHER_ARGS[@]}" \
+              --token "$BENCHER_API_TOKEN" \
+              --branch "${{ github.head_ref }}" \
+              --start-point "${{ github.base_ref }}" \
+              --start-point-hash "${{ github.event.pull_request.base.sha }}" \
+              --start-point-clone-thresholds \
+              --start-point-reset \
+              --ci-only-thresholds \
+              "cargo bench --workspace"
+
+          else
+            # Pull request without token (fork PRs): run benchmarks locally
+            echo "::warning title=Bencher::BENCHER_API_TOKEN not available. Running benchmarks without analytics."
+            cargo bench --workspace
+          fi
