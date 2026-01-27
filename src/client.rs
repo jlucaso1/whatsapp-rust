@@ -73,7 +73,7 @@ pub(crate) struct OfflineSyncMetrics {
     pub active: AtomicBool,
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
-    // Using simple std Mutex for timestamp as it's rarely contented and non-async
+    // Using simple std Mutex for timestamp as it's rarely contended and non-async
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
@@ -694,7 +694,10 @@ impl Client {
             self.offline_sync_metrics
                 .active
                 .store(true, Ordering::Relaxed);
-            *self.offline_sync_metrics.start_time.lock().unwrap() = Some(std::time::Instant::now());
+            match self.offline_sync_metrics.start_time.lock() {
+                Ok(mut guard) => *guard = Some(std::time::Instant::now()),
+                Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+            }
             info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
         }
 
@@ -717,13 +720,10 @@ impl Client {
                 }
 
                 if processed >= total {
-                    let elapsed = self
-                        .offline_sync_metrics
-                        .start_time
-                        .lock()
-                        .unwrap()
-                        .map(|t| t.elapsed())
-                        .unwrap_or(Duration::from_secs(0));
+                    let elapsed = match self.offline_sync_metrics.start_time.lock() {
+                        Ok(guard) => guard.map(|t| t.elapsed()).unwrap_or_default(),
+                        Err(poison) => poison.into_inner().map(|t| t.elapsed()).unwrap_or_default(),
+                    };
                     info!(target: "Client/OfflineSync", "Sync COMPLETED: Processed {} items in {:.2?}.", processed, elapsed);
                     self.offline_sync_metrics
                         .active

@@ -134,13 +134,6 @@ impl Client {
         }
     }
 
-    /// Spawns a task that sends a retry receipt for a failed decryption.
-    ///
-    /// This is used when sessions are not found or invalid to request the sender to resend
-    /// the message with a PreKeySignalMessage to re-establish the session.
-    ///
-    /// # Retry Count Tracking
-    ///
     /// Helper to generate consistent cache keys for retry logic.
     /// Key format: "{chat}:{msg_id}:{sender}"
     pub(crate) fn make_retry_cache_key(
@@ -512,11 +505,7 @@ impl Client {
                             info.source.chat
                         );
 
-                        // Mark as local retry in cache prevents infinite loops (handled in process_group_enc_batch)
-                        // But we also double check/insert here to be safe and cleaner
-                        // Actually process_group_enc_batch checks it but doesn't insert it.
-                        // Wait, logic says: "If not cached, return true". So we must insert it here!
-                        // Use consistent key logic to prevent collisions
+                        // Mark as local retry to prevent re-queue loops (key: "{chat}:{msg_id}:{sender}")
                         let cache_key = Self::make_retry_cache_key(
                             &info.source.chat,
                             &info.id,
