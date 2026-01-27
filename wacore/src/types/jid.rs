@@ -20,10 +20,13 @@ pub trait JidExt {
     /// - Input:  `user[:agent]@server`
     /// - Output: `user[:agent]@server.<device>`
     ///
+    /// # Server Mapping
+    /// - `s.whatsapp.net` is converted to `c.us` (matching WhatsApp Web behavior)
+    ///
     /// # Examples
     /// - `123456@lid` → `123456@lid.0`
-    /// - `123456:4@lid` → `123456:4@lid.0`
-    /// - `123456@s.whatsapp.net` → `123456@s.whatsapp.net.0`
+    /// - `123456:4@lid` → `123456:4@lid.4`
+    /// - `123456@s.whatsapp.net` → `123456@c.us.0`
     /// - `123456@c.us.0` → `123456@c.us.0` (already has suffix, unchanged)
     ///
     /// # Implementation Notes
@@ -33,7 +36,7 @@ pub trait JidExt {
     /// ```
     ///
     /// The function detects existing device suffixes by checking if the server ends
-    /// with `.<digits>`, and only appends `.0` if not already present.
+    /// with `.<digits>`, and uses the JID's device ID if no suffix is present.
     fn to_device_jid(&self) -> String;
 }
 
@@ -90,23 +93,51 @@ impl JidExt for Jid {
     }
 
     fn to_device_jid(&self) -> String {
-        // Check if server already has a device suffix (e.g., "lid.0", "c.us.1")
-        // Device suffix is defined as: .<digits> at the end of the server string
-        let server_has_device_suffix = self
-            .server()
-            .rsplit_once('.')
-            .map(|(_prefix, suffix): (&str, &str)| {
-                suffix.chars().all(|c| c.is_ascii_digit())
-            })
-            .unwrap_or(false);
-
-        if server_has_device_suffix {
-            // Already has device suffix (e.g., "user@lid.0"), return as-is
-            self.to_string()
+        let server = self.server();
+        // Map s.whatsapp.net to c.us to match WhatsApp Web behavior for device JIDs
+        let effective_server = if server == "s.whatsapp.net" {
+            "c.us"
         } else {
-            // No device suffix, append .0 to server (e.g., "user@lid" → "user@lid.0")
-            format!("{}.0", self)
+            server
+        };
+
+        // Check if server already has a device suffix (e.g., "lid.0", "c.us.1")
+        // Split on last dot to separate base server and potential suffix
+        let (base_server, existing_suffix) = match effective_server.rsplit_once('.') {
+            Some((base, suffix)) if suffix.chars().all(|c| c.is_ascii_digit()) => {
+                (base, Some(suffix))
+            }
+            _ => (effective_server, None),
+        };
+
+        // If suffix exists, it's already a device JID (or at least has the format).
+        // If not, we append the device ID from the JID struct.
+        let final_server = if let Some(suffix) = existing_suffix {
+            format!("{}.{}", base_server, suffix)
+        } else {
+            format!("{}.{}", effective_server, self.device)
+        };
+
+        // Reconstruct user part (user[:agent][:device])
+        let mut user_part = self.user.clone();
+
+        // Append agent if present and not implied by server type
+        // (This logic mirrors Jid::fmt behavior generally, though simplistic)
+        if self.agent != 0
+            && server != "s.whatsapp.net"
+            && server != "lid"
+            && server != "hosted"
+            && server != "c.us"
+        {
+            user_part.push_str(&format!(".{}", self.agent));
         }
+
+        // Append device if present
+        if self.device != 0 {
+            user_part.push_str(&format!(":{}", self.device));
+        }
+
+        format!("{}@{}", user_part, final_server)
     }
 }
 
@@ -188,38 +219,42 @@ mod tests {
     }
 
     #[test]
-    fn test_to_device_jid_lid_with_device() {
-        // LID with device in user part
-        let jid = Jid::from_str("123456789:4@lid").expect("test JID should be valid");
-        assert_eq!(jid.to_device_jid(), "123456789:4@lid.0");
+    fn test_to_device_jid_lid_with_device_from_jid() {
+        // LID with device in JID struct (implied by test parsing logic)
+        let mut jid = Jid::from_str("123456789:4@lid").expect("test JID should be valid");
+        jid.device = 4; // Ensure device is set
+        assert_eq!(jid.to_device_jid(), "123456789:4@lid.4");
     }
 
     #[test]
     fn test_to_device_jid_lid_already_has_suffix() {
         // LID with device suffix already present in server
         let jid = Jid::from_str("123456789:4@lid.0").expect("test JID should be valid");
+        // Expect :4 in user part and .0 in server part (preserved suffix)
         assert_eq!(jid.to_device_jid(), "123456789:4@lid.0");
     }
 
     #[test]
     fn test_to_device_jid_phone_number() {
-        // Phone number JID
+        // Phone number JID - should convert s.whatsapp.net to c.us
         let jid = Jid::from_str("5511999887766@s.whatsapp.net").expect("test JID should be valid");
-        assert_eq!(jid.to_device_jid(), "5511999887766@s.whatsapp.net.0");
+        assert_eq!(jid.to_device_jid(), "5511999887766@c.us.0");
     }
 
     #[test]
-    fn test_to_device_jid_phone_with_device() {
-        // Phone number with device in user part
-        let jid = Jid::from_str("5511999887766:2@s.whatsapp.net").expect("test JID should be valid");
-        assert_eq!(jid.to_device_jid(), "5511999887766:2@s.whatsapp.net.0");
+    fn test_to_device_jid_phone_with_device_from_jid() {
+        // Phone number with device in JID struct
+        let mut jid =
+            Jid::from_str("5511999887766:2@s.whatsapp.net").expect("test JID should be valid");
+        jid.device = 2;
+        assert_eq!(jid.to_device_jid(), "5511999887766:2@c.us.2");
     }
 
     #[test]
     fn test_to_device_jid_complex_server() {
-        // Server with multiple dots like "s.whatsapp.net"
+        // Server with multiple dots like "s.whatsapp.net" -> "c.us"
         let jid = Jid::from_str("123456@s.whatsapp.net").expect("test JID should be valid");
-        assert_eq!(jid.to_device_jid(), "123456@s.whatsapp.net.0");
+        assert_eq!(jid.to_device_jid(), "123456@c.us.0");
     }
 
     #[test]
@@ -227,5 +262,12 @@ mod tests {
         // Device suffix with multiple digits
         let jid = Jid::from_str("123456@lid.123").expect("test JID should be valid");
         assert_eq!(jid.to_device_jid(), "123456@lid.123");
+    }
+
+    #[test]
+    fn test_to_device_jid_c_us_input() {
+        // Input already c.us
+        let jid = Jid::from_str("123456@c.us").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456@c.us.0");
     }
 }
