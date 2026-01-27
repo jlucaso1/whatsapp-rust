@@ -373,7 +373,11 @@ impl Client {
         }
 
         if all_enc_nodes.is_empty() {
-            log::warn!("Received message without <enc> child: {}", node.tag);
+            log::warn!(
+                "[msg:{}] Received message without <enc> child: {}",
+                info.id,
+                node.tag
+            );
             return;
         }
 
@@ -913,8 +917,8 @@ impl Client {
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
                     warn!(
-                        "No sender key state for batched group message from {}: {}. Sending retry receipt.",
-                        info.source.sender, msg
+                        "No sender key state for batched group message [msg:{}] from {}: {}. Sending retry receipt.",
+                        info.id, info.source.sender, msg
                     );
                     // Use spawn_retry_receipt which has retry count tracking
                     // NoSenderKeyState is similar to NoSession - we need the SKDM
@@ -922,7 +926,8 @@ impl Client {
                 }
                 Err(e) => {
                     log::error!(
-                        "Group batch decrypt failed for group {} sender {}: {:?}",
+                        "Group batch decrypt failed [msg:{}] for group {} sender {}: {:?}",
+                        info.id,
                         sender_key_name.group_id(),
                         sender_key_name.sender_id(),
                         e
@@ -950,7 +955,8 @@ impl Client {
 
         let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
-            "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            "[msg:{}] Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            info.id,
             info.source.sender,
             plaintext_slice.len(),
             enc_type
