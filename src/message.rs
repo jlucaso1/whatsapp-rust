@@ -141,6 +141,23 @@ impl Client {
     ///
     /// # Retry Count Tracking
     ///
+    /// Helper to generate consistent cache keys for retry logic.
+    /// Key format: "{chat}:{msg_id}:{sender}"
+    pub(crate) fn make_retry_cache_key(
+        chat: impl std::fmt::Display,
+        msg_id: impl std::fmt::Display,
+        sender: impl std::fmt::Display,
+    ) -> String {
+        format!("{}:{}:{}", chat, msg_id, sender)
+    }
+
+    /// Spawns a task that sends a retry receipt for a failed decryption.
+    ///
+    /// This is used when sessions are not found or invalid to request the sender to resend
+    /// the message with a PreKeySignalMessage to re-establish the session.
+    ///
+    /// # Retry Count Tracking
+    ///
     /// This method tracks retry counts per message (keyed by `{chat}:{msg_id}:{sender}`)
     /// and stops sending retry receipts after `MAX_DECRYPT_RETRIES` (5) attempts to prevent
     /// infinite retry loops. This matches WhatsApp Web's behavior.
@@ -157,7 +174,8 @@ impl Client {
     /// * `info` - The message info for the failed message
     /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
-        let cache_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
+        let cache_key =
+            Self::make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender);
         let client = Arc::clone(self);
         let info = info.clone();
 
@@ -498,7 +516,13 @@ impl Client {
                         // But we also double check/insert here to be safe and cleaner
                         // Actually process_group_enc_batch checks it but doesn't insert it.
                         // Wait, logic says: "If not cached, return true". So we must insert it here!
-                        self.local_retry_cache.insert(msg_id, ()).await;
+                        // Use consistent key logic to prevent collisions
+                        let cache_key = Self::make_retry_cache_key(
+                            &info.source.chat,
+                            &info.id,
+                            &info.source.sender,
+                        );
+                        self.local_retry_cache.insert(cache_key, ()).await;
 
                         tokio::spawn(async move {
                             // Short delay to allow dependent messages (pkmsg) to process
@@ -955,7 +979,11 @@ impl Client {
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
                     // Optimization: Check if this message was already re-queued locally
-                    let cache_key = info.id.clone();
+                    let cache_key = Self::make_retry_cache_key(
+                        &info.source.chat,
+                        &info.id,
+                        &info.source.sender,
+                    );
                     let already_requeued = self.local_retry_cache.get(&cache_key).await.is_some();
 
                     if !already_requeued {

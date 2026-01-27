@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
@@ -65,6 +65,16 @@ pub enum ClientError {
 pub struct RecentMessageKey {
     pub to: Jid,
     pub id: String,
+}
+
+/// Metrics for tracking offline sync progress
+#[derive(Debug)]
+pub(crate) struct OfflineSyncMetrics {
+    pub active: AtomicBool,
+    pub total_messages: AtomicUsize,
+    pub processed_messages: AtomicUsize,
+    // Using simple std Mutex for timestamp as it's rarely contented and non-async
+    pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 pub struct Client {
@@ -133,9 +143,6 @@ pub struct Client {
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
     /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
-    /// Track retry attempts per message to prevent infinite retry loops.
-    /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
-    /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
     pub(crate) message_retry_counts: Cache<String, u8>,
 
     /// Cache for tracking local re-queue attempts for NoSession errors.
@@ -160,6 +167,8 @@ pub struct Client {
     pub(crate) offline_sync_notifier: Arc<Notify>,
     /// Flag indicating offline sync has completed (received ib offline stanza).
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
+    /// Metrics for granular offline sync logging
+    pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
     /// Notifier for when the noise socket is established (before login).
     /// Use this to wait for the socket to be ready for sending messages.
     pub(crate) socket_ready_notifier: Arc<Notify>,
@@ -276,12 +285,19 @@ impl Client {
                 .max_capacity(5_000)
                 .build(),
 
-            // Local retry cache for out-of-order message tollerance
+            // Local retry cache for out-of-order message tolerance
             // 10s TTL is sufficient for packet reordering
             local_retry_cache: Cache::builder()
                 .time_to_live(Duration::from_secs(10))
                 .max_capacity(5_000)
                 .build(),
+
+            offline_sync_metrics: Arc::new(OfflineSyncMetrics {
+                active: AtomicBool::new(false),
+                total_messages: AtomicUsize::new(0),
+                processed_messages: AtomicUsize::new(0),
+                start_time: std::sync::Mutex::new(None),
+            }),
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
@@ -658,6 +674,64 @@ impl Client {
     /// Process a node wrapped in Arc. Handlers receive the Arc and can share/store it cheaply.
     pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<Node>) {
         use wacore::xml::DisplayableNode;
+
+        // --- Offline Sync Tracking ---
+        if node.tag.as_str() == "ib"
+            && let Some(preview) = node.get_optional_child("offline_preview")
+        {
+            let count: usize = preview
+                .attrs
+                .get("count")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            self.offline_sync_metrics
+                .total_messages
+                .store(count, Ordering::Relaxed);
+            self.offline_sync_metrics
+                .processed_messages
+                .store(0, Ordering::Relaxed);
+            self.offline_sync_metrics
+                .active
+                .store(true, Ordering::Relaxed);
+            *self.offline_sync_metrics.start_time.lock().unwrap() = Some(std::time::Instant::now());
+            info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
+        }
+
+        // Track progress if active
+        if self.offline_sync_metrics.active.load(Ordering::Relaxed) {
+            // Check for 'offline' attribute on relevant stanzas
+            if node.attrs.contains_key("offline") {
+                let processed = self
+                    .offline_sync_metrics
+                    .processed_messages
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1;
+                let total = self
+                    .offline_sync_metrics
+                    .total_messages
+                    .load(Ordering::Relaxed);
+
+                if processed.is_multiple_of(50) || processed == total {
+                    info!(target: "Client/OfflineSync", "Sync Progress: {}/{}", processed, total);
+                }
+
+                if processed >= total {
+                    let elapsed = self
+                        .offline_sync_metrics
+                        .start_time
+                        .lock()
+                        .unwrap()
+                        .map(|t| t.elapsed())
+                        .unwrap_or(Duration::from_secs(0));
+                    info!(target: "Client/OfflineSync", "Sync COMPLETED: Processed {} items in {:.2?}.", processed, elapsed);
+                    self.offline_sync_metrics
+                        .active
+                        .store(false, Ordering::Relaxed);
+                }
+            }
+        }
+        // --- End Tracking ---
 
         if node.tag.as_str() == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
