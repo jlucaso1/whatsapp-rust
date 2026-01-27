@@ -54,9 +54,11 @@ jobs:
           )
 
           if [ "$GITHUB_EVENT_NAME" == "push" ]; then
-            # Push to main: establish baseline
+            # Push to main: establish baseline (no GitHub check posting)
             bencher run \
-              "${BENCHER_ARGS[@]}" \
+              --project "$BENCHER_PROJECT" \
+              --testbed "$BENCHER_TESTBED" \
+              --adapter "$BENCHER_ADAPTER" \
               --token "$BENCHER_API_TOKEN" \
               --branch main \
               --threshold-measure instructions \
