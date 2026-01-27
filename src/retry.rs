@@ -604,10 +604,16 @@ impl Client {
             None
         };
 
+        // Determine target JID for retry receipt (matches WhatsApp Web's sendRetryReceipt).
+        // For DMs: send to sender's DEVICE JID (e.g., "user@lid.0", "user@c.us.0").
+        // For groups: send to group JID, with participant attribute identifying the sender.
+        // CRITICAL: Device suffix (.0, .1, etc.) must be included or senders won't receive the retry!
         let receipt_to = if info.source.is_group {
             info.source.chat.to_string()
         } else {
-            info.source.sender.to_string()
+            // For DMs: convert to device JID (appends .0 to server if needed)
+            // Matches WhatsApp Web: I = DEVICE_JID(i)
+            info.source.sender.to_device_jid()
         };
 
         // Build the receipt node. For group messages, include the participant attribute
@@ -619,7 +625,9 @@ impl Client {
             .attr("type", "retry");
 
         if info.source.is_group {
-            builder = builder.attr("participant", info.source.sender.to_string());
+            // For groups: convert participant to device JID (matches WhatsApp Web)
+            // Matches WhatsApp Web: k = l ? DEVICE_JID(l) : DROP_ATTR
+            builder = builder.attr("participant", info.source.sender.to_device_jid());
         }
 
         // Handle peer vs device sync messages (matches WhatsApp Web's sendRetryReceipt):
@@ -1202,4 +1210,5 @@ mod tests {
         // DM should NOT trigger sender key deletion
         assert!(!(dm.is_group() || dm.is_status_broadcast()));
     }
+
 }

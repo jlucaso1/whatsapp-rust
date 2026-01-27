@@ -1,5 +1,5 @@
 use crate::libsignal::protocol::ProtocolAddress;
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{Jid, JidExt as BinaryJidExt};
 
 pub trait JidExt {
     fn to_protocol_address(&self) -> ProtocolAddress;
@@ -9,6 +9,32 @@ pub trait JidExt {
     /// - Device part `:device` only included when `device != 0`
     /// - Examples: `123456789@lid`, `123456789:33@lid`, `5511999887766@c.us`
     fn to_signal_address_string(&self) -> String;
+
+    /// Converts this JID to a device JID by appending a device suffix to the server.
+    ///
+    /// Device JIDs are used for retry receipts and other protocol messages where the
+    /// target is a specific device rather than a user. The device suffix is appended
+    /// to the SERVER part (not the user part).
+    ///
+    /// # Format
+    /// - Input:  `user[:agent]@server`
+    /// - Output: `user[:agent]@server.<device>`
+    ///
+    /// # Examples
+    /// - `123456@lid` → `123456@lid.0`
+    /// - `123456:4@lid` → `123456:4@lid.0`
+    /// - `123456@s.whatsapp.net` → `123456@s.whatsapp.net.0`
+    /// - `123456@c.us.0` → `123456@c.us.0` (already has suffix, unchanged)
+    ///
+    /// # Implementation Notes
+    /// This matches WhatsApp Web's `DEVICE_JID()` function from WAWebCommsWapMd:
+    /// ```javascript
+    /// // Appends device ID to server: "lid" → "lid.0", "c.us" → "c.us.0"
+    /// ```
+    ///
+    /// The function detects existing device suffixes by checking if the server ends
+    /// with `.<digits>`, and only appends `.0` if not already present.
+    fn to_device_jid(&self) -> String;
 }
 
 impl JidExt for Jid {
@@ -61,6 +87,26 @@ impl JidExt for Jid {
         // The device is encoded in the name, and device_id is always 0.
         let name = self.to_signal_address_string();
         ProtocolAddress::new(name, 0.into())
+    }
+
+    fn to_device_jid(&self) -> String {
+        // Check if server already has a device suffix (e.g., "lid.0", "c.us.1")
+        // Device suffix is defined as: .<digits> at the end of the server string
+        let server_has_device_suffix = self
+            .server()
+            .rsplit_once('.')
+            .map(|(_prefix, suffix): (&str, &str)| {
+                suffix.chars().all(|c| c.is_ascii_digit())
+            })
+            .unwrap_or(false);
+
+        if server_has_device_suffix {
+            // Already has device suffix (e.g., "user@lid.0"), return as-is
+            self.to_string()
+        } else {
+            // No device suffix, append .0 to server (e.g., "user@lid" → "user@lid.0")
+            format!("{}.0", self)
+        }
     }
 }
 
@@ -132,5 +178,54 @@ mod tests {
         assert_eq!(addr.name(), "5511999887766@c.us");
         assert_eq!(u32::from(addr.device_id()), 0);
         assert_eq!(addr.to_string(), "5511999887766@c.us.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_lid_no_device() {
+        // LID without device suffix in server
+        let jid = Jid::from_str("123456789@lid").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456789@lid.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_lid_with_device() {
+        // LID with device in user part
+        let jid = Jid::from_str("123456789:4@lid").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456789:4@lid.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_lid_already_has_suffix() {
+        // LID with device suffix already present in server
+        let jid = Jid::from_str("123456789:4@lid.0").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456789:4@lid.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_phone_number() {
+        // Phone number JID
+        let jid = Jid::from_str("5511999887766@s.whatsapp.net").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "5511999887766@s.whatsapp.net.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_phone_with_device() {
+        // Phone number with device in user part
+        let jid = Jid::from_str("5511999887766:2@s.whatsapp.net").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "5511999887766:2@s.whatsapp.net.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_complex_server() {
+        // Server with multiple dots like "s.whatsapp.net"
+        let jid = Jid::from_str("123456@s.whatsapp.net").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456@s.whatsapp.net.0");
+    }
+
+    #[test]
+    fn test_to_device_jid_already_has_multi_digit_suffix() {
+        // Device suffix with multiple digits
+        let jid = Jid::from_str("123456@lid.123").expect("test JID should be valid");
+        assert_eq!(jid.to_device_jid(), "123456@lid.123");
     }
 }
