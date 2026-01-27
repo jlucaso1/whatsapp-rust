@@ -96,16 +96,24 @@ impl PersistenceManager {
 
     /// Triggers a snapshot of the underlying storage backend.
     /// Useful for debugging critical errors like crypto state corruption.
-    pub async fn create_snapshot(&self, name: &str) -> Result<(), StoreError> {
+    pub async fn create_snapshot(
+        &self,
+        name: &str,
+        extra_content: Option<&[u8]>,
+    ) -> Result<(), StoreError> {
         #[cfg(feature = "debug-snapshots")]
         {
             // Ensure pending changes are saved first
             self.save_to_disk().await?;
-            self.backend.snapshot_db(name).await.map_err(db_err)
+            self.backend
+                .snapshot_db(name, extra_content)
+                .await
+                .map_err(db_err)
         }
         #[cfg(not(feature = "debug-snapshots"))]
         {
             let _ = name;
+            let _ = extra_content;
             log::warn!("Snapshot requested but 'debug-snapshots' feature is disabled");
             Ok(())
         }

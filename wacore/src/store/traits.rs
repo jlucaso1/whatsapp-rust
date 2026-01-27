@@ -242,7 +242,8 @@ pub trait DeviceStore: Send + Sync {
 
     /// Create a snapshot of the database state.
     /// The argument `name` can be used to label the snapshot file.
-    async fn snapshot_db(&self, _name: &str) -> Result<()> {
+    /// `extra_content` can be used to save a related binary blob (e.g. the message that caused the failure).
+    async fn snapshot_db(&self, _name: &str, _extra_content: Option<&[u8]>) -> Result<()> {
         Ok(())
     }
 }

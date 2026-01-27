@@ -646,7 +646,7 @@ impl Client {
             if enc_type == "pkmsg" {
                 if let Err(e) = self
                     .persistence_manager
-                    .create_snapshot(&format!("pre_pkmsg_{}", info.id))
+                    .create_snapshot(&format!("pre_pkmsg_{}", info.id), Some(ciphertext))
                     .await
                 {
                     log::warn!("Failed to create snapshot for pkmsg: {}", e);

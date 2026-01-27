@@ -1733,10 +1733,11 @@ impl DeviceStore for SqliteStore {
         SqliteStore::create_new_device(self).await
     }
 
-    async fn snapshot_db(&self, name: &str) -> Result<()> {
+    async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()> {
         let pool = self.pool.clone();
         let db_path = self.database_path.clone();
         let name = name.to_string();
+        let extra_data = extra_content.map(|b| b.to_vec());
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
@@ -1758,6 +1759,14 @@ impl DeviceStore for SqliteStore {
             diesel::sql_query(query)
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Save extra content if provided
+            if let Some(data) = extra_data {
+                let extra_path = format!("{}.bin", target_path);
+                std::fs::write(&extra_path, data).map_err(|e| {
+                    StoreError::Database(format!("Failed to write snapshot extra content: {}", e))
+                })?;
+            }
 
             Ok(())
         })
