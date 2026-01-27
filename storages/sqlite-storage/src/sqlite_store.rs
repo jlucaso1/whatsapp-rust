@@ -1762,7 +1762,7 @@ impl DeviceStore for SqliteStore {
 
             // Save extra content if provided
             if let Some(data) = extra_data {
-                let extra_path = format!("{}.bin", target_path);
+                let extra_path = format!("{}.json", target_path);
                 std::fs::write(&extra_path, data).map_err(|e| {
                     StoreError::Database(format!("Failed to write snapshot extra content: {}", e))
                 })?;

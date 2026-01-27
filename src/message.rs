@@ -644,12 +644,31 @@ impl Client {
             let signal_address = sender_encryption_jid.to_protocol_address();
 
             if enc_type == "pkmsg" {
-                if let Err(e) = self
-                    .persistence_manager
-                    .create_snapshot(&format!("pre_pkmsg_{}", info.id), Some(ciphertext))
-                    .await
+                // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
+                #[cfg(feature = "debug-snapshots")]
                 {
-                    log::warn!("Failed to create snapshot for pkmsg: {}", e);
+                    use base64::prelude::*;
+                    let payload = serde_json::json!({
+                        "id": info.id,
+                        "sender_jid": sender_encryption_jid.to_string(),
+                        "timestamp": info.timestamp,
+                        "enc_type": enc_type,
+                        "payload_base64": BASE64_STANDARD.encode(ciphertext),
+                    });
+
+                    let content_bytes = serde_json::to_vec_pretty(&payload).unwrap_or_default();
+
+                    if let Err(e) = self
+                        .persistence_manager
+                        .create_snapshot(&format!("pre_pkmsg_{}", info.id), Some(&content_bytes))
+                        .await
+                    {
+                        log::warn!("Failed to create snapshot for pkmsg: {}", e);
+                    }
+                }
+                #[cfg(not(feature = "debug-snapshots"))]
+                {
+                    // No-op if disabled
                 }
             }
 
@@ -4034,8 +4053,9 @@ mod tests {
 
         // Verify cache IMMEDIATELY
         // Asserting presence means we successfully triggered the "NoSenderKey" path.
+        let retry_cache_key = Client::make_retry_cache_key(&group_jid, msg_id, &sender_jid);
         assert!(
-            client.local_retry_cache.contains_key(msg_id),
+            client.local_retry_cache.contains_key(&retry_cache_key),
             "Message should be in local_retry_cache (Optimization NOT triggered - check error logs)"
         );
 
@@ -4126,8 +4146,9 @@ mod tests {
             .handle_encrypted_message(Arc::new(garbage_node))
             .await;
 
+        let retry_cache_key = Client::make_retry_cache_key(&group_jid, garbage_id, &sender_jid);
         assert!(
-            !client.local_retry_cache.contains_key(garbage_id),
+            !client.local_retry_cache.contains_key(&retry_cache_key),
             "Garbage message should NOT be re-queued/cached"
         );
 
@@ -4170,11 +4191,12 @@ mod tests {
             .clone()
             .handle_encrypted_message(dup_arc.clone())
             .await;
+
+        let retry_key = Client::make_retry_cache_key(&group_jid, dup_id, &sender_jid);
         assert!(
-            client.local_retry_cache.contains_key(dup_id),
+            client.local_retry_cache.contains_key(&retry_key),
             "First dup message should be cached/requeued"
         );
-        let retry_key = format!("{}:{}:{}", group_jid, dup_id, sender_jid);
         assert!(client.message_retry_counts.get(&retry_key).await.is_none());
 
         // Second Pass (Immediate duplicate)
