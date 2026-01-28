@@ -132,8 +132,10 @@ impl Client {
     /// Establish session with primary phone (device 0) immediately for PDO.
     ///
     /// Called during login BEFORE offline messages arrive. Checks both PN and LID
-    /// sessions but only establishes PN proactively (LID sessions are established
-    /// by the primary phone via pkmsg - matches `prekey_fetch_iq_pnh_lid_enabled: false`).
+    /// sessions but does NOT establish PN sessions proactively. The primary phone's
+    /// PN session will be established via LID pkmsg when needed, which prevents
+    /// dual-session conflicts where both PN and LID sessions exist for the same user.
+    /// This matches WhatsApp Web's `prekey_fetch_iq_pnh_lid_enabled: false` behavior.
     ///
     /// Returns error if session check fails (fail-safe to prevent replacing existing sessions).
     pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {

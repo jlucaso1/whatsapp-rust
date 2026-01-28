@@ -521,6 +521,7 @@ impl Client {
                         let chat_id = info.source.chat.to_string();
                         let node_clone = node.clone();
                         let msg_id = info.id.clone();
+                        let info_clone = info.clone();
 
                         log::info!(
                             "Re-queueing message {} from {} (NoSession) with 500ms delay",
@@ -528,22 +529,50 @@ impl Client {
                             info.source.chat
                         );
 
-                        // Mark as local retry to prevent re-queue loops (key: "{chat}:{msg_id}:{sender}")
-                        let cache_key = self
-                            .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
-                            .await;
-                        self.local_retry_cache.insert(cache_key, ()).await;
+                        // First check if the message queue exists before inserting cache marker
+                        // This prevents dropping messages if the queue doesn't exist
+                        if client.message_queues.get(&chat_id).await.is_some() {
+                            // Queue exists, insert cache marker to prevent re-queue loops
+                            let cache_key = client
+                                .make_retry_cache_key(
+                                    &info.source.chat,
+                                    &info.id,
+                                    &info.source.sender,
+                                )
+                                .await;
+                            client.local_retry_cache.insert(cache_key, ()).await;
 
-                        tokio::spawn(async move {
-                            // Short delay to allow dependent messages (pkmsg) to process
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            tokio::spawn(async move {
+                                // Short delay to allow dependent messages (pkmsg) to process
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                            if let Some(sender) = client.message_queues.get(&chat_id).await
-                                && let Err(e) = sender.send(node_clone).await
-                            {
-                                log::warn!("Failed to re-queue message: {}", e);
-                            }
-                        });
+                                // Try to re-queue the message
+                                if let Some(sender) = client.message_queues.get(&chat_id).await {
+                                    if let Err(e) = sender.send(node_clone).await {
+                                        log::warn!("Failed to re-queue message: {}", e);
+                                        // Fallback to retry receipt if send fails
+                                        client.spawn_retry_receipt(
+                                            &info_clone,
+                                            RetryReason::NoSession,
+                                        );
+                                    }
+                                } else {
+                                    // Queue disappeared between check and send, fallback to retry receipt
+                                    log::warn!(
+                                        "Message queue for {} disappeared, falling back to retry receipt",
+                                        chat_id
+                                    );
+                                    client.spawn_retry_receipt(&info_clone, RetryReason::NoSession);
+                                }
+                            });
+                        } else {
+                            // Queue doesn't exist, skip local re-queue and go straight to retry receipt
+                            log::warn!(
+                                "Message queue for {} not found, skipping local re-queue, using retry receipt",
+                                chat_id
+                            );
+                            client.spawn_retry_receipt(&info_clone, RetryReason::NoSession);
+                        }
                     }
                     Ok(false) => {
                         // Processed successfully or handled errors (e.g. sent retry receipt)

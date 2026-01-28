@@ -707,22 +707,30 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
                 "cannot decrypt without remote identity key",
             ))?;
 
+    let local_identity_key = state.local_identity_key()?;
+
     let mac_valid = ciphertext.verify_mac(
         &their_identity_key,
-        &state.local_identity_key()?,
+        &local_identity_key,
         message_keys.mac_key(),
     )?;
 
     if !mac_valid {
+        let their_id_fingerprint = hex::encode(their_identity_key.public_key().public_key_bytes());
+        let local_id_fingerprint = hex::encode(local_identity_key.public_key().public_key_bytes());
+
+        let mac_key_bytes = message_keys.mac_key();
+        let mac_key_fingerprint: String = hex::encode(mac_key_bytes).chars().take(8).collect();
+
         log::error!(
             "MAC verification failed for message from {}. \
              Remote Identity: {}, \
              Local Identity: {}, \
-             MAC Key: {}",
+             MAC Key Fingerprint: {}...",
             remote_address,
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
-            hex::encode(state.local_identity_key()?.public_key().public_key_bytes()),
-            hex::encode(message_keys.mac_key())
+            their_id_fingerprint,
+            local_id_fingerprint,
+            mac_key_fingerprint
         );
         return Err(SignalProtocolError::InvalidMessage(
             original_message_type,

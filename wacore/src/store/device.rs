@@ -124,6 +124,7 @@ impl Default for Device {
 
 impl Device {
     pub fn new() -> Self {
+        use rand::Rng;
         use rand::RngCore;
 
         let mut rng = rand::rng();
@@ -148,7 +149,7 @@ impl Device {
         Self {
             pn: None,
             lid: None,
-            registration_id: (rand::random::<u32>() % 2147483647) + 1,
+            registration_id: rng.random_range(1..=2147483647),
             noise_key: KeyPair::generate(&mut rng),
             identity_key,
             signed_pre_key,

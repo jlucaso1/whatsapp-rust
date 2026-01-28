@@ -1734,9 +1734,48 @@ impl DeviceStore for SqliteStore {
     }
 
     async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()> {
+        fn sanitize_snapshot_name(name: &str) -> Result<String> {
+            const MAX_LENGTH: usize = 100;
+
+            let sanitized: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+
+            let sanitized = sanitized
+                .split('.')
+                .filter(|part| !part.is_empty() && *part != "..")
+                .collect::<Vec<_>>()
+                .join(".");
+
+            let sanitized = sanitized.trim_matches(['/', '\\', '.']);
+
+            if sanitized.is_empty() {
+                return Err(StoreError::Database(
+                    "Snapshot name cannot be empty after sanitization".to_string(),
+                ));
+            }
+
+            if sanitized.len() > MAX_LENGTH {
+                return Err(StoreError::Database(format!(
+                    "Snapshot name exceeds maximum length of {} characters",
+                    MAX_LENGTH
+                )));
+            }
+
+            Ok(sanitized.to_string())
+        }
+
+        let sanitized_name = sanitize_snapshot_name(name)?;
+
         let pool = self.pool.clone();
         let db_path = self.database_path.clone();
-        let name = name.to_string();
         let extra_data = extra_content.map(|b| b.to_vec());
 
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1749,8 +1788,8 @@ impl DeviceStore for SqliteStore {
                 .unwrap_or_default()
                 .as_secs();
 
-            // Construct target path: db_path.snapshot-TIMESTAMP-NAME
-            let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, name);
+            // Construct target path: db_path.snapshot-TIMESTAMP-SANITIZED_NAME
+            let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, sanitized_name);
 
             // Use VACUUM INTO to create a consistent backup
             // Note: We escape single quotes in the path just in case
