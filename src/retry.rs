@@ -680,11 +680,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -939,15 +935,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_operations() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id = "ABC123";
@@ -987,15 +977,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_upsert() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id = "MSG001";
@@ -1041,15 +1025,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_multiple_messages() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id_1 = "MSG001";

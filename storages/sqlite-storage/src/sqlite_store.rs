@@ -1850,7 +1850,13 @@ mod tests {
     use super::*;
 
     async fn create_test_store() -> SqliteStore {
-        SqliteStore::new(":memory:")
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let db_name = format!("file:memdb_test_{}?mode=memory&cache=shared", timestamp);
+        SqliteStore::new(&db_name)
             .await
             .expect("Failed to create test store")
     }

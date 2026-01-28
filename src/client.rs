@@ -2064,11 +2064,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2121,11 +2117,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plaintext_buffer_pool_reuses_buffers() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2169,11 +2161,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_waiter_resolves() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2239,11 +2227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_without_matching_waiter() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3099,11 +3083,7 @@ mod tests {
     async fn test_server_time_offset_extraction() {
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3178,11 +3158,7 @@ mod tests {
     async fn test_unified_session_manager_integration() {
         // Test the unified session manager through the client
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
