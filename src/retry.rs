@@ -572,13 +572,13 @@ impl Client {
                 .public_key_bytes()
                 .to_vec();
 
-            let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
+            let prekey_value_bytes = new_prekey_keypair.public_key.serialize().to_vec();
 
             let skey_id = device_snapshot.signed_pre_key_id;
             let skey_value_bytes = device_snapshot
                 .signed_pre_key
                 .public_key
-                .public_key_bytes()
+                .serialize()
                 .to_vec();
             let skey_sig_bytes = device_snapshot.signed_pre_key_signature.to_vec();
 

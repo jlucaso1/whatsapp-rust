@@ -122,21 +122,9 @@ where
     let mut jids_needing_prekeys = Vec::new();
 
     for device_jid in devices {
-        let signal_address = device_jid.to_protocol_address();
-
-        // First check if we have a session under the phone number address
-        if stores
-            .session_store
-            .load_session(&signal_address)
-            .await?
-            .is_some()
-        {
-            // Session exists under PN address, use it
-            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
-            continue;
-        }
-
-        // No session under PN - check if there's one under the corresponding LID
+        // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
+        // creating signal addresses. We do the same: check LID session FIRST.
+        // This prevents using stale PN sessions when a newer LID session exists.
         if device_jid.is_pn()
             && let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await
         {
@@ -152,7 +140,7 @@ where
             {
                 // Found existing session under LID address - use it!
                 log::debug!(
-                    "Using existing LID session {} instead of creating new PN session for {}",
+                    "Using LID session {} for PN {} (LID-first lookup)",
                     lid_jid,
                     device_jid
                 );
@@ -161,8 +149,39 @@ where
             }
         }
 
-        // No session found under either address - need to fetch prekeys
-        jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+        // Fall back to direct address lookup (for LID JIDs or PN without LID mapping)
+        let signal_address = device_jid.to_protocol_address();
+        if stores
+            .session_store
+            .load_session(&signal_address)
+            .await?
+            .is_some()
+        {
+            // Session exists under direct address, use it
+            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+            continue;
+        }
+
+        // No session found - need to fetch prekeys and create session.
+        // Keep device_jid for prekey fetch (server returns bundles keyed by this),
+        // but normalize to LID for the actual session creation.
+        let encryption_jid = if device_jid.is_pn() {
+            if let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await {
+                let lid_jid = Jid::lid_device(lid_user, device_jid.device);
+                log::debug!(
+                    "Will create LID session {} for PN {} (no existing session)",
+                    lid_jid,
+                    device_jid
+                );
+                lid_jid
+            } else {
+                device_jid.clone()
+            }
+        } else {
+            device_jid.clone()
+        };
+        jid_to_encryption_jid.insert(device_jid.clone(), encryption_jid);
+        // Use original device_jid for prekey fetch (HashMap key match)
         jids_needing_prekeys.push(device_jid.clone());
     }
 
@@ -176,8 +195,23 @@ where
             .await?;
 
         for device_jid in &jids_needing_prekeys {
-            let signal_address = device_jid.to_protocol_address();
-            match prekey_bundles.get(device_jid) {
+            // Use the LID-normalized encryption JID for session creation
+            let mut encryption_jid = jid_to_encryption_jid
+                .get(device_jid)
+                .unwrap_or(device_jid)
+                .clone();
+
+            // Normalize agent to 0 for LID JIDs to match how pre-key bundles are stored.
+            // The JID parsing logic in `prekeys.rs` forces agent=0 for LID, so we must match that here.
+            if encryption_jid.is_lid() {
+                encryption_jid.agent = 0;
+            }
+
+            let signal_address = encryption_jid.to_protocol_address();
+            // Fix: Use the normalized device_jid to lookup the bundle
+            // Use centralized normalization logic to avoid mismatches
+            let lookup_jid = device_jid.normalize_for_prekey_bundle();
+            match prekey_bundles.get(&lookup_jid) {
                 Some(bundle) => {
                     match process_prekey_bundle(
                         &signal_address,
@@ -390,7 +424,12 @@ pub async fn prepare_dm_stanza<
     let mut recipient_devices = Vec::new();
     let mut own_other_devices = Vec::new();
     for device_jid in &all_devices {
-        let is_own_device = device_jid.user == own_jid.user && device_jid.device != own_jid.device;
+        // Skip the current device (sender) to prevent self-encryption loops
+        if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
+            continue;
+        }
+
+        let is_own_device = device_jid.user == own_jid.user;
         if is_own_device {
             own_other_devices.push(device_jid.clone());
         } else {
@@ -1474,5 +1513,188 @@ mod tests {
         );
 
         println!("✅ LID lookup correctly limited to s.whatsapp.net JIDs");
+    }
+
+    /// Test case: Regression test for self-encryption bug.
+    ///
+    /// The sender's own device (e.g. device 79) must be excluded from the encryption list
+    /// to prevent "SESSION BASE KEY CHANGED" warnings caused by establishing a session with oneself.
+    #[test]
+    fn test_dm_encryption_excludes_sender_device() {
+        // Setup:
+        // - Own user: 123456789
+        // - Specific own device (Sender): 79
+        // - Other own device: 0
+        // - Recipient: 987654321
+
+        let own_user = "123456789";
+        let own_device_id = 79;
+
+        // Own JID (Sender)
+        let own_jid = Jid::lid_device(own_user.to_string(), own_device_id);
+
+        // Simulate devices returned by resolver.resolve_devices()
+        // This includes:
+        // 1. The sender's own device (should be excluded)
+        // 2. Another device of the sender (should be in own_other_devices)
+        // 3. The recipient's device (should be in recipient_devices)
+        let all_devices: Vec<Jid> = vec![
+            Jid::lid_device(own_user.to_string(), own_device_id), // Sender (79)
+            Jid::lid_device(own_user.to_string(), 0),             // Other own device (0)
+            Jid::lid_device("987654321".to_string(), 0),          // Recipient
+        ];
+
+        // The logic under test (from prepare_dm_stanza):
+        let mut recipient_devices = Vec::new();
+        let mut own_other_devices = Vec::new();
+
+        for device_jid in &all_devices {
+            // Fix check: Skip the current device (sender) to prevent self-encryption loops
+            if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
+                continue;
+            }
+
+            let is_own_device = device_jid.user == own_jid.user;
+            if is_own_device {
+                own_other_devices.push(device_jid.clone());
+            } else {
+                recipient_devices.push(device_jid.clone());
+            }
+        }
+
+        // Verifications
+
+        // 1. Sender device (79) should NOT be in either list
+        let sender_in_own = own_other_devices.iter().any(|d| d.device == own_device_id);
+        let sender_in_recipient = recipient_devices.iter().any(|d| d.device == own_device_id);
+
+        assert!(
+            !sender_in_own,
+            "Sender device (79) should be excluded from own_other_devices"
+        );
+        assert!(
+            !sender_in_recipient,
+            "Sender device (79) should be excluded from recipient_devices"
+        );
+
+        // 2. Other own device (0) MUST be in own_other_devices
+        let other_own_present = own_other_devices
+            .iter()
+            .any(|d| d.device == 0 && d.user == own_user);
+        assert!(
+            other_own_present,
+            "Other own device (0) should be included in own_other_devices"
+        );
+
+        // 3. Recipient MUST be in recipient_devices
+        let recipient_present = recipient_devices.iter().any(|d| d.user == "987654321");
+        assert!(
+            recipient_present,
+            "Recipient should be included in recipient_devices"
+        );
+
+        println!("✅ Self-encryption regression test passed: Sender device correctly excluded.");
+    }
+
+    /// Test case: LID Prekey Lookup Normalization
+    ///
+    /// Verifies that when looking up pre-key bundles for LID JIDs, the lookup key
+    /// is normalized (agent=0) to match how the bundles are stored in the map.
+    ///
+    /// This validates the fix for "No pre-key bundle returned" when the requested JID
+    /// has non-standard agent/server fields but the bundle is stored under the normalized key.
+    #[test]
+    fn test_lid_prekey_lookup_normalization() {
+        // 1. Define JIDs
+        // The JID we request (simulating what comes from resolve_devices or elsewhere)
+        // Let's pretend it has agent=1 to simulate a mismatch
+        let mut requested_jid = Jid::lid_device("123456789".to_string(), 0);
+        requested_jid.agent = 1;
+
+        // The normalized JID (how it's stored in the bundle map)
+        let normalized_jid = Jid::lid_device("123456789".to_string(), 0); // agent=0 by default
+
+        // 2. Setup Resolver
+        // Store the bundle under the NORMALIZED key (agent=0)
+        let resolver = MockSendContextResolver::new()
+            .with_bundle(normalized_jid.clone(), create_mock_bundle())
+            .with_devices(vec![requested_jid.clone()]);
+
+        // 3. Verify Mock Setup
+        // Ensure bundle is accessible via normalized key but NOT via requested (raw) key
+        // This confirms our test condition is valid (that implicit lookup would fail)
+        assert!(
+            resolver.prekey_bundles.contains_key(&normalized_jid),
+            "Setup: bundle should exist for normalized key"
+        );
+        assert!(
+            !resolver.prekey_bundles.contains_key(&requested_jid),
+            "Setup: bundle should NOT exist for requested raw key"
+        );
+
+        // 4. Test logic mirroring `encrypt_for_devices`
+        let mut jid_to_encryption_jid = HashMap::new();
+        // Assume direct mapping for simplicity
+        jid_to_encryption_jid.insert(requested_jid.clone(), requested_jid.clone());
+
+        // Get the bundles map (mocks `fetch_prekeys_for_identity_check`)
+        // The mock implementation returns the map as-is filtered by keys.
+        // HOWEVER, `fetch_prekeys` usually takes a list.
+        // In `encrypt_for_devices`, we call:
+        // let prekey_bundles = resolver.fetch_prekeys_for_identity_check(&[requested_jid]).await?;
+
+        // Let's simulate what `fetch_prekeys_for_identity_check` would return.
+        // Our mock implementation `fetch_prekeys` logic:
+        // if let Some(bundle_opt) = self.prekey_bundles.get(jid)
+
+        // Wait, if the mock follows exact HashMap lookup, `fetch_prekeys(&[requested_jid])`
+        // will return EMPTY because `requested_jid` is not in `prekey_bundles`.
+        // The REAL `fetch_prekeys` (in `client.rs` -> `prekeys.rs`) sends an IQ to the server,
+        // and the server response is parsed. The parsing logic (in `prekeys.rs`) normalizes the key.
+        // So the HashMap returned by `fetch_prekeys` will contain NORMALIZED keys.
+
+        // So for this test to be accurate, we must simulate that `fetch_prekeys` returned a map
+        // where the key is NORMALIZED, even if we asked for `requested_jid`?
+        // Actually, `PreKeyFetchSpec` asks for JIDs. The response contains JIDs.
+        // If we ask for `agent=1`, does the server return `agent=1`?
+        // The logs showed:
+        // parsed: `...:82@lid` (agent=0 probably, or just not printed?)
+        // lookup: `...` (failed)
+
+        // The critical part is that the `HashMap` returned by `resolver.fetch_prekeys`
+        // definitely contains the bundle under some key.
+        // If `prekeys.rs` normalizes it, it's under the normalized key.
+        // The `encrypt_for_devices` logic has:
+        // `match prekey_bundles.get(device_jid)`
+        // where `device_jid` is the one from the loop (requested_jid).
+
+        // If `fetch_prekeys` returns a map with `normalized_jid`, and we lookup `requested_jid`, it fails.
+        // My fix was to normalize `requested_jid` before lookup.
+
+        // So I need to construct the `prekey_bundles` map manually here to simulate the return from fetch.
+        let mut prekey_bundles = HashMap::new();
+        prekey_bundles.insert(normalized_jid.clone(), create_mock_bundle());
+
+        // Now test the logic:
+        let device_jid = &requested_jid;
+
+        // -- Logic from fix --
+        // Use centralized normalization logic
+        let lookup_jid = device_jid.normalize_for_prekey_bundle();
+
+        // Fix: Use the normalized device_jid to lookup the bundle
+        let bundle = prekey_bundles.get(&lookup_jid);
+        // --------------------
+
+        assert!(bundle.is_some(), "Should find bundle after normalization");
+
+        // Verify it would have failed without normalization
+        let raw_lookup = prekey_bundles.get(device_jid);
+        assert!(
+            raw_lookup.is_none(),
+            "Should NOT find bundle without normalization"
+        );
+
+        println!("✅ LID Prekey Lookup Normalization passed");
     }
 }

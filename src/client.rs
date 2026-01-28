@@ -385,6 +385,7 @@ impl Client {
     fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
         use crate::handlers::{
             basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
+            chatstate::ChatStateHandler,
             ib::IbHandler,
             iq::IqHandler,
             message::MessageHandler,
@@ -406,11 +407,11 @@ impl Client {
         router.register(Arc::new(IbHandler));
         router.register(Arc::new(NotificationHandler));
         router.register(Arc::new(AckHandler));
+        router.register(Arc::new(ChatStateHandler));
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));
         router.register(Arc::new(UnimplementedHandler::for_presence()));
-        router.register(Arc::new(UnimplementedHandler::for_chatstate()));
 
         router
     }
@@ -1000,10 +1001,16 @@ impl Client {
                 // Don't fail login - PDO will retry via ensure_e2e_sessions fallback
             }
 
+            // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
+            // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
+            check_generation!();
+            if let Err(e) = client_clone.upload_pre_keys().await {
+                warn!("Failed to upload pre-keys during startup: {e:?}");
+            }
+
             // === Send active IQ ===
             // The server sends <ib><offline count="X"/></ib> AFTER we exit passive mode.
-            // This matches WhatsApp Web's behavior: sendPassiveModeProtocol("active") first,
-            // then wait for offlineDeliveryEnd.
+            // This matches WhatsApp Web's behavior: executePassiveTasks() -> sendPassiveModeProtocol("active")
             check_generation!();
             if let Err(e) = client_clone.set_passive(false).await {
                 warn!("Failed to send post-connect active IQ: {e:?}");
@@ -1031,14 +1038,6 @@ impl Client {
                 } else {
                     info!(target: "Client", "Offline sync completed, proceeding with passive tasks");
                 }
-            }
-
-            // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
-            // These tasks run after offline delivery ends.
-
-            check_generation!();
-            if let Err(e) = client_clone.upload_pre_keys().await {
-                warn!("Failed to upload pre-keys during startup: {e:?}");
             }
 
             // Re-check connection and generation before sending presence

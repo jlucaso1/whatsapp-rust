@@ -1,4 +1,5 @@
 pub mod basic;
+pub mod chatstate;
 pub mod ib;
 pub mod iq;
 pub mod message;

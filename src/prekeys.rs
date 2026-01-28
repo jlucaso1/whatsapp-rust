@@ -8,7 +8,7 @@ use log;
 use rand::TryRngCore;
 use rand_core::OsRng;
 use wacore::iq::prekeys::{PreKeyCountSpec, PreKeyFetchSpec, PreKeyUploadSpec};
-use wacore::libsignal::protocol::{KeyPair, PreKeyBundle};
+use wacore::libsignal::protocol::{KeyPair, PreKeyBundle, PublicKey};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
 use wacore_binary::jid::Jid;
 
@@ -136,24 +136,16 @@ impl Client {
         }
 
         // Step 3: Build upload request using type-safe IqSpec
-        let pre_key_pairs: Vec<(u32, Vec<u8>)> = key_pairs_to_upload
+        let pre_key_pairs: Vec<(u32, PublicKey)> = key_pairs_to_upload
             .iter()
-            .map(|(id, key_pair)| (*id, key_pair.public_key.public_key_bytes().to_vec()))
+            .map(|(id, key_pair)| (*id, key_pair.public_key))
             .collect();
 
         let spec = PreKeyUploadSpec::new(
             device_snapshot.registration_id,
-            device_snapshot
-                .identity_key
-                .public_key
-                .public_key_bytes()
-                .to_vec(),
+            device_snapshot.identity_key.public_key,
             device_snapshot.signed_pre_key_id,
-            device_snapshot
-                .signed_pre_key
-                .public_key
-                .public_key_bytes()
-                .to_vec(),
+            device_snapshot.signed_pre_key.public_key,
             device_snapshot.signed_pre_key_signature.to_vec(),
             pre_key_pairs,
         );

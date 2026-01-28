@@ -85,7 +85,7 @@ impl Client {
         let mut failed_count = 0;
 
         for jid in jids {
-            if let Some(bundle) = prekey_bundles.get(jid) {
+            if let Some(bundle) = prekey_bundles.get(&jid.normalize_for_prekey_bundle()) {
                 let signal_addr = jid.to_protocol_address();
                 match process_prekey_bundle(
                     &signal_addr,
@@ -159,27 +159,20 @@ impl Client {
                     )
                 })?;
 
+        // Don't proactively establish PN session - matches WhatsApp Web's
+        // prekey_fetch_iq_pnh_lid_enabled: false behavior. The primary phone will
+        // establish the session via pkmsg from LID address, which prevents dual-session
+        // conflicts where both PN and LID sessions exist for the same user.
         if pn_session_exists {
             log::debug!(
-                "Session with primary phone {} already exists, skipping establishment",
+                "PN session with primary phone {} already exists",
                 primary_phone_pn
             );
         } else {
             log::info!(
-                "Establishing PN session with primary phone {}",
+                "No PN session with primary phone {} - will be established via LID pkmsg",
                 primary_phone_pn
             );
-
-            let success_count = self
-                .fetch_and_establish_sessions(std::slice::from_ref(&primary_phone_pn))
-                .await?;
-
-            if success_count == 0 {
-                log::warn!(
-                    "Failed to establish PN session with primary phone {} - PDO may not work",
-                    primary_phone_pn
-                );
-            }
         }
 
         // Check LID session existence (don't establish - primary phone does that via pkmsg)
@@ -484,5 +477,40 @@ mod tests {
             action_for_error(RETRY_ERROR_INVALID_MESSAGE),
             "Delete stale session, resend message"
         );
+    }
+
+    #[test]
+    fn test_session_establishment_lookup_normalization() {
+        use std::collections::HashMap;
+        use wacore_binary::jid::Jid;
+
+        // Represents the bundle map returned by fetch_pre_keys
+        // (keys are normalized by parsing logic as verified in wacore/src/prekeys.rs)
+        let mut prekey_bundles: HashMap<Jid, ()> = HashMap::new(); // Using () as mock bundle placeholder
+
+        let normalized_jid = Jid::lid("123456789"); // agent=0
+        prekey_bundles.insert(normalized_jid.clone(), ());
+
+        // Represents the JID from the device list (e.g. from ensure_e2e_sessions)
+        // which might have agent=1 due to some upstream source or parsing quirk
+        let mut requested_jid = Jid::lid("123456789");
+        requested_jid.agent = 1;
+
+        // 1. Verify direct lookup fails (This is the bug)
+        assert!(
+            !prekey_bundles.contains_key(&requested_jid),
+            "Direct lookup of non-normalized JID should fail"
+        );
+
+        // 2. Verify normalized lookup succeeds (This is the fix)
+        // This mirrors the logic change in fetch_and_establish_sessions
+        let normalized_lookup = requested_jid.normalize_for_prekey_bundle();
+        assert!(
+            prekey_bundles.contains_key(&normalized_lookup),
+            "Normalized lookup should succeed"
+        );
+
+        // Ensure the normalization actually produced the key we stored
+        assert_eq!(normalized_lookup, normalized_jid);
     }
 }
