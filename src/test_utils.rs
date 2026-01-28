@@ -103,3 +103,21 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
 
     client
 }
+
+pub async fn create_test_backend() -> Arc<dyn Backend> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let db_name = format!(
+        "file:memdb_backend_{}_{}?mode=memory&cache=shared",
+        unique_id,
+        std::process::id()
+    );
+
+    Arc::new(
+        SqliteStore::new(&db_name)
+            .await
+            .expect("test backend should initialize"),
+    ) as Arc<dyn Backend>
+}

@@ -72,9 +72,18 @@ impl Client {
         // Create JID for device 0 (primary phone)
         let primary_phone_jid = own_pn.with_device(0);
 
+        // Resolve JIDs to LID for the MessageKey and cache key, matching WhatsApp Web's behavior.
+        // This ensures the cache key matches the JID that the phone will respond with (usually LID).
+        let remote_jid = self.resolve_encryption_jid(&info.source.chat).await;
+        let participant = if info.source.is_group {
+            Some(self.resolve_encryption_jid(&info.source.sender).await)
+        } else {
+            None
+        };
+
         // Atomically check-and-insert to avoid race conditions where two concurrent
         // calls could both pass a contains_key check before either inserts.
-        let cache_key = format!("{}:{}", info.source.chat, info.id);
+        let cache_key = format!("{}:{}", remote_jid, info.id);
         let pending = PendingPdoRequest {
             message_info: info.clone(),
             requested_at: std::time::Instant::now(),
@@ -87,22 +96,18 @@ impl Client {
 
         if !entry.is_fresh() {
             debug!(
-                "PDO request already pending for message {} from {}",
-                info.id, info.source.sender
+                "PDO request already pending for message {} from {} (resolved: {})",
+                info.id, info.source.sender, remote_jid
             );
             return Ok(());
         }
 
         // Build the message key for the placeholder resend request
         let message_key = wa::MessageKey {
-            remote_jid: Some(info.source.chat.to_string()),
+            remote_jid: Some(remote_jid.to_string()),
             from_me: Some(info.source.is_from_me),
             id: Some(info.id.clone()),
-            participant: if info.source.is_group {
-                Some(info.source.sender.to_string())
-            } else {
-                None
-            },
+            participant: participant.map(|p| p.to_string()),
         };
 
         // Build the PDO request message

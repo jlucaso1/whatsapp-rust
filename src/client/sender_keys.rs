@@ -13,7 +13,6 @@ use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 use super::Client;
-use crate::client::RecentMessageKey;
 
 impl Client {
     /// Mark participants for fresh SKDM on next group send.
@@ -89,10 +88,7 @@ impl Client {
     /// Returns the deserialized message if found, None otherwise.
     pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
         use prost::Message;
-        let key = RecentMessageKey {
-            to: to.clone(),
-            id: id.clone(),
-        };
+        let key = self.make_stanza_key(to.clone(), id.clone()).await;
         self.recent_messages.remove(&key).await.and_then(|bytes| {
             match wa::Message::decode(bytes.as_slice()) {
                 Ok(msg) => Some(msg),
@@ -108,7 +104,7 @@ impl Client {
     /// This is lightweight - only stores the protobuf bytes, not Arc<Message>.
     pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
         use prost::Message;
-        let key = RecentMessageKey { to, id };
+        let key = self.make_stanza_key(to, id).await;
         // Serialize message to bytes - much lighter than storing Arc<Message>
         let bytes = msg.encode_to_vec();
         self.recent_messages.insert(key, bytes).await;

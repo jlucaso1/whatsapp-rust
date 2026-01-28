@@ -429,6 +429,19 @@ impl Jid {
         self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
     }
 
+    /// Normalize the JID for use in pre-key bundle storage and lookup.
+    ///
+    /// WhatsApp servers may return JIDs with varied agent fields, or we might derive them
+    /// with agent fields in some contexts. However, pre-key bundles are stored and looked up
+    /// using a normalized key where the agent is 0 for standard servers (s.whatsapp.net, lid).
+    pub fn normalize_for_prekey_bundle(&self) -> Self {
+        let mut jid = self.clone();
+        if jid.server == DEFAULT_USER_SERVER || jid.server == HIDDEN_USER_SERVER {
+            jid.agent = 0;
+        }
+        jid
+    }
+
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
             self.server.clone()

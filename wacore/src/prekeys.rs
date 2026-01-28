@@ -86,12 +86,7 @@ impl PreKeyUtils {
                 continue;
             }
             let mut attrs = user_node.attrs();
-            let mut jid = attrs.jid("jid");
-            if jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
-                || jid.server == wacore_binary::jid::HIDDEN_USER_SERVER
-            {
-                jid.agent = 0;
-            }
+            let mut jid = attrs.jid("jid").normalize_for_prekey_bundle();
             if jid.device == 0
                 && (jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
                     || jid.server == wacore_binary::jid::HIDDEN_USER_SERVER)
@@ -103,7 +98,8 @@ impl PreKeyUtils {
             }
             let bundle = match Self::node_to_pre_key_bundle(&jid, user_node) {
                 Ok(b) => b,
-                Err(_e) => {
+                Err(e) => {
+                    log::warn!("Failed to parse prekey bundle for {}: {}", jid, e);
                     continue;
                 }
             };

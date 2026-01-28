@@ -155,11 +155,7 @@ mod tests {
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = PersistenceManager::new(backend)
             .await
             .expect("persistence manager should initialize");
@@ -191,11 +187,7 @@ mod tests {
         // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = PersistenceManager::new(backend)
             .await
             .expect("persistence manager should initialize");

@@ -72,7 +72,7 @@ impl StanzaHandler for MessageHandler {
                 tokio::spawn(async move {
                     while let Some(msg_node) = rx.recv().await {
                         let client = client_for_worker.clone();
-                        Box::pin(client.handle_encrypted_message(msg_node)).await;
+                        Box::pin(client.handle_incoming_message(msg_node)).await;
                     }
                     // Clean up when channel closes to prevent memory leaks
                     queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;

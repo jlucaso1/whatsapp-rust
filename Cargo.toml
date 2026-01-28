@@ -63,6 +63,7 @@ wacore-noise = { path = "./wacore/noise", version = "0.2.0" }
 waproto = { path = "./waproto", version = "0.2.0" }
 
 [features]
+debug-snapshots = []
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
 default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]

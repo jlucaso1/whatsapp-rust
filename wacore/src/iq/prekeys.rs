@@ -48,7 +48,7 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export PreKeyBundle for convenience
-pub use crate::libsignal::protocol::PreKeyBundle;
+pub use crate::libsignal::protocol::{PreKeyBundle, PublicKey};
 
 /// Pre-key count response.
 #[derive(Debug, Clone)]
@@ -218,33 +218,33 @@ impl IqSpec for DigestKeyBundleSpec {
 pub struct PreKeyUploadSpec {
     /// 4-byte registration ID
     pub registration_id: u32,
-    /// 32-byte identity public key
-    pub identity_key_bytes: Vec<u8>,
+    /// Identity public key
+    pub identity_key: PublicKey,
     /// Signed pre-key ID (uses lower 3 bytes)
     pub signed_pre_key_id: u32,
-    /// 32-byte signed pre-key public
-    pub signed_pre_key_public_bytes: Vec<u8>,
+    /// Signed pre-key public
+    pub signed_pre_key_public: PublicKey,
     /// 64-byte signature
     pub signed_pre_key_signature: Vec<u8>,
-    /// Pre-keys to upload: (id, 32-byte public key)
-    pub pre_keys: Vec<(u32, Vec<u8>)>,
+    /// Pre-keys to upload: (id, public key)
+    pub pre_keys: Vec<(u32, PublicKey)>,
 }
 
 impl PreKeyUploadSpec {
     /// Create a new pre-key upload spec.
     pub fn new(
         registration_id: u32,
-        identity_key_bytes: Vec<u8>,
+        identity_key: PublicKey,
         signed_pre_key_id: u32,
-        signed_pre_key_public_bytes: Vec<u8>,
+        signed_pre_key_public: PublicKey,
         signed_pre_key_signature: Vec<u8>,
-        pre_keys: Vec<(u32, Vec<u8>)>,
+        pre_keys: Vec<(u32, PublicKey)>,
     ) -> Self {
         Self {
             registration_id,
-            identity_key_bytes,
+            identity_key,
             signed_pre_key_id,
-            signed_pre_key_public_bytes,
+            signed_pre_key_public,
             signed_pre_key_signature,
             pre_keys,
         }
@@ -255,13 +255,20 @@ impl IqSpec for PreKeyUploadSpec {
     type Response = ();
 
     fn build_iq(&self) -> InfoQuery<'static> {
+        // Convert PublicKeys to 32-byte raw values for the wire
+        let pre_keys_bytes: Vec<(u32, Vec<u8>)> = self
+            .pre_keys
+            .iter()
+            .map(|(id, pk)| (*id, pk.public_key_bytes().to_vec()))
+            .collect();
+
         let content = PreKeyUtils::build_upload_prekeys_request(
             self.registration_id,
-            self.identity_key_bytes.clone(),
+            self.identity_key.public_key_bytes().to_vec(),
             self.signed_pre_key_id,
-            self.signed_pre_key_public_bytes.clone(),
+            self.signed_pre_key_public.public_key_bytes().to_vec(),
             self.signed_pre_key_signature.clone(),
-            &self.pre_keys,
+            &pre_keys_bytes,
         );
 
         InfoQuery::set(
@@ -504,7 +511,8 @@ impl PreKeyBundleUserNode {
     ) -> Result<Self, anyhow::Error> {
         let registration_id = bundle.registration_id()?;
 
-        // Identity key must be 32 bytes (raw key), not 33 bytes (serialized with 0x05 prefix)
+        // Identity key must be 32 bytes (raw key).
+        // PublicKey::public_key_bytes() returns the raw 32-byte key without the 0x05 prefix.
         let identity_key = bundle
             .identity_key()?
             .public_key()
@@ -769,13 +777,15 @@ mod tests {
 
     #[test]
     fn test_prekey_upload_spec_build_iq() {
+        let pk = |b| PublicKey::from_djb_public_key_bytes(&[b; 32]).unwrap();
+
         let spec = PreKeyUploadSpec::new(
-            12345,                                            // registration_id
-            vec![1u8; 32],                                    // identity_key_bytes
-            1,                                                // signed_pre_key_id
-            vec![2u8; 32],                                    // signed_pre_key_public_bytes
-            vec![3u8; 64],                                    // signed_pre_key_signature
-            vec![(100, vec![4u8; 32]), (101, vec![5u8; 32])], // pre_keys
+            12345,                            // registration_id
+            pk(1),                            // identity_key
+            1,                                // signed_pre_key_id
+            pk(2),                            // signed_pre_key_public
+            vec![3u8; 64],                    // signed_pre_key_signature
+            vec![(100, pk(4)), (101, pk(5))], // pre_keys
         );
         let iq = spec.build_iq();
 
@@ -806,14 +816,9 @@ mod tests {
 
     #[test]
     fn test_prekey_upload_spec_parse_response() {
-        let spec = PreKeyUploadSpec::new(
-            12345,
-            vec![1u8; 32],
-            1,
-            vec![2u8; 32],
-            vec![3u8; 64],
-            vec![(100, vec![4u8; 32])],
-        );
+        let pk = |b| PublicKey::from_djb_public_key_bytes(&[b; 32]).unwrap();
+
+        let spec = PreKeyUploadSpec::new(12345, pk(1), 1, pk(2), vec![3u8; 64], vec![(100, pk(4))]);
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 

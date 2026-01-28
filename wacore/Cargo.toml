@@ -42,6 +42,10 @@ wacore-libsignal = { workspace = true }
 wacore-noise = { workspace = true }
 waproto = { workspace = true }
 
+[features]
+default = []
+debug-snapshots = []
+
 [dev-dependencies]
 iai-callgrind = { workspace = true }
 
