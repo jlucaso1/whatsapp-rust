@@ -76,6 +76,33 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
     }
 }
 
+fn parse_database_path(database_url: &str) -> Result<String> {
+    // Reject in-memory databases
+    if database_url == ":memory:" {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    // Strip query string and fragment
+    let path = database_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(database_url);
+
+    // Remove sqlite:// prefix if present
+    let path = path.trim_start_matches("sqlite://");
+
+    // Check if the resulting path looks like an in-memory marker
+    if path == ":memory:" || path.starts_with(":memory:?") {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    Ok(path.to_string())
+}
+
 impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
@@ -106,10 +133,12 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
+        let database_path = parse_database_path(database_url)?;
+
         Ok(Self {
             pool,
             db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
-            database_path: database_url.trim_start_matches("sqlite://").to_string(),
+            database_path,
             device_id: 1,
         })
     }
@@ -1824,6 +1853,55 @@ mod tests {
         SqliteStore::new(":memory:")
             .await
             .expect("Failed to create test store")
+    }
+
+    #[test]
+    fn test_parse_database_path_regular_path() {
+        let path = "/var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_sqlite_prefix() {
+        let path = "sqlite:///var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_query_params() {
+        let path = "file:database.db?mode=memory&cache=shared";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_fragment() {
+        let path = "file:database.db#fragment";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_both_query_and_fragment() {
+        let path = "sqlite:///var/lib/database.db?mode=ro#backup";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_rejected() {
+        let result = parse_database_path(":memory:");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_with_query_rejected() {
+        let result = parse_database_path(":memory:?cache=shared");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[tokio::test]
