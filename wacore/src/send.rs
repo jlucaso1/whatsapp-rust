@@ -519,7 +519,8 @@ pub async fn prepare_dm_stanza<
 pub async fn prepare_peer_stanza<S, I>(
     session_store: &mut S,
     identity_store: &mut I,
-    to_jid: Jid,
+    transport_jid: Jid,
+    encryption_jid: Jid,
     message: &wa::Message,
     request_id: String,
 ) -> Result<Node>
@@ -528,7 +529,7 @@ where
     I: crate::libsignal::protocol::IdentityKeyStore,
 {
     let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
-    let signal_address = to_jid.to_protocol_address();
+    let signal_address = encryption_jid.to_protocol_address();
 
     let encrypted_message =
         message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
@@ -546,7 +547,7 @@ where
 
     let stanza = NodeBuilder::new("message")
         .attrs([
-            ("to", to_jid.to_string()),
+            ("to", transport_jid.to_string()),
             ("id", request_id),
             ("type", "text".to_string()),
             ("category", "peer".to_string()),

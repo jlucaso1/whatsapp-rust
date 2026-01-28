@@ -7,6 +7,7 @@ use log::{debug, warn};
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use wacore::libsignal::crypto::DecryptionError;
 use wacore::libsignal::protocol::SenderKeyDistributionMessage;
 use wacore::libsignal::protocol::group_decrypt;
@@ -107,11 +108,6 @@ impl Client {
                     );
                 }
             }
-        } else {
-            log::warn!(
-                "[msg:{}] Newsletter <plaintext> node missing byte content",
-                info.id
-            );
         }
     }
     /// Dispatches an `UndecryptableMessage` event to notify consumers that a message
@@ -187,11 +183,14 @@ impl Client {
 
     /// Helper to generate consistent cache keys for retry logic.
     /// Key format: "{chat}:{msg_id}:{sender}"
-    pub(crate) fn make_retry_cache_key(
-        chat: impl std::fmt::Display,
-        msg_id: impl std::fmt::Display,
-        sender: impl std::fmt::Display,
+    pub(crate) async fn make_retry_cache_key(
+        &self,
+        chat: &Jid,
+        msg_id: &str,
+        sender: &Jid,
     ) -> String {
+        let chat = self.resolve_encryption_jid(chat).await;
+        let sender = self.resolve_encryption_jid(sender).await;
         format!("{}:{}:{}", chat, msg_id, sender)
     }
 
@@ -218,12 +217,14 @@ impl Client {
     /// * `info` - The message info for the failed message
     /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
-        let cache_key =
-            Self::make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender);
         let client = Arc::clone(self);
         let info = info.clone();
 
         tokio::spawn(async move {
+            let cache_key = client
+                .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                .await;
+
             // Atomically increment retry count and check if we should continue
             let Some(retry_count) = client.increment_retry_count(&cache_key).await else {
                 // Max retries reached
@@ -372,6 +373,8 @@ impl Client {
             }
         };
 
+        let has_unavailable = node.get_optional_child("unavailable").is_some();
+
         let mut all_enc_nodes = Vec::new();
 
         let direct_enc_nodes = node.get_children_by_tag("enc");
@@ -386,7 +389,6 @@ impl Client {
                     None => continue,
                 };
                 let own_jid = self.get_pn().await;
-
                 if let Some(our_jid) = own_jid
                     && to_jid == our_jid.to_string()
                 {
@@ -396,11 +398,19 @@ impl Client {
             }
         }
 
-        if all_enc_nodes.is_empty() {
+        if all_enc_nodes.is_empty() && !has_unavailable {
             log::warn!(
                 "[msg:{}] Received non-newsletter message without <enc> child: {}",
                 info.id,
                 node.tag
+            );
+            return;
+        }
+
+        if has_unavailable {
+            log::debug!(
+                "[msg:{}] Message has <unavailable> child, skipping decryption",
+                info.id
             );
             return;
         }
@@ -519,11 +529,9 @@ impl Client {
                         );
 
                         // Mark as local retry to prevent re-queue loops (key: "{chat}:{msg_id}:{sender}")
-                        let cache_key = Self::make_retry_cache_key(
-                            &info.source.chat,
-                            &info.id,
-                            &info.source.sender,
-                        );
+                        let cache_key = self
+                            .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                            .await;
                         self.local_retry_cache.insert(cache_key, ()).await;
 
                         tokio::spawn(async move {
@@ -985,6 +993,21 @@ impl Client {
 
             match decrypt_result {
                 Ok(padded_plaintext) => {
+                    // Check if this message was previously re-queued and clear cache
+                    let cache_key = self
+                        .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                        .await;
+                    if self.local_retry_cache.remove(&cache_key).await.is_some() {
+                        // Successfully decrypted a message that was previously re-queued
+                        self.retry_metrics
+                            .local_requeue_success
+                            .fetch_add(1, Ordering::Relaxed);
+                        log::debug!(
+                            "[msg:{}] Successfully decrypted message that was previously re-queued",
+                            info.id
+                        );
+                    }
+
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
@@ -1010,25 +1033,31 @@ impl Client {
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
                     // Optimization: Check if this message was already re-queued locally
-                    let cache_key = Self::make_retry_cache_key(
-                        &info.source.chat,
-                        &info.id,
-                        &info.source.sender,
-                    );
+                    let cache_key = self
+                        .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                        .await;
                     let already_requeued = self.local_retry_cache.get(&cache_key).await.is_some();
 
                     if !already_requeued {
+                        // First NoSenderKey: trigger local re-queue
+                        self.retry_metrics
+                            .local_requeue_attempts
+                            .fetch_add(1, Ordering::Relaxed);
                         // Signal caller to re-queue this message
                         // Do NOT send retry receipt yet
                         return Ok(true);
                     }
 
+                    // Second NoSenderKey (already re-queued): fall back to network retry
+                    self.retry_metrics
+                        .local_requeue_fallback
+                        .fetch_add(1, Ordering::Relaxed);
                     warn!(
                         "No sender key state for batched group message [msg:{}] from {}: {}. Sending retry receipt (already requeued).",
                         info.id, info.source.sender, msg
                     );
                     // Use spawn_retry_receipt which has retry count tracking
-                    // NoSenderKeyState is similar to NoSession - we need the SKDM
+                    // NoSenderKeyState is similar to NoSession - we need SKDM
                     self.spawn_retry_receipt(info, RetryReason::NoSession);
                 }
                 Err(e) => {
@@ -1221,7 +1250,11 @@ impl Client {
             .unwrap_or_default();
 
         let id = attrs.required_string("id")?.to_string();
-        let server_id = attrs.optional_u64("server_id").unwrap_or(0);
+        // server_id must be in range 99-2147476647 (per WhatsApp Web)
+        let server_id = attrs
+            .optional_u64("server_id")
+            .filter(|&v| (99..=2_147_476_647).contains(&v))
+            .unwrap_or(0) as i32;
 
         // Ensure newsletter JID is normalized: should be just {user}@newsletter
         if source.chat.is_newsletter() {
@@ -1232,7 +1265,7 @@ impl Client {
         Ok(MessageInfo {
             source,
             id,
-            server_id: server_id as i32,
+            server_id,
             push_name: attrs
                 .optional_string("notify")
                 .map(|s| s.to_string())
@@ -4046,7 +4079,9 @@ mod tests {
 
         // Verify cache IMMEDIATELY
         // Asserting presence means we successfully triggered the "NoSenderKey" path.
-        let retry_cache_key = Client::make_retry_cache_key(&group_jid, msg_id, &sender_jid);
+        let retry_cache_key = client
+            .make_retry_cache_key(&group_jid, msg_id, &sender_jid)
+            .await;
         assert!(
             client.local_retry_cache.contains_key(&retry_cache_key),
             "Message should be in local_retry_cache (Optimization NOT triggered - check error logs)"
@@ -4083,9 +4118,14 @@ mod tests {
             .await;
 
         // Verify retry count allows network retry now
-        // Note: spawn_retry_receipt spawns a task, so we might need to yield slightly to let it update the cache.
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+        // spawn_retry_receipt spawns a task, so we need to wait for it to update the cache.
+        // Use retry loop instead of fixed sleep to avoid flaky test under load.
+        for _ in 0..20 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            if client.message_retry_counts.get(&retry_key).await == Some(1) {
+                break;
+            }
+        }
         assert_eq!(
             client.message_retry_counts.get(&retry_key).await,
             Some(1),
@@ -4139,7 +4179,9 @@ mod tests {
             .handle_incoming_message(Arc::new(garbage_node))
             .await;
 
-        let retry_cache_key = Client::make_retry_cache_key(&group_jid, garbage_id, &sender_jid);
+        let retry_cache_key = client
+            .make_retry_cache_key(&group_jid, garbage_id, &sender_jid)
+            .await;
         assert!(
             !client.local_retry_cache.contains_key(&retry_cache_key),
             "Garbage message should NOT be re-queued/cached"
@@ -4185,7 +4227,9 @@ mod tests {
             .handle_incoming_message(dup_arc.clone())
             .await;
 
-        let retry_key = Client::make_retry_cache_key(&group_jid, dup_id, &sender_jid);
+        let retry_key = client
+            .make_retry_cache_key(&group_jid, dup_id, &sender_jid)
+            .await;
         assert!(
             client.local_retry_cache.contains_key(&retry_key),
             "First dup message should be cached/requeued"

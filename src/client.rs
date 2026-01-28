@@ -60,12 +60,7 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
-/// Key for looking up recent messages for retry functionality.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RecentMessageKey {
-    pub to: Jid,
-    pub id: String,
-}
+use wacore::types::message::StanzaKey;
 
 /// Metrics for tracking offline sync progress
 #[derive(Debug)]
@@ -75,6 +70,17 @@ pub(crate) struct OfflineSyncMetrics {
     pub processed_messages: AtomicUsize,
     // Using simple std Mutex for timestamp as it's rarely contended and non-async
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// Metrics for tracking the effectiveness of the local re-queue optimization.
+/// This helps monitor whether the 500ms delay and cache TTL are well-tuned.
+pub(crate) struct RetryMetrics {
+    /// Number of times messages triggered local re-queue (NoSession on first attempt)
+    pub local_requeue_attempts: AtomicUsize,
+    /// Number of times re-queued messages successfully decrypted
+    pub local_requeue_success: AtomicUsize,
+    /// Number of times re-queued messages still failed (fell back to network retry)
+    pub local_requeue_fallback: AtomicUsize,
 }
 
 pub struct Client {
@@ -136,7 +142,7 @@ pub struct Client {
 
     /// Cache for recent messages (serialized bytes) for retry functionality.
     /// Uses moka cache with TTL and max capacity for automatic eviction.
-    pub(crate) recent_messages: Cache<RecentMessageKey, Vec<u8>>,
+    pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
 
     pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
 
@@ -169,6 +175,8 @@ pub struct Client {
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
+    /// Metrics for tracking the effectiveness of local re-queue optimization
+    pub(crate) retry_metrics: Arc<RetryMetrics>,
     /// Notifier for when the noise socket is established (before login).
     /// Use this to wait for the socket to be ready for sending messages.
     pub(crate) socket_ready_notifier: Arc<Notify>,
@@ -297,6 +305,12 @@ impl Client {
                 total_messages: AtomicUsize::new(0),
                 processed_messages: AtomicUsize::new(0),
                 start_time: std::sync::Mutex::new(None),
+            }),
+
+            retry_metrics: Arc::new(RetryMetrics {
+                local_requeue_attempts: AtomicUsize::new(0),
+                local_requeue_success: AtomicUsize::new(0),
+                local_requeue_fallback: AtomicUsize::new(0),
             }),
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
@@ -677,52 +691,69 @@ impl Client {
         use wacore::xml::DisplayableNode;
 
         // --- Offline Sync Tracking ---
-        if node.tag.as_str() == "ib"
-            && let Some(preview) = node.get_optional_child("offline_preview")
-        {
-            let count: usize = preview
-                .attrs
-                .get("count")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+        if node.tag.as_str() == "ib" {
+            // Check for offline_preview child to get expected count
+            if let Some(preview) = node.get_optional_child("offline_preview") {
+                let count: usize = preview
+                    .attrs
+                    .get("count")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
 
-            if count == 0 {
-                self.offline_sync_metrics
-                    .active
-                    .store(false, Ordering::Relaxed);
-                info!(target: "Client/OfflineSync", "Sync COMPLETED: 0 items.");
-            } else {
-                self.offline_sync_metrics
-                    .total_messages
-                    .store(count, Ordering::Relaxed);
-                self.offline_sync_metrics
-                    .processed_messages
-                    .store(0, Ordering::Relaxed);
-                self.offline_sync_metrics
-                    .active
-                    .store(true, Ordering::Relaxed);
-                match self.offline_sync_metrics.start_time.lock() {
-                    Ok(mut guard) => *guard = Some(std::time::Instant::now()),
-                    Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+                if count == 0 {
+                    self.offline_sync_metrics
+                        .active
+                        .store(false, Ordering::Release);
+                    info!(target: "Client/OfflineSync", "Sync COMPLETED: 0 items.");
+                } else {
+                    // Use stronger memory ordering for state transitions
+                    self.offline_sync_metrics
+                        .total_messages
+                        .store(count, Ordering::Release);
+                    self.offline_sync_metrics
+                        .processed_messages
+                        .store(0, Ordering::Release);
+                    self.offline_sync_metrics
+                        .active
+                        .store(true, Ordering::Release);
+                    match self.offline_sync_metrics.start_time.lock() {
+                        Ok(mut guard) => *guard = Some(std::time::Instant::now()),
+                        Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+                    }
+                    info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
-                info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
+            } else if self.offline_sync_metrics.active.load(Ordering::Acquire) {
+                // Handle end marker: <ib> without offline_preview while sync is active
+                // This can happen when server sends fewer messages than advertised
+                let processed = self
+                    .offline_sync_metrics
+                    .processed_messages
+                    .load(Ordering::Acquire);
+                let elapsed = match self.offline_sync_metrics.start_time.lock() {
+                    Ok(guard) => guard.map(|t| t.elapsed()).unwrap_or_default(),
+                    Err(poison) => poison.into_inner().map(|t| t.elapsed()).unwrap_or_default(),
+                };
+                info!(target: "Client/OfflineSync", "Sync COMPLETED: End marker received. Processed {} items in {:.2?}.", processed, elapsed);
+                self.offline_sync_metrics
+                    .active
+                    .store(false, Ordering::Release);
             }
         }
 
         // Track progress if active
-        if self.offline_sync_metrics.active.load(Ordering::Relaxed) {
+        if self.offline_sync_metrics.active.load(Ordering::Acquire) {
             // Check for 'offline' attribute on relevant stanzas
             if node.attrs.contains_key("offline") {
                 let processed = self
                     .offline_sync_metrics
                     .processed_messages
-                    .fetch_add(1, Ordering::Relaxed)
+                    .fetch_add(1, Ordering::Release)
                     + 1;
                 let total = self
                     .offline_sync_metrics
                     .total_messages
-                    .load(Ordering::Relaxed);
+                    .load(Ordering::Acquire);
 
                 if processed.is_multiple_of(50) || processed == total {
                     info!(target: "Client/OfflineSync", "Sync Progress: {}/{}", processed, total);
@@ -736,7 +767,7 @@ impl Client {
                     info!(target: "Client/OfflineSync", "Sync COMPLETED: Processed {} items in {:.2?}.", processed, elapsed);
                     self.offline_sync_metrics
                         .active
-                        .store(false, Ordering::Relaxed);
+                        .store(false, Ordering::Release);
                 }
             }
         }
@@ -1968,6 +1999,14 @@ impl Client {
     pub async fn get_lid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.lid.clone()
+    }
+
+    /// Creates a normalized StanzaKey by resolving PN to LID JIDs.
+    pub(crate) async fn make_stanza_key(&self, chat: Jid, id: String) -> StanzaKey {
+        // Resolve chat JID to LID if possible
+        let chat = self.resolve_encryption_jid(&chat).await;
+
+        StanzaKey { chat, id }
     }
 
     // get_phone_number_from_lid is in client/lid_pn.rs

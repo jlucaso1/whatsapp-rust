@@ -41,12 +41,6 @@ pub mod key_pair_serde {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ProcessedMessageKey {
-    pub to: Jid,
-    pub id: String,
-}
-
 fn build_base_client_payload(
     app_version: wa::client_payload::user_agent::AppVersion,
 ) -> wa::ClientPayload {

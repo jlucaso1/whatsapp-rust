@@ -186,3 +186,53 @@ impl Client {
         self.lid_pn_cache.get_phone_number(lid_user).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lid_pn_cache::LearningSource;
+    use crate::test_utils::create_test_client;
+    use std::sync::Arc;
+    use wacore_binary::jid::HIDDEN_USER_SERVER;
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_pn_to_lid() {
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "55999999999";
+        let lid = "100000012345678";
+
+        // Add mapping to cache
+        client
+            .add_lid_pn_mapping(lid, pn, LearningSource::PeerPnMessage)
+            .await
+            .unwrap();
+
+        let pn_jid = Jid::pn(pn);
+        let resolved = client.resolve_encryption_jid(&pn_jid).await;
+
+        assert_eq!(resolved.user, lid);
+        assert_eq!(resolved.server, HIDDEN_USER_SERVER);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_preserves_lid() {
+        let client: Arc<Client> = create_test_client().await;
+        let lid = "100000012345678";
+        let lid_jid = Jid::lid(lid);
+
+        let resolved = client.resolve_encryption_jid(&lid_jid).await;
+
+        assert_eq!(resolved, lid_jid);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_no_mapping_returns_pn() {
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "55999999999";
+        let pn_jid = Jid::pn(pn);
+
+        let resolved = client.resolve_encryption_jid(&pn_jid).await;
+
+        assert_eq!(resolved, pn_jid);
+    }
+}
