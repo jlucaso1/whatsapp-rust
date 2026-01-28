@@ -61,7 +61,7 @@ pub fn prekey_record_to_structure(
 ) -> Result<wa::PreKeyRecordStructure, SignalProtocolError> {
     Ok(wa::PreKeyRecordStructure {
         id: Some(record.id()?.into()),
-        public_key: Some(record.key_pair()?.public_key.public_key_bytes()[1..].to_vec()),
+        public_key: Some(record.key_pair()?.public_key.serialize().to_vec()),
         private_key: Some(record.key_pair()?.private_key.serialize().to_vec()),
     })
 }
@@ -94,4 +94,25 @@ pub fn signed_prekey_structure_to_record(
             id, timestamp, &key_pair, signature,
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::KeyPair;
+    use crate::protocol::PreKeyRecord;
+
+    #[test]
+    fn test_prekey_serialization_length() -> Result<(), Box<dyn std::error::Error>> {
+        let key_pair = KeyPair::generate(&mut rand::rng());
+        let record = PreKeyRecord::new(1.into(), &key_pair);
+        let structure = prekey_record_to_structure(&record)?;
+
+        // WhatsApp Web expects 33 bytes for the public key (prefix 0x05 + 32 byte key)
+        let pub_key = structure.public_key.clone().unwrap();
+        assert_eq!(pub_key.len(), 33);
+        assert_eq!(pub_key[0], 0x05);
+
+        Ok(())
+    }
 }

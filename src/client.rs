@@ -685,7 +685,7 @@ impl Client {
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            
+
             if count == 0 {
                 self.offline_sync_metrics
                     .active

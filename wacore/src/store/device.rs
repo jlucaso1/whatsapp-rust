@@ -1,8 +1,6 @@
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
-use rand::TryRngCore;
-use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use wacore_binary::jid::Jid;
@@ -134,32 +132,30 @@ impl Device {
     pub fn new() -> Self {
         use rand::RngCore;
 
-        let identity_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+        let mut rng = rand::rng();
+        let identity_key_pair = IdentityKeyPair::generate(&mut rng);
 
         let identity_key: KeyPair = KeyPair::new(
             *identity_key_pair.public_key(),
             identity_key_pair.private_key().clone(),
         );
-        let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
+        let signed_pre_key = KeyPair::generate(&mut rng);
         let signature_box = identity_key_pair
             .private_key()
-            .calculate_signature(
-                &signed_pre_key.public_key.serialize(),
-                &mut OsRng.unwrap_err(),
-            )
+            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut rng)
             .expect("signing with valid Ed25519 key should succeed");
         let signed_pre_key_signature: [u8; 64] = signature_box
             .as_ref()
             .try_into()
             .expect("Ed25519 signature is always 64 bytes");
         let mut adv_secret_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut adv_secret_key);
+        rng.fill_bytes(&mut adv_secret_key);
 
         Self {
             pn: None,
             lid: None,
-            registration_id: 3718719151,
-            noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
+            registration_id: (rand::random::<u32>() % 2147483647) + 1,
+            noise_key: KeyPair::generate(&mut rng),
             identity_key,
             signed_pre_key,
             signed_pre_key_id: 1,
@@ -274,5 +270,19 @@ impl Device {
         payload.passive = Some(false);
         payload.pull = Some(false);
         payload
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_registration_id_range() {
+        for _ in 0..1000 {
+            let device = Device::new();
+            assert!(device.registration_id >= 1);
+            assert!(device.registration_id <= 2147483647);
+        }
     }
 }
