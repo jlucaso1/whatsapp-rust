@@ -685,20 +685,28 @@ impl Client {
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            self.offline_sync_metrics
-                .total_messages
-                .store(count, Ordering::Relaxed);
-            self.offline_sync_metrics
-                .processed_messages
-                .store(0, Ordering::Relaxed);
-            self.offline_sync_metrics
-                .active
-                .store(true, Ordering::Relaxed);
-            match self.offline_sync_metrics.start_time.lock() {
-                Ok(mut guard) => *guard = Some(std::time::Instant::now()),
-                Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+            
+            if count == 0 {
+                self.offline_sync_metrics
+                    .active
+                    .store(false, Ordering::Relaxed);
+                info!(target: "Client/OfflineSync", "Sync COMPLETED: 0 items.");
+            } else {
+                self.offline_sync_metrics
+                    .total_messages
+                    .store(count, Ordering::Relaxed);
+                self.offline_sync_metrics
+                    .processed_messages
+                    .store(0, Ordering::Relaxed);
+                self.offline_sync_metrics
+                    .active
+                    .store(true, Ordering::Relaxed);
+                match self.offline_sync_metrics.start_time.lock() {
+                    Ok(mut guard) => *guard = Some(std::time::Instant::now()),
+                    Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+                }
+                info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
             }
-            info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
         }
 
         // Track progress if active
