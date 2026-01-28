@@ -166,18 +166,26 @@ mod tests {
     async fn test_prepare_send() {
         let manager = UnifiedSessionManager::new();
 
-        let result = manager.prepare_send().await;
-        assert!(result.is_some());
-        let (node, seq) = result.unwrap();
-        assert_eq!(node.tag, "ib");
-        assert_eq!(
-            seq, 1,
-            "First sequence should be 1 (pre-increment like WhatsApp Web)"
-        );
+        // Use a loop to handle potential millisecond boundary crossing during the test.
+        // Duplicate prevention only applies if the session ID (which is time-dependent) remains the same.
+        loop {
+            manager.reset().await; // Start clean for each attempt
+            let result = manager.prepare_send().await;
+            assert!(result.is_some());
+            let (node, seq) = result.unwrap();
+            assert_eq!(node.tag, "ib");
+            assert_eq!(seq, 1);
 
-        let result2 = manager.prepare_send().await;
-        assert!(result2.is_none(), "Duplicate should be prevented");
-        assert_eq!(manager.sequence(), 1);
+            let result2 = manager.prepare_send().await;
+            if result2.is_none() {
+                // Success: duplicate was prevented within the same millisecond/session
+                assert_eq!(manager.sequence(), 1);
+                break;
+            }
+            // If result2 is Some, it means the millisecond changed and it's a new session.
+            // We'll loop and try again to catch it within the same millisecond.
+            tokio::task::yield_now().await;
+        }
     }
 
     #[tokio::test]
