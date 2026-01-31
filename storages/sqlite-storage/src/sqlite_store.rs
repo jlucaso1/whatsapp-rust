@@ -43,6 +43,7 @@ type DeviceRow = (
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
     pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(crate) database_path: String,
     device_id: i32,
 }
 
@@ -75,6 +76,33 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
     }
 }
 
+fn parse_database_path(database_url: &str) -> Result<String> {
+    // Reject in-memory databases
+    if database_url == ":memory:" {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    // Strip query string and fragment
+    let path = database_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(database_url);
+
+    // Remove sqlite:// prefix if present
+    let path = path.trim_start_matches("sqlite://");
+
+    // Check if the resulting path looks like an in-memory marker
+    if path == ":memory:" || path.starts_with(":memory:?") {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    Ok(path.to_string())
+}
+
 impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
@@ -105,9 +133,12 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
+        let database_path = parse_database_path(database_url)?;
+
         Ok(Self {
             pool,
             db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            database_path,
             device_id: 1,
         })
     }
@@ -1730,6 +1761,88 @@ impl DeviceStore for SqliteStore {
     async fn create(&self) -> Result<i32> {
         SqliteStore::create_new_device(self).await
     }
+
+    async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()> {
+        fn sanitize_snapshot_name(name: &str) -> Result<String> {
+            const MAX_LENGTH: usize = 100;
+
+            let sanitized: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+
+            let sanitized = sanitized
+                .split('.')
+                .filter(|part| !part.is_empty() && *part != "..")
+                .collect::<Vec<_>>()
+                .join(".");
+
+            let sanitized = sanitized.trim_matches(['/', '\\', '.']);
+
+            if sanitized.is_empty() {
+                return Err(StoreError::Database(
+                    "Snapshot name cannot be empty after sanitization".to_string(),
+                ));
+            }
+
+            if sanitized.len() > MAX_LENGTH {
+                return Err(StoreError::Database(format!(
+                    "Snapshot name exceeds maximum length of {} characters",
+                    MAX_LENGTH
+                )));
+            }
+
+            Ok(sanitized.to_string())
+        }
+
+        let sanitized_name = sanitize_snapshot_name(name)?;
+
+        let pool = self.pool.clone();
+        let db_path = self.database_path.clone();
+        let extra_data = extra_content.map(|b| b.to_vec());
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            // Construct target path: db_path.snapshot-TIMESTAMP-SANITIZED_NAME
+            let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, sanitized_name);
+
+            // Use VACUUM INTO to create a consistent backup
+            // Note: We escape single quotes in the path just in case
+            let query = format!("VACUUM INTO '{}'", target_path.replace("'", "''"));
+
+            diesel::sql_query(query)
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Save extra content if provided
+            if let Some(data) = extra_data {
+                let extra_path = format!("{}.json", target_path);
+                std::fs::write(&extra_path, data).map_err(|e| {
+                    StoreError::Database(format!("Failed to write snapshot extra content: {}", e))
+                })?;
+            }
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1737,9 +1850,64 @@ mod tests {
     use super::*;
 
     async fn create_test_store() -> SqliteStore {
-        SqliteStore::new(":memory:")
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let db_name = format!("file:memdb_test_{}?mode=memory&cache=shared", timestamp);
+        SqliteStore::new(&db_name)
             .await
             .expect("Failed to create test store")
+    }
+
+    #[test]
+    fn test_parse_database_path_regular_path() {
+        let path = "/var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_sqlite_prefix() {
+        let path = "sqlite:///var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_query_params() {
+        let path = "file:database.db?mode=memory&cache=shared";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_fragment() {
+        let path = "file:database.db#fragment";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_both_query_and_fragment() {
+        let path = "sqlite:///var/lib/database.db?mode=ro#backup";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_rejected() {
+        let result = parse_database_path(":memory:");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_with_query_rejected() {
+        let result = parse_database_path(":memory:?cache=shared");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[tokio::test]

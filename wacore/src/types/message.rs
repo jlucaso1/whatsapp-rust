@@ -1,7 +1,22 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde::Serialize;
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
+
+/// Unique identifier for a message stanza within a chat.
+/// Used for deduplication and retry tracking.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StanzaKey {
+    pub chat: Jid,
+    pub id: MessageId,
+}
+
+impl StanzaKey {
+    pub fn new(chat: Jid, id: MessageId) -> Self {
+        Self { chat, id }
+    }
+}
 
 /// Addressing mode for a group (phone number vs LID).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

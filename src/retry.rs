@@ -572,13 +572,13 @@ impl Client {
                 .public_key_bytes()
                 .to_vec();
 
-            let prekey_value_bytes = new_prekey_keypair.public_key.public_key_bytes().to_vec();
+            let prekey_value_bytes = new_prekey_keypair.public_key.serialize().to_vec();
 
             let skey_id = device_snapshot.signed_pre_key_id;
             let skey_value_bytes = device_snapshot
                 .signed_pre_key
                 .public_key
-                .public_key_bytes()
+                .serialize()
                 .to_vec();
             let skey_sig_bytes = device_snapshot.signed_pre_key_signature.to_vec();
 
@@ -680,11 +680,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        ) as Arc<dyn crate::store::traits::Backend>;
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -939,15 +935,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_operations() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id = "ABC123";
@@ -987,15 +977,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_upsert() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id = "MSG001";
@@ -1041,15 +1025,9 @@ mod tests {
 
     #[tokio::test]
     async fn base_key_store_multiple_messages() {
-        use wacore::store::traits::ProtocolStore as _;
-
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let address = "12345.0:1";
         let msg_id_1 = "MSG001";
