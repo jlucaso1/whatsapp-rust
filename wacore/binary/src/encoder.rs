@@ -1,8 +1,5 @@
 use std::io::Write;
 
-use core::simd::prelude::*;
-use core::simd::{Simd, u8x16};
-
 use crate::error::Result;
 use crate::jid::{self, Jid, JidRef};
 use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, NodeValue, ValueRef};
@@ -354,42 +351,13 @@ impl<W: Write> Encoder<W> {
         }
         self.write_u8(rounded_len)?;
 
-        let mut input_bytes = value.as_bytes();
-
-        while input_bytes.len() >= 16 {
-            let (chunk, rest) = input_bytes.split_at(16);
-            let input = u8x16::from_slice(chunk);
-
-            let nibbles = if data_type == token::NIBBLE_8 {
-                let indices = input.saturating_sub(Simd::splat(b'-'));
-                const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
-                Simd::from_array(LOOKUP).swizzle_dyn(indices)
-            } else {
-                let ascii_0 = Simd::splat(b'0');
-                let ascii_a = Simd::splat(b'A');
-                let ten = Simd::splat(10);
-
-                let digit_vals = input - ascii_0;
-                let letter_vals = input - ascii_a + ten;
-                let is_letter = input.simd_ge(ascii_a);
-                is_letter.select(letter_vals, digit_vals)
-            };
-
-            let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
-            let packed = (evens << Simd::splat(4)) | odds;
-            let packed_bytes = packed.to_array();
-            self.write_raw_bytes(&packed_bytes[..8])?;
-
-            input_bytes = rest;
-        }
-
         let packer: fn(char) -> u8 = if data_type == token::NIBBLE_8 {
             Self::pack_nibble
         } else {
             Self::pack_hex
         };
 
-        let mut chars = core::str::from_utf8(input_bytes)?.chars();
+        let mut chars = value.chars();
         while let Some(part1) = chars.next() {
             let part2 = chars.next().unwrap_or('\x00');
             self.write_u8(self.pack_byte_pair(packer, part1, part2))?;

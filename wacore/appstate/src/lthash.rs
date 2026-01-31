@@ -1,4 +1,3 @@
-use core::simd::u16x8;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -41,28 +40,9 @@ impl LTHash {
 
 fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool) {
     assert_eq!(base.len(), input.len(), "length mismatch");
-    assert!(base.len().is_multiple_of(2), "slice lengths must be even");
+    assert!(base.len() % 2 == 0, "slice lengths must be even");
 
-    let (base_chunks, base_remainder) = base.as_chunks_mut::<16>();
-    let (input_chunks, input_remainder) = input.as_chunks::<16>();
-
-    for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-        let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
-        let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
-
-        let result_simd = if subtract {
-            base_simd - input_simd
-        } else {
-            base_simd + input_simd
-        };
-
-        *base_chunk = bytemuck::cast(result_simd.to_array());
-    }
-
-    for (base_pair, input_pair) in base_remainder
-        .chunks_exact_mut(2)
-        .zip(input_remainder.chunks_exact(2))
-    {
+    for (base_pair, input_pair) in base.chunks_exact_mut(2).zip(input.chunks_exact(2)) {
         let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
         let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
 
