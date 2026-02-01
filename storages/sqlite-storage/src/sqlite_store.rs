@@ -14,6 +14,7 @@ use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
@@ -1289,11 +1290,11 @@ impl AppSyncStore for SqliteStore {
 
 #[async_trait]
 impl ProtocolStore for SqliteStore {
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>> {
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<Jid>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -1303,20 +1304,24 @@ impl ProtocolStore for SqliteStore {
                 .filter(skdm_recipients::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(recipients)
+            let jids: Vec<Jid> = recipients
+                .iter()
+                .filter_map(|s| s.parse::<Jid>().ok())
+                .collect();
+            Ok(jids)
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()> {
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
         if device_jids.is_empty() {
             return Ok(());
         }
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        let device_jids: Vec<String> = device_jids.to_vec();
+        let device_jid_strs: Vec<String> = device_jids.iter().map(|j| j.to_string()).collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1326,8 +1331,7 @@ impl ProtocolStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            // Build all values upfront for batch insert
-            let values: Vec<_> = device_jids
+            let values: Vec<_> = device_jid_strs
                 .iter()
                 .map(|device_jid| {
                     (
@@ -1339,9 +1343,7 @@ impl ProtocolStore for SqliteStore {
                 })
                 .collect();
 
-            // SQLite has a limit of ~999 variables per statement (SQLITE_MAX_VARIABLE_NUMBER)
-            // With 4 columns per row, we can safely insert ~200 rows per batch
-            const CHUNK_SIZE: usize = 200;
+            const CHUNK_SIZE: usize = 200; // SQLite variable limit ~999, 4 cols/row
 
             for chunk in values.chunks(CHUNK_SIZE) {
                 diesel::insert_into(skdm_recipients::table)

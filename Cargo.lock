@@ -2495,6 +2495,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wacore",
+ "wacore-binary",
  "waproto",
 ]
 

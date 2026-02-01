@@ -310,6 +310,7 @@ mod tests {
         AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
         ProtocolStore, SignalStore,
     };
+    use wacore_binary::jid::Jid;
 
     type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
 
@@ -428,10 +429,10 @@ mod tests {
     // Implement ProtocolStore - WhatsApp Web protocol alignment
     #[async_trait]
     impl ProtocolStore for MockBackend {
-        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<String>> {
+        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<Jid>> {
             Ok(vec![])
         }
-        async fn add_skdm_recipients(&self, _: &str, _: &[String]) -> StoreResult<()> {
+        async fn add_skdm_recipients(&self, _: &str, _: &[Jid]) -> StoreResult<()> {
             Ok(())
         }
         async fn clear_skdm_recipients(&self, _: &str) -> StoreResult<()> {
