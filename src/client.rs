@@ -17,6 +17,7 @@ use wacore_binary::jid::JidExt;
 use wacore_binary::node::{Attrs, Node};
 
 use crate::appstate_sync::AppStateProcessor;
+use crate::handlers::chatstate::ChatStateEvent;
 use crate::jid_utils::server_jid;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
@@ -81,16 +82,6 @@ pub(crate) struct RetryMetrics {
     pub local_requeue_success: AtomicUsize,
     /// Number of times re-queued messages still failed (fell back to network retry)
     pub local_requeue_fallback: AtomicUsize,
-}
-
-/// Event for incoming chatstate (<chatstate/>) stanzas.
-/// Contains the chat JID, optional participant (for groups), and the state string
-/// ("composing", "recording", "paused").
-#[derive(Debug, Clone)]
-pub struct ChatStateEvent {
-    pub chat: Jid,
-    pub participant: Option<Jid>,
-    pub state: String,
 }
 
 pub struct Client {
@@ -414,7 +405,7 @@ impl Client {
     fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
         use crate::handlers::{
             basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
-            chatstate::ChatStateHandler,
+            chatstate::ChatstateHandler,
             ib::IbHandler,
             iq::IqHandler,
             message::MessageHandler,
@@ -436,7 +427,7 @@ impl Client {
         router.register(Arc::new(IbHandler));
         router.register(Arc::new(NotificationHandler));
         router.register(Arc::new(AckHandler));
-        router.register(Arc::new(ChatStateHandler));
+        router.register(Arc::new(ChatstateHandler));
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));
@@ -450,53 +441,32 @@ impl Client {
         self.core.event_bus.add_handler(handler);
     }
 
-    /// Register a chatstate handler which will be invoked when a <chatstate> stanza is received.
-    pub async fn register_chatstate_handler(&self, handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>) {
+    /// Register a chatstate handler which will be invoked when a `<chatstate>` stanza is received.
+    ///
+    /// The handler receives a `ChatStateEvent` with the parsed chat state information.
+    pub async fn register_chatstate_handler(
+        &self,
+        handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>,
+    ) {
         self.chatstate_handlers.write().await.push(handler);
     }
 
-    /// Emit a chatstate event from a raw node by parsing it and invoking registered handlers.
-    pub async fn emit_chatstate(&self, node: &wacore_binary::node::Node) {
-        // Parse chat JID. Incoming stanzas may set either 'to' (when we send) or 'from' (when received).
-        let jid_attr = node.attrs.get("to").or_else(|| node.attrs.get("from"));
-        let chat_jid = match jid_attr {
-            Some(t) => match t.parse::<Jid>() {
-                Ok(j) => j,
-                Err(e) => {
-                    warn!(target: "Client/ChatState", "Failed to parse chat JID in chatstate: {e}");
-                    return;
-                }
-            },
-            None => {
-                warn!(target: "Client/ChatState", "Received <chatstate/> without 'to' or 'from' attribute");
-                return;
-            }
-        };
-
-        // Participant attribute (optional, present in groups)
-        let participant = node.attrs.get("participant").and_then(|p| p.parse::<Jid>().ok());
-
-        // Determine state from first child tag (e.g., composing, paused, recording)
-        let state = node
-            .children()
-            .and_then(|c| c.get(0))
-            .map(|c| c.tag.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let ev = ChatStateEvent {
-            chat: chat_jid,
-            participant,
-            state,
-        };
+    /// Dispatch a parsed chatstate stanza to registered handlers.
+    ///
+    /// Called by `ChatstateHandler` after parsing the incoming stanza.
+    pub(crate) async fn dispatch_chatstate_event(
+        &self,
+        stanza: wacore::iq::chatstate::ChatstateStanza,
+    ) {
+        let event = ChatStateEvent::from_stanza(stanza);
 
         // Invoke handlers asynchronously
-        let handlers = { self.chatstate_handlers.read().await.clone() };
-        for h in handlers.into_iter() {
-            let ev_clone = ev.clone();
-            // run handlers in a new task to avoid blocking
-            let h_clone = h.clone();
+        let handlers = self.chatstate_handlers.read().await.clone();
+        for handler in handlers {
+            let event_clone = event.clone();
+            let handler_clone = handler.clone();
             tokio::spawn(async move {
-                (h_clone)(ev_clone);
+                (handler_clone)(event_clone);
             });
         }
     }
