@@ -9,6 +9,7 @@ pub mod client;
 pub use client::Client;
 pub mod download;
 pub mod handlers;
+pub use handlers::chatstate::ChatStateEvent;
 pub mod handshake;
 pub mod jid_utils;
 pub mod keepalive;

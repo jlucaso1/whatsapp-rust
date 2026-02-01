@@ -17,6 +17,7 @@ use wacore_binary::jid::JidExt;
 use wacore_binary::node::{Attrs, Node};
 
 use crate::appstate_sync::AppStateProcessor;
+use crate::handlers::chatstate::ChatStateEvent;
 use crate::jid_utils::server_jid;
 use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceManager};
 use crate::types::enc_handler::EncHandler;
@@ -41,6 +42,9 @@ use waproto::whatsapp as wa;
 
 use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
+
+/// Type alias for chatstate event handler functions.
+type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
@@ -197,6 +201,10 @@ pub struct Client {
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
 
+    /// Chat state (typing indicator) handlers registered by external consumers.
+    /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
+    pub(crate) chatstate_handlers: Arc<RwLock<Vec<ChatStateHandler>>>,
+
     /// Cache for pending PDO (Peer Data Operation) requests.
     /// Maps message cache keys (chat:id) to pending request info.
     pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
@@ -332,6 +340,7 @@ impl Client {
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
             plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
+            chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
             device_registry_cache: Cache::builder()
                 .max_capacity(5_000) // Match WhatsApp Web's 5000 entry limit
@@ -399,7 +408,7 @@ impl Client {
     fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
         use crate::handlers::{
             basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
-            chatstate::ChatStateHandler,
+            chatstate::ChatstateHandler,
             ib::IbHandler,
             iq::IqHandler,
             message::MessageHandler,
@@ -421,7 +430,7 @@ impl Client {
         router.register(Arc::new(IbHandler));
         router.register(Arc::new(NotificationHandler));
         router.register(Arc::new(AckHandler));
-        router.register(Arc::new(ChatStateHandler));
+        router.register(Arc::new(ChatstateHandler));
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));
@@ -433,6 +442,36 @@ impl Client {
     /// Registers an external event handler to the core event bus.
     pub fn register_handler(&self, handler: Arc<dyn wacore::types::events::EventHandler>) {
         self.core.event_bus.add_handler(handler);
+    }
+
+    /// Register a chatstate handler which will be invoked when a `<chatstate>` stanza is received.
+    ///
+    /// The handler receives a `ChatStateEvent` with the parsed chat state information.
+    pub async fn register_chatstate_handler(
+        &self,
+        handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>,
+    ) {
+        self.chatstate_handlers.write().await.push(handler);
+    }
+
+    /// Dispatch a parsed chatstate stanza to registered handlers.
+    ///
+    /// Called by `ChatstateHandler` after parsing the incoming stanza.
+    pub(crate) async fn dispatch_chatstate_event(
+        &self,
+        stanza: wacore::iq::chatstate::ChatstateStanza,
+    ) {
+        let event = ChatStateEvent::from_stanza(stanza);
+
+        // Invoke handlers asynchronously
+        let handlers = self.chatstate_handlers.read().await.clone();
+        for handler in handlers {
+            let event_clone = event.clone();
+            let handler_clone = handler.clone();
+            tokio::spawn(async move {
+                (handler_clone)(event_clone);
+            });
+        }
     }
 
     pub async fn run(self: &Arc<Self>) {

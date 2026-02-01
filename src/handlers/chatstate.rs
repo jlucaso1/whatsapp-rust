@@ -1,29 +1,75 @@
+//! Handler for incoming `<chatstate>` stanzas (typing indicators).
+
 use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use log::debug;
 use std::sync::Arc;
+use wacore::iq::chatstate::{ChatstateSource, ChatstateStanza, ReceivedChatState};
+use wacore::protocol::ProtocolNode;
+use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
 
-/// Handler for `<chatstate>` stanzas (typing indicators).
+/// Event for incoming chatstate (`<chatstate/>`) stanzas.
 ///
-/// Currently we just log them at DEBUG level to avoid log noise,
-/// as we don't need to take any action on them yet.
-pub struct ChatStateHandler;
+/// Contains the chat JID, optional participant (for groups), and the parsed state.
+/// State values align with WhatsApp Web's `WAChatState` constants.
+#[derive(Debug, Clone)]
+pub struct ChatStateEvent {
+    /// The chat where the event occurred (user JID for 1:1, group JID for groups)
+    pub chat: Jid,
+    /// For group chats, the participant who triggered the event
+    pub participant: Option<Jid>,
+    /// The chat state (typing, recording_audio, or idle)
+    pub state: ReceivedChatState,
+}
+
+impl ChatStateEvent {
+    /// Create a `ChatStateEvent` from a parsed `ChatstateStanza`.
+    pub fn from_stanza(stanza: ChatstateStanza) -> Self {
+        let (chat, participant) = match stanza.source {
+            ChatstateSource::User { from } => (from, None),
+            ChatstateSource::Group { from, participant } => (from, Some(participant)),
+        };
+        Self {
+            chat,
+            participant,
+            state: stanza.state,
+        }
+    }
+}
+
+/// Handler for `<chatstate>` stanzas.
+///
+/// Parses incoming chatstate stanzas using the `ProtocolNode` pattern
+/// and dispatches events to registered handlers.
+#[derive(Default)]
+pub struct ChatstateHandler;
 
 #[async_trait]
-impl StanzaHandler for ChatStateHandler {
+impl StanzaHandler for ChatstateHandler {
     fn tag(&self) -> &'static str {
         "chatstate"
     }
 
-    async fn handle(&self, _client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        let from = node
-            .attrs
-            .get("from")
-            .and_then(|s| s.as_str())
-            .unwrap_or("unknown");
-        debug!(target: "Client", "Received chatstate from {}: {:?}", from, node);
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        match ChatstateStanza::try_from_node(&node) {
+            Ok(stanza) => {
+                debug!(
+                    target: "ChatstateHandler",
+                    "Received chatstate: {:?} from {:?}",
+                    stanza.state,
+                    stanza.source
+                );
+                client.dispatch_chatstate_event(stanza).await;
+            }
+            Err(e) => {
+                log::warn!(
+                    target: "ChatstateHandler",
+                    "Failed to parse chatstate stanza: {e}"
+                );
+            }
+        }
         true
     }
 }
