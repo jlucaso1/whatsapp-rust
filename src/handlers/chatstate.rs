@@ -5,8 +5,9 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::debug;
 use std::sync::Arc;
-use wacore::iq::chatstate::{ChatstateSource, ChatstateStanza, ReceivedChatState};
-use wacore::protocol::ProtocolNode;
+use wacore::iq::chatstate::{
+    ChatstateParseError, ChatstateSource, ChatstateStanza, ReceivedChatState,
+};
 use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
 
@@ -53,7 +54,7 @@ impl StanzaHandler for ChatstateHandler {
     }
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        match ChatstateStanza::try_from_node(&node) {
+        match ChatstateStanza::parse(&node) {
             Ok(stanza) => {
                 debug!(
                     target: "ChatstateHandler",
@@ -62,6 +63,12 @@ impl StanzaHandler for ChatstateHandler {
                     stanza.source
                 );
                 client.dispatch_chatstate_event(stanza).await;
+            }
+            Err(ChatstateParseError::SelfEcho) => {
+                debug!(
+                    target: "ChatstateHandler",
+                    "Ignoring self-echo chatstate"
+                );
             }
             Err(e) => {
                 log::warn!(
