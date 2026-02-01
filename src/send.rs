@@ -281,11 +281,19 @@ impl Client {
 
                     match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                         Ok(all_devices) => {
+                            // Use HashSet for O(1) lookup instead of O(N) Vec.contains
+                            // This reduces complexity from O(N*M) to O(N+M) for large groups
+                            use std::collections::HashSet;
+                            let known_set: HashSet<&str> =
+                                known_recipients.iter().map(|s| s.as_str()).collect();
+
                             // Filter to find devices that don't have SKDM yet
                             let new_devices: Vec<Jid> = all_devices
                                 .into_iter()
                                 .filter(|device: &Jid| {
-                                    !known_recipients.contains(&device.to_string())
+                                    // Convert to string once per device, then O(1) lookup
+                                    let device_str = device.to_string();
+                                    !known_set.contains(device_str.as_str())
                                 })
                                 .collect();
 

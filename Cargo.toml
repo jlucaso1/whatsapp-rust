@@ -27,6 +27,7 @@ members = [
 [workspace.dependencies]
 # Shared dependencies
 aes = "0.8.3"
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
 aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
 anyhow = { version = "1.0", default-features = false }
 async-channel = { version = "2.5.0", default-features = false }

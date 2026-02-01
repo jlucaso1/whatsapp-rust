@@ -1325,14 +1325,27 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for device_jid in device_jids {
-                diesel::insert_into(skdm_recipients::table)
-                    .values((
+
+            // Build all values upfront for batch insert
+            let values: Vec<_> = device_jids
+                .iter()
+                .map(|device_jid| {
+                    (
                         skdm_recipients::group_jid.eq(&group_jid),
-                        skdm_recipients::device_jid.eq(&device_jid),
+                        skdm_recipients::device_jid.eq(device_jid),
                         skdm_recipients::device_id.eq(device_id),
                         skdm_recipients::created_at.eq(now),
-                    ))
+                    )
+                })
+                .collect();
+
+            // SQLite has a limit of ~999 variables per statement (SQLITE_MAX_VARIABLE_NUMBER)
+            // With 4 columns per row, we can safely insert ~200 rows per batch
+            const CHUNK_SIZE: usize = 200;
+
+            for chunk in values.chunks(CHUNK_SIZE) {
+                diesel::insert_into(skdm_recipients::table)
+                    .values(chunk)
                     .on_conflict((
                         skdm_recipients::group_jid,
                         skdm_recipients::device_jid,
