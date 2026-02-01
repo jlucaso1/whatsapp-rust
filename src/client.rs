@@ -83,6 +83,16 @@ pub(crate) struct RetryMetrics {
     pub local_requeue_fallback: AtomicUsize,
 }
 
+/// Event for incoming chatstate (<chatstate/>) stanzas.
+/// Contains the chat JID, optional participant (for groups), and the state string
+/// ("composing", "recording", "paused").
+#[derive(Debug, Clone)]
+pub struct ChatStateEvent {
+    pub chat: Jid,
+    pub participant: Option<Jid>,
+    pub state: String,
+}
+
 pub struct Client {
     pub(crate) core: wacore::client::CoreClient,
 
@@ -196,6 +206,10 @@ pub struct Client {
 
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
+
+    /// Chat state (typing indicator) handlers registered by external consumers.
+    /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
+    pub(crate) chatstate_handlers: Arc<RwLock<Vec<Arc<dyn Fn(ChatStateEvent) + Send + Sync>>>>,
 
     /// Cache for pending PDO (Peer Data Operation) requests.
     /// Maps message cache keys (chat:id) to pending request info.
@@ -332,6 +346,7 @@ impl Client {
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
             plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
             custom_enc_handlers: Arc::new(DashMap::new()),
+            chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
             device_registry_cache: Cache::builder()
                 .max_capacity(5_000) // Match WhatsApp Web's 5000 entry limit
@@ -433,6 +448,57 @@ impl Client {
     /// Registers an external event handler to the core event bus.
     pub fn register_handler(&self, handler: Arc<dyn wacore::types::events::EventHandler>) {
         self.core.event_bus.add_handler(handler);
+    }
+
+    /// Register a chatstate handler which will be invoked when a <chatstate> stanza is received.
+    pub async fn register_chatstate_handler(&self, handler: Arc<dyn Fn(ChatStateEvent) + Send + Sync>) {
+        self.chatstate_handlers.write().await.push(handler);
+    }
+
+    /// Emit a chatstate event from a raw node by parsing it and invoking registered handlers.
+    pub async fn emit_chatstate(&self, node: &wacore_binary::node::Node) {
+        // Parse chat JID. Incoming stanzas may set either 'to' (when we send) or 'from' (when received).
+        let jid_attr = node.attrs.get("to").or_else(|| node.attrs.get("from"));
+        let chat_jid = match jid_attr {
+            Some(t) => match t.parse::<Jid>() {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!(target: "Client/ChatState", "Failed to parse chat JID in chatstate: {e}");
+                    return;
+                }
+            },
+            None => {
+                warn!(target: "Client/ChatState", "Received <chatstate/> without 'to' or 'from' attribute");
+                return;
+            }
+        };
+
+        // Participant attribute (optional, present in groups)
+        let participant = node.attrs.get("participant").and_then(|p| p.parse::<Jid>().ok());
+
+        // Determine state from first child tag (e.g., composing, paused, recording)
+        let state = node
+            .children()
+            .and_then(|c| c.get(0))
+            .map(|c| c.tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let ev = ChatStateEvent {
+            chat: chat_jid,
+            participant,
+            state,
+        };
+
+        // Invoke handlers asynchronously
+        let handlers = { self.chatstate_handlers.read().await.clone() };
+        for h in handlers.into_iter() {
+            let ev_clone = ev.clone();
+            // run handlers in a new task to avoid blocking
+            let h_clone = h.clone();
+            tokio::spawn(async move {
+                (h_clone)(ev_clone);
+            });
+        }
     }
 
     pub async fn run(self: &Arc<Self>) {
