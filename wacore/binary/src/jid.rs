@@ -452,6 +452,54 @@ impl Jid {
             )
         }
     }
+
+    /// Compare device identity without allocations.
+    ///
+    /// Two JIDs have the same device identity if they have the same user, server, and device.
+    /// The agent and integrator fields are ignored because they may not roundtrip correctly
+    /// through string serialization/parsing.
+    ///
+    /// This is useful for SKDM recipient matching where we need to compare resolved devices
+    /// against stored device JIDs.
+    #[inline]
+    pub fn device_eq(&self, other: &Jid) -> bool {
+        self.user == other.user && self.server == other.server && self.device == other.device
+    }
+
+    /// Get a borrowing key for device identity comparison.
+    ///
+    /// Returns a `DeviceKey` that can be used with `HashSet<DeviceKey>` for
+    /// zero-allocation O(1) lookups. Only compares user, server, and device fields.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::collections::HashSet;
+    /// let mut known_devices: HashSet<DeviceKey> = HashSet::new();
+    /// known_devices.insert(known_jid.device_key());
+    /// // Later: O(1) lookup without allocation
+    /// if known_devices.contains(&resolved_jid.device_key()) { ... }
+    /// ```
+    #[inline]
+    pub fn device_key(&self) -> DeviceKey<'_> {
+        DeviceKey {
+            user: &self.user,
+            server: &self.server,
+            device: self.device,
+        }
+    }
+}
+
+/// A borrowing key for device identity comparison.
+///
+/// This type only compares user, server, and device fields, ignoring agent and integrator
+/// which may not roundtrip correctly through string serialization.
+///
+/// Use this with `HashSet<DeviceKey>` for zero-allocation O(1) device lookups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey<'a> {
+    pub user: &'a str,
+    pub server: &'a str,
+    pub device: u16,
 }
 
 impl<'a> JidExt for JidRef<'a> {

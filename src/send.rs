@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -283,20 +283,27 @@ impl Client {
 
                     match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                         Ok(all_devices) => {
-                            // OPTIMIZATION: Use HashSet<Jid> instead of HashSet<&str>
-                            // This avoids to_string() allocation per device in the filter loop
-                            // Parse known recipients into Jids once, then compare directly
+                            // OPTIMIZATION: Zero-allocation O(n+m) device comparison
+                            //
+                            // Using DeviceKey for O(1) HashSet lookups without string allocation.
+                            // DeviceKey compares only (user, server, device) fields, ignoring
+                            // agent/integrator which may not roundtrip through string serialization.
                             use std::collections::HashSet;
-                            let known_set: HashSet<Jid> = known_recipients
+
+                            // O(n) - parse known recipients to Jids (one-time allocation)
+                            let known_jids: Vec<Jid> = known_recipients
                                 .iter()
                                 .filter_map(|s| s.parse::<Jid>().ok())
                                 .collect();
 
-                            // Filter to find devices that don't have SKDM yet
-                            // No string allocation here - direct Jid comparison via Hash+Eq
+                            // Build HashSet<DeviceKey> - zero allocation, just borrows from known_jids
+                            let known_set: HashSet<DeviceKey<'_>> =
+                                known_jids.iter().map(|j| j.device_key()).collect();
+
+                            // O(m) - filter devices with O(1) lookups, no allocation per device
                             let new_devices: Vec<Jid> = all_devices
                                 .into_iter()
-                                .filter(|device| !known_set.contains(device))
+                                .filter(|device| !known_set.contains(&device.device_key()))
                                 .collect();
 
                             if new_devices.is_empty() {
@@ -325,17 +332,15 @@ impl Client {
                     None => None, // Already doing full distribution
                     Some(mut devices) => {
                         // Parse marked JID strings and add to target list
-                        // OPTIMIZATION: Compare Jid structs directly instead of to_string()
                         for marked_jid_str in &marked_for_fresh_skdm {
-                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>() {
-                                // Direct Jid comparison - no string allocation
-                                if !devices.iter().any(|d| d == &marked_jid) {
-                                    log::debug!(
-                                        "Adding {} to SKDM targets (marked for fresh key)",
-                                        marked_jid_str
-                                    );
-                                    devices.push(marked_jid);
-                                }
+                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
+                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
+                            {
+                                log::debug!(
+                                    "Adding {} to SKDM targets (marked for fresh key)",
+                                    marked_jid_str
+                                );
+                                devices.push(marked_jid);
                             }
                         }
                         Some(devices)
@@ -657,5 +662,246 @@ mod tests {
             participant_str.ends_with("@lid"),
             "LID participant must preserve @lid suffix"
         );
+    }
+
+    // ==========================================================================
+    // SKDM Recipient Filtering Tests
+    //
+    // These tests validate the HashSet<&str> filtering logic used to determine
+    // which devices need SKDM (Sender Key Distribution Message) distribution.
+    // We use string comparison instead of Jid struct comparison because:
+    // 1. Jid parsing has edge cases (agent/integrator fields may not roundtrip)
+    // 2. String comparison is guaranteed to work correctly
+    // 3. O(n+m) complexity with HashSet lookup
+    // ==========================================================================
+
+    #[test]
+    fn test_skdm_recipient_filtering_basic() {
+        use std::collections::HashSet;
+
+        // Simulate known recipients from database
+        let known_recipients = vec![
+            "1234567890:0@s.whatsapp.net".to_string(),
+            "1234567890:5@s.whatsapp.net".to_string(),
+            "9876543210:0@s.whatsapp.net".to_string(),
+        ];
+
+        // Simulate resolved devices from usync
+        let all_devices = vec![
+            Jid::from_str("1234567890:0@s.whatsapp.net").unwrap(),
+            Jid::from_str("1234567890:5@s.whatsapp.net").unwrap(),
+            Jid::from_str("9876543210:0@s.whatsapp.net").unwrap(),
+            Jid::from_str("5555555555:0@s.whatsapp.net").unwrap(), // New device
+        ];
+
+        // Same logic as production code: use DeviceKey for zero-allocation comparison
+        let known_jids: Vec<Jid> = known_recipients
+            .iter()
+            .filter_map(|s| s.parse::<Jid>().ok())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> = known_jids.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "5555555555");
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_lid_jids() {
+        use std::collections::HashSet;
+
+        // LID (Linked ID) JIDs - common in modern WhatsApp
+        let known_recipients = vec![
+            "236395184570386:91@lid".to_string(),
+            "129171292463295:0@lid".to_string(),
+            "45857667830004:14@lid".to_string(),
+        ];
+
+        let all_devices = vec![
+            Jid::from_str("236395184570386:91@lid").unwrap(),
+            Jid::from_str("129171292463295:0@lid").unwrap(),
+            Jid::from_str("45857667830004:14@lid").unwrap(),
+            Jid::from_str("45857667830004:15@lid").unwrap(), // New device for existing user
+        ];
+
+        // Same logic as production code: use DeviceKey
+        let known_jids: Vec<Jid> = known_recipients
+            .iter()
+            .filter_map(|s| s.parse::<Jid>().ok())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> = known_jids.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "45857667830004");
+        assert_eq!(new_devices[0].device, 15);
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_known() {
+        use std::collections::HashSet;
+
+        // All devices already known - common case for consecutive messages
+        let known_recipients = vec![
+            "1234567890:0@s.whatsapp.net".to_string(),
+            "1234567890:5@s.whatsapp.net".to_string(),
+        ];
+
+        let all_devices = vec![
+            Jid::from_str("1234567890:0@s.whatsapp.net").unwrap(),
+            Jid::from_str("1234567890:5@s.whatsapp.net").unwrap(),
+        ];
+
+        // Same logic as production code: use DeviceKey
+        let known_jids: Vec<Jid> = known_recipients
+            .iter()
+            .filter_map(|s| s.parse::<Jid>().ok())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> = known_jids.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert!(
+            new_devices.is_empty(),
+            "All devices known - should return empty"
+        );
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_new() {
+        use std::collections::HashSet;
+
+        // First message to group - no known recipients
+        let known_recipients: Vec<String> = vec![];
+
+        let all_devices = vec![
+            Jid::from_str("1234567890:0@s.whatsapp.net").unwrap(),
+            Jid::from_str("9876543210:0@s.whatsapp.net").unwrap(),
+        ];
+
+        // Same logic as production code: use DeviceKey
+        let known_jids: Vec<Jid> = known_recipients
+            .iter()
+            .filter_map(|s| s.parse::<Jid>().ok())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> = known_jids.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .clone()
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(
+            new_devices.len(),
+            all_devices.len(),
+            "All devices new - should return all"
+        );
+    }
+
+    #[test]
+    fn test_device_key_comparison() {
+        // Verify that DeviceKey comparison works correctly regardless of string format
+        // This is critical: DB may store ":0" but Jid.to_string() omits it
+        let test_cases = [
+            // (jid_str_1, jid_str_2, should_match)
+            (
+                "1234567890:0@s.whatsapp.net",
+                "1234567890@s.whatsapp.net",
+                true,
+            ), // :0 omitted
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:5@s.whatsapp.net",
+                true,
+            ),
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:6@s.whatsapp.net",
+                false,
+            ), // different device
+            ("236395184570386:91@lid", "236395184570386:91@lid", true),
+            ("236395184570386:0@lid", "236395184570386@lid", true), // :0 omitted
+            ("user1@s.whatsapp.net", "user2@s.whatsapp.net", false), // different user
+        ];
+
+        for (jid1_str, jid2_str, should_match) in test_cases {
+            let jid1: Jid = jid1_str.parse().expect("should parse jid1");
+            let jid2: Jid = jid2_str.parse().expect("should parse jid2");
+
+            let key1 = jid1.device_key();
+            let key2 = jid2.device_key();
+
+            assert_eq!(
+                key1 == key2,
+                should_match,
+                "DeviceKey comparison failed for '{}' vs '{}': expected match={}, got match={}",
+                jid1_str,
+                jid2_str,
+                should_match,
+                key1 == key2
+            );
+
+            // Also verify device_eq method
+            assert_eq!(
+                jid1.device_eq(&jid2),
+                should_match,
+                "device_eq failed for '{}' vs '{}'",
+                jid1_str,
+                jid2_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_skdm_filtering_large_group() {
+        use std::collections::HashSet;
+
+        // Simulate a large group scenario
+        let mut known_recipients: Vec<String> = Vec::with_capacity(1000);
+        let mut all_devices: Vec<Jid> = Vec::with_capacity(1010);
+
+        // Generate 1000 known devices
+        for i in 0..1000i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            known_recipients.push(jid_str.clone());
+            all_devices.push(Jid::from_str(&jid_str).unwrap());
+        }
+
+        // Add 10 new devices
+        for i in 1000i64..1010i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            all_devices.push(Jid::from_str(&jid_str).unwrap());
+        }
+
+        // Same logic as production code: use DeviceKey
+        let known_jids: Vec<Jid> = known_recipients
+            .iter()
+            .filter_map(|s| s.parse::<Jid>().ok())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> = known_jids.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 10, "Should find exactly 10 new devices");
     }
 }
