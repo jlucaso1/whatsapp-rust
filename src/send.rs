@@ -261,7 +261,8 @@ impl Client {
                 // Forcing full distribution (either first message or explicit request)
                 None // Let prepare_group_stanza resolve all devices
             } else {
-                // Check which devices already have SKDM and find new ones
+                // Check known recipients FIRST (fast local DB query)
+                // This short-circuits for first messages, avoiding unnecessary device resolution
                 let known_recipients = self
                     .persistence_manager
                     .get_skdm_recipients(&to.to_string())
@@ -269,10 +270,11 @@ impl Client {
                     .unwrap_or_default();
 
                 if known_recipients.is_empty() {
-                    // No known recipients, need full distribution
+                    // First message to group: no known recipients, need full distribution
+                    // Let prepare_group_stanza handle device resolution
                     None
                 } else {
-                    // Get current devices for all participants
+                    // Consecutive messages: resolve devices to find new ones that need SKDM
                     let jids_to_resolve: Vec<Jid> = group_info
                         .participants
                         .iter()
@@ -281,20 +283,20 @@ impl Client {
 
                     match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                         Ok(all_devices) => {
-                            // Use HashSet for O(1) lookup instead of O(N) Vec.contains
-                            // This reduces complexity from O(N*M) to O(N+M) for large groups
+                            // OPTIMIZATION: Use HashSet<Jid> instead of HashSet<&str>
+                            // This avoids to_string() allocation per device in the filter loop
+                            // Parse known recipients into Jids once, then compare directly
                             use std::collections::HashSet;
-                            let known_set: HashSet<&str> =
-                                known_recipients.iter().map(|s| s.as_str()).collect();
+                            let known_set: HashSet<Jid> = known_recipients
+                                .iter()
+                                .filter_map(|s| s.parse::<Jid>().ok())
+                                .collect();
 
                             // Filter to find devices that don't have SKDM yet
+                            // No string allocation here - direct Jid comparison via Hash+Eq
                             let new_devices: Vec<Jid> = all_devices
                                 .into_iter()
-                                .filter(|device: &Jid| {
-                                    // Convert to string once per device, then O(1) lookup
-                                    let device_str = device.to_string();
-                                    !known_set.contains(device_str.as_str())
-                                })
+                                .filter(|device| !known_set.contains(device))
                                 .collect();
 
                             if new_devices.is_empty() {
@@ -323,15 +325,17 @@ impl Client {
                     None => None, // Already doing full distribution
                     Some(mut devices) => {
                         // Parse marked JID strings and add to target list
+                        // OPTIMIZATION: Compare Jid structs directly instead of to_string()
                         for marked_jid_str in &marked_for_fresh_skdm {
-                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
-                            {
-                                log::debug!(
-                                    "Adding {} to SKDM targets (marked for fresh key)",
-                                    marked_jid_str
-                                );
-                                devices.push(marked_jid);
+                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>() {
+                                // Direct Jid comparison - no string allocation
+                                if !devices.iter().any(|d| d == &marked_jid) {
+                                    log::debug!(
+                                        "Adding {} to SKDM targets (marked for fresh key)",
+                                        marked_jid_str
+                                    );
+                                    devices.push(marked_jid);
+                                }
                             }
                         }
                         Some(devices)
