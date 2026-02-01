@@ -2,13 +2,51 @@
 //!
 //! This module provides type-safe structures for parsing incoming `<chatstate>` stanzas
 //! (typing indicators) following the patterns defined in `wacore/src/protocol.rs`.
+//!
+//! ## Wire Format
+//!
+//! Incoming chatstates (from other users) have a `from` attribute:
+//! ```xml
+//! <chatstate from="user@s.whatsapp.net">
+//!   <composing/>
+//! </chatstate>
+//! ```
+//!
+//! Self-echo chatstates (our own typing echoed for multi-device sync) have a `to` attribute:
+//! ```xml
+//! <chatstate to="user@s.whatsapp.net">
+//!   <composing/>
+//! </chatstate>
+//! ```
 
 use crate::StringEnum;
 use crate::iq::node::optional_jid;
 use crate::protocol::ProtocolNode;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use thiserror::Error;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::Node;
+
+/// Error type for chatstate parsing failures.
+#[derive(Debug, Error)]
+pub enum ChatstateParseError {
+    /// Stanza has wrong tag (not `<chatstate>`)
+    #[error("expected <chatstate>, got <{0}>")]
+    WrongTag(String),
+
+    /// Self-echo chatstate (has `to` attribute instead of `from`).
+    /// This is our own typing indicator echoed back for multi-device sync.
+    #[error("self-echo chatstate (has 'to' but no 'from')")]
+    SelfEcho,
+
+    /// Missing required `from` attribute
+    #[error("missing required attribute 'from'")]
+    MissingFrom,
+
+    /// Invalid JID in attribute
+    #[error("invalid JID: {0}")]
+    InvalidJid(#[from] anyhow::Error),
+}
 
 /// Chat state type as received from incoming stanzas.
 ///
@@ -85,25 +123,25 @@ pub struct ChatstateStanza {
     pub state: ReceivedChatState,
 }
 
-impl ProtocolNode for ChatstateStanza {
-    fn tag(&self) -> &'static str {
-        "chatstate"
-    }
-
-    fn into_node(self) -> Node {
-        // Chatstate stanzas are incoming-only; outgoing uses features/chatstate.rs
-        unimplemented!("ChatstateStanza is incoming-only")
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        use crate::iq::node::required_jid;
-
+impl ChatstateStanza {
+    /// Parse a chatstate stanza, returning a typed error.
+    ///
+    /// Use this method when you need to distinguish between different failure modes
+    /// (e.g., to ignore self-echo chatstates without logging warnings).
+    pub fn parse(node: &Node) -> Result<Self, ChatstateParseError> {
         if node.tag != "chatstate" {
-            return Err(anyhow!("expected <chatstate>, got <{}>", node.tag));
+            return Err(ChatstateParseError::WrongTag(node.tag.clone()));
         }
 
-        // Parse 'from' attribute (required)
-        let from = required_jid(node, "from")?;
+        let from = match optional_jid(node, "from")? {
+            Some(jid) => jid,
+            None => {
+                if optional_jid(node, "to")?.is_some() {
+                    return Err(ChatstateParseError::SelfEcho);
+                }
+                return Err(ChatstateParseError::MissingFrom);
+            }
+        };
 
         // Parse 'participant' attribute (optional, present in groups)
         let source = match optional_jid(node, "participant")? {
@@ -119,6 +157,21 @@ impl ProtocolNode for ChatstateStanza {
             .unwrap_or(ReceivedChatState::Idle);
 
         Ok(Self { source, state })
+    }
+}
+
+impl ProtocolNode for ChatstateStanza {
+    fn tag(&self) -> &'static str {
+        "chatstate"
+    }
+
+    fn into_node(self) -> Node {
+        // Chatstate stanzas are incoming-only; outgoing uses features/chatstate.rs
+        unimplemented!("ChatstateStanza is incoming-only")
+    }
+
+    fn try_from_node(node: &Node) -> Result<Self> {
+        Self::parse(node).map_err(Into::into)
     }
 }
 
@@ -209,13 +262,25 @@ mod tests {
 
     #[test]
     fn test_parse_missing_from_error() {
+        // Chatstate with neither 'from' nor 'to' should error with MissingFrom
         let node = NodeBuilder::new("chatstate")
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let result = ChatstateStanza::try_from_node(&node);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("from"));
+        let result = ChatstateStanza::parse(&node);
+        assert!(matches!(result, Err(ChatstateParseError::MissingFrom)));
+    }
+
+    #[test]
+    fn test_parse_self_echo_chatstate() {
+        // Self-echo chatstates have 'to' instead of 'from' (our own typing echoed for multi-device sync)
+        let node = NodeBuilder::new("chatstate")
+            .attr("to", "1234567890@s.whatsapp.net")
+            .children([NodeBuilder::new("composing").build()])
+            .build();
+
+        let result = ChatstateStanza::parse(&node);
+        assert!(matches!(result, Err(ChatstateParseError::SelfEcho)));
     }
 
     #[test]
@@ -224,9 +289,8 @@ mod tests {
             .attr("from", "1234567890@s.whatsapp.net")
             .build();
 
-        let result = ChatstateStanza::try_from_node(&node);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("chatstate"));
+        let result = ChatstateStanza::parse(&node);
+        assert!(matches!(result, Err(ChatstateParseError::WrongTag(_))));
     }
 
     #[test]
@@ -248,5 +312,70 @@ mod tests {
 
         let stanza = ChatstateStanza::try_from_node(&node).unwrap();
         assert_eq!(stanza.state, ReceivedChatState::Idle);
+    }
+
+    #[test]
+    fn test_parse_lid_jid_chatstate() {
+        // LID JIDs (Linked IDs) should parse correctly when stored as strings
+        let node = NodeBuilder::new("chatstate")
+            .attr("from", "236395184570386@lid")
+            .children([NodeBuilder::new("composing").build()])
+            .build();
+
+        let stanza = ChatstateStanza::parse(&node).unwrap();
+        assert!(matches!(stanza.source, ChatstateSource::User { .. }));
+        assert_eq!(stanza.state, ReceivedChatState::Typing);
+
+        if let ChatstateSource::User { from } = stanza.source {
+            assert_eq!(from.user, "236395184570386");
+            assert_eq!(from.server, "lid");
+        }
+    }
+
+    #[test]
+    fn test_parse_jid_attribute_as_jid_type() {
+        // In the binary protocol, JID attributes are stored as actual JID types,
+        // not strings. This test simulates that behavior using jid_attr().
+        use wacore_binary::jid::Jid;
+
+        let jid: Jid = "236395184570386@lid".parse().unwrap();
+        let node = NodeBuilder::new("chatstate")
+            .jid_attr("from", jid)
+            .children([NodeBuilder::new("composing").build()])
+            .build();
+
+        let stanza = ChatstateStanza::parse(&node).unwrap();
+        assert!(matches!(stanza.source, ChatstateSource::User { .. }));
+        assert_eq!(stanza.state, ReceivedChatState::Typing);
+
+        if let ChatstateSource::User { from } = stanza.source {
+            assert_eq!(from.user, "236395184570386");
+            assert_eq!(from.server, "lid");
+        }
+    }
+
+    #[test]
+    fn test_parse_group_chatstate_with_jid_types() {
+        // Test group chatstate with JID-typed attributes (as binary protocol stores them)
+        use wacore_binary::jid::Jid;
+
+        let group_jid: Jid = "123456789-1234567890@g.us".parse().unwrap();
+        let participant_jid: Jid = "236395184570386@lid".parse().unwrap();
+
+        let node = NodeBuilder::new("chatstate")
+            .jid_attr("from", group_jid)
+            .jid_attr("participant", participant_jid)
+            .children([NodeBuilder::new("composing").build()])
+            .build();
+
+        let stanza = ChatstateStanza::parse(&node).unwrap();
+        assert!(matches!(stanza.source, ChatstateSource::Group { .. }));
+        assert_eq!(stanza.state, ReceivedChatState::Typing);
+
+        if let ChatstateSource::Group { from, participant } = stanza.source {
+            assert_eq!(from.server, "g.us");
+            assert_eq!(participant.user, "236395184570386");
+            assert_eq!(participant.server, "lid");
+        }
     }
 }

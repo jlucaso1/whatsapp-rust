@@ -38,17 +38,26 @@ pub fn optional_u64(node: &Node, key: &str) -> Option<u64> {
 }
 
 /// Get a required JID attribute, returning an error if not found or invalid.
+///
+/// This properly handles JID attributes stored as either:
+/// - Direct JID values (binary protocol stores JIDs as structured data)
+/// - String values that need to be parsed
 pub fn required_jid(node: &Node, key: &str) -> Result<Jid, anyhow::Error> {
-    let value = required_attr(node, key)?;
-    value.parse().map_err(|err| anyhow!("{err}"))
+    node.attrs()
+        .optional_jid(key)
+        .ok_or_else(|| anyhow!("missing required attribute {key}"))
 }
 
-/// Get an optional JID attribute, returning an error only if the value is invalid.
+/// Get an optional JID attribute.
+///
+/// This properly handles JID attributes stored as either:
+/// - Direct JID values (binary protocol stores JIDs as structured data)
+/// - String values that need to be parsed
+///
+/// Returns `Ok(None)` if the attribute is missing.
+/// Note: Parse errors are handled internally by the attrs parser.
 pub fn optional_jid(node: &Node, key: &str) -> Result<Option<Jid>, anyhow::Error> {
-    match optional_attr(node, key) {
-        Some(value) => Ok(Some(value.parse().map_err(|err| anyhow!("{err}"))?)),
-        None => Ok(None),
-    }
+    Ok(node.attrs().optional_jid(key))
 }
 
 /// Get optional string content from a child node, skipping if an error child exists.
