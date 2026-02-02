@@ -169,8 +169,13 @@ pub trait AppSyncStore: Send + Sync {
 pub trait ProtocolStore: Send + Sync {
     // --- SKDM Tracking ---
 
+    /// Get device JIDs that have received SKDM for a group.
     async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
+
+    /// Record devices that have received SKDM for a group.
     async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
+
+    /// Clear SKDM recipients for a group (call when sender key is rotated).
     async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
 
     // --- LID-PN Mapping ---

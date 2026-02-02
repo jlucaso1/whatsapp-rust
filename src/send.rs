@@ -757,7 +757,8 @@ mod tests {
 
     #[test]
     fn test_device_key_comparison() {
-        // DeviceKey handles :0 normalization (Jid.to_string() omits :0)
+        // Jid parse/display normalizes :0 (omitted in Display, missing ':N' parses as device 0).
+        // This test ensures DeviceKey comparisons work correctly under that normalization.
         let test_cases = [
             (
                 "1234567890:0@s.whatsapp.net",
