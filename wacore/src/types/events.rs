@@ -1,3 +1,4 @@
+use crate::stanza::BusinessSubscription;
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
@@ -240,6 +241,65 @@ pub struct DeviceListUpdate {
     pub contact_hash: Option<String>,
 }
 
+/// Type of business status update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BusinessUpdateType {
+    RemovedAsBusiness,
+    VerifiedNameChanged,
+    ProfileUpdated,
+    ProductsUpdated,
+    CollectionsUpdated,
+    SubscriptionsUpdated,
+    Unknown,
+}
+
+impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateType {
+    fn from(t: crate::stanza::business::BusinessNotificationType) -> Self {
+        match t {
+            crate::stanza::business::BusinessNotificationType::RemoveJid
+            | crate::stanza::business::BusinessNotificationType::RemoveHash => {
+                Self::RemovedAsBusiness
+            }
+            crate::stanza::business::BusinessNotificationType::VerifiedNameJid
+            | crate::stanza::business::BusinessNotificationType::VerifiedNameHash => {
+                Self::VerifiedNameChanged
+            }
+            crate::stanza::business::BusinessNotificationType::Profile
+            | crate::stanza::business::BusinessNotificationType::ProfileHash => {
+                Self::ProfileUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Product => Self::ProductsUpdated,
+            crate::stanza::business::BusinessNotificationType::Collection => {
+                Self::CollectionsUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Subscriptions => {
+                Self::SubscriptionsUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Business status update notification.
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessStatusUpdate {
+    pub jid: Jid,
+    pub update_type: BusinessUpdateType,
+    pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_jid: Option<Jid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub product_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub collection_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<BusinessSubscription>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum Event {
     Connected(Connected),
@@ -292,6 +352,9 @@ pub enum Event {
 
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
+
+    /// Business account status changed (verified name, profile, conversion to personal)
+    BusinessStatusUpdate(BusinessStatusUpdate),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),

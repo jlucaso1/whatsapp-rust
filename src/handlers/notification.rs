@@ -5,9 +5,12 @@ use crate::types::events::Event;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
+use wacore::stanza::business::BusinessNotification;
 use wacore::stanza::devices::DeviceNotification;
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-use wacore::types::events::{DeviceListUpdate, DeviceNotificationInfo};
+use wacore::types::events::{
+    BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
+};
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
 
@@ -90,6 +93,11 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Handle pair code notification (stage 2 of pair code authentication)
             // This is sent when the user enters the code on their phone
             crate::pair_code::handle_pair_code_notification(client, node).await;
+        }
+        "business" => {
+            // Handle business notification (WhatsApp Web: handleBusinessNotification)
+            // Notifies about business account status changes: verified name, profile, removal
+            handle_business_notification(client, node).await;
         }
         _ => {
             warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
@@ -300,6 +308,81 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             device.key_index
         );
     }
+}
+
+/// Handle business notification (WhatsApp Web: `WAWebHandleBusinessNotification`).
+async fn handle_business_notification(client: &Arc<Client>, node: &Node) {
+    let notification = match BusinessNotification::try_parse(node) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(target: "Client/Business", "Failed to parse business notification: {e}");
+            return;
+        }
+    };
+
+    debug!(
+        target: "Client/Business",
+        "Business notification: from={}, type={}, jid={:?}",
+        notification.from,
+        notification.notification_type,
+        notification.jid
+    );
+
+    let update_type = BusinessUpdateType::from(notification.notification_type.clone());
+    let verified_name = notification
+        .verified_name
+        .as_ref()
+        .and_then(|vn| vn.name.clone());
+
+    let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
+        jid: notification.from.clone(),
+        update_type,
+        timestamp: notification.timestamp,
+        target_jid: notification.jid.clone(),
+        hash: notification.hash.clone(),
+        verified_name,
+        product_ids: notification.product_ids.clone(),
+        collection_ids: notification.collection_ids.clone(),
+        subscriptions: notification.subscriptions.clone(),
+    });
+
+    match notification.notification_type {
+        wacore::stanza::business::BusinessNotificationType::RemoveJid
+        | wacore::stanza::business::BusinessNotificationType::RemoveHash => {
+            info!(
+                target: "Client/Business",
+                "Contact {} is no longer a business account",
+                notification.from
+            );
+        }
+        wacore::stanza::business::BusinessNotificationType::VerifiedNameJid
+        | wacore::stanza::business::BusinessNotificationType::VerifiedNameHash => {
+            if let Some(name) = &notification
+                .verified_name
+                .as_ref()
+                .and_then(|vn| vn.name.as_ref())
+            {
+                info!(
+                    target: "Client/Business",
+                    "Contact {} verified business name: {}",
+                    notification.from,
+                    name
+                );
+            }
+        }
+        wacore::stanza::business::BusinessNotificationType::Profile
+        | wacore::stanza::business::BusinessNotificationType::ProfileHash => {
+            debug!(
+                target: "Client/Business",
+                "Contact {} business profile updated (hash: {:?})",
+                notification.from,
+                notification.hash
+            );
+        }
+        _ => {}
+    }
+
+    client.core.event_bus.dispatch(&event);
 }
 
 #[cfg(test)]
