@@ -302,11 +302,11 @@ impl BusinessNotification {
                             expiration_date: child
                                 .attrs()
                                 .optional_u64("subscription_end_time")
-                                .map(|v| v as i64),
+                                .and_then(|v| i64::try_from(v).ok()),
                             creation_time: child
                                 .attrs()
                                 .optional_u64("subscription_creation_time")
-                                .map(|v| v as i64),
+                                .and_then(|v| i64::try_from(v).ok()),
                         });
                     }
                 }

@@ -343,6 +343,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &Node) {
         verified_name,
         product_ids: notification.product_ids.clone(),
         collection_ids: notification.collection_ids.clone(),
+        subscriptions: notification.subscriptions.clone(),
     });
 
     match notification.notification_type {

@@ -1,3 +1,4 @@
+use crate::stanza::BusinessSubscription;
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
@@ -295,6 +296,8 @@ pub struct BusinessStatusUpdate {
     pub product_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collection_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<BusinessSubscription>,
 }
 
 #[derive(Debug, Clone, Serialize)]
