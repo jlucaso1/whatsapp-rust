@@ -2,6 +2,7 @@ use std::io::Write;
 
 use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
+use core::simd::Select;
 
 use crate::error::Result;
 use crate::jid::{self, Jid, JidRef};
@@ -376,7 +377,7 @@ impl<W: Write> Encoder<W> {
             };
 
             let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
-            let packed = (evens << Simd::splat(4)) | odds;
+            let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
             let packed_bytes = packed.to_array();
             self.write_raw_bytes(&packed_bytes[..8])?;
 
