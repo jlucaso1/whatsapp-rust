@@ -7,6 +7,10 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Core WhatsApp protocol implementation without runtime dependencies"
 
+[features]
+default = []
+debug-snapshots = []
+
 [dependencies]
 aes = { workspace = true }
 aes-gcm = { workspace = true }
@@ -41,10 +45,6 @@ wacore-derive = { workspace = true }
 wacore-libsignal = { workspace = true }
 wacore-noise = { workspace = true }
 waproto = { workspace = true }
-
-[features]
-default = []
-debug-snapshots = []
 
 [dev-dependencies]
 iai-callgrind = { workspace = true }

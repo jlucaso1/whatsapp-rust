@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -258,10 +258,8 @@ impl Client {
 
             // Determine which devices need SKDM distribution
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
-                // Forcing full distribution (either first message or explicit request)
-                None // Let prepare_group_stanza resolve all devices
+                None
             } else {
-                // Check which devices already have SKDM and find new ones
                 let known_recipients = self
                     .persistence_manager
                     .get_skdm_recipients(&to.to_string())
@@ -269,10 +267,8 @@ impl Client {
                     .unwrap_or_default();
 
                 if known_recipients.is_empty() {
-                    // No known recipients, need full distribution
                     None
                 } else {
-                    // Get current devices for all participants
                     let jids_to_resolve: Vec<Jid> = group_info
                         .participants
                         .iter()
@@ -281,16 +277,18 @@ impl Client {
 
                     match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                         Ok(all_devices) => {
-                            // Filter to find devices that don't have SKDM yet
+                            use std::collections::HashSet;
+
+                            let known_set: HashSet<DeviceKey<'_>> =
+                                known_recipients.iter().map(|j| j.device_key()).collect();
+
                             let new_devices: Vec<Jid> = all_devices
                                 .into_iter()
-                                .filter(|device: &Jid| {
-                                    !known_recipients.contains(&device.to_string())
-                                })
+                                .filter(|device| !known_set.contains(&device.device_key()))
                                 .collect();
 
                             if new_devices.is_empty() {
-                                Some(vec![]) // No new devices, no SKDM needed
+                                Some(vec![])
                             } else {
                                 log::debug!(
                                     "Found {} new devices needing SKDM for group {}",
@@ -302,22 +300,20 @@ impl Client {
                         }
                         Err(e) => {
                             log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
-                            None // Fall back to full distribution
+                            None
                         }
                     }
                 }
             };
 
-            // Merge marked_for_fresh_skdm into skdm_target_devices
-            // These are devices that need fresh SKDMs due to retry/error handling
+            // Merge devices marked for fresh SKDM (from retry/error handling)
             let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
                 match skdm_target_devices {
-                    None => None, // Already doing full distribution
+                    None => None,
                     Some(mut devices) => {
-                        // Parse marked JID strings and add to target list
                         for marked_jid_str in &marked_for_fresh_skdm {
                             if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
+                                && !devices.iter().any(|d| d.device_eq(&marked_jid))
                             {
                                 log::debug!(
                                     "Adding {} to SKDM targets (marked for fresh key)",
@@ -333,13 +329,9 @@ impl Client {
                 skdm_target_devices
             };
 
-            // Track devices that will receive SKDM in this message
-            let devices_receiving_skdm: Vec<String> = skdm_target_devices
-                .as_ref()
-                .map(|devices: &Vec<Jid>| devices.iter().map(|d: &Jid| d.to_string()).collect())
-                .unwrap_or_default();
+            let is_full_distribution = force_skdm || skdm_target_devices.is_none();
+            let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
 
-            // Encryption happens here (per-device locking handled internally)
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
@@ -351,14 +343,13 @@ impl Client {
                 message,
                 request_id.clone(),
                 force_skdm,
-                skdm_target_devices.clone(),
+                skdm_target_devices,
                 edit.clone(),
                 extra_stanza_nodes.clone(),
             )
             .await
             {
                 Ok(stanza) => {
-                    // Update SKDM recipients tracking after preparing the stanza
                     if !devices_receiving_skdm.is_empty() {
                         if let Err(e) = self
                             .persistence_manager
@@ -367,8 +358,7 @@ impl Client {
                         {
                             log::warn!("Failed to update SKDM recipients: {:?}", e);
                         }
-                    } else if force_skdm || skdm_target_devices.is_none() {
-                        // Full distribution happened, query all devices and track them
+                    } else if is_full_distribution {
                         let jids_to_resolve: Vec<Jid> = group_info
                             .participants
                             .iter()
@@ -377,16 +367,12 @@ impl Client {
 
                         if let Ok(all_devices) =
                             SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        {
-                            let all_device_strs: Vec<String> =
-                                all_devices.iter().map(|d| d.to_string()).collect();
-                            if let Err(e) = self
+                            && let Err(e) = self
                                 .persistence_manager
-                                .add_skdm_recipients(&to.to_string(), &all_device_strs)
+                                .add_skdm_recipients(&to.to_string(), &all_devices)
                                 .await
-                            {
-                                log::warn!("Failed to update SKDM recipients: {:?}", e);
-                            }
+                        {
+                            log::warn!("Failed to update SKDM recipients: {:?}", e);
                         }
                     }
                     stanza
@@ -645,5 +631,209 @@ mod tests {
             participant_str.ends_with("@lid"),
             "LID participant must preserve @lid suffix"
         );
+    }
+
+    // SKDM Recipient Filtering Tests - validates DeviceKey-based filtering
+
+    #[test]
+    fn test_skdm_recipient_filtering_basic() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = [
+            "1234567890:0@s.whatsapp.net",
+            "1234567890:5@s.whatsapp.net",
+            "9876543210:0@s.whatsapp.net",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let all_devices: Vec<Jid> = [
+            "1234567890:0@s.whatsapp.net",
+            "1234567890:5@s.whatsapp.net",
+            "9876543210:0@s.whatsapp.net",
+            "5555555555:0@s.whatsapp.net", // new
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "5555555555");
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_lid_jids() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = [
+            "236395184570386:91@lid",
+            "129171292463295:0@lid",
+            "45857667830004:14@lid",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let all_devices: Vec<Jid> = [
+            "236395184570386:91@lid",
+            "129171292463295:0@lid",
+            "45857667830004:14@lid",
+            "45857667830004:15@lid", // new
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "45857667830004");
+        assert_eq!(new_devices[0].device, 15);
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_known() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> =
+            ["1234567890:0@s.whatsapp.net", "1234567890:5@s.whatsapp.net"]
+                .into_iter()
+                .map(|s| Jid::from_str(s).unwrap())
+                .collect();
+
+        let all_devices: Vec<Jid> = ["1234567890:0@s.whatsapp.net", "1234567890:5@s.whatsapp.net"]
+            .into_iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert!(new_devices.is_empty());
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_new() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = vec![];
+
+        let all_devices: Vec<Jid> = ["1234567890:0@s.whatsapp.net", "9876543210:0@s.whatsapp.net"]
+            .into_iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .clone()
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), all_devices.len());
+    }
+
+    #[test]
+    fn test_device_key_comparison() {
+        // Jid parse/display normalizes :0 (omitted in Display, missing ':N' parses as device 0).
+        // This test ensures DeviceKey comparisons work correctly under that normalization.
+        let test_cases = [
+            (
+                "1234567890:0@s.whatsapp.net",
+                "1234567890@s.whatsapp.net",
+                true,
+            ),
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:5@s.whatsapp.net",
+                true,
+            ),
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:6@s.whatsapp.net",
+                false,
+            ),
+            ("236395184570386:91@lid", "236395184570386:91@lid", true),
+            ("236395184570386:0@lid", "236395184570386@lid", true),
+            ("user1@s.whatsapp.net", "user2@s.whatsapp.net", false),
+        ];
+
+        for (jid1_str, jid2_str, should_match) in test_cases {
+            let jid1: Jid = jid1_str.parse().expect("should parse jid1");
+            let jid2: Jid = jid2_str.parse().expect("should parse jid2");
+
+            let key1 = jid1.device_key();
+            let key2 = jid2.device_key();
+
+            assert_eq!(
+                key1 == key2,
+                should_match,
+                "DeviceKey comparison failed for '{}' vs '{}': expected match={}, got match={}",
+                jid1_str,
+                jid2_str,
+                should_match,
+                key1 == key2
+            );
+
+            assert_eq!(
+                jid1.device_eq(&jid2),
+                should_match,
+                "device_eq failed for '{}' vs '{}'",
+                jid1_str,
+                jid2_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_skdm_filtering_large_group() {
+        use std::collections::HashSet;
+
+        let mut known_recipients: Vec<Jid> = Vec::with_capacity(1000);
+        let mut all_devices: Vec<Jid> = Vec::with_capacity(1010);
+
+        for i in 0..1000i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            let jid = Jid::from_str(&jid_str).unwrap();
+            known_recipients.push(jid.clone());
+            all_devices.push(jid);
+        }
+
+        for i in 1000i64..1010i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            all_devices.push(Jid::from_str(&jid_str).unwrap());
+        }
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 10);
     }
 }

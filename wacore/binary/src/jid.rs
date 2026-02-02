@@ -452,6 +452,30 @@ impl Jid {
             )
         }
     }
+
+    /// Compare device identity (user, server, device) without allocation.
+    #[inline]
+    pub fn device_eq(&self, other: &Jid) -> bool {
+        self.user == other.user && self.server == other.server && self.device == other.device
+    }
+
+    /// Get a borrowing key for O(1) HashSet lookups by device identity.
+    #[inline]
+    pub fn device_key(&self) -> DeviceKey<'_> {
+        DeviceKey {
+            user: &self.user,
+            server: &self.server,
+            device: self.device,
+        }
+    }
+}
+
+/// Borrowing key for device identity (user, server, device). Use with HashSet for O(1) lookups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey<'a> {
+    pub user: &'a str,
+    pub server: &'a str,
+    pub device: u16,
 }
 
 impl<'a> JidExt for JidRef<'a> {

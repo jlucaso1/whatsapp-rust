@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Notify, RwLock};
 use tokio::time::{Duration, sleep};
+use wacore_binary::jid::Jid;
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
@@ -149,21 +150,18 @@ impl PersistenceManager {
     }
 }
 
-// SKDM recipient tracking methods
 impl PersistenceManager {
-    /// Get the list of device JIDs that have already received SKDM for a group
-    pub async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>, StoreError> {
+    pub async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>, StoreError> {
         self.backend
             .get_skdm_recipients(group_jid)
             .await
             .map_err(db_err)
     }
 
-    /// Mark devices as having received SKDM for a group
     pub async fn add_skdm_recipients(
         &self,
         group_jid: &str,
-        device_jids: &[String],
+        device_jids: &[Jid],
     ) -> Result<(), StoreError> {
         self.backend
             .add_skdm_recipients(group_jid, device_jids)
@@ -171,7 +169,6 @@ impl PersistenceManager {
             .map_err(db_err)
     }
 
-    /// Clear all SKDM recipients for a group (used when sender key is rotated)
     pub async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<(), StoreError> {
         self.backend
             .clear_skdm_recipients(group_jid)

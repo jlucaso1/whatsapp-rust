@@ -12,6 +12,7 @@ use crate::store::error::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use wacore_appstate::processor::AppStateMutationMAC;
+use wacore_binary::jid::Jid;
 
 /// App state synchronization key for WhatsApp's app state protocol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -166,15 +167,15 @@ pub trait AppSyncStore: Send + Sync {
 /// device registry, and sender key status.
 #[async_trait]
 pub trait ProtocolStore: Send + Sync {
-    // --- SKDM (Sender Key Distribution Message) Tracking ---
+    // --- SKDM Tracking ---
 
-    /// Get the list of device JIDs that have already received SKDM for a group.
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>>;
+    /// Get device JIDs that have received SKDM for a group.
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
 
-    /// Mark devices as having received SKDM for a group.
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()>;
+    /// Record devices that have received SKDM for a group.
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
 
-    /// Clear all SKDM recipients for a group (used when sender key is rotated).
+    /// Clear SKDM recipients for a group (call when sender key is rotated).
     async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
 
     // --- LID-PN Mapping ---
