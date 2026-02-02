@@ -1306,7 +1306,13 @@ impl ProtocolStore for SqliteStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
             let jids: Vec<Jid> = recipients
                 .iter()
-                .filter_map(|s| s.parse::<Jid>().ok())
+                .filter_map(|s| match s.parse::<Jid>() {
+                    Ok(jid) => Some(jid),
+                    Err(e) => {
+                        warn!("Failed to parse SKDM recipient '{}': {}", s, e);
+                        None
+                    }
+                })
                 .collect();
             Ok(jids)
         })

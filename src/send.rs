@@ -313,7 +313,7 @@ impl Client {
                     Some(mut devices) => {
                         for marked_jid_str in &marked_for_fresh_skdm {
                             if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
+                                && !devices.iter().any(|d| d.device_eq(&marked_jid))
                             {
                                 log::debug!(
                                     "Adding {} to SKDM targets (marked for fresh key)",
@@ -329,6 +329,7 @@ impl Client {
                 skdm_target_devices
             };
 
+            let is_full_distribution = force_skdm || skdm_target_devices.is_none();
             let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
 
             match wacore::send::prepare_group_stanza(
@@ -342,7 +343,7 @@ impl Client {
                 message,
                 request_id.clone(),
                 force_skdm,
-                skdm_target_devices.clone(),
+                skdm_target_devices,
                 edit.clone(),
                 extra_stanza_nodes.clone(),
             )
@@ -357,7 +358,7 @@ impl Client {
                         {
                             log::warn!("Failed to update SKDM recipients: {:?}", e);
                         }
-                    } else if force_skdm || skdm_target_devices.is_none() {
+                    } else if is_full_distribution {
                         let jids_to_resolve: Vec<Jid> = group_info
                             .participants
                             .iter()
