@@ -1,8 +1,8 @@
 use std::io::Write;
 
+use core::simd::Select;
 use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
-use core::simd::Select;
 
 use crate::error::Result;
 use crate::jid::{self, Jid, JidRef};

@@ -21,7 +21,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-19
+          toolchain: nightly-2026-01-30
 
       - name: Cache install-action tools
         uses: actions/cache@v4
