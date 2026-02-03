@@ -6,7 +6,6 @@ use crate::client::Client;
 use anyhow;
 use log;
 use rand::TryRngCore;
-use rand_core::OsRng;
 use wacore::iq::prekeys::{PreKeyCountSpec, PreKeyFetchSpec, PreKeyUploadSpec};
 use wacore::libsignal::protocol::{KeyPair, PreKeyBundle, PublicKey};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
@@ -123,7 +122,7 @@ impl Client {
                 break;
             }
 
-            let key_pair = KeyPair::generate(&mut OsRng.unwrap_err());
+            let key_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
 
             keys_to_upload.push((pre_key_id, pre_key_record));

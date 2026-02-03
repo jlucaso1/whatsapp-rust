@@ -1560,6 +1560,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c8d0fd677905edcbeedbf2edb6494d676f0e98d54d5cf9bda0b061cb8fb8aba"
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2261,7 +2267,7 @@ dependencies = [
  "prost",
  "protobuf",
  "rand",
- "rand_core 0.9.5",
+ "rand_core 0.10.0",
  "serde",
  "serde-big-array",
  "serde_json",
@@ -2363,7 +2369,7 @@ dependencies = [
  "log",
  "prost",
  "rand",
- "rand_core 0.9.5",
+ "rand_core 0.10.0",
  "sha2",
  "thiserror 2.0.18",
  "wacore-binary",
@@ -2466,7 +2472,7 @@ dependencies = [
  "moka",
  "prost",
  "rand",
- "rand_core 0.9.5",
+ "rand_core 0.10.0",
  "scopeguard",
  "serde",
  "serde_json",

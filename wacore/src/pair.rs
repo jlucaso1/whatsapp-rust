@@ -207,10 +207,7 @@ impl PairUtils {
         let device_signature = device_state
             .identity_key
             .private_key
-            .calculate_signature(
-                &msg_to_sign,
-                &mut rand::rngs::OsRng::unwrap_err(rand_core::OsRng),
-            )
+            .calculate_signature(&msg_to_sign, &mut rand::rngs::OsRng.unwrap_err())
             .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",
