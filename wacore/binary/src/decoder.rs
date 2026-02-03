@@ -3,7 +3,6 @@ use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec, ValueRef};
 use crate::token;
 use std::borrow::Cow;
-use std::simd::{Simd, prelude::*, u8x16};
 
 pub(crate) struct Decoder<'a> {
     data: &'a [u8],
@@ -254,49 +253,21 @@ impl<'a> Decoder<'a> {
 
         const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
         const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
-        let lookup_table = Simd::from_array(if tag == token::NIBBLE_8 {
-            NIBBLE_LOOKUP
+        let lookup: &[u8; 16] = if tag == token::NIBBLE_8 {
+            &NIBBLE_LOOKUP
         } else {
-            HEX_LOOKUP
-        });
-        let low_mask = Simd::splat(0x0F);
+            &HEX_LOOKUP
+        };
 
-        let (chunks, remainder) = packed_data.as_chunks::<16>();
-        for chunk in chunks {
-            let data = u8x16::from_array(*chunk);
-
-            let high_nibbles = (data >> 4) & low_mask;
-            let low_nibbles = data & low_mask;
-
-            if tag == token::NIBBLE_8 {
-                let le11 = Simd::splat(11);
-                let f15 = Simd::splat(15);
-                let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
-                let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
-                if !(hi_valid & lo_valid).all() {
-                    for byte in *chunk {
-                        let high = (byte & 0xF0) >> 4;
-                        let low = byte & 0x0F;
-                        Self::unpack_byte(tag, high)?;
-                        Self::unpack_byte(tag, low)?;
-                    }
-                    unreachable!("SIMD validation should match scalar validation");
-                }
+        for &byte in packed_data {
+            let hi = (byte >> 4) & 0x0F;
+            let lo = byte & 0x0F;
+            if tag == token::NIBBLE_8 && ((hi > 11 && hi != 15) || (lo > 11 && lo != 15)) {
+                Self::unpack_byte(tag, hi)?;
+                Self::unpack_byte(tag, lo)?;
             }
-
-            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
-            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
-
-            let (lo, hi) = Simd::interleave(high_chars, low_chars);
-            unpacked_bytes.extend_from_slice(lo.as_array());
-            unpacked_bytes.extend_from_slice(hi.as_array());
-        }
-
-        for &byte in remainder {
-            let high = (byte & 0xF0) >> 4;
-            let low = byte & 0x0F;
-            unpacked_bytes.push(Self::unpack_byte(tag, high)? as u8);
-            unpacked_bytes.push(Self::unpack_byte(tag, low)? as u8);
+            unpacked_bytes.push(lookup[hi as usize]);
+            unpacked_bytes.push(lookup[lo as usize]);
         }
 
         if is_half_byte {
