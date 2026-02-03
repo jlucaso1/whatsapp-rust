@@ -271,9 +271,8 @@ impl HandshakeState {
         prologue: &[u8],
     ) -> Result<Self> {
         use rand::TryRngCore;
-        use rand_core::OsRng;
 
-        let ephemeral_kp = KeyPair::generate(&mut OsRng.unwrap_err());
+        let ephemeral_kp = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
         let mut noise = NoiseHandshake::new(pattern, prologue)?;
 
         noise.authenticate(ephemeral_kp.public_key.public_key_bytes());
