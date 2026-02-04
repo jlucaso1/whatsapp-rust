@@ -195,33 +195,62 @@ impl AppStateProcessor {
                 }
             }
 
-            // Build callbacks for the pure processing function
-            let key_cache = self.key_cache.lock().await;
-            let get_keys =
-                |key_id: &[u8]| -> Result<ExpandedAppStateKeys, wacore::appstate::AppStateError> {
+            // Collect keys needed for this patch to pass to blocking task
+            let mut keys_map = HashMap::new();
+            {
+                let key_cache = self.key_cache.lock().await;
+                let needed_keys =
+                    collect_key_ids_from_patch_list(None, std::slice::from_ref(patch));
+                for key_id in needed_keys {
+                    use base64::Engine;
+                    use base64::engine::general_purpose::STANDARD_NO_PAD;
+                    let id_b64 = STANDARD_NO_PAD.encode(&key_id);
+                    if let Some(key) = key_cache.get(&id_b64) {
+                        keys_map.insert(id_b64, key.clone());
+                    }
+                }
+            }
+
+            // Clone data for blocking task
+            let patch_clone = patch.clone();
+            let mut state_clone = state.clone();
+            let collection_name_string = collection_name.to_string();
+
+            // Offload CPU-intensive patch processing to a blocking thread
+            let result = tokio::task::spawn_blocking(move || {
+                let get_keys = |key_id: &[u8]| -> Result<
+                    ExpandedAppStateKeys,
+                    wacore::appstate::AppStateError,
+                > {
                     use base64::Engine;
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    key_cache
+                    keys_map
                         .get(&id_b64)
                         .cloned()
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 
-            let get_prev_value_mac = |index_mac: &[u8]| -> Result<
-                Option<Vec<u8>>,
-                wacore::appstate::AppStateError,
-            > { Ok(db_prev.get(index_mac).cloned()) };
+                let get_prev_value_mac = |index_mac: &[u8]| -> Result<
+                    Option<Vec<u8>>,
+                    wacore::appstate::AppStateError,
+                > { Ok(db_prev.get(index_mac).cloned()) };
 
-            let result = process_patch(
-                patch,
-                &mut state,
-                get_keys,
-                get_prev_value_mac,
-                validate_macs,
-                collection_name,
-            )
+                process_patch(
+                    &patch_clone,
+                    &mut state_clone,
+                    get_keys,
+                    get_prev_value_mac,
+                    validate_macs,
+                    &collection_name_string,
+                )
+            })
+            .await
+            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
+
+            // Update local state with the result from the blocking task
+            state = result.state.clone();
 
             new_mutations.extend(result.mutations);
 
