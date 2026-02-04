@@ -131,6 +131,11 @@ pub fn collect_key_ids_from_patch_list(
 
     for patch in patches {
         check(patch.key_id.as_ref().and_then(|k| k.id.as_ref()));
+        for mutation in &patch.mutations {
+            if let Some(record) = &mutation.record {
+                check(record.key_id.as_ref().and_then(|k| k.id.as_ref()));
+            }
+        }
     }
 
     key_ids
@@ -249,6 +254,7 @@ mod tests {
         let key_id_1 = vec![1, 2, 3];
         let key_id_2 = vec![4, 5, 6];
         let key_id_3 = vec![7, 8, 9];
+        let key_id_4 = vec![10, 11, 12];
 
         let snapshot = wa::SyncdSnapshot {
             key_id: Some(wa::KeyId {
@@ -267,15 +273,25 @@ mod tests {
             key_id: Some(wa::KeyId {
                 id: Some(key_id_3.clone()),
             }),
+            mutations: vec![wa::SyncdMutation {
+                record: Some(wa::SyncdRecord {
+                    key_id: Some(wa::KeyId {
+                        id: Some(key_id_4.clone()),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
             ..Default::default()
         }];
 
         let key_ids = collect_key_ids_from_patch_list(Some(&snapshot), &patches);
 
-        assert_eq!(key_ids.len(), 3);
+        assert_eq!(key_ids.len(), 4);
         assert!(key_ids.contains(&key_id_1));
         assert!(key_ids.contains(&key_id_2));
         assert!(key_ids.contains(&key_id_3));
+        assert!(key_ids.contains(&key_id_4));
     }
 
     #[test]
