@@ -996,12 +996,17 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for idx in index_macs {
+
+            // SQLite variable limit is usually 999 or higher.
+            // We use a safe chunk size to stay well within limits.
+            const CHUNK_SIZE: usize = 500;
+
+            for chunk in index_macs.chunks(CHUNK_SIZE) {
                 diesel::delete(
                     app_state_mutation_macs::table.filter(
                         app_state_mutation_macs::name
                             .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&idx))
+                            .and(app_state_mutation_macs::index_mac.eq_any(chunk))
                             .and(app_state_mutation_macs::device_id.eq(device_id)),
                     ),
                 )
