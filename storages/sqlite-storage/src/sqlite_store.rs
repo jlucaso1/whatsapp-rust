@@ -4,6 +4,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
+use diesel::upsert::excluded;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::warn;
 use prost::Message;
@@ -951,15 +952,27 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for m in mutations {
-                diesel::insert_into(app_state_mutation_macs::table)
-                    .values((
+
+            let records: Vec<_> = mutations
+                .iter()
+                .map(|m| {
+                    (
                         app_state_mutation_macs::name.eq(&name),
                         app_state_mutation_macs::version.eq(version as i64),
                         app_state_mutation_macs::index_mac.eq(&m.index_mac),
                         app_state_mutation_macs::value_mac.eq(&m.value_mac),
                         app_state_mutation_macs::device_id.eq(device_id),
-                    ))
+                    )
+                })
+                .collect();
+
+            // SQLite variable limit is typically 999 or 32766.
+            // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
+            const CHUNK_SIZE: usize = 100;
+
+            for chunk in records.chunks(CHUNK_SIZE) {
+                diesel::insert_into(app_state_mutation_macs::table)
+                    .values(chunk)
                     .on_conflict((
                         app_state_mutation_macs::name,
                         app_state_mutation_macs::index_mac,
@@ -967,8 +980,10 @@ impl SqliteStore {
                     ))
                     .do_update()
                     .set((
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                        app_state_mutation_macs::version
+                            .eq(excluded(app_state_mutation_macs::version)),
+                        app_state_mutation_macs::value_mac
+                            .eq(excluded(app_state_mutation_macs::value_mac)),
                     ))
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
