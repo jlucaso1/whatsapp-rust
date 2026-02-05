@@ -600,7 +600,7 @@ impl Client {
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
-        info!(target: "Client", "Starting message processing loop...");
+        info!("Starting message processing loop...");
 
         let mut rx_guard = self.transport_events.lock().await;
         let transport_events = rx_guard
@@ -615,7 +615,7 @@ impl Client {
             tokio::select! {
                     biased;
                     _ = self.shutdown_notifier.notified() => {
-                        info!(target: "Client", "Shutdown signaled in message loop. Exiting message loop.");
+                        info!("Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
                     event_result = transport_events.recv() => {
@@ -650,7 +650,7 @@ impl Client {
 
                                     // Check if we should exit after processing (e.g., after 515 stream error)
                                     if self.expected_disconnect.load(Ordering::Relaxed) {
-                                        info!(target: "Client", "Expected disconnect signaled during frame processing. Exiting message loop.");
+                                        info!("Expected disconnect signaled during frame processing. Exiting message loop.");
                                         return Ok(());
                                     }
                                 }
@@ -694,7 +694,7 @@ impl Client {
         let decrypted_payload = match noise_socket.decrypt_frame(encrypted_frame) {
             Ok(p) => p,
             Err(e) => {
-                log::error!(target: "Client", "Failed to decrypt frame: {e}");
+                log::error!("Failed to decrypt frame: {e}");
                 return None;
             }
         };
@@ -830,9 +830,9 @@ impl Client {
 
         if node.tag.as_str() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
-                debug!(target: "Client", "Received <xmlstreamend/>, expected disconnect.");
+                debug!("Received <xmlstreamend/>, expected disconnect.");
             } else {
-                warn!(target: "Client", "Received <xmlstreamend/>, treating as disconnect.");
+                warn!("Received <xmlstreamend/>, treating as disconnect.");
             }
             self.shutdown_notifier.notify_waiters();
             return;
@@ -854,7 +854,10 @@ impl Client {
             .dispatch(self.clone(), Arc::clone(&node), &mut cancelled)
             .await
         {
-            warn!(target: "Client", "Received unknown top-level node: {}", DisplayableNode(&node));
+            warn!(
+                "Received unknown top-level node: {}",
+                DisplayableNode(&node)
+            );
         }
 
         // Send the deferred ACK if applicable and not cancelled by handler
@@ -878,14 +881,14 @@ impl Client {
     async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<Node>) {
         if self.synchronous_ack {
             if let Err(e) = self.send_ack_for(&node).await {
-                warn!(target: "Client", "Failed to send ack: {e:?}");
+                warn!("Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
             // Node is already in Arc - just clone the Arc (cheap), not the Node
             tokio::spawn(async move {
                 if let Err(e) = this.send_ack_for(&node).await {
-                    warn!(target: "Client", "Failed to send ack: {e:?}");
+                    warn!("Failed to send ack: {e:?}");
                 }
             });
         }
@@ -929,7 +932,7 @@ impl Client {
     }
 
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {
-        warn!(target: "Client", "TODO: Implement handler for <{tag}>");
+        warn!("TODO: Implement handler for <{tag}>");
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
@@ -951,7 +954,7 @@ impl Client {
     pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
         use wacore::iq::props::PropsSpec;
 
-        debug!(target: "Client", "Fetching properties (props)...");
+        debug!("Fetching properties (props)...");
 
         // TODO: load hash from persistence for delta updates
         self.execute(PropsSpec::new()).await.map(|_| ())
@@ -960,7 +963,7 @@ impl Client {
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
         use wacore::iq::privacy::PrivacySettingsSpec;
 
-        debug!(target: "Client", "Fetching privacy settings...");
+        debug!("Fetching privacy settings...");
 
         self.execute(PrivacySettingsSpec::new()).await.map(|_| ())
     }
@@ -968,7 +971,7 @@ impl Client {
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
         use wacore::iq::prekeys::DigestKeyBundleSpec;
 
-        debug!(target: "Client", "Sending digest key bundle...");
+        debug!("Sending digest key bundle...");
 
         self.execute(DigestKeyBundleSpec::new()).await.map(|_| ())
     }
@@ -978,14 +981,14 @@ impl Client {
         // This prevents race conditions where a spawned success handler runs after
         // cleanup_connection_state has already reset is_logged_in.
         if self.expected_disconnect.load(Ordering::Relaxed) {
-            debug!(target: "Client", "Ignoring <success> stanza: expected disconnect pending");
+            debug!("Ignoring <success> stanza: expected disconnect pending");
             return;
         }
 
         // Guard against multiple <success> stanzas (WhatsApp may send more than one during
         // routing/reconnection). Only process the first one per connection.
         if self.is_logged_in.swap(true, Ordering::SeqCst) {
-            debug!(target: "Client", "Ignoring duplicate <success> stanza (already logged in)");
+            debug!("Ignoring duplicate <success> stanza (already logged in)");
             return;
         }
 
@@ -1006,16 +1009,16 @@ impl Client {
             if let Some(lid) = lid_value.to_jid() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
-                    info!(target: "Client", "Updating LID from server to '{lid}'");
+                    info!("Updating LID from server to '{lid}'");
                     self.persistence_manager
                         .process_command(DeviceCommand::SetLid(Some(lid)))
                         .await;
                 }
             } else {
-                warn!(target: "Client", "Failed to parse LID from success stanza: {lid_value}");
+                warn!("Failed to parse LID from success stanza: {lid_value}");
             }
         } else {
-            warn!(target: "Client", "LID not found in <success> stanza. Group messaging may fail.");
+            warn!("LID not found in <success> stanza. Group messaging may fail.");
         }
 
         let client_clone = self.clone();
@@ -1032,17 +1035,17 @@ impl Client {
                 };
             }
 
-            info!(target: "Client", "Starting post-login initialization sequence (gen={})...", task_generation);
+            info!(
+                "Starting post-login initialization sequence (gen={})...",
+                task_generation
+            );
 
             // Check if we need initial app state sync (empty pushname indicates fresh pairing
             // where pushname will come from app state sync's setting_pushName mutation)
             let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
             let needs_pushname_from_sync = device_snapshot.push_name.is_empty();
             if needs_pushname_from_sync {
-                debug!(
-                    target: "Client",
-                    "Push name is empty - will be set from app state sync (setting_pushName)"
-                );
+                debug!("Push name is empty - will be set from app state sync (setting_pushName)");
             }
 
             // Check connection before network operations.
@@ -1093,7 +1096,10 @@ impl Client {
             const OFFLINE_SYNC_TIMEOUT_SECS: u64 = 5;
 
             if !client_clone.offline_sync_completed.load(Ordering::Relaxed) {
-                info!(target: "Client", "Waiting for offline sync to complete (up to {}s)...", OFFLINE_SYNC_TIMEOUT_SECS);
+                info!(
+                    "Waiting for offline sync to complete (up to {}s)...",
+                    OFFLINE_SYNC_TIMEOUT_SECS
+                );
                 let wait_result = tokio::time::timeout(
                     Duration::from_secs(OFFLINE_SYNC_TIMEOUT_SECS),
                     client_clone.offline_sync_notifier.notified(),
@@ -1104,9 +1110,9 @@ impl Client {
                 check_generation!();
 
                 if wait_result.is_err() {
-                    info!(target: "Client", "Offline sync wait timed out, proceeding with passive tasks");
+                    info!("Offline sync wait timed out, proceeding with passive tasks");
                 } else {
-                    info!(target: "Client", "Offline sync completed, proceeding with passive tasks");
+                    info!("Offline sync completed, proceeding with passive tasks");
                 }
             }
 
@@ -1127,7 +1133,7 @@ impl Client {
                     info!("Initial presence sent successfully.");
                 }
             } else {
-                debug!(target: "Client", "Deferring presence until pushname is available from app state sync");
+                debug!("Deferring presence until pushname is available from app state sync");
             }
 
             check_generation!();
@@ -1147,7 +1153,6 @@ impl Client {
                 }
 
                 info!(
-                    target: "Client",
                     "Sending background initialization queries (Props, Blocklist, Privacy, Digest)..."
                 );
 
@@ -1643,7 +1648,6 @@ impl Client {
 
         if !conflict_type.is_empty() {
             info!(
-                target: "Client",
                 "Got stream error indicating client was removed or replaced (conflict={}). Logging out.",
                 conflict_type
             );
@@ -1663,7 +1667,7 @@ impl Client {
             let transport_opt = self.transport.lock().await.clone();
             if let Some(transport) = transport_opt {
                 tokio::spawn(async move {
-                    info!(target: "Client", "Disconnecting transport after conflict");
+                    info!("Disconnecting transport after conflict");
                     transport.disconnect().await;
                 });
             }
@@ -1671,7 +1675,9 @@ impl Client {
             match code {
                 "515" => {
                     // 515 is expected during registration/pairing phase - server closes stream after pairing
-                    info!(target: "Client", "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect.");
+                    info!(
+                        "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect."
+                    );
                     self.expect_disconnect().await;
                     // Proactively disconnect transport since server may not close the connection
                     // Clone the transport Arc before spawning to avoid holding the lock
@@ -1679,13 +1685,13 @@ impl Client {
                     if let Some(transport) = transport_opt {
                         // Spawn disconnect in background so we don't block the message loop
                         tokio::spawn(async move {
-                            info!(target: "Client", "Disconnecting transport after 515");
+                            info!("Disconnecting transport after 515");
                             transport.disconnect().await;
                         });
                     }
                 }
                 "516" => {
-                    info!(target: "Client", "Got 516 stream error (device removed). Logging out.");
+                    info!("Got 516 stream error (device removed). Logging out.");
                     self.expect_disconnect().await;
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core.event_bus.dispatch(&Event::LoggedOut(
@@ -1698,16 +1704,16 @@ impl Client {
                     let transport_opt = self.transport.lock().await.clone();
                     if let Some(transport) = transport_opt {
                         tokio::spawn(async move {
-                            info!(target: "Client", "Disconnecting transport after 516");
+                            info!("Disconnecting transport after 516");
                             transport.disconnect().await;
                         });
                     }
                 }
                 "503" => {
-                    info!(target: "Client", "Got 503 service unavailable, will auto-reconnect.");
+                    info!("Got 503 service unavailable, will auto-reconnect.");
                 }
                 _ => {
-                    error!(target: "Client", "Unknown stream error: {}", DisplayableNode(node));
+                    error!("Unknown stream error: {}", DisplayableNode(node));
                     self.expect_disconnect().await;
                     self.core.event_bus.dispatch(&Event::StreamError(
                         crate::types::events::StreamError {
@@ -1719,7 +1725,7 @@ impl Client {
             }
         }
 
-        info!(target: "Client", "Notifying shutdown from stream error handler");
+        info!("Notifying shutdown from stream error handler");
         self.shutdown_notifier.notify_waiters();
     }
 
@@ -1738,7 +1744,7 @@ impl Client {
         }
 
         if reason.is_logged_out() {
-            info!(target: "Client", "Got {reason:?} connect failure, logging out.");
+            info!("Got {reason:?} connect failure, logging out.");
             self.core
                 .event_bus
                 .dispatch(&wacore::types::events::Event::LoggedOut(
@@ -1752,7 +1758,7 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!(target: "Client", "Temporary ban connect failure: {}", DisplayableNode(node));
+            warn!("Temporary ban connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::TemporaryBan(
                 crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
@@ -1760,12 +1766,12 @@ impl Client {
                 },
             ));
         } else if let ConnectFailureReason::ClientOutdated = reason {
-            error!(target: "Client", "Client is outdated and was rejected by server.");
+            error!("Client is outdated and was rejected by server.");
             self.core
                 .event_bus
                 .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!(target: "Client", "Unknown connect failure: {}", DisplayableNode(node));
+            warn!("Unknown connect failure: {}", DisplayableNode(node));
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
@@ -1780,7 +1786,7 @@ impl Client {
         if let Some("get") = node.attrs.get("type").and_then(|s| s.as_str())
             && node.get_optional_child("ping").is_some()
         {
-            info!(target: "Client", "Received ping, sending pong.");
+            info!("Received ping, sending pong.");
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
             let id = parser.optional_string("id").unwrap_or("").to_string();

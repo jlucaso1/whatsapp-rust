@@ -20,6 +20,37 @@ impl From<&MediaConn> for wacore::download::MediaConnection {
     }
 }
 
+/// Implements `Downloadable` from raw media parameters.
+struct DownloadParams {
+    direct_path: String,
+    media_key: Vec<u8>,
+    file_sha256: Vec<u8>,
+    file_enc_sha256: Vec<u8>,
+    file_length: u64,
+    media_type: MediaType,
+}
+
+impl Downloadable for DownloadParams {
+    fn direct_path(&self) -> Option<&str> {
+        Some(&self.direct_path)
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        Some(&self.media_key)
+    }
+    fn file_enc_sha256(&self) -> Option<&[u8]> {
+        Some(&self.file_enc_sha256)
+    }
+    fn file_sha256(&self) -> Option<&[u8]> {
+        Some(&self.file_sha256)
+    }
+    fn file_length(&self) -> Option<u64> {
+        Some(self.file_length)
+    }
+    fn app_info(&self) -> MediaType {
+        self.media_type
+    }
+}
+
 impl Client {
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
         let media_conn = self.refresh_media_conn(false).await?;
@@ -93,6 +124,27 @@ impl Client {
             Some(err) => Err(err),
             None => Err(anyhow!("Failed to download from all available media hosts")),
         }
+    }
+
+    /// Downloads and decrypts media from raw parameters without needing the original message.
+    pub async fn download_from_params(
+        &self,
+        direct_path: &str,
+        media_key: &[u8],
+        file_sha256: &[u8],
+        file_enc_sha256: &[u8],
+        file_length: u64,
+        media_type: MediaType,
+    ) -> Result<Vec<u8>> {
+        let params = DownloadParams {
+            direct_path: direct_path.to_string(),
+            media_key: media_key.to_vec(),
+            file_sha256: file_sha256.to_vec(),
+            file_enc_sha256: file_enc_sha256.to_vec(),
+            file_length,
+            media_type,
+        };
+        self.download(&params).await
     }
 
     async fn download_and_write<W: Write + Seek + Send + Unpin>(

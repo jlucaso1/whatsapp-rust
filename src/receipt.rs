@@ -5,7 +5,7 @@ use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::JidExt as _;
+use wacore_binary::jid::{Jid, JidExt as _};
 
 use wacore_binary::node::Node;
 
@@ -106,6 +106,53 @@ impl Client {
         if let Err(e) = self.send_node(receipt_node).await {
             log::warn!(target: "Client/Receipt", "Failed to send delivery receipt for message {}: {:?}", info.id, e);
         }
+    }
+
+    /// Sends read receipts for one or more messages.
+    ///
+    /// For group messages, pass the message sender as `sender`.
+    pub async fn mark_as_read(
+        &self,
+        chat: &Jid,
+        sender: Option<&Jid>,
+        message_ids: Vec<String>,
+    ) -> Result<(), anyhow::Error> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
+
+        let mut builder = NodeBuilder::new("receipt")
+            .attr("to", chat.to_string())
+            .attr("type", "read")
+            .attr("id", &message_ids[0])
+            .attr("t", &timestamp);
+
+        if let Some(sender) = sender {
+            builder = builder.attr("participant", sender.to_string());
+        }
+
+        // Additional message IDs go into <list><item id="..."/></list>
+        if message_ids.len() > 1 {
+            let items: Vec<wacore_binary::node::Node> = message_ids[1..]
+                .iter()
+                .map(|id| NodeBuilder::new("item").attr("id", id).build())
+                .collect();
+            builder = builder.children(vec![NodeBuilder::new("list").children(items).build()]);
+        }
+
+        let node = builder.build();
+
+        info!(target: "Client/Receipt", "Sending read receipt for {} message(s) to {}", message_ids.len(), chat);
+
+        self.send_node(node)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send read receipt: {}", e))
     }
 }
 

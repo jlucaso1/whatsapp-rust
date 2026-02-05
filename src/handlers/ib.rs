@@ -37,14 +37,13 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let dirty_type = match attrs.optional_string("type") {
                     Some(t) => t.to_string(),
                     None => {
-                        warn!(target: "Client", "Dirty notification missing 'type' attribute");
+                        warn!("Dirty notification missing 'type' attribute");
                         continue;
                     }
                 };
                 let timestamp = attrs.optional_string("timestamp").map(|s| s.to_string());
 
                 info!(
-                    target: "Client",
                     "Received dirty state notification for type: '{dirty_type}'. Sending clean IQ."
                 );
 
@@ -55,7 +54,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         .clean_dirty_bits(&dirty_type, timestamp.as_deref())
                         .await
                     {
-                        warn!(target: "Client", "Failed to send clean dirty bits IQ: {e:?}");
+                        warn!("Failed to send clean dirty bits IQ: {e:?}");
                     }
                 });
             }
@@ -67,7 +66,6 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                     if let Some(NodeContent::Bytes(routing_bytes)) = &routing_info_node.content {
                         if !routing_bytes.is_empty() {
                             info!(
-                                target: "Client",
                                 "Received edge routing info ({} bytes), storing for reconnection",
                                 routing_bytes.len()
                             );
@@ -79,13 +77,13 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                                 })
                                 .await;
                         } else {
-                            info!(target: "Client", "Received empty edge routing info, ignoring");
+                            info!("Received empty edge routing info, ignoring");
                         }
                     } else {
-                        info!(target: "Client", "Edge routing info node has no bytes content");
+                        info!("Edge routing info node has no bytes content");
                     }
                 } else {
-                    info!(target: "Client", "Edge routing stanza has no routing_info child");
+                    info!("Edge routing stanza has no routing_info child");
                 }
             }
             "offline_preview" => {
@@ -135,10 +133,10 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.
-                info!(target: "Client", "Received thread metadata, ignoring for now.");
+                info!("Received thread metadata, ignoring for now.");
             }
             _ => {
-                warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
+                warn!("Unhandled ib child: <{}>", child.tag);
             }
         }
     }
