@@ -100,7 +100,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             handle_business_notification(client, node).await;
         }
         _ => {
-            warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
+            warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
                 .core
                 .event_bus
@@ -126,7 +126,7 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     let notification = match DeviceNotification::try_parse(node) {
         Ok(n) => n,
         Err(e) => {
-            warn!(target: "Client", "Failed to parse device notification: {e}");
+            warn!("Failed to parse device notification: {e}");
             return;
         }
     };
@@ -137,21 +137,18 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
             .add_lid_pn_mapping(lid, pn, LearningSource::DeviceNotification)
             .await
     {
-        warn!(target: "Client", "Failed to add LID-PN mapping from device notification: {e}");
+        warn!("Failed to add LID-PN mapping from device notification: {e}");
     }
 
     // Process the single operation (per WhatsApp Web: one operation per notification)
     let op = &notification.operation;
     debug!(
-        target: "Client",
         "Device notification: user={}, type={:?}, devices={:?}",
         notification.user(),
         op.operation_type,
         op.device_ids()
     );
 
-    // Invalidate the device cache for this user
-    // This ensures the next lookup fetches fresh data
     client.invalidate_device_cache(notification.user()).await;
 
     // Dispatch event to notify application layer

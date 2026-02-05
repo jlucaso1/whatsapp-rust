@@ -1,5 +1,6 @@
 pub use wacore::{proto_helpers, store::traits};
 pub use wacore_binary::builder::NodeBuilder;
+pub use wacore_binary::jid::Jid;
 pub use waproto;
 
 pub mod http;
@@ -39,10 +40,10 @@ pub mod usync;
 pub mod features;
 pub use features::{
     Blocking, BlocklistEntry, ChatStateType, Chatstate, ContactInfo, Contacts, CreateGroupResult,
-    GroupCreateOptions, GroupMetadata, GroupParticipant, GroupParticipantOptions, Groups,
-    IsOnWhatsAppResult, MemberAddMode, MemberLinkMode, MembershipApprovalMode, Mex, MexError,
-    MexErrorExtensions, MexRequest, MexResponse, Presence, PresenceStatus, ProfilePicture,
-    UserInfo,
+    GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
+    GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode, MemberLinkMode,
+    MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse,
+    ParticipantChangeResponse, Presence, PresenceStatus, ProfilePicture, UserInfo,
 };
 
 pub mod bot;

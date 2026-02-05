@@ -49,15 +49,9 @@ pub async fn do_handshake(
     let (header, used_edge_routing) =
         build_handshake_header(device.core.edge_routing_info.as_deref());
     if used_edge_routing {
-        debug!(
-            target: "Client",
-            "Sending edge routing pre-intro for optimized reconnection"
-        );
+        debug!("Sending edge routing pre-intro for optimized reconnection");
     } else if device.core.edge_routing_info.is_some() {
-        warn!(
-            target: "Client",
-            "Edge routing info provided but not used (possibly too large)"
-        );
+        warn!("Edge routing info provided but not used (possibly too large)");
     }
 
     // First message includes the WA connection header (with optional edge routing)
@@ -104,7 +98,7 @@ pub async fn do_handshake(
     transport.send(framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
-    info!(target: "Client", "Handshake complete, switching to encrypted communication");
+    info!("Handshake complete, switching to encrypted communication");
 
     Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
 }

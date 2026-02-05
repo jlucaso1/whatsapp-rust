@@ -2,15 +2,17 @@ use crate::client::Client;
 use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
-    GroupCreateIq, GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq,
+    AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteLinkIq, GroupCreateIq,
+    GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
+    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupDescriptionIq, SetGroupSubjectIq,
     normalize_participants,
 };
 use wacore::types::message::AddressingMode;
 use wacore_binary::jid::Jid;
 
 pub use wacore::iq::groups::{
-    GroupCreateOptions, GroupParticipantOptions, MemberAddMode, MemberLinkMode,
-    MembershipApprovalMode,
+    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, MemberAddMode,
+    MemberLinkMode, MembershipApprovalMode, ParticipantChangeResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -149,6 +151,84 @@ impl<'a> Groups<'a> {
         let gid = self.client.execute(GroupCreateIq::new(options)).await?;
 
         Ok(CreateGroupResult { gid })
+    }
+
+    pub async fn set_subject(&self, jid: &Jid, subject: GroupSubject) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupSubjectIq::new(jid, subject))
+            .await?)
+    }
+
+    /// Sets or deletes a group's description.
+    ///
+    /// `prev` is the current description ID (from group metadata) used for
+    /// conflict detection. Pass `None` if unknown.
+    pub async fn set_description(
+        &self,
+        jid: &Jid,
+        description: Option<GroupDescription>,
+        prev: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupDescriptionIq::new(jid, description, prev))
+            .await?)
+    }
+
+    pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        Ok(self.client.execute(LeaveGroupIq::new(jid)).await?)
+    }
+
+    pub async fn add_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(AddParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn remove_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(RemoveParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn promote_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(PromoteParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn demote_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(DemoteParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn get_invite_link(&self, jid: &Jid, reset: bool) -> Result<String, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(GetGroupInviteLinkIq::new(jid, reset))
+            .await?)
     }
 }
 
