@@ -66,6 +66,7 @@ diesel::table! {
         app_version_tertiary -> BigInt,
         app_version_last_fetched_ms -> BigInt,
         edge_routing_info -> Nullable<Binary>,
+        props_hash -> Nullable<Text>,
     }
 }
 

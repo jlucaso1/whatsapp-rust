@@ -53,8 +53,8 @@ use whatsapp_rust_ureq_http_client::UreqHttpClient;
 use wacore::types::events::Event;
 
 #[tokio::main]
-async fn main() {
-    let backend = Arc::new(SqliteStore::new("whatsapp.db").await.unwrap());
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let backend = Arc::new(SqliteStore::new("whatsapp.db").await?);
 
     let mut bot = Bot::builder()
         .with_backend(backend)
@@ -70,10 +70,10 @@ async fn main() {
             }
         })
         .build()
-        .await
-        .unwrap();
+        .await?;
 
-    bot.run().await.unwrap().await.unwrap();
+    bot.run().await?.await?;
+    Ok(())
 }
 ```
 
