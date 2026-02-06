@@ -118,8 +118,8 @@ impl Client {
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
                 resolved.push(Jid::lid_device(lid_user, jid.device));
             } else {
-                // No cached mapping, use original JID
-                // TODO: Could trigger usync query here for proactive resolution
+                // No cached mapping — use original JID. Mapping will be learned
+                // organically from incoming messages or usync responses.
                 resolved.push(jid.clone());
             }
         }

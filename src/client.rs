@@ -997,12 +997,14 @@ impl Client {
         Ok(())
     }
 
-    pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {
+    pub async fn fetch_privacy_settings(
+        &self,
+    ) -> Result<wacore::iq::privacy::PrivacySettingsResponse, crate::request::IqError> {
         use wacore::iq::privacy::PrivacySettingsSpec;
 
         debug!("Fetching privacy settings...");
 
-        self.execute(PrivacySettingsSpec::new()).await.map(|_| ())
+        self.execute(PrivacySettingsSpec::new()).await
     }
 
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
@@ -1496,7 +1498,6 @@ impl Client {
         Ok(())
     }
 
-    #[allow(dead_code)]
     async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
         if raw_key_ids.is_empty() {
             return;
@@ -1536,7 +1537,6 @@ impl Client {
         }
     }
 
-    #[allow(dead_code)]
     async fn dispatch_app_state_mutation(
         &self,
         m: &crate::appstate_sync::Mutation,
@@ -1981,7 +1981,7 @@ impl Client {
             false,
             false,
             Some(crate::types::message::EditAttribute::MessageEdit),
-            vec![], // TODO: Support extra nodes for edit messages if needed
+            vec![],
         )
         .await?;
 

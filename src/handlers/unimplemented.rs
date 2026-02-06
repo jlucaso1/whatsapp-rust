@@ -28,10 +28,6 @@ impl UnimplementedHandler {
     pub fn for_presence() -> Self {
         Self::new(vec!["presence"])
     }
-
-    pub fn for_chatstate() -> Self {
-        Self::new(vec!["chatstate"])
-    }
 }
 
 #[async_trait]

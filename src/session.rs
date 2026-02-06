@@ -9,7 +9,6 @@
 //! recipient from multiple concurrent operations.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use tokio::sync::{Mutex, oneshot};
 use wacore_binary::jid::Jid;
 
@@ -215,12 +214,10 @@ impl Default for SessionManager {
     }
 }
 
-/// Thread-safe reference to a SessionManager
-pub type SharedSessionManager = Arc<SessionManager>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

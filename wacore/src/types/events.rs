@@ -1,8 +1,6 @@
 use crate::stanza::BusinessSubscription;
 use crate::types::message::MessageInfo;
-use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
-use crate::types::user::PrivacySettings;
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use prost::Message;
@@ -95,16 +93,6 @@ impl LazyConversation {
             conv.messages.shrink_to_fit();
             conv
         })
-    }
-
-    /// Returns true if the conversation has been parsed.
-    pub fn is_parsed(&self) -> bool {
-        self.parsed.get().is_some()
-    }
-
-    /// Get the raw bytes size (useful for debugging/metrics).
-    pub fn raw_size(&self) -> usize {
-        self.raw_bytes.len()
     }
 }
 
@@ -389,15 +377,6 @@ pub struct ClientOutdated;
 pub struct Connected;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct KeepAliveTimeout {
-    pub error_count: i32,
-    pub last_success: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct KeepAliveRestored;
-
-#[derive(Debug, Clone, Serialize)]
 pub struct LoggedOut {
     pub on_connect: bool,
     pub reason: ConnectFailureReason,
@@ -405,9 +384,6 @@ pub struct LoggedOut {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManualLoginReconnect;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TempBanReason {
@@ -552,11 +528,6 @@ pub struct ConnectFailure {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CatRefreshError {
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct StreamError {
     pub code: String,
     pub raw: Option<Node>,
@@ -638,18 +609,6 @@ pub struct UserAboutUpdate {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IdentityChange {
-    pub jid: Jid,
-    pub timestamp: DateTime<Utc>,
-    pub implicit: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PrivacySettingsUpdate {
-    pub new_settings: PrivacySettings,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -670,17 +629,6 @@ pub struct PinUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
-    pub from_full_sync: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StarUpdate {
-    pub chat_jid: Jid,
-    pub sender_jid: Option<Jid>,
-    pub is_from_me: bool,
-    pub message_id: MessageId,
-    pub timestamp: DateTime<Utc>,
-    pub action: Box<wa::sync_action_value::StarAction>,
     pub from_full_sync: bool,
 }
 
@@ -706,28 +654,4 @@ pub struct MarkChatAsReadUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
     pub from_full_sync: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterJoin {
-    pub metadata: NewsletterMetadata,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterLeave {
-    pub id: Jid,
-    pub role: NewsletterRole,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterMuteChange {
-    pub id: Jid,
-    pub mute: NewsletterMuteState,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterLiveUpdate {
-    pub jid: Jid,
-    pub time: DateTime<Utc>,
-    pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
 }

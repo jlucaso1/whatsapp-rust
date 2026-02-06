@@ -25,7 +25,6 @@ pub mod prekeys;
 pub mod proto_helpers;
 pub mod reporting_token;
 pub mod request;
-pub mod runtime;
 pub mod send;
 pub mod stanza;
 pub mod store;
