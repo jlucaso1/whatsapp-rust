@@ -26,7 +26,7 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
 /// MEX GraphQL error extensions.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MexErrorExtensions {
     pub error_code: Option<i32>,
     pub is_summary: Option<bool>,
@@ -35,7 +35,7 @@ pub struct MexErrorExtensions {
 }
 
 /// MEX GraphQL error.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MexGraphQLError {
     pub message: String,
     pub extensions: Option<MexErrorExtensions>,
@@ -56,7 +56,7 @@ impl MexGraphQLError {
 }
 
 /// MEX GraphQL response.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MexResponse {
     pub data: Option<Value>,
     pub errors: Option<Vec<MexGraphQLError>>,

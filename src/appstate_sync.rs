@@ -131,42 +131,62 @@ impl AppStateProcessor {
 
         // Process snapshot if present
         if let Some(snapshot) = &pl.snapshot {
-            // Build a key lookup function using our cache
-            let key_cache = self.key_cache.lock().await;
-            let get_keys =
-                |key_id: &[u8]| -> Result<ExpandedAppStateKeys, wacore::appstate::AppStateError> {
+            let keys_map = self.key_cache.lock().await.clone();
+            let snapshot_clone = snapshot.clone();
+            let collection_name_owned = collection_name.to_string();
+
+            // Offload CPU-intensive snapshot processing to a blocking thread
+            let result = tokio::task::spawn_blocking(move || {
+                let get_keys = |key_id: &[u8]| -> Result<
+                    ExpandedAppStateKeys,
+                    wacore::appstate::AppStateError,
+                > {
                     use base64::Engine;
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    key_cache
+                    keys_map
                         .get(&id_b64)
                         .cloned()
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 
-            // Reset state for snapshot processing
-            state = HashState::default();
-            let result = process_snapshot(
-                snapshot,
-                &mut state,
-                get_keys,
-                validate_macs,
-                collection_name,
-            )
+                let mut snapshot_state = HashState::default();
+                let result = process_snapshot(
+                    &snapshot_clone,
+                    &mut snapshot_state,
+                    get_keys,
+                    validate_macs,
+                    &collection_name_owned,
+                )?;
+                Ok::<_, wacore::appstate::AppStateError>((result, snapshot_state))
+            })
+            .await
+            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
 
-            new_mutations.extend(result.mutations);
+            let (snapshot_result, snapshot_state) = result;
+            state = snapshot_state;
+
+            new_mutations.extend(snapshot_result.mutations);
 
             // Persist state and MACs
             self.backend
                 .set_version(collection_name, state.clone())
                 .await?;
-            if !result.mutation_macs.is_empty() {
+            if !snapshot_result.mutation_macs.is_empty() {
                 self.backend
-                    .put_mutation_macs(collection_name, state.version, &result.mutation_macs)
+                    .put_mutation_macs(
+                        collection_name,
+                        state.version,
+                        &snapshot_result.mutation_macs,
+                    )
                     .await?;
             }
         }
+
+        // Snapshot the key cache once for all patches (prefetch_keys already populated it)
+        let keys_map = self.key_cache.lock().await.clone();
+        let collection_name_owned = collection_name.to_string();
 
         // Process patches
         for patch in &pl.patches {
@@ -195,26 +215,11 @@ impl AppStateProcessor {
                 }
             }
 
-            // Collect keys needed for this patch to pass to blocking task
-            let mut keys_map = HashMap::new();
-            {
-                let key_cache = self.key_cache.lock().await;
-                let needed_keys =
-                    collect_key_ids_from_patch_list(None, std::slice::from_ref(patch));
-                for key_id in needed_keys {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD_NO_PAD;
-                    let id_b64 = STANDARD_NO_PAD.encode(&key_id);
-                    if let Some(key) = key_cache.get(&id_b64) {
-                        keys_map.insert(id_b64, key.clone());
-                    }
-                }
-            }
-
             // Clone data for blocking task
             let patch_clone = patch.clone();
-            let mut state_clone = state.clone();
-            let collection_name_string = collection_name.to_string();
+            let state_clone = state.clone();
+            let keys = keys_map.clone();
+            let coll = collection_name_owned.clone();
 
             // Offload CPU-intensive patch processing to a blocking thread
             let result = tokio::task::spawn_blocking(move || {
@@ -225,8 +230,7 @@ impl AppStateProcessor {
                     use base64::Engine;
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    keys_map
-                        .get(&id_b64)
+                    keys.get(&id_b64)
                         .cloned()
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
@@ -236,13 +240,14 @@ impl AppStateProcessor {
                     wacore::appstate::AppStateError,
                 > { Ok(db_prev.get(index_mac).cloned()) };
 
+                let mut state = state_clone;
                 process_patch(
                     &patch_clone,
-                    &mut state_clone,
+                    &mut state,
                     get_keys,
                     get_prev_value_mac,
                     validate_macs,
-                    &collection_name_string,
+                    &coll,
                 )
             })
             .await
@@ -250,7 +255,7 @@ impl AppStateProcessor {
             .map_err(|e| anyhow!("{}", e))?;
 
             // Update local state with the result from the blocking task
-            state = result.state.clone();
+            state = result.state;
 
             new_mutations.extend(result.mutations);
 
