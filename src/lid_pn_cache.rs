@@ -12,7 +12,6 @@
 //! (by `created_at` timestamp) is considered "current".
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub use wacore::types::{LearningSource, LidPnEntry};
@@ -152,9 +151,6 @@ impl LidPnCache {
         pn_map.len()
     }
 }
-
-/// Thread-safe shared reference to the LID-PN cache
-pub type SharedLidPnCache = Arc<LidPnCache>;
 
 #[cfg(test)]
 mod tests {

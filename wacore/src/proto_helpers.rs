@@ -424,12 +424,13 @@ impl ConversationExt for wa::Conversation {
     }
 
     fn is_locked(&self) -> bool {
-        // TODO: derive from SyncActionValue in GroupInfoUpdate.
-        false
+        self.locked.unwrap_or(false)
     }
 
     fn is_announce_only(&self) -> bool {
-        // TODO: derive from SyncActionValue in GroupInfoUpdate.
+        // The Conversation proto does not carry an `announce` field.
+        // Announce mode is only available from the group metadata IQ
+        // response (restrict/announce attributes on the <group> node).
         false
     }
 }

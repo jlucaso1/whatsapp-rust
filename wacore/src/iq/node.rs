@@ -60,43 +60,6 @@ pub fn optional_jid(node: &Node, key: &str) -> Result<Option<Jid>, anyhow::Error
     Ok(node.attrs().optional_jid(key))
 }
 
-/// Get optional string content from a child node, skipping if an error child exists.
-///
-/// This is a common pattern in usync responses where a node may contain
-/// an `<error>` child to indicate the data is unavailable.
-pub fn optional_string_content(node: &Node, child_tag: &str) -> Option<String> {
-    use wacore_binary::node::NodeContent;
-
-    node.get_optional_child(child_tag).and_then(|child| {
-        if child.get_optional_child("error").is_some() {
-            return None;
-        }
-        match &child.content {
-            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-            _ => None,
-        }
-    })
-}
-
-/// Get optional JID from a child node's attribute (commonly "val").
-///
-/// Example: `<lid val="123@lid"/>` -> returns parsed JID
-pub fn optional_jid_from_child(node: &Node, child_tag: &str, attr: &str) -> Option<Jid> {
-    node.get_optional_child(child_tag)
-        .and_then(|n| n.attrs().optional_string(attr))
-        .and_then(|s| s.parse().ok())
-}
-
-/// Get optional string attribute from a child node, skipping if an error child exists.
-pub fn optional_attr_skipping_error(node: &Node, child_tag: &str, attr: &str) -> Option<String> {
-    node.get_optional_child(child_tag).and_then(|child| {
-        if child.get_optional_child("error").is_some() {
-            return None;
-        }
-        child.attrs().optional_string(attr).map(|s| s.to_string())
-    })
-}
-
 /// Parse all children with a given tag into a Vec of ProtocolNodes.
 ///
 /// Returns an error if any child fails to parse.
@@ -108,29 +71,5 @@ pub fn optional_attr_skipping_error(node: &Node, child_tag: &str, attr: &str) ->
 pub fn collect_children<T: ProtocolNode>(node: &Node, tag: &str) -> Result<Vec<T>, anyhow::Error> {
     node.get_children_by_tag(tag)
         .map(|child| T::try_from_node(child))
-        .collect()
-}
-
-/// Parse all children with a given tag into a Vec of ProtocolNodes, skipping parse errors.
-///
-/// Logs a warning for each child that fails to parse.
-///
-/// # Example
-/// ```ignore
-/// let entries = collect_children_lenient::<BlocklistEntry>(node, "item");
-/// ```
-pub fn collect_children_lenient<T: ProtocolNode>(node: &Node, tag: &str) -> Vec<T> {
-    node.get_children_by_tag(tag)
-        .filter_map(|child| match T::try_from_node(child) {
-            Ok(item) => Some(item),
-            Err(e) => {
-                log::warn!(
-                    target: "iq::node",
-                    "Failed to parse <{}>: {e}",
-                    tag
-                );
-                None
-            }
-        })
         .collect()
 }

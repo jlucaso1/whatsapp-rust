@@ -1,4 +1,4 @@
-pub use wacore::{proto_helpers, store::traits};
+pub use wacore::{iq::privacy as privacy_settings, proto_helpers, store::traits};
 pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;
