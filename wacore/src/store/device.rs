@@ -114,6 +114,10 @@ pub struct Device {
     /// When present, this should be sent as a pre-intro before the Noise handshake.
     #[serde(default)]
     pub edge_routing_info: Option<Vec<u8>>,
+    /// Hash from the last props (A/B experiment config) fetch.
+    /// Sent on subsequent connects to enable delta updates instead of full fetches.
+    #[serde(default)]
+    pub props_hash: Option<String>,
 }
 
 impl Default for Device {
@@ -164,6 +168,7 @@ impl Device {
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
             edge_routing_info: None,
+            props_hash: None,
         }
     }
 

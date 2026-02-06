@@ -39,6 +39,7 @@ type DeviceRow = (
     i64,
     i64,
     Option<Vec<u8>>,
+    Option<String>,
 );
 
 #[derive(Clone)]
@@ -225,6 +226,7 @@ impl SqliteStore {
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
         let edge_routing_info = device_data.edge_routing_info.clone();
+        let props_hash = device_data.props_hash.clone();
         let new_lid = device_data
             .lid
             .as_ref()
@@ -260,6 +262,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info.clone()),
+                    device::props_hash.eq(props_hash.clone()),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -280,6 +283,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info),
+                    device::props_hash.eq(props_hash),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -340,6 +344,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
                     device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
                     device::edge_routing_info.eq(None::<Vec<u8>>),
+                    device::props_hash.eq(None::<String>),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -420,6 +425,7 @@ impl SqliteStore {
             app_version_tertiary,
             app_version_last_fetched_ms,
             edge_routing_info,
+            props_hash,
         )) = row
         {
             let id = if !pn_str.is_empty() {
@@ -474,6 +480,7 @@ impl SqliteStore {
                     DEVICE_PROPS.clone()
                 },
                 edge_routing_info,
+                props_hash,
             }))
         } else {
             Ok(None)

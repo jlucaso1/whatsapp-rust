@@ -953,11 +953,48 @@ impl Client {
 
     pub async fn fetch_props(&self) -> Result<(), crate::request::IqError> {
         use wacore::iq::props::PropsSpec;
+        use wacore::store::commands::DeviceCommand;
 
-        debug!("Fetching properties (props)...");
+        let stored_hash = self
+            .persistence_manager
+            .get_device_snapshot()
+            .await
+            .props_hash
+            .clone();
 
-        // TODO: load hash from persistence for delta updates
-        self.execute(PropsSpec::new()).await.map(|_| ())
+        let spec = match &stored_hash {
+            Some(hash) => {
+                debug!("Fetching props with hash for delta update...");
+                PropsSpec::with_hash(hash)
+            }
+            None => {
+                debug!("Fetching props (full, no stored hash)...");
+                PropsSpec::new()
+            }
+        };
+
+        let response = self.execute(spec).await?;
+
+        if response.delta_update {
+            debug!(
+                "Props delta update received ({} changed props)",
+                response.props.len()
+            );
+        } else {
+            debug!(
+                "Props full update received ({} props, hash={:?})",
+                response.props.len(),
+                response.hash
+            );
+        }
+
+        if let Some(new_hash) = response.hash {
+            self.persistence_manager
+                .process_command(DeviceCommand::SetPropsHash(Some(new_hash)))
+                .await;
+        }
+
+        Ok(())
     }
 
     pub async fn fetch_privacy_settings(&self) -> Result<(), crate::request::IqError> {

@@ -14,6 +14,7 @@ pub enum DeviceCommand {
         Option<wa::device_props::AppVersion>,
         Option<wa::device_props::PlatformType>,
     ),
+    SetPropsHash(Option<String>),
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -38,6 +39,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetDeviceProps(os, version, platform_type) => {
             device.set_device_props(os, version, platform_type);
+        }
+        DeviceCommand::SetPropsHash(hash) => {
+            device.props_hash = hash;
         }
     }
 }
