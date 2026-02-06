@@ -120,7 +120,7 @@ impl LidPnCache {
             count += 1;
         }
 
-        log::info!(
+        log::debug!(
             "LID-PN cache warmed up with {} entries in {:?}",
             count,
             start.elapsed()

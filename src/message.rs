@@ -1157,8 +1157,18 @@ impl Client {
                         .await;
                 }
 
-                // Dispatch to event bus and send receipt
-                self.dispatch_parsed_message(original_msg, info);
+                // Skip dispatch for messages that only carry sender key distribution
+                // (protocol-level key exchange) with no user-visible content.
+                // These arrive as a separate pkmsg enc node alongside the actual
+                // group message (skmsg) and would otherwise surface as "unknown".
+                if is_sender_key_distribution_only(&original_msg) {
+                    log::debug!(
+                        "[msg:{}] Skipping event dispatch for sender key distribution message",
+                        info.id
+                    );
+                } else {
+                    self.dispatch_parsed_message(original_msg, info);
+                }
                 Ok(())
             }
             Err(e) => Err(anyhow::anyhow!("Failed to decode decrypted plaintext: {e}")),
@@ -1483,6 +1493,30 @@ impl Client {
             );
         }
     }
+}
+
+/// Returns `true` if the message contains only a SenderKey distribution
+/// (internal key-exchange for group encryption) and no user-visible content.
+///
+/// When sending a group message, WhatsApp includes the SKDM in a separate
+/// `pkmsg` enc node.  We must process it (store the sender key) but should
+/// not surface it as a user event.
+fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
+    let has_skdm = msg.sender_key_distribution_message.is_some()
+        || msg
+            .fast_ratchet_key_sender_key_distribution_message
+            .is_some();
+
+    if !has_skdm {
+        return false;
+    }
+
+    // Strip protocol-only fields and check if anything user-visible remains.
+    let mut stripped = msg.clone();
+    stripped.sender_key_distribution_message = None;
+    stripped.fast_ratchet_key_sender_key_distribution_message = None;
+    stripped.message_context_info = None;
+    stripped == wa::Message::default()
 }
 
 #[cfg(test)]
@@ -4276,5 +4310,49 @@ mod tests {
             Some(1),
             "Second dup message should trigger network retry fallback"
         );
+    }
+
+    #[test]
+    fn test_is_sender_key_distribution_only() {
+        let skdm = wa::message::SenderKeyDistributionMessage {
+            group_id: Some("group".into()),
+            axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
+        };
+
+        // Empty message → false (no SKDM)
+        assert!(!is_sender_key_distribution_only(&wa::Message::default()));
+
+        // SKDM only → true
+        assert!(is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            ..Default::default()
+        }));
+
+        // SKDM + message_context_info → still true (context_info is metadata)
+        assert!(is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            message_context_info: Some(wa::MessageContextInfo::default()),
+            ..Default::default()
+        }));
+
+        // SKDM + sticker → false (has user content)
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            sticker_message: Some(Box::new(wa::message::StickerMessage::default())),
+            ..Default::default()
+        }));
+
+        // SKDM + text → false (has user content)
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            conversation: Some("hello".into()),
+            ..Default::default()
+        }));
+
+        // protocol_message only (no SKDM) → false
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
+            ..Default::default()
+        }));
     }
 }

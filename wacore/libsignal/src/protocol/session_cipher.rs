@@ -113,7 +113,7 @@ pub async fn message_encrypt(
     let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
         let local_registration_id = session_state.local_registration_id();
 
-        log::info!(
+        log::debug!(
             "Building PreKeyWhisperMessage for: {} with preKeyId: {}",
             remote_address,
             items
@@ -505,7 +505,7 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
         match result {
             Ok(ptext) => {
-                log::info!(
+                log::debug!(
                     "decrypted {:?} message from {} with current session state (base key {})",
                     original_message_type,
                     remote_address,
@@ -588,7 +588,7 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
         match result {
             Ok(ptext) => {
-                log::info!(
+                log::debug!(
                     "decrypted {:?} message from {} with PREVIOUS session state (base key {})",
                     original_message_type,
                     remote_address,

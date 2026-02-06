@@ -52,11 +52,11 @@ impl Client {
         };
 
         if server_count >= MIN_PRE_KEY_COUNT {
-            log::info!("Server has {} pre-keys, no upload needed.", server_count);
+            log::debug!("Server has {} pre-keys, no upload needed.", server_count);
             return Ok(());
         }
 
-        log::info!("Server has {} pre-keys, uploading more.", server_count);
+        log::debug!("Server has {} pre-keys, uploading more.", server_count);
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let device_store = self.persistence_manager.get_device_arc().await;
@@ -162,7 +162,7 @@ impl Client {
             }
         }
 
-        log::info!(
+        log::debug!(
             "Successfully uploaded {} new pre-keys with sequential IDs starting from {}.",
             key_pairs_to_upload.len(),
             start_id

@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::request::IqError;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -18,7 +18,7 @@ impl Client {
             return false;
         }
 
-        info!(target: "Client/Keepalive", "Sending keepalive ping");
+        debug!(target: "Client/Keepalive", "Sending keepalive ping");
 
         match self
             .execute(KeepaliveSpec::with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE))
@@ -56,7 +56,7 @@ impl Client {
 
                     if is_success {
                         if error_count > 0 {
-                            info!(target: "Client/Keepalive", "Keepalive restored.");
+                            debug!(target: "Client/Keepalive", "Keepalive restored.");
                         }
                         error_count = 0;
                         last_success = chrono::Utc::now();

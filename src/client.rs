@@ -23,7 +23,7 @@ use crate::store::{commands::DeviceCommand, persistence_manager::PersistenceMana
 use crate::types::enc_handler::EncHandler;
 use crate::types::events::{ConnectFailureReason, Event};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 
 use rand::RngCore;
 use scopeguard;
@@ -374,7 +374,7 @@ impl Client {
     pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
         self.group_cache
             .get_or_init(|| async {
-                info!("Initializing Group Cache for the first time.");
+                debug!("Initializing Group Cache for the first time.");
                 Cache::builder()
                     .time_to_live(Duration::from_secs(3600))
                     .max_capacity(1_000)
@@ -386,7 +386,7 @@ impl Client {
     pub(crate) async fn get_device_cache(&self) -> &Cache<Jid, Vec<Jid>> {
         self.device_cache
             .get_or_init(|| async {
-                info!("Initializing Device Cache for the first time.");
+                debug!("Initializing Device Cache for the first time.");
                 Cache::builder()
                     .time_to_live(Duration::from_secs(3600))
                     .max_capacity(5_000)
@@ -398,7 +398,7 @@ impl Client {
     pub(crate) async fn get_app_state_processor(&self) -> &AppStateProcessor {
         self.app_state_processor
             .get_or_init(|| async {
-                info!("Initializing AppStateProcessor for the first time.");
+                debug!("Initializing AppStateProcessor for the first time.");
                 AppStateProcessor::new(self.persistence_manager.backend())
             })
             .await
@@ -551,12 +551,12 @@ impl Client {
 
         let transport_future = self.transport_factory.create_transport();
 
-        info!("Connecting WebSocket and fetching latest client version in parallel...");
+        debug!("Connecting WebSocket and fetching latest client version in parallel...");
         let (version_result, transport_result) = tokio::join!(version_future, transport_future);
 
         version_result.map_err(|e| anyhow!("Failed to resolve app version: {}", e))?;
         let (transport, mut transport_events) = transport_result?;
-        info!("Version fetch and transport connection established.");
+        debug!("Version fetch and transport connection established.");
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
@@ -600,7 +600,7 @@ impl Client {
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
-        info!("Starting message processing loop...");
+        debug!("Starting message processing loop...");
 
         let mut rx_guard = self.transport_events.lock().await;
         let transport_events = rx_guard
@@ -615,7 +615,7 @@ impl Client {
             tokio::select! {
                     biased;
                     _ = self.shutdown_notifier.notified() => {
-                        info!("Shutdown signaled in message loop. Exiting message loop.");
+                        debug!("Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
                     event_result = transport_events.recv() => {
@@ -650,7 +650,7 @@ impl Client {
 
                                     // Check if we should exit after processing (e.g., after 515 stream error)
                                     if self.expected_disconnect.load(Ordering::Relaxed) {
-                                        info!("Expected disconnect signaled during frame processing. Exiting message loop.");
+                                        debug!("Expected disconnect signaled during frame processing. Exiting message loop.");
                                         return Ok(());
                                     }
                                 }
@@ -659,10 +659,10 @@ impl Client {
                                 self.cleanup_connection_state().await;
                                  if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
-                                    info!("Transport disconnected unexpectedly.");
+                                    debug!("Transport disconnected unexpectedly.");
                                     return Err(anyhow::anyhow!("Transport disconnected unexpectedly"));
                                 } else {
-                                    info!("Transport disconnected as expected.");
+                                    debug!("Transport disconnected as expected.");
                                     return Ok(());
                                 }
                             }
@@ -744,7 +744,7 @@ impl Client {
                     self.offline_sync_metrics
                         .active
                         .store(false, Ordering::Release);
-                    info!(target: "Client/OfflineSync", "Sync COMPLETED: 0 items.");
+                    debug!(target: "Client/OfflineSync", "Sync COMPLETED: 0 items.");
                 } else {
                     // Use stronger memory ordering for state transitions
                     self.offline_sync_metrics
@@ -760,7 +760,7 @@ impl Client {
                         Ok(mut guard) => *guard = Some(std::time::Instant::now()),
                         Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
                     }
-                    info!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
+                    debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
             } else if self.offline_sync_metrics.active.load(Ordering::Acquire) {
                 // Handle end marker: <ib> without offline_preview while sync is active
@@ -773,7 +773,7 @@ impl Client {
                     Ok(guard) => guard.map(|t| t.elapsed()).unwrap_or_default(),
                     Err(poison) => poison.into_inner().map(|t| t.elapsed()).unwrap_or_default(),
                 };
-                info!(target: "Client/OfflineSync", "Sync COMPLETED: End marker received. Processed {} items in {:.2?}.", processed, elapsed);
+                debug!(target: "Client/OfflineSync", "Sync COMPLETED: End marker received. Processed {} items in {:.2?}.", processed, elapsed);
                 self.offline_sync_metrics
                     .active
                     .store(false, Ordering::Release);
@@ -795,7 +795,7 @@ impl Client {
                     .load(Ordering::Acquire);
 
                 if processed.is_multiple_of(50) || processed == total {
-                    info!(target: "Client/OfflineSync", "Sync Progress: {}/{}", processed, total);
+                    trace!(target: "Client/OfflineSync", "Sync Progress: {}/{}", processed, total);
                 }
 
                 if processed >= total {
@@ -803,7 +803,7 @@ impl Client {
                         Ok(guard) => guard.map(|t| t.elapsed()).unwrap_or_default(),
                         Err(poison) => poison.into_inner().map(|t| t.elapsed()).unwrap_or_default(),
                     };
-                    info!(target: "Client/OfflineSync", "Sync COMPLETED: Processed {} items in {:.2?}.", processed, elapsed);
+                    debug!(target: "Client/OfflineSync", "Sync COMPLETED: Processed {} items in {:.2?}.", processed, elapsed);
                     self.offline_sync_metrics
                         .active
                         .store(false, Ordering::Release);
@@ -820,9 +820,9 @@ impl Client {
                 .attrs()
                 .optional_string("name")
                 .unwrap_or("<unknown>");
-            info!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
+            debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            info!(target: "Client/Recv","{}", DisplayableNode(&node));
+            debug!(target: "Client/Recv","{}", DisplayableNode(&node));
         }
 
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
@@ -1048,7 +1048,7 @@ impl Client {
             if let Some(lid) = lid_value.to_jid() {
                 let device_snapshot = self.persistence_manager.get_device_snapshot().await;
                 if device_snapshot.lid.as_ref() != Some(&lid) {
-                    info!("Updating LID from server to '{lid}'");
+                    debug!("Updating LID from server to '{lid}'");
                     self.persistence_manager
                         .process_command(DeviceCommand::SetLid(Some(lid)))
                         .await;
@@ -1074,7 +1074,7 @@ impl Client {
                 };
             }
 
-            info!(
+            debug!(
                 "Starting post-login initialization sequence (gen={})...",
                 task_generation
             );
@@ -1135,7 +1135,7 @@ impl Client {
             const OFFLINE_SYNC_TIMEOUT_SECS: u64 = 5;
 
             if !client_clone.offline_sync_completed.load(Ordering::Relaxed) {
-                info!(
+                debug!(
                     "Waiting for offline sync to complete (up to {}s)...",
                     OFFLINE_SYNC_TIMEOUT_SECS
                 );
@@ -1149,9 +1149,9 @@ impl Client {
                 check_generation!();
 
                 if wait_result.is_err() {
-                    info!("Offline sync wait timed out, proceeding with passive tasks");
+                    debug!("Offline sync wait timed out, proceeding with passive tasks");
                 } else {
-                    info!("Offline sync completed, proceeding with passive tasks");
+                    debug!("Offline sync completed, proceeding with passive tasks");
                 }
             }
 
@@ -1169,7 +1169,7 @@ impl Client {
                 if let Err(e) = client_clone.presence().set_available().await {
                     warn!("Failed to send initial presence: {e:?}");
                 } else {
-                    info!("Initial presence sent successfully.");
+                    debug!("Initial presence sent successfully.");
                 }
             } else {
                 debug!("Deferring presence until pushname is available from app state sync");
@@ -1191,7 +1191,7 @@ impl Client {
                     return;
                 }
 
-                info!(
+                debug!(
                     "Sending background initialization queries (Props, Blocklist, Privacy, Digest)..."
                 );
 
@@ -1228,7 +1228,7 @@ impl Client {
 
             let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
             if flag_set || needs_pushname_from_sync {
-                info!(
+                debug!(
                     target: "Client/AppState",
                     "Starting Initial App State Sync (flag_set={flag_set}, needs_pushname={needs_pushname_from_sync})"
                 );
@@ -1237,7 +1237,7 @@ impl Client {
                     .initial_app_state_keys_received
                     .load(Ordering::Relaxed)
                 {
-                    info!(
+                    debug!(
                         target: "Client/AppState",
                         "Waiting up to 5s for app state keys..."
                     );
@@ -1279,7 +1279,7 @@ impl Client {
                     sync_client
                         .needs_initial_full_sync
                         .store(false, Ordering::Relaxed);
-                    info!(target: "Client/AppState", "Initial App State Sync Completed.");
+                    debug!(target: "Client/AppState", "Initial App State Sync Completed.");
                 });
             }
         });
@@ -1313,7 +1313,7 @@ impl Client {
                     let es = e.to_string();
                     if es.contains("app state key not found") && attempt == 1 {
                         if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
-                            info!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
+                            debug!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
                             if tokio::time::timeout(
                                 Duration::from_secs(10),
                                 self.initial_keys_synced_notifier.notified(),
@@ -1575,7 +1575,7 @@ impl Client {
                     let snapshot = self.persistence_manager.get_device_snapshot().await;
                     let old = snapshot.push_name.clone();
                     if old != new_name {
-                        info!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
+                        debug!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
                         self.persistence_manager
                             .process_command(DeviceCommand::SetPushName(new_name.clone()))
                             .await;
@@ -1589,7 +1589,7 @@ impl Client {
 
                         // WhatsApp Web sends presence immediately when receiving pushname from
                         if old.is_empty() && !new_name.is_empty() {
-                            info!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
+                            debug!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
                             if let Err(e) = self.presence().set_available().await {
                                 warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
                             }
@@ -1995,7 +1995,7 @@ impl Client {
             None => return Err(ClientError::NotConnected),
         };
 
-        info!(target: "Client/Send", "{}", DisplayableNode(&node));
+        debug!(target: "Client/Send", "{}", DisplayableNode(&node));
 
         let mut plaintext_buf = {
             let mut pool = self.plaintext_buffer_pool.lock().await;
@@ -2045,7 +2045,7 @@ impl Client {
             return;
         }
 
-        log::info!("Updating push name from '{}' -> '{}'", old_name, new_name);
+        log::debug!("Updating push name from '{}' -> '{}'", old_name, new_name);
         self.persistence_manager
             .process_command(DeviceCommand::SetPushName(new_name.clone()))
             .await;
@@ -2063,7 +2063,7 @@ impl Client {
             if let Err(e) = client_clone.presence().set_available().await {
                 log::warn!("Failed to send presence after push name update: {:?}", e);
             } else {
-                log::info!("Sent presence after push name update.");
+                log::debug!("Sent presence after push name update.");
             }
         });
     }

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -199,7 +199,7 @@ impl TransportFactory for TokioWebSocketTransportFactory {
         let connector = create_tls_connector();
 
         let url = self.url.as_str();
-        info!("Dialing {url}");
+        debug!("Dialing {url}");
         let uri: http::Uri = url
             .parse()
             .map_err(|e| anyhow::anyhow!("Failed to parse URL: {}", e))?;

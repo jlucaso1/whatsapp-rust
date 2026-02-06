@@ -1,5 +1,5 @@
 use crate::client::Client;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use wacore::StringEnum;
 use wacore_binary::builder::NodeBuilder;
 
@@ -62,7 +62,7 @@ impl<'a> Presence<'a> {
             .attr("name", &device_snapshot.push_name)
             .build();
 
-        info!(
+        debug!(
             "Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
             node.attrs

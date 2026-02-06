@@ -117,7 +117,7 @@ impl Client {
         }
 
         if missing_count > 0 || failed_count > 0 {
-            log::info!(
+            log::debug!(
                 "Session establishment: {} succeeded, {} missing prekeys, {} failed (of {} requested)",
                 success_count,
                 missing_count,
@@ -171,7 +171,7 @@ impl Client {
                 primary_phone_pn
             );
         } else {
-            log::info!(
+            log::debug!(
                 "No PN session with primary phone {} - will be established via LID pkmsg",
                 primary_phone_pn
             );
