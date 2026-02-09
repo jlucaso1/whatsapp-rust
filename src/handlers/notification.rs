@@ -337,7 +337,7 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
 ///   </tokens>
 /// </notification>
 /// ```
-async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
+async fn handle_privacy_token_notification(_client: &Arc<Client>, node: &Node) {
     let from = node.attrs().optional_string("from").unwrap_or("<unknown>");
 
     let Some(tokens_node) = node.get_optional_child_by_tag(&["tokens"]) else {

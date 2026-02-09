@@ -205,9 +205,7 @@ impl CallHandler {
                     let (ipv4, port) = endpoint
                         .addresses
                         .iter()
-                        .find_map(|addr| {
-                            addr.ipv4.as_ref().map(|ip| (Some(ip.clone()), addr.port))
-                        })
+                        .find_map(|addr| addr.ipv4.as_ref().map(|ip| (Some(ip.clone()), addr.port)))
                         .unwrap_or((None, 3478));
 
                     let latency_ms = endpoint.c2r_rtt_ms.unwrap_or(50);
@@ -360,6 +358,17 @@ impl CallHandler {
 
     async fn handle_reject(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} rejected", parsed.call_id);
+
+        let call_manager = client.get_call_manager().await;
+        let call_id = CallId::new(&parsed.call_id);
+
+        if let Err(e) = call_manager.handle_remote_reject(parsed).await {
+            warn!("Failed to handle reject for {}: {}", parsed.call_id, e);
+        }
+
+        // Clean up any transports that were created during the call
+        call_manager.cleanup_call_transports(&call_id).await;
+
         client
             .core
             .event_bus
@@ -370,6 +379,17 @@ impl CallHandler {
 
     async fn handle_terminate(&self, client: &Client, parsed: &ParsedCallStanza) {
         debug!("Call {} terminated", parsed.call_id);
+
+        let call_manager = client.get_call_manager().await;
+        let call_id = CallId::new(&parsed.call_id);
+
+        if let Err(e) = call_manager.handle_terminate(parsed).await {
+            warn!("Failed to handle terminate for {}: {}", parsed.call_id, e);
+        }
+
+        // Close WebRTC/legacy transports to stop ICE keepalives
+        call_manager.cleanup_call_transports(&call_id).await;
+
         client.core.event_bus.dispatch(&Event::CallEnded(CallEnded {
             meta: parsed.basic_meta(),
         }));
