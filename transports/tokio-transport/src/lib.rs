@@ -7,12 +7,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_websockets::{ClientBuilder, Connector, MaybeTlsStream, Message, WebSocketStream};
-use wacore::net::{Transport, TransportEvent, TransportFactory};
+use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_URL};
 
 /// Ensures the rustls crypto provider is only installed once
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
@@ -113,8 +113,6 @@ type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<RawWs, Message>;
 type WsStream = SplitStream<RawWs>;
 
-const URL: &str = "wss://web.whatsapp.com/ws/chat";
-
 /// Tokio-based WebSocket transport
 /// This is a simple byte pipe - it has no knowledge of WhatsApp framing.
 pub struct TokioWebSocketTransport {
@@ -169,12 +167,21 @@ impl Transport for TokioWebSocketTransport {
 }
 
 /// Factory for creating Tokio WebSocket transports
-pub struct TokioWebSocketTransportFactory;
+pub struct TokioWebSocketTransportFactory {
+    url: String,
+}
 
 impl TokioWebSocketTransportFactory {
     /// Create a new factory instance
     pub fn new() -> Self {
-        Self
+        Self {
+            url: WHATSAPP_WEB_WS_URL.to_string(),
+        }
+    }
+
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = url.into();
+        self
     }
 }
 
@@ -191,8 +198,9 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
         let connector = create_tls_connector();
 
-        info!("Dialing {URL}");
-        let uri: http::Uri = URL
+        let url = self.url.as_str();
+        debug!("Dialing {url}");
+        let uri: http::Uri = url
             .parse()
             .map_err(|e| anyhow::anyhow!("Failed to parse URL: {}", e))?;
 

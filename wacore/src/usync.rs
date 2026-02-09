@@ -74,8 +74,20 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
 
         let mut devices = Vec::new();
         for device_node in device_list_node.get_children_by_tag("device") {
-            let device_id_str = device_node.attrs().string("id");
-            let device_id: u16 = device_id_str.parse()?;
+            let device_id_str = match device_node.attrs().optional_string("id") {
+                Some(id) => id,
+                None => {
+                    log::warn!(target: "usync", "device node missing 'id' attribute, skipping");
+                    continue;
+                }
+            };
+            let device_id: u16 = match device_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    log::warn!(target: "usync", "invalid device id '{device_id_str}' for user {user_jid}, skipping");
+                    continue;
+                }
+            };
 
             let mut device_jid = user_jid.clone();
             device_jid.device = device_id;
@@ -112,7 +124,10 @@ pub fn parse_lid_mappings_from_response(resp_node: &Node) -> Vec<UsyncLidMapping
     };
 
     for user_node in list_node.get_children_by_tag("user") {
-        let user_jid_str = user_node.attrs().string("jid");
+        let user_jid_str = match user_node.attrs().optional_string("jid") {
+            Some(jid) => jid,
+            None => continue,
+        };
         let user_jid: Jid = match user_jid_str.parse() {
             Ok(j) => j,
             Err(_) => continue,
@@ -125,7 +140,10 @@ pub fn parse_lid_mappings_from_response(resp_node: &Node) -> Vec<UsyncLidMapping
 
         // Look for <lid val="...@lid"> node inside the user node
         if let Some(lid_node) = user_node.get_optional_child("lid") {
-            let lid_val = lid_node.attrs().string("val");
+            let lid_val = match lid_node.attrs().optional_string("val") {
+                Some(v) => v,
+                None => continue,
+            };
             if !lid_val.is_empty() {
                 // Parse the LID JID to extract just the user part
                 if let Ok(lid_jid) = lid_val.parse::<Jid>()

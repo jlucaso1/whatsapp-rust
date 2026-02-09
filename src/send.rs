@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -13,6 +13,17 @@ use waproto::whatsapp as wa;
 pub struct SendOptions {
     /// Extra XML nodes to add to the message stanza.
     pub extra_stanza_nodes: Vec<Node>,
+}
+
+/// Specifies who is revoking (deleting) the message.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RevokeType {
+    /// The message sender deleting their own message.
+    #[default]
+    Sender,
+    /// A group admin deleting another user's message.
+    /// `original_sender` is the JID of the user who sent the message being deleted.
+    Admin { original_sender: Jid },
 }
 
 impl Client {
@@ -46,6 +57,91 @@ impl Client {
         Ok(request_id)
     }
 
+    /// Delete a message for everyone in the chat (revoke).
+    ///
+    /// This sends a revoke protocol message that removes the message for all participants.
+    /// The message will show as "This message was deleted" for recipients.
+    ///
+    /// # Arguments
+    /// * `to` - The chat JID (DM or group)
+    /// * `message_id` - The ID of the message to delete
+    /// * `revoke_type` - Use `RevokeType::Sender` to delete your own message,
+    ///   or `RevokeType::Admin { original_sender }` to delete another user's message as group admin
+    pub async fn revoke_message(
+        &self,
+        to: Jid,
+        message_id: impl Into<String>,
+        revoke_type: RevokeType,
+    ) -> Result<(), anyhow::Error> {
+        let message_id = message_id.into();
+        // Verify we're logged in
+        self.get_pn()
+            .await
+            .ok_or_else(|| anyhow!("Not logged in"))?;
+
+        let (from_me, participant, edit_attr) = match &revoke_type {
+            RevokeType::Sender => {
+                // For sender revoke, participant is NOT set (from_me=true identifies it)
+                // This matches whatsmeow's BuildMessageKey behavior
+                (
+                    true,
+                    None,
+                    crate::types::message::EditAttribute::SenderRevoke,
+                )
+            }
+            RevokeType::Admin { original_sender } => {
+                // Admin revoke requires group context
+                if !to.is_group() {
+                    return Err(anyhow!("Admin revoke is only valid for group chats"));
+                }
+                // The protocolMessageKey.participant should match the original message's key exactly
+                // Do NOT convert LID to PN - pass through unchanged like WhatsApp Web does
+                let participant_str = original_sender.to_non_ad().to_string();
+                log::debug!(
+                    "Admin revoke: using participant {} for MessageKey",
+                    participant_str
+                );
+                (
+                    false,
+                    Some(participant_str),
+                    crate::types::message::EditAttribute::AdminRevoke,
+                )
+            }
+        };
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant,
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        // The revoke message stanza needs a NEW unique ID, not the message ID being revoked
+        // The message_id being revoked is already in protocolMessage.key.id
+        // Passing None generates a fresh stanza ID
+        //
+        // For admin revokes, force SKDM distribution to get the proper message structure
+        // with phash, <participants>, and <device-identity> that WhatsApp Web uses
+        let force_skdm = matches!(revoke_type, RevokeType::Admin { .. });
+        self.send_message_impl(
+            to,
+            &revoke_message,
+            None,
+            false,
+            force_skdm,
+            Some(edit_attr),
+            vec![],
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn send_message_impl(
         &self,
@@ -76,7 +172,6 @@ impl Client {
                 .await;
             let _session_guard = session_mutex.lock().await;
 
-            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -84,11 +179,11 @@ impl Client {
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
                 to,
+                encryption_jid,
                 message,
                 request_id,
             )
             .await?
-            // Lock released here automatically
         } else if to.is_group() {
             // Group messages: No client-level lock needed.
             // Each participant device is encrypted separately with its own per-device lock
@@ -162,10 +257,8 @@ impl Client {
 
             // Determine which devices need SKDM distribution
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
-                // Forcing full distribution (either first message or explicit request)
-                None // Let prepare_group_stanza resolve all devices
+                None
             } else {
-                // Check which devices already have SKDM and find new ones
                 let known_recipients = self
                     .persistence_manager
                     .get_skdm_recipients(&to.to_string())
@@ -173,10 +266,8 @@ impl Client {
                     .unwrap_or_default();
 
                 if known_recipients.is_empty() {
-                    // No known recipients, need full distribution
                     None
                 } else {
-                    // Get current devices for all participants
                     let jids_to_resolve: Vec<Jid> = group_info
                         .participants
                         .iter()
@@ -185,16 +276,18 @@ impl Client {
 
                     match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                         Ok(all_devices) => {
-                            // Filter to find devices that don't have SKDM yet
+                            use std::collections::HashSet;
+
+                            let known_set: HashSet<DeviceKey<'_>> =
+                                known_recipients.iter().map(|j| j.device_key()).collect();
+
                             let new_devices: Vec<Jid> = all_devices
                                 .into_iter()
-                                .filter(|device: &Jid| {
-                                    !known_recipients.contains(&device.to_string())
-                                })
+                                .filter(|device| !known_set.contains(&device.device_key()))
                                 .collect();
 
                             if new_devices.is_empty() {
-                                Some(vec![]) // No new devices, no SKDM needed
+                                Some(vec![])
                             } else {
                                 log::debug!(
                                     "Found {} new devices needing SKDM for group {}",
@@ -206,22 +299,20 @@ impl Client {
                         }
                         Err(e) => {
                             log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
-                            None // Fall back to full distribution
+                            None
                         }
                     }
                 }
             };
 
-            // Merge marked_for_fresh_skdm into skdm_target_devices
-            // These are devices that need fresh SKDMs due to retry/error handling
+            // Merge devices marked for fresh SKDM (from retry/error handling)
             let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
                 match skdm_target_devices {
-                    None => None, // Already doing full distribution
+                    None => None,
                     Some(mut devices) => {
-                        // Parse marked JID strings and add to target list
                         for marked_jid_str in &marked_for_fresh_skdm {
                             if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.to_string() == *marked_jid_str)
+                                && !devices.iter().any(|d| d.device_eq(&marked_jid))
                             {
                                 log::debug!(
                                     "Adding {} to SKDM targets (marked for fresh key)",
@@ -237,13 +328,9 @@ impl Client {
                 skdm_target_devices
             };
 
-            // Track devices that will receive SKDM in this message
-            let devices_receiving_skdm: Vec<String> = skdm_target_devices
-                .as_ref()
-                .map(|devices: &Vec<Jid>| devices.iter().map(|d: &Jid| d.to_string()).collect())
-                .unwrap_or_default();
+            let is_full_distribution = force_skdm || skdm_target_devices.is_none();
+            let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
 
-            // Encryption happens here (per-device locking handled internally)
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
@@ -255,14 +342,13 @@ impl Client {
                 message,
                 request_id.clone(),
                 force_skdm,
-                skdm_target_devices.clone(),
+                skdm_target_devices,
                 edit.clone(),
                 extra_stanza_nodes.clone(),
             )
             .await
             {
                 Ok(stanza) => {
-                    // Update SKDM recipients tracking after preparing the stanza
                     if !devices_receiving_skdm.is_empty() {
                         if let Err(e) = self
                             .persistence_manager
@@ -271,8 +357,7 @@ impl Client {
                         {
                             log::warn!("Failed to update SKDM recipients: {:?}", e);
                         }
-                    } else if force_skdm || skdm_target_devices.is_none() {
-                        // Full distribution happened, query all devices and track them
+                    } else if is_full_distribution {
                         let jids_to_resolve: Vec<Jid> = group_info
                             .participants
                             .iter()
@@ -281,16 +366,12 @@ impl Client {
 
                         if let Ok(all_devices) =
                             SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        {
-                            let all_device_strs: Vec<String> =
-                                all_devices.iter().map(|d| d.to_string()).collect();
-                            if let Err(e) = self
+                            && let Err(e) = self
                                 .persistence_manager
-                                .add_skdm_recipients(&to.to_string(), &all_device_strs)
+                                .add_skdm_recipients(&to.to_string(), &all_devices)
                                 .await
-                            {
-                                log::warn!("Failed to update SKDM recipients: {:?}", e);
-                            }
+                        {
+                            log::warn!("Failed to update SKDM recipients: {:?}", e);
                         }
                     }
                     stanza
@@ -373,7 +454,6 @@ impl Client {
                 .await;
             let _session_guard = session_mutex.lock().await;
 
-            // Lock is held only during encryption
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
 
@@ -397,9 +477,362 @@ impl Client {
                 extra_stanza_nodes,
             )
             .await?
-            // Lock released here automatically
         };
-        // Network send happens with NO lock held
+
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_revoke_type_default_is_sender() {
+        // RevokeType::Sender is the default (for deleting own messages)
+        let revoke_type = RevokeType::default();
+        assert_eq!(revoke_type, RevokeType::Sender);
+    }
+
+    #[test]
+    fn test_force_skdm_only_for_admin_revoke() {
+        // Admin revokes require force_skdm=true to get proper message structure
+        // with phash, <participants>, and <device-identity> that WhatsApp Web uses.
+        // Without this, the server returns error 479.
+        let sender_jid = Jid::from_str("123456@s.whatsapp.net").unwrap();
+
+        let sender_revoke = RevokeType::Sender;
+        let admin_revoke = RevokeType::Admin {
+            original_sender: sender_jid,
+        };
+
+        // This matches the logic in revoke_message()
+        let force_skdm_sender = matches!(sender_revoke, RevokeType::Admin { .. });
+        let force_skdm_admin = matches!(admin_revoke, RevokeType::Admin { .. });
+
+        assert!(!force_skdm_sender, "Sender revoke should NOT force SKDM");
+        assert!(force_skdm_admin, "Admin revoke MUST force SKDM");
+    }
+
+    #[test]
+    fn test_sender_revoke_message_key_structure() {
+        // Sender revoke (edit="7"): from_me=true, participant=None
+        // The sender is identified by from_me=true, no participant field needed
+        let to = Jid::from_str("120363040237990503@g.us").unwrap();
+        let message_id = "3EB0ABC123".to_string();
+
+        let (from_me, participant, edit_attr) = match RevokeType::Sender {
+            RevokeType::Sender => (
+                true,
+                None,
+                crate::types::message::EditAttribute::SenderRevoke,
+            ),
+            RevokeType::Admin { original_sender } => (
+                false,
+                Some(original_sender.to_non_ad().to_string()),
+                crate::types::message::EditAttribute::AdminRevoke,
+            ),
+        };
+
+        assert!(from_me, "Sender revoke must have from_me=true");
+        assert!(
+            participant.is_none(),
+            "Sender revoke must NOT set participant"
+        );
+        assert_eq!(edit_attr.to_string_val(), "7");
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant,
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let proto_msg = revoke_message.protocol_message.unwrap();
+        let key = proto_msg.key.unwrap();
+        assert_eq!(key.from_me, Some(true));
+        assert_eq!(key.participant, None);
+        assert_eq!(key.id, Some(message_id));
+    }
+
+    #[test]
+    fn test_admin_revoke_message_key_structure() {
+        // Admin revoke (edit="8"): from_me=false, participant=original_sender
+        // The participant field identifies whose message is being deleted
+        let to = Jid::from_str("120363040237990503@g.us").unwrap();
+        let message_id = "3EB0ABC123".to_string();
+        let original_sender = Jid::from_str("236395184570386:22@lid").unwrap();
+
+        let revoke_type = RevokeType::Admin {
+            original_sender: original_sender.clone(),
+        };
+        let (from_me, participant, edit_attr) = match revoke_type {
+            RevokeType::Sender => (
+                true,
+                None,
+                crate::types::message::EditAttribute::SenderRevoke,
+            ),
+            RevokeType::Admin { original_sender } => (
+                false,
+                Some(original_sender.to_non_ad().to_string()),
+                crate::types::message::EditAttribute::AdminRevoke,
+            ),
+        };
+
+        assert!(!from_me, "Admin revoke must have from_me=false");
+        assert!(
+            participant.is_some(),
+            "Admin revoke MUST set participant to original sender"
+        );
+        assert_eq!(edit_attr.to_string_val(), "8");
+
+        let revoke_message = wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                key: Some(wa::MessageKey {
+                    remote_jid: Some(to.to_string()),
+                    from_me: Some(from_me),
+                    id: Some(message_id.clone()),
+                    participant: participant.clone(),
+                }),
+                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let proto_msg = revoke_message.protocol_message.unwrap();
+        let key = proto_msg.key.unwrap();
+        assert_eq!(key.from_me, Some(false));
+        // Participant should be the original sender with device number stripped
+        assert_eq!(key.participant, Some("236395184570386@lid".to_string()));
+        assert_eq!(key.id, Some(message_id));
+    }
+
+    #[test]
+    fn test_admin_revoke_preserves_lid_format() {
+        // LID JIDs must NOT be converted to PN (phone number) format.
+        // This was a bug that caused error 479 - the participant field must
+        // preserve the original JID format exactly (with device stripped).
+        let lid_sender = Jid::from_str("236395184570386:22@lid").unwrap();
+        let participant_str = lid_sender.to_non_ad().to_string();
+
+        // Must preserve @lid suffix, device number stripped
+        assert_eq!(participant_str, "236395184570386@lid");
+        assert!(
+            participant_str.ends_with("@lid"),
+            "LID participant must preserve @lid suffix"
+        );
+    }
+
+    // SKDM Recipient Filtering Tests - validates DeviceKey-based filtering
+
+    #[test]
+    fn test_skdm_recipient_filtering_basic() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = [
+            "1234567890:0@s.whatsapp.net",
+            "1234567890:5@s.whatsapp.net",
+            "9876543210:0@s.whatsapp.net",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let all_devices: Vec<Jid> = [
+            "1234567890:0@s.whatsapp.net",
+            "1234567890:5@s.whatsapp.net",
+            "9876543210:0@s.whatsapp.net",
+            "5555555555:0@s.whatsapp.net", // new
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "5555555555");
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_lid_jids() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = [
+            "236395184570386:91@lid",
+            "129171292463295:0@lid",
+            "45857667830004:14@lid",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let all_devices: Vec<Jid> = [
+            "236395184570386:91@lid",
+            "129171292463295:0@lid",
+            "45857667830004:14@lid",
+            "45857667830004:15@lid", // new
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 1);
+        assert_eq!(new_devices[0].user, "45857667830004");
+        assert_eq!(new_devices[0].device, 15);
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_known() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> =
+            ["1234567890:0@s.whatsapp.net", "1234567890:5@s.whatsapp.net"]
+                .into_iter()
+                .map(|s| Jid::from_str(s).unwrap())
+                .collect();
+
+        let all_devices: Vec<Jid> = ["1234567890:0@s.whatsapp.net", "1234567890:5@s.whatsapp.net"]
+            .into_iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert!(new_devices.is_empty());
+    }
+
+    #[test]
+    fn test_skdm_recipient_filtering_all_new() {
+        use std::collections::HashSet;
+
+        let known_recipients: Vec<Jid> = vec![];
+
+        let all_devices: Vec<Jid> = ["1234567890:0@s.whatsapp.net", "9876543210:0@s.whatsapp.net"]
+            .into_iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .clone()
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), all_devices.len());
+    }
+
+    #[test]
+    fn test_device_key_comparison() {
+        // Jid parse/display normalizes :0 (omitted in Display, missing ':N' parses as device 0).
+        // This test ensures DeviceKey comparisons work correctly under that normalization.
+        let test_cases = [
+            (
+                "1234567890:0@s.whatsapp.net",
+                "1234567890@s.whatsapp.net",
+                true,
+            ),
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:5@s.whatsapp.net",
+                true,
+            ),
+            (
+                "1234567890:5@s.whatsapp.net",
+                "1234567890:6@s.whatsapp.net",
+                false,
+            ),
+            ("236395184570386:91@lid", "236395184570386:91@lid", true),
+            ("236395184570386:0@lid", "236395184570386@lid", true),
+            ("user1@s.whatsapp.net", "user2@s.whatsapp.net", false),
+        ];
+
+        for (jid1_str, jid2_str, should_match) in test_cases {
+            let jid1: Jid = jid1_str.parse().expect("should parse jid1");
+            let jid2: Jid = jid2_str.parse().expect("should parse jid2");
+
+            let key1 = jid1.device_key();
+            let key2 = jid2.device_key();
+
+            assert_eq!(
+                key1 == key2,
+                should_match,
+                "DeviceKey comparison failed for '{}' vs '{}': expected match={}, got match={}",
+                jid1_str,
+                jid2_str,
+                should_match,
+                key1 == key2
+            );
+
+            assert_eq!(
+                jid1.device_eq(&jid2),
+                should_match,
+                "device_eq failed for '{}' vs '{}'",
+                jid1_str,
+                jid2_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_skdm_filtering_large_group() {
+        use std::collections::HashSet;
+
+        let mut known_recipients: Vec<Jid> = Vec::with_capacity(1000);
+        let mut all_devices: Vec<Jid> = Vec::with_capacity(1010);
+
+        for i in 0..1000i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            let jid = Jid::from_str(&jid_str).unwrap();
+            known_recipients.push(jid.clone());
+            all_devices.push(jid);
+        }
+
+        for i in 1000i64..1010i64 {
+            let jid_str = format!("{}:1@lid", 100000000000000i64 + i);
+            all_devices.push(Jid::from_str(&jid_str).unwrap());
+        }
+
+        let known_set: HashSet<DeviceKey<'_>> =
+            known_recipients.iter().map(|j| j.device_key()).collect();
+
+        let new_devices: Vec<Jid> = all_devices
+            .into_iter()
+            .filter(|device| !known_set.contains(&device.device_key()))
+            .collect();
+
+        assert_eq!(new_devices.len(), 10);
     }
 }

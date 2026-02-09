@@ -24,18 +24,28 @@ impl Default for HashState {
     }
 }
 
+/// Result of updating the hash state with mutations.
+#[derive(Debug, Clone, Default)]
+pub struct HashUpdateResult {
+    /// Whether a REMOVE mutation was missing its previous value.
+    /// This happens when the server has an entry we don't have locally.
+    /// WhatsApp Web tracks this as `hasMissingRemove` and uses it to
+    /// determine if MAC validation failures should be fatal.
+    pub has_missing_remove: bool,
+}
+
 impl HashState {
     pub fn update_hash<F>(
         &mut self,
         mutations: &[wa::SyncdMutation],
         mut get_prev_set_value_mac: F,
-    ) -> (Vec<anyhow::Error>, anyhow::Result<()>)
+    ) -> (HashUpdateResult, anyhow::Result<()>)
     where
         F: FnMut(&[u8], usize) -> anyhow::Result<Option<Vec<u8>>>,
     {
         let mut added: Vec<Vec<u8>> = Vec::new();
         let mut removed: Vec<Vec<u8>> = Vec::new();
-        let mut warnings: Vec<anyhow::Error> = Vec::new();
+        let mut result = HashUpdateResult::default();
 
         for (i, mutation) in mutations.iter().enumerate() {
             let op = mutation.operation.unwrap_or_default();
@@ -57,18 +67,20 @@ impl HashState {
                     Ok(Some(prev)) => removed.push(prev),
                     Ok(None) => {
                         if op == wa::syncd_mutation::SyncdOperation::Remove as i32 {
-                            warnings.push(anyhow::anyhow!(
-                                AppStateError::MissingPreviousSetValueOperation
-                            ));
+                            result.has_missing_remove = true;
+                            log::trace!(
+                                target: "AppState",
+                                "REMOVE mutation missing previous value (hasMissingRemove=true)"
+                            );
                         }
                     }
-                    Err(e) => return (warnings, Err(anyhow::anyhow!(e))),
+                    Err(e) => return (result, Err(anyhow::anyhow!(e))),
                 }
             }
         }
 
         WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &removed, &added);
-        (warnings, Ok(()))
+        (result, Ok(()))
     }
 
     /// Update hash state from snapshot records directly (avoids cloning into SyncdMutation).
@@ -224,9 +236,9 @@ mod tests {
         ];
 
         let get_prev_mac_closure = |_: &[u8], _: usize| Ok(None);
-        let (warnings, result) = state.update_hash(&initial_mutations, get_prev_mac_closure);
+        let (hash_result, result) = state.update_hash(&initial_mutations, get_prev_mac_closure);
         assert!(result.is_ok());
-        assert!(warnings.is_empty());
+        assert!(!hash_result.has_missing_remove);
 
         let expected_hash_after_add = WAPATCH_INTEGRITY.subtract_then_add(
             &[0; 128],
@@ -253,10 +265,10 @@ mod tests {
 
         let get_prev_mac_closure_phase2 =
             |index_mac: &[u8], _: usize| Ok(prev_macs.get(index_mac).cloned());
-        let (warnings, result) =
+        let (hash_result, result) =
             state.update_hash(&update_and_remove_mutations, get_prev_mac_closure_phase2);
         assert!(result.is_ok());
-        assert!(warnings.is_empty());
+        assert!(!hash_result.has_missing_remove);
 
         let expected_final_hash = WAPATCH_INTEGRITY.subtract_then_add(
             &expected_hash_after_add,

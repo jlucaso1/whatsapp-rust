@@ -79,9 +79,53 @@ impl SessionStore for SessionAdapter {
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
         let addr_str = address.to_string();
-        let record_bytes = record.serialize()?;
 
         let device = self.0.device.read().await;
+        let existing_session = device
+            .backend
+            .get_session(&addr_str)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|data| SessionRecord::deserialize(&data).ok());
+
+        if let (Some(existing), Some(new_state)) = (&existing_session, record.session_state()) {
+            if let Some(existing_state) = existing.session_state() {
+                let old_base_key = existing_state.alice_base_key();
+                let new_base_key = new_state.alice_base_key();
+
+                if old_base_key != new_base_key {
+                    let backtrace = std::backtrace::Backtrace::force_capture();
+                    log::warn!(
+                        target: "signal_session_store",
+                        "⚠️ SESSION BASE KEY CHANGED for {}!\n\
+                         Old base_key: {}\n\
+                         New base_key: {}\n\
+                         Old version: {:?}, New version: {:?}\n\
+                         Old prev_sessions: {}, New prev_sessions: {}\n\
+                         This will cause MAC verification failures on future messages!\n\
+                         Backtrace:\n{}",
+                        addr_str,
+                        hex::encode(old_base_key),
+                        hex::encode(new_base_key),
+                        existing_state.session_version(),
+                        new_state.session_version(),
+                        existing.previous_session_count(),
+                        record.previous_session_count(),
+                        backtrace
+                    );
+                }
+            }
+        } else if let (None, Some(state)) = (&existing_session, record.session_state()) {
+            log::debug!(
+                target: "signal_session_store",
+                "Creating new session for {}: base_key={}",
+                addr_str,
+                hex::encode(&state.alice_base_key()[..8.min(state.alice_base_key().len())])
+            );
+        }
+
+        let record_bytes = record.serialize()?;
         device
             .backend
             .put_session(&addr_str, &record_bytes)

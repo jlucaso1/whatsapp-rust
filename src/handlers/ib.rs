@@ -2,7 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
 use async_trait::async_trait;
-use log::{info, warn};
+use log::{debug, warn};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore_binary::node::{Node, NodeContent};
@@ -34,11 +34,16 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
         match child.tag.as_str() {
             "dirty" => {
                 let mut attrs = child.attrs();
-                let dirty_type = attrs.string("type");
+                let dirty_type = match attrs.optional_string("type") {
+                    Some(t) => t.to_string(),
+                    None => {
+                        warn!("Dirty notification missing 'type' attribute");
+                        continue;
+                    }
+                };
                 let timestamp = attrs.optional_string("timestamp").map(|s| s.to_string());
 
-                info!(
-                    target: "Client",
+                debug!(
                     "Received dirty state notification for type: '{dirty_type}'. Sending clean IQ."
                 );
 
@@ -49,7 +54,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         .clean_dirty_bits(&dirty_type, timestamp.as_deref())
                         .await
                     {
-                        warn!(target: "Client", "Failed to send clean dirty bits IQ: {e:?}");
+                        warn!("Failed to send clean dirty bits IQ: {e:?}");
                     }
                 });
             }
@@ -60,8 +65,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 if let Some(routing_info_node) = child.get_optional_child("routing_info") {
                     if let Some(NodeContent::Bytes(routing_bytes)) = &routing_info_node.content {
                         if !routing_bytes.is_empty() {
-                            info!(
-                                target: "Client",
+                            debug!(
                                 "Received edge routing info ({} bytes), storing for reconnection",
                                 routing_bytes.len()
                             );
@@ -73,13 +77,13 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                                 })
                                 .await;
                         } else {
-                            info!(target: "Client", "Received empty edge routing info, ignoring");
+                            debug!("Received empty edge routing info, ignoring");
                         }
                     } else {
-                        info!(target: "Client", "Edge routing info node has no bytes content");
+                        debug!("Edge routing info node has no bytes content");
                     }
                 } else {
-                    info!(target: "Client", "Edge routing stanza has no routing_info child");
+                    debug!("Edge routing stanza has no routing_info child");
                 }
             }
             "offline_preview" => {
@@ -90,7 +94,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let notifications = attrs.optional_u64("notification").unwrap_or(0) as i32;
                 let receipts = attrs.optional_u64("receipt").unwrap_or(0) as i32;
 
-                info!(
+                debug!(
                     target: "Client/OfflineSync",
                     "Offline preview: {} total ({} messages, {} notifications, {} receipts, {} app data changes)",
                     total, messages, notifications, receipts, app_data_changes,
@@ -111,7 +115,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let mut attrs = child.attrs();
                 let count = attrs.optional_u64("count").unwrap_or(0) as i32;
 
-                info!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
+                debug!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
 
                 // Signal that offline sync is complete - post-login tasks are waiting for this.
                 // This mimics WhatsApp Web's offlineDeliveryEnd event.
@@ -129,10 +133,10 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.
-                info!(target: "Client", "Received thread metadata, ignoring for now.");
+                debug!("Received thread metadata, ignoring for now.");
             }
             _ => {
-                warn!(target: "Client", "Unhandled ib child: <{}>", child.tag);
+                warn!("Unhandled ib child: <{}>", child.tag);
             }
         }
     }

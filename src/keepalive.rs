@@ -1,11 +1,11 @@
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, IqError};
-use log::{debug, info, warn};
+use crate::request::IqError;
+use log::{debug, warn};
 use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use wacore::iq::keepalive::KeepaliveSpec;
 
 const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(20);
 const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
@@ -18,13 +18,13 @@ impl Client {
             return false;
         }
 
-        info!(target: "Client/Keepalive", "Sending keepalive ping");
+        debug!(target: "Client/Keepalive", "Sending keepalive ping");
 
-        let iq =
-            InfoQuery::get("w:p", server_jid(), None).with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE);
-
-        match self.send_iq(iq).await {
-            Ok(_) => {
+        match self
+            .execute(KeepaliveSpec::with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE))
+            .await
+        {
+            Ok(()) => {
                 debug!(target: "Client/Keepalive", "Received keepalive pong");
                 true
             }
@@ -56,7 +56,7 @@ impl Client {
 
                     if is_success {
                         if error_count > 0 {
-                            info!(target: "Client/Keepalive", "Keepalive restored.");
+                            debug!(target: "Client/Keepalive", "Keepalive restored.");
                         }
                         error_count = 0;
                         last_success = chrono::Utc::now();

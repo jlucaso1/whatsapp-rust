@@ -100,16 +100,27 @@ async fn process_prekey_impl(
         .key_pair()?;
 
     let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
-        log::info!("processing PreKey message from {remote_address}");
+        log::info!(
+            "processing PreKey message from {remote_address} with one-time prekey {pre_key_id}"
+        );
         Some(pre_key_store.get_pre_key(pre_key_id).await?.key_pair()?)
     } else {
-        log::warn!("processing PreKey message from {remote_address} which had no one-time prekey");
+        // This is normal Signal Protocol behavior - one-time prekeys are optional.
+        // Common scenarios:
+        // - Newly paired device hasn't uploaded prekeys yet
+        // - Server's one-time prekey pool is exhausted
+        // - App state sync messages during initial pairing
+        // Security: Session still provides strong guarantees via signed prekey.
+        // Perfect forward secrecy begins after first reply exchange.
+        log::debug!(
+            "processing PreKey message from {remote_address} without one-time prekey (using signed prekey only)"
+        );
         None
     };
 
     let parameters = BobSignalProtocolParameters::new(
         identity_store.get_identity_key_pair().await?,
-        our_signed_pre_key_pair, // signed pre key
+        our_signed_pre_key_pair.clone(), // signed pre key
         our_one_time_pre_key_pair,
         our_signed_pre_key_pair, // ratchet key
         *message.identity_key(),
@@ -162,6 +173,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         .unwrap_or_else(SessionRecord::new_fresh);
 
     let our_base_key_pair = KeyPair::generate(&mut csprng);
+    let our_base_public_key = our_base_key_pair.public_key; // Save before moving
     let their_signed_prekey = bundle.signed_pre_key_public()?;
 
     let their_one_time_prekey_id = bundle.pre_key_id()?;
@@ -191,7 +203,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
     session.set_unacknowledged_pre_key_message(
         their_one_time_prekey_id,
         bundle.signed_pre_key_id()?,
-        &our_base_key_pair.public_key,
+        &our_base_public_key,
     );
 
     session.set_local_registration_id(identity_store.get_local_registration_id().await?);

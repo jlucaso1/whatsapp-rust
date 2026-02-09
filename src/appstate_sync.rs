@@ -66,6 +66,8 @@ impl AppStateProcessor {
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
         let mut pl = parse_patch_list(stanza_root)?;
+
+        // Download external snapshot if present (matches WhatsApp Web behavior)
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
             && let Ok(data) = download(ext)
@@ -73,6 +75,45 @@ impl AppStateProcessor {
         {
             pl.snapshot = Some(snapshot);
         }
+
+        // Download external mutations for each patch (matches WhatsApp Web behavior)
+        // WhatsApp Web: if (r.externalMutations) { n = yield downloadExternalPatch(e, r) }
+        for patch in &mut pl.patches {
+            if let Some(ext) = &patch.external_mutations {
+                let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                match download(ext) {
+                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                        Ok(ext_mutations) => {
+                            log::trace!(
+                                target: "AppState",
+                                "Downloaded external mutations for patch v{}: {} mutations (inline had {})",
+                                patch_version,
+                                ext_mutations.mutations.len(),
+                                patch.mutations.len()
+                            );
+                            patch.mutations = ext_mutations.mutations;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                target: "AppState",
+                                "Failed to decode external mutations for patch v{}: {}",
+                                patch_version,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            target: "AppState",
+                            "Failed to download external mutations for patch v{}: {}",
+                            patch_version,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         self.process_patch_list(pl, validate_macs).await
     }
 
@@ -90,42 +131,62 @@ impl AppStateProcessor {
 
         // Process snapshot if present
         if let Some(snapshot) = &pl.snapshot {
-            // Build a key lookup function using our cache
-            let key_cache = self.key_cache.lock().await;
-            let get_keys =
-                |key_id: &[u8]| -> Result<ExpandedAppStateKeys, wacore::appstate::AppStateError> {
+            let keys_map = self.key_cache.lock().await.clone();
+            let snapshot_clone = snapshot.clone();
+            let collection_name_owned = collection_name.to_string();
+
+            // Offload CPU-intensive snapshot processing to a blocking thread
+            let result = tokio::task::spawn_blocking(move || {
+                let get_keys = |key_id: &[u8]| -> Result<
+                    ExpandedAppStateKeys,
+                    wacore::appstate::AppStateError,
+                > {
                     use base64::Engine;
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    key_cache
+                    keys_map
                         .get(&id_b64)
                         .cloned()
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 
-            // Reset state for snapshot processing
-            state = HashState::default();
-            let result = process_snapshot(
-                snapshot,
-                &mut state,
-                get_keys,
-                validate_macs,
-                collection_name,
-            )
+                let mut snapshot_state = HashState::default();
+                let result = process_snapshot(
+                    &snapshot_clone,
+                    &mut snapshot_state,
+                    get_keys,
+                    validate_macs,
+                    &collection_name_owned,
+                )?;
+                Ok::<_, wacore::appstate::AppStateError>((result, snapshot_state))
+            })
+            .await
+            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
 
-            new_mutations.extend(result.mutations);
+            let (snapshot_result, snapshot_state) = result;
+            state = snapshot_state;
+
+            new_mutations.extend(snapshot_result.mutations);
 
             // Persist state and MACs
             self.backend
                 .set_version(collection_name, state.clone())
                 .await?;
-            if !result.mutation_macs.is_empty() {
+            if !snapshot_result.mutation_macs.is_empty() {
                 self.backend
-                    .put_mutation_macs(collection_name, state.version, &result.mutation_macs)
+                    .put_mutation_macs(
+                        collection_name,
+                        state.version,
+                        &snapshot_result.mutation_macs,
+                    )
                     .await?;
             }
         }
+
+        // Snapshot the key cache once for all patches (prefetch_keys already populated it)
+        let keys_map = self.key_cache.lock().await.clone();
+        let collection_name_owned = collection_name.to_string();
 
         // Process patches
         for patch in &pl.patches {
@@ -154,33 +215,47 @@ impl AppStateProcessor {
                 }
             }
 
-            // Build callbacks for the pure processing function
-            let key_cache = self.key_cache.lock().await;
-            let get_keys =
-                |key_id: &[u8]| -> Result<ExpandedAppStateKeys, wacore::appstate::AppStateError> {
+            // Clone data for blocking task
+            let patch_clone = patch.clone();
+            let state_clone = state.clone();
+            let keys = keys_map.clone();
+            let coll = collection_name_owned.clone();
+
+            // Offload CPU-intensive patch processing to a blocking thread
+            let result = tokio::task::spawn_blocking(move || {
+                let get_keys = |key_id: &[u8]| -> Result<
+                    ExpandedAppStateKeys,
+                    wacore::appstate::AppStateError,
+                > {
                     use base64::Engine;
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    key_cache
-                        .get(&id_b64)
+                    keys.get(&id_b64)
                         .cloned()
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 
-            let get_prev_value_mac = |index_mac: &[u8]| -> Result<
-                Option<Vec<u8>>,
-                wacore::appstate::AppStateError,
-            > { Ok(db_prev.get(index_mac).cloned()) };
+                let get_prev_value_mac = |index_mac: &[u8]| -> Result<
+                    Option<Vec<u8>>,
+                    wacore::appstate::AppStateError,
+                > { Ok(db_prev.get(index_mac).cloned()) };
 
-            let result = process_patch(
-                patch,
-                &mut state,
-                get_keys,
-                get_prev_value_mac,
-                validate_macs,
-                collection_name,
-            )
+                let mut state = state_clone;
+                process_patch(
+                    &patch_clone,
+                    &mut state,
+                    get_keys,
+                    get_prev_value_mac,
+                    validate_macs,
+                    &coll,
+                )
+            })
+            .await
+            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
+
+            // Update local state with the result from the blocking task
+            state = result.state;
 
             new_mutations.extend(result.mutations);
 
@@ -269,6 +344,7 @@ mod tests {
         AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
         ProtocolStore, SignalStore,
     };
+    use wacore_binary::jid::Jid;
 
     type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
 
@@ -387,10 +463,10 @@ mod tests {
     // Implement ProtocolStore - WhatsApp Web protocol alignment
     #[async_trait]
     impl ProtocolStore for MockBackend {
-        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<String>> {
+        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<Jid>> {
             Ok(vec![])
         }
-        async fn add_skdm_recipients(&self, _: &str, _: &[String]) -> StoreResult<()> {
+        async fn add_skdm_recipients(&self, _: &str, _: &[Jid]) -> StoreResult<()> {
             Ok(())
         }
         async fn clear_skdm_recipients(&self, _: &str) -> StoreResult<()> {
@@ -521,9 +597,9 @@ mod tests {
             version: 1,
             ..Default::default()
         };
-        let (warnings, res) =
+        let (hash_result, res) =
             initial_state.update_hash(std::slice::from_ref(&original_mutation), |_, _| Ok(None));
-        assert!(res.is_ok() && warnings.is_empty());
+        assert!(res.is_ok() && !hash_result.has_missing_remove);
         backend
             .set_version(collection_name.as_str(), initial_state.clone())
             .await

@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::pair_code::PairCodeOptions;
+use crate::store::commands::DeviceCommand;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::store::traits::Backend;
 use crate::types::enc_handler::EncHandler;
@@ -28,9 +29,28 @@ impl MessageContext {
             .await
     }
 
+    /// Build a quote context for this message.
+    ///
+    /// Handles:
+    /// - Correct stanza_id/participant (newsletters + group status)
+    /// - Stripping nested mentions to avoid accidental tags
+    /// - Preserving bot quote chains (matches WhatsApp Web)
+    ///
+    /// Use this when you need manual control but want correct quoting behavior.
+    pub fn build_quote_context(&self) -> wa::ContextInfo {
+        // Use the standalone function from wacore with full message info
+        // This handles newsletter/group status participant resolution
+        wacore::proto_helpers::build_quote_context_with_info(
+            &self.info.id,
+            &self.info.source.sender,
+            &self.info.source.chat,
+            &self.message,
+        )
+    }
+
     pub async fn edit_message(
         &self,
-        original_message_id: String,
+        original_message_id: impl Into<String>,
         new_message: wa::Message,
     ) -> Result<String, anyhow::Error> {
         self.client
@@ -39,6 +59,17 @@ impl MessageContext {
                 original_message_id,
                 new_message,
             )
+            .await
+    }
+
+    /// Delete a message for everyone in the chat.
+    pub async fn revoke_message(
+        &self,
+        message_id: String,
+        revoke_type: crate::send::RevokeType,
+    ) -> Result<(), anyhow::Error> {
+        self.client
+            .revoke_message(self.info.source.chat.clone(), message_id, revoke_type)
             .await
     }
 }
@@ -174,7 +205,11 @@ pub struct BotBuilder {
     transport_factory: Option<Arc<dyn crate::transport::TransportFactory>>,
     http_client: Option<Arc<dyn crate::http::HttpClient>>,
     override_version: Option<(u32, u32, u32)>,
-    os_info: Option<(Option<String>, Option<wa::device_props::AppVersion>)>,
+    os_info: Option<(
+        Option<String>,
+        Option<wa::device_props::AppVersion>,
+        Option<wa::device_props::PlatformType>,
+    )>,
     pair_code_options: Option<PairCodeOptions>,
 }
 
@@ -307,44 +342,55 @@ impl BotBuilder {
         self
     }
 
-    /// Override the OS information sent to WhatsApp servers.
-    /// This allows customizing the device properties that WhatsApp sees.
+    /// Override the device properties sent to WhatsApp servers.
+    /// This allows customizing how your device appears on the linked devices list.
     ///
     /// # Arguments
-    /// * `os_name` - Optional OS name (e.g., "Android", "iOS", "Windows")
-    /// * `version` - Optional OS version as AppVersion struct
+    /// * `os_name` - Optional OS name (e.g., "macOS", "Windows", "Linux")
+    /// * `version` - Optional app version as AppVersion struct
+    /// * `platform_type` - Optional platform type that determines the device name shown
+    ///   on the phone's linked devices list (e.g., Chrome, Firefox, Safari, Desktop)
     ///
-    /// You can pass `None` for either parameter to keep the default value.
+    /// **Important**: The `platform_type` determines what device name is shown on the phone.
+    /// Common values: `Chrome`, `Firefox`, `Safari`, `Edge`, `Desktop`, `Ipad`, etc.
+    /// If not set, defaults to `Unknown` which shows as "Unknown device".
+    ///
+    /// You can pass `None` for any parameter to keep the default value.
     ///
     /// # Example
     /// ```rust,ignore
-    /// use waproto::whatsapp::device_props;
+    /// use waproto::whatsapp::device_props::{self, PlatformType};
     ///
-    /// // Set only OS name, keep default version
+    /// // Show as "Chrome" on linked devices
     /// let bot = Bot::builder()
     ///     .with_backend(backend)
-    ///     .with_os_info(Some("Android".to_string()), None)
+    ///     .with_device_props(
+    ///         Some("macOS".to_string()),
+    ///         Some(device_props::AppVersion {
+    ///             primary: Some(2),
+    ///             secondary: Some(0),
+    ///             tertiary: Some(0),
+    ///             ..Default::default()
+    ///         }),
+    ///         Some(PlatformType::Chrome),
+    ///     )
     ///     .build()
     ///     .await?;
     ///
-    /// // Set only version, keep default OS
+    /// // Show as "Desktop" on linked devices
     /// let bot = Bot::builder()
     ///     .with_backend(backend)
-    ///     .with_os_info(None, Some(device_props::AppVersion {
-    ///         primary: Some(10),
-    ///         secondary: Some(0),
-    ///         tertiary: Some(0),
-    ///         ..Default::default()
-    ///     }))
+    ///     .with_device_props(None, None, Some(PlatformType::Desktop))
     ///     .build()
     ///     .await?;
     /// ```
-    pub fn with_os_info(
+    pub fn with_device_props(
         mut self,
         os_name: Option<String>,
         version: Option<wa::device_props::AppVersion>,
+        platform_type: Option<wa::device_props::PlatformType>,
     ) -> Self {
-        self.os_info = Some((os_name, version));
+        self.os_info = Some((os_name, version, platform_type));
         self
     }
 
@@ -417,13 +463,18 @@ impl BotBuilder {
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
 
-        // Apply OS info override if specified
-        if let Some((os_name, version)) = self.os_info {
-            info!("Applying OS info override: {:?} {:?}", os_name, version);
+        // Apply device props override if specified
+        if let Some((os_name, version, platform_type)) = self.os_info {
+            info!(
+                "Applying device props override: os={:?}, version={:?}, platform_type={:?}",
+                os_name, version, platform_type
+            );
             persistence_manager
-                .modify_device(|device| {
-                    device.set_device_props(os_name, version);
-                })
+                .process_command(DeviceCommand::SetDeviceProps(
+                    os_name,
+                    version,
+                    platform_type,
+                ))
                 .await;
         }
 
@@ -635,7 +686,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bot_builder_with_os_info_override() {
+    async fn test_bot_builder_with_device_props_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();
         let http_client = MockHttpClient;
@@ -652,16 +703,16 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_os_info(Some(custom_os.clone()), Some(custom_version))
+            .with_device_props(Some(custom_os.clone()), Some(custom_version), None)
             .build()
             .await
-            .expect("Failed to build bot with OS info override");
+            .expect("Failed to build bot with device props override");
 
         let client = bot.client();
         let persistence_manager = client.persistence_manager();
         let device = persistence_manager.get_device_snapshot().await;
 
-        // Verify the OS info was overridden
+        // Verify the device props were overridden
         assert_eq!(device.device_props.os, Some(custom_os));
         assert_eq!(device.device_props.version, Some(custom_version));
     }
@@ -678,7 +729,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_os_info(Some(custom_os.clone()), None)
+            .with_device_props(Some(custom_os.clone()), None, None)
             .build()
             .await
             .expect("Failed to build bot with OS only override");
@@ -713,7 +764,7 @@ mod tests {
             .with_backend(backend)
             .with_http_client(http_client)
             .with_transport_factory(transport)
-            .with_os_info(None, Some(custom_version))
+            .with_device_props(None, Some(custom_version), None)
             .build()
             .await
             .expect("Failed to build bot with version only override");
@@ -728,6 +779,82 @@ mod tests {
         assert_eq!(
             device.device_props.os,
             Some(wacore::store::Device::default_os().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_platform_type_override() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(http_client)
+            .with_device_props(None, None, Some(wa::device_props::PlatformType::Chrome))
+            .build()
+            .await
+            .expect("Failed to build bot with platform type override");
+
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+        let device = persistence_manager.get_device_snapshot().await;
+
+        // Verify platform type was set to Chrome
+        assert_eq!(
+            device.device_props.platform_type,
+            Some(wa::device_props::PlatformType::Chrome as i32)
+        );
+        // OS and version should remain default
+        assert_eq!(
+            device.device_props.os,
+            Some(wacore::store::Device::default_os().to_string())
+        );
+        assert_eq!(
+            device.device_props.version,
+            Some(wacore::store::Device::default_device_props_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_with_full_device_props_override() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
+
+        let custom_os = "macOS".to_string();
+        let custom_version = wa::device_props::AppVersion {
+            primary: Some(2),
+            secondary: Some(0),
+            tertiary: Some(0),
+            ..Default::default()
+        };
+        let custom_platform = wa::device_props::PlatformType::Safari;
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(http_client)
+            .with_device_props(
+                Some(custom_os.clone()),
+                Some(custom_version),
+                Some(custom_platform),
+            )
+            .build()
+            .await
+            .expect("Failed to build bot with full device props override");
+
+        let client = bot.client();
+        let persistence_manager = client.persistence_manager();
+        let device = persistence_manager.get_device_snapshot().await;
+
+        // Verify all device props were overridden
+        assert_eq!(device.device_props.os, Some(custom_os));
+        assert_eq!(device.device_props.version, Some(custom_version));
+        assert_eq!(
+            device.device_props.platform_type,
+            Some(custom_platform as i32)
         );
     }
 }

@@ -1,11 +1,12 @@
 use std::io::Write;
 
+use core::simd::Select;
 use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
 use crate::error::Result;
-use crate::jid::{self, JidRef};
-use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, ValueRef};
+use crate::jid::{self, Jid, JidRef};
+use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, NodeValue, ValueRef};
 use crate::token;
 
 /// Trait for encoding node structures (both owned Node and borrowed NodeRef).
@@ -39,7 +40,10 @@ impl EncodeNode for Node {
     fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
         for (k, v) in &self.attrs {
             encoder.write_string(k)?;
-            encoder.write_string(v)?;
+            match v {
+                NodeValue::String(s) => encoder.write_string(s)?,
+                NodeValue::Jid(jid) => encoder.write_jid_owned(jid)?,
+            }
         }
         Ok(())
     }
@@ -214,6 +218,10 @@ impl<W: Write> Encoder<W> {
             return Ok(());
         }
 
+        // Optimization: JID formats are tightly bounded (max ~41 chars for user+agent+device
+        // with domain). Use a small headroom threshold to avoid scanning long text payloads.
+        let is_likely_jid = s.len() <= 48;
+
         if let Some(token) = token::index_of_single_token(s) {
             self.write_u8(token)?;
         } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
@@ -223,7 +231,7 @@ impl<W: Write> Encoder<W> {
             self.write_packed_bytes(s, token::NIBBLE_8)?;
         } else if Self::validate_hex(s) {
             self.write_packed_bytes(s, token::HEX_8)?;
-        } else if let Some(jid) = parse_jid(s) {
+        } else if is_likely_jid && let Some(jid) = parse_jid(s) {
             self.write_jid(&jid)?;
         } else {
             self.write_bytes_with_len(s.as_bytes())?;
@@ -252,6 +260,28 @@ impl<W: Write> Encoder<W> {
     /// Write a JidRef directly without converting to string first.
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
+        if jid.device > 0 {
+            // AD_JID format: agent/domain_type, device, user
+            self.write_u8(token::AD_JID)?;
+            self.write_u8(jid.agent)?;
+            self.write_u8(jid.device as u8)?;
+            self.write_string(&jid.user)?;
+        } else {
+            // JID_PAIR format: user, server
+            self.write_u8(token::JID_PAIR)?;
+            if jid.user.is_empty() {
+                self.write_u8(token::LIST_EMPTY)?;
+            } else {
+                self.write_string(&jid.user)?;
+            }
+            self.write_string(&jid.server)?;
+        }
+        Ok(())
+    }
+
+    /// Write an owned Jid directly without converting to string first.
+    /// This avoids the allocation that would occur with `jid.to_string()`.
+    fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
             self.write_u8(token::AD_JID)?;
@@ -347,7 +377,7 @@ impl<W: Write> Encoder<W> {
             };
 
             let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
-            let packed = (evens << Simd::splat(4)) | odds;
+            let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
             let packed_bytes = packed.to_array();
             self.write_raw_bytes(&packed_bytes[..8])?;
 
@@ -632,8 +662,8 @@ mod tests {
         use crate::decoder::Decoder;
 
         let mut attrs = Attrs::new();
-        attrs.insert("key".to_string(), "".to_string()); // Empty value
-        attrs.insert("".to_string(), "value".to_string()); // Empty key
+        attrs.insert("key".to_string(), ""); // Empty value
+        attrs.insert("".to_string(), "value"); // Empty key
 
         let node = Node::new("test", attrs, Some(NodeContent::String("".to_string())));
 
@@ -645,14 +675,79 @@ mod tests {
         let decoded = decoder.read_node_ref()?.to_owned();
 
         assert_eq!(decoded.tag, "test");
-        assert_eq!(decoded.attrs.get("key"), Some(&"".to_string()));
-        assert_eq!(decoded.attrs.get(""), Some(&"value".to_string()));
+        assert_eq!(
+            decoded.attrs.get("key"),
+            Some(&NodeValue::String("".to_string()))
+        );
+        assert_eq!(
+            decoded.attrs.get(""),
+            Some(&NodeValue::String("value".to_string()))
+        );
 
         // Empty strings are encoded as BINARY_8 + 0, which decodes as empty bytes
         match &decoded.content {
             Some(NodeContent::Bytes(b)) => assert!(b.is_empty(), "Content should be empty bytes"),
             other => panic!("Expected empty bytes, got {:?}", other),
         }
+        Ok(())
+    }
+
+    /// Test the JID parsing optimization: short JIDs should still be parsed,
+    /// while long strings should be encoded as raw bytes.
+    #[test]
+    fn test_jid_length_heuristic() -> TestResult {
+        use crate::decoder::Decoder;
+        use crate::token;
+
+        // Short JID: should be encoded as JID token (256 bytes or less)
+        let short_jid = "user@s.whatsapp.net";
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_string(short_jid)?;
+
+        // JID_PAIR token indicates JID encoding was used
+        assert_eq!(
+            buffer[1],
+            token::JID_PAIR,
+            "Short JID should be encoded as JID_PAIR token"
+        );
+
+        // Long string (> 256 chars): should be encoded as raw bytes, not as JID
+        let long_text = "x".repeat(300) + "@s.whatsapp.net";
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_string(&long_text)?;
+
+        // BINARY_20 token indicates raw bytes encoding (length > 255)
+        assert_eq!(
+            buffer[1],
+            token::BINARY_20,
+            "Long string should be encoded as BINARY_20, not as JID"
+        );
+
+        // Verify round-trip for long string
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(long_text.clone())),
+        );
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match &decoded.content {
+            Some(NodeContent::Bytes(b)) => {
+                assert_eq!(
+                    String::from_utf8_lossy(b),
+                    long_text,
+                    "Long string should round-trip correctly"
+                );
+            }
+            other => panic!("Expected bytes content, got {:?}", other),
+        }
+
         Ok(())
     }
 }

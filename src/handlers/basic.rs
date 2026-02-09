@@ -73,7 +73,7 @@ impl StanzaHandler for AckHandler {
                 if let Some(call_id_str) = node
                     .get_optional_child("relay")
                     .and_then(|r| r.attrs.get("call-id"))
-                    .cloned()
+                    .map(|v| v.to_string())
                 {
                     info!(
                         "Received offer ACK with relay data for call {}: {} endpoints, hbh_key={} bytes, relay_key={} bytes",

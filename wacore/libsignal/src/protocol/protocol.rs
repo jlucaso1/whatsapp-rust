@@ -7,6 +7,7 @@ use hmac::{Hmac, Mac};
 use prost::Message;
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
+use std::sync::OnceLock;
 use subtle::ConstantTimeEq;
 
 use crate::protocol::state::{PreKeyId, SignedPreKeyId};
@@ -374,13 +375,31 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SenderKeyMessage {
     message_version: u8,
     chain_id: u32,
     iteration: u32,
-    ciphertext: Box<[u8]>,
     serialized: Box<[u8]>,
+    // Ciphertext is cached after the first parse to avoid re-decoding.
+    ciphertext_cache: OnceLock<Box<[u8]>>,
+}
+
+impl Clone for SenderKeyMessage {
+    fn clone(&self) -> Self {
+        let ciphertext_cache = OnceLock::new();
+        if let Some(ciphertext) = self.ciphertext_cache.get() {
+            let _ = ciphertext_cache.set(ciphertext.clone());
+        }
+
+        Self {
+            message_version: self.message_version,
+            chain_id: self.chain_id,
+            iteration: self.iteration,
+            serialized: self.serialized.clone(),
+            ciphertext_cache,
+        }
+    }
 }
 
 impl SenderKeyMessage {
@@ -397,7 +416,7 @@ impl SenderKeyMessage {
         let proto_message = waproto::whatsapp::SenderKeyMessage {
             id: Some(chain_id),
             iteration: Some(iteration),
-            ciphertext: Some(Vec::from(ciphertext.as_ref())),
+            ciphertext: Some(ciphertext.into_vec()),
         };
 
         // Build serialized buffer directly: [version_byte || proto || signature]
@@ -420,8 +439,8 @@ impl SenderKeyMessage {
             message_version,
             chain_id,
             iteration,
-            ciphertext,
             serialized: serialized.into_boxed_slice(),
+            ciphertext_cache: OnceLock::new(),
         })
     }
 
@@ -449,9 +468,36 @@ impl SenderKeyMessage {
         self.iteration
     }
 
-    #[inline]
-    pub fn ciphertext(&self) -> &[u8] {
-        &self.ciphertext
+    /// Returns the ciphertext, parsing and caching it on first access.
+    ///
+    /// The ciphertext is extracted from the protobuf-encoded `serialized` bytes
+    /// and cached to avoid repeated parsing.
+    ///
+    /// # Performance Note
+    ///
+    /// Callers should avoid calling this in hot loops when possible.
+    pub fn ciphertext(&self) -> Result<&[u8]> {
+        if let Some(ciphertext) = self.ciphertext_cache.get() {
+            return Ok(ciphertext.as_ref());
+        }
+
+        let ciphertext = self.decode_ciphertext()?;
+        let _ = self.ciphertext_cache.set(ciphertext);
+        match self.ciphertext_cache.get() {
+            Some(ciphertext) => Ok(ciphertext.as_ref()),
+            None => Err(SignalProtocolError::InvalidProtobufEncoding),
+        }
+    }
+
+    fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
+        // serialized layout: [version_byte || protobuf || signature]
+        let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
+        let proto = waproto::whatsapp::SenderKeyMessage::decode(proto_bytes)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
+        let ciphertext = proto
+            .ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
+        Ok(ciphertext.into_boxed_slice())
     }
 
     #[inline]
@@ -500,12 +546,15 @@ impl TryFrom<&[u8]> for SenderKeyMessage {
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
             .into_boxed_slice();
 
+        let ciphertext_cache = OnceLock::new();
+        let _ = ciphertext_cache.set(ciphertext);
+
         Ok(SenderKeyMessage {
             message_version,
             chain_id,
             iteration,
-            ciphertext,
             serialized: Box::from(value),
+            ciphertext_cache,
         })
     }
 }

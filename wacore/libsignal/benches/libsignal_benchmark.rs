@@ -7,12 +7,13 @@ use iai_callgrind::{
 };
 use std::hint::black_box;
 use wacore_libsignal::protocol::{
-    CiphertextMessage, Direction, GenericSignedPreKey, IdentityChange, IdentityKey,
-    IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore,
-    ProtocolAddress, SenderKeyRecord, SenderKeyStore, SessionRecord, SessionStore, SignedPreKeyId,
-    SignedPreKeyRecord, SignedPreKeyStore, Timestamp, UsePQRatchet,
-    create_sender_key_distribution_message, group_decrypt, group_encrypt, message_decrypt,
-    message_encrypt, process_prekey_bundle, process_sender_key_distribution_message,
+    ChainKey, CiphertextMessage, Direction, GenericSignedPreKey, IdentityChange, IdentityKey,
+    IdentityKeyPair, IdentityKeyStore, KeyPair, MessageKeyGenerator, PreKeyBundle, PreKeyId,
+    PreKeyRecord, PreKeyStore, ProtocolAddress, RootKey, SenderKeyRecord, SenderKeyStore,
+    SessionRecord, SessionState, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
+    SignedPreKeyStore, Timestamp, UsePQRatchet, consts, create_sender_key_distribution_message,
+    group_decrypt, group_encrypt, message_decrypt, message_encrypt, process_prekey_bundle,
+    process_sender_key_distribution_message,
 };
 use wacore_libsignal::store::sender_key_name::SenderKeyName;
 
@@ -37,7 +38,7 @@ impl IdentityKeyStore for InMemoryIdentityKeyStore {
     async fn get_identity_key_pair(
         &self,
     ) -> wacore_libsignal::protocol::error::Result<IdentityKeyPair> {
-        Ok(self.identity_key_pair)
+        Ok(self.identity_key_pair.clone())
     }
 
     async fn get_local_registration_id(&self) -> wacore_libsignal::protocol::error::Result<u32> {
@@ -688,6 +689,551 @@ fn bench_full_dm_conversation(data: (User, User)) {
     black_box((alice, bob));
 }
 
+// Signature-specific benchmarks to measure the XEdDSA optimization
+fn setup_keypair_with_message() -> (KeyPair, [u8; 64]) {
+    let mut rng = rand::rng();
+    let keypair = KeyPair::generate(&mut rng);
+    let message = [0x42u8; 64]; // Fixed message for consistent benchmarking
+    (keypair, message)
+}
+
+// Benchmark raw signature creation (the main target of the caching optimization).
+// This measures signing with a pre-created key, which is the common case in real usage.
+#[library_benchmark]
+#[bench::sign(setup = setup_keypair_with_message)]
+fn bench_signature_creation(data: (KeyPair, [u8; 64])) {
+    let (keypair, message) = data;
+    let mut rng = rand::rng();
+
+    // Sign multiple times to amortize any setup overhead
+    for _ in 0..10 {
+        let signature = keypair
+            .calculate_signature(&message, &mut rng)
+            .expect("signature");
+        black_box(signature);
+    }
+}
+
+// Benchmark signature verification
+#[library_benchmark]
+#[bench::verify(setup = setup_keypair_with_message)]
+fn bench_signature_verification(data: (KeyPair, [u8; 64])) {
+    let (keypair, message) = data;
+    let mut rng = rand::rng();
+    let signature = keypair
+        .calculate_signature(&message, &mut rng)
+        .expect("signature");
+
+    // Verify multiple times
+    for _ in 0..10 {
+        let valid = keypair.public_key.verify_signature(&message, &signature);
+        black_box(valid);
+    }
+}
+
+// Benchmark key generation (shows the added cost of caching)
+#[library_benchmark]
+#[bench::keygen()]
+fn bench_key_generation() {
+    let mut rng = rand::rng();
+    for _ in 0..10 {
+        let keypair = KeyPair::generate(&mut rng);
+        black_box(keypair);
+    }
+}
+
+/// Creates a session with multiple archived previous sessions.
+/// This simulates a scenario where Alice has re-keyed multiple times.
+fn setup_with_archived_sessions() -> (User, User, Vec<Vec<u8>>) {
+    let mut alice = User::new("alice", 1);
+    let mut bob = User::new("bob", 1);
+    let mut rng = rand::rng();
+
+    // Store ciphertexts encrypted with each session version
+    let mut old_ciphertexts = Vec::new();
+
+    futures::executor::block_on(async {
+        // Create initial session and send first message
+        let bob_bundle = bob.get_prekey_bundle();
+        process_prekey_bundle(
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+            &bob_bundle,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("session 1");
+
+        // Send a message with this session (to be used for previous session decryption)
+        let msg = message_encrypt(
+            b"Message from session 1",
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+        )
+        .await
+        .expect("encrypt");
+        old_ciphertexts.push(msg.serialize().to_vec());
+
+        // Bob processes Alice's first message to establish his side
+        let ct = CiphertextMessage::PreKeySignalMessage(
+            wacore_libsignal::protocol::PreKeySignalMessage::try_from(
+                old_ciphertexts[0].as_slice(),
+            )
+            .unwrap(),
+        );
+        message_decrypt(
+            &ct,
+            &alice.address,
+            &mut bob.session_store,
+            &mut bob.identity_store,
+            &mut bob.prekey_store,
+            &bob.signed_prekey_store,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("decrypt");
+
+        // Now create multiple new sessions to archive the old one
+        // Each new PreKey message from Alice will archive Bob's current session
+        for i in 2..=10 {
+            // Alice creates a fresh session (simulating re-keying)
+            alice.session_store = InMemorySessionStore::new();
+
+            // Generate new prekeys for Bob
+            bob.prekey_id = (i as u32).into();
+            bob.prekey_pair = KeyPair::generate(&mut rng);
+            let prekey_record = PreKeyRecord::new(bob.prekey_id, &bob.prekey_pair);
+            bob.prekey_store
+                .save_pre_key(bob.prekey_id, &prekey_record)
+                .await
+                .unwrap();
+
+            let bob_bundle = bob.get_prekey_bundle();
+            process_prekey_bundle(
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+                &bob_bundle,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("new session");
+
+            // Send PreKey message to establish new session on Bob's side
+            let msg = message_encrypt(
+                format!("Message from session {}", i).as_bytes(),
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+            )
+            .await
+            .expect("encrypt");
+
+            let ct = CiphertextMessage::PreKeySignalMessage(
+                wacore_libsignal::protocol::PreKeySignalMessage::try_from(msg.serialize()).unwrap(),
+            );
+            message_decrypt(
+                &ct,
+                &alice.address,
+                &mut bob.session_store,
+                &mut bob.identity_store,
+                &mut bob.prekey_store,
+                &bob.signed_prekey_store,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("decrypt");
+
+            // Store the message encrypted with this session
+            let msg2 = message_encrypt(
+                format!("Another message from session {}", i).as_bytes(),
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+            )
+            .await
+            .expect("encrypt");
+            old_ciphertexts.push(msg2.serialize().to_vec());
+        }
+    });
+
+    (alice, bob, old_ciphertexts)
+}
+
+// Benchmark decryption that requires searching through previous sessions.
+// This tests the take/restore optimization for previous session iteration.
+#[library_benchmark]
+#[bench::previous_session(setup = setup_with_archived_sessions)]
+fn bench_decrypt_with_previous_session(data: (User, User, Vec<Vec<u8>>)) {
+    let (alice, mut bob, ciphertexts) = data;
+    let mut rng = rand::rng();
+
+    // Try to decrypt an old message (encrypted with a previous session)
+    // This forces the decryption to iterate through previous sessions
+    futures::executor::block_on(async {
+        for ciphertext in ciphertexts.iter().take(5) {
+            // Try to parse as SignalMessage (non-PreKey)
+            if let Ok(signal_msg) =
+                wacore_libsignal::protocol::SignalMessage::try_from(ciphertext.as_slice())
+            {
+                let ct = CiphertextMessage::SignalMessage(signal_msg);
+                let result = message_decrypt(
+                    &ct,
+                    &alice.address,
+                    &mut bob.session_store,
+                    &mut bob.identity_store,
+                    &mut bob.prekey_store,
+                    &bob.signed_prekey_store,
+                    &mut rng,
+                    UsePQRatchet::No,
+                )
+                .await;
+                let _ = black_box(result);
+            }
+        }
+    });
+}
+
+// Setup for out-of-order message benchmark.
+// Creates a fully established session and prepares multiple SignalMessages.
+fn setup_out_of_order_messages() -> (User, User, Vec<Vec<u8>>) {
+    let (mut alice, mut bob) = setup_dm_session();
+    let mut messages = Vec::new();
+
+    futures::executor::block_on(async {
+        let mut rng = rand::rng();
+
+        // Alice sends initial PreKey message to Bob
+        let msg = message_encrypt(
+            b"Initial message",
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+        )
+        .await
+        .expect("encrypt");
+
+        let ct = CiphertextMessage::PreKeySignalMessage(
+            wacore_libsignal::protocol::PreKeySignalMessage::try_from(msg.serialize()).unwrap(),
+        );
+        message_decrypt(
+            &ct,
+            &alice.address,
+            &mut bob.session_store,
+            &mut bob.identity_store,
+            &mut bob.prekey_store,
+            &bob.signed_prekey_store,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("decrypt initial");
+
+        // Bob replies to Alice - this completes the session establishment
+        let reply = message_encrypt(
+            b"Reply from Bob",
+            &alice.address,
+            &mut bob.session_store,
+            &mut bob.identity_store,
+        )
+        .await
+        .expect("encrypt reply");
+
+        let ct_reply = CiphertextMessage::SignalMessage(
+            wacore_libsignal::protocol::SignalMessage::try_from(reply.serialize()).unwrap(),
+        );
+        message_decrypt(
+            &ct_reply,
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+            &mut alice.prekey_store,
+            &alice.signed_prekey_store,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("decrypt reply");
+
+        // Now Alice can send SignalMessages (not PreKey)
+        for i in 0..20 {
+            let msg = message_encrypt(
+                format!("Message {}", i).as_bytes(),
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+            )
+            .await
+            .expect("encrypt");
+            messages.push(msg.serialize().to_vec());
+        }
+    });
+
+    (alice, bob, messages)
+}
+
+// Benchmark out-of-order message decryption.
+// This tests the set_message_keys optimization (push vs insert(0)).
+// Messages are decrypted in reverse order, causing maximum message key storage.
+#[library_benchmark]
+#[bench::out_of_order(setup = setup_out_of_order_messages)]
+fn bench_out_of_order_decryption(data: (User, User, Vec<Vec<u8>>)) {
+    let (alice, mut bob, messages) = data;
+    let mut rng = rand::rng();
+
+    futures::executor::block_on(async {
+        // Decrypt messages in reverse order (worst case for message key storage)
+        for ciphertext in messages.iter().rev() {
+            let signal_msg =
+                wacore_libsignal::protocol::SignalMessage::try_from(ciphertext.as_slice())
+                    .expect("parse");
+            let ct = CiphertextMessage::SignalMessage(signal_msg);
+            let result = message_decrypt(
+                &ct,
+                &alice.address,
+                &mut bob.session_store,
+                &mut bob.identity_store,
+                &mut bob.prekey_store,
+                &bob.signed_prekey_store,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("decrypt");
+            black_box(result);
+        }
+    });
+}
+
+/// Setup for promote_matching_session benchmark.
+/// Creates a session record with many archived sessions, then creates a PreKey
+/// message that should match and promote one of the previous sessions.
+fn setup_promote_matching_session() -> (User, User, Vec<u8>) {
+    let mut alice = User::new("alice", 1);
+    let mut bob = User::new("bob", 1);
+    let mut rng = rand::rng();
+
+    let prekey_message = futures::executor::block_on(async {
+        // Create initial session
+        let bob_bundle = bob.get_prekey_bundle();
+        process_prekey_bundle(
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+            &bob_bundle,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("session");
+
+        // Send initial message to establish Bob's session
+        let msg = message_encrypt(
+            b"First contact",
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+        )
+        .await
+        .expect("encrypt");
+
+        let ct = CiphertextMessage::PreKeySignalMessage(
+            wacore_libsignal::protocol::PreKeySignalMessage::try_from(msg.serialize()).unwrap(),
+        );
+        message_decrypt(
+            &ct,
+            &alice.address,
+            &mut bob.session_store,
+            &mut bob.identity_store,
+            &mut bob.prekey_store,
+            &bob.signed_prekey_store,
+            &mut rng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("decrypt");
+
+        // Create many new sessions to push the original to previous_sessions
+        for i in 2..=20 {
+            // Generate new prekeys for Bob
+            bob.prekey_id = (i as u32).into();
+            bob.prekey_pair = KeyPair::generate(&mut rng);
+            let prekey_record = PreKeyRecord::new(bob.prekey_id, &bob.prekey_pair);
+            bob.prekey_store
+                .save_pre_key(bob.prekey_id, &prekey_record)
+                .await
+                .unwrap();
+
+            // Alice starts fresh session
+            alice.session_store = InMemorySessionStore::new();
+            let bob_bundle = bob.get_prekey_bundle();
+            process_prekey_bundle(
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+                &bob_bundle,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("new session");
+
+            let msg = message_encrypt(
+                format!("Session {}", i).as_bytes(),
+                &bob.address,
+                &mut alice.session_store,
+                &mut alice.identity_store,
+            )
+            .await
+            .expect("encrypt");
+
+            let ct = CiphertextMessage::PreKeySignalMessage(
+                wacore_libsignal::protocol::PreKeySignalMessage::try_from(msg.serialize()).unwrap(),
+            );
+            message_decrypt(
+                &ct,
+                &alice.address,
+                &mut bob.session_store,
+                &mut bob.identity_store,
+                &mut bob.prekey_store,
+                &bob.signed_prekey_store,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("decrypt");
+        }
+
+        // Now Alice sends another PreKey message with the CURRENT session
+        // This should trigger promote_matching_session to find and promote it
+        let final_msg = message_encrypt(
+            b"Final message with current session",
+            &bob.address,
+            &mut alice.session_store,
+            &mut alice.identity_store,
+        )
+        .await
+        .expect("encrypt");
+
+        final_msg.serialize().to_vec()
+    });
+
+    (alice, bob, prekey_message)
+}
+
+// Benchmark promote_matching_session during PreKey processing.
+// This tests the find_matching_previous_session_index optimization.
+#[library_benchmark]
+#[bench::promote(setup = setup_promote_matching_session)]
+fn bench_promote_matching_session(data: (User, User, Vec<u8>)) {
+    let (alice, mut bob, prekey_message) = data;
+    let mut rng = rand::rng();
+
+    futures::executor::block_on(async {
+        // Process multiple PreKey messages to exercise promote_matching_session
+        for _ in 0..5 {
+            let ct = CiphertextMessage::PreKeySignalMessage(
+                wacore_libsignal::protocol::PreKeySignalMessage::try_from(
+                    prekey_message.as_slice(),
+                )
+                .unwrap(),
+            );
+            let result = message_decrypt(
+                &ct,
+                &alice.address,
+                &mut bob.session_store,
+                &mut bob.identity_store,
+                &mut bob.prekey_store,
+                &bob.signed_prekey_store,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await;
+            let _ = black_box(result);
+        }
+    });
+}
+
+/// Helper function to create a test message key generator.
+fn create_test_message_key_generator(counter: u32) -> MessageKeyGenerator {
+    let mut seed = [0u8; 32];
+    seed[0] = counter as u8;
+    seed[1] = (counter >> 8) as u8;
+    seed[2] = (counter >> 16) as u8;
+    seed[3] = (counter >> 24) as u8;
+    MessageKeyGenerator::new_from_seed(&seed, counter)
+}
+
+/// Helper function to create a minimal valid SessionState for testing.
+fn create_test_session_state(
+    version: u8,
+    base_key: &wacore_libsignal::protocol::PublicKey,
+) -> SessionState {
+    let mut csprng = rand::rng();
+    let identity_keypair = KeyPair::generate(&mut csprng);
+    let their_identity = IdentityKey::new(identity_keypair.public_key);
+    let our_identity = IdentityKey::new(KeyPair::generate(&mut csprng).public_key);
+    let root_key = RootKey::new([0u8; 32]);
+
+    let mut state = SessionState::new(version, &our_identity, &their_identity, &root_key, base_key);
+
+    // Add a sender chain to make it usable
+    let sender_keypair = KeyPair::generate(&mut csprng);
+    let chain_key = ChainKey::new([1u8; 32], 0);
+    state.set_sender_chain(&sender_keypair, &chain_key);
+
+    state
+}
+
+/// Setup for message key eviction benchmark.
+/// Creates a session with a receiver chain pre-filled near capacity.
+fn setup_message_key_eviction() -> (SessionState, wacore_libsignal::protocol::PublicKey) {
+    let mut csprng = rand::rng();
+    let base_key = KeyPair::generate(&mut csprng).public_key;
+    let mut state = create_test_session_state(3, &base_key);
+
+    // Add a receiver chain
+    let sender_key = KeyPair::generate(&mut csprng).public_key;
+    let chain_key = ChainKey::new([2u8; 32], 0);
+    state.add_receiver_chain(&sender_key, &chain_key);
+
+    // Pre-fill the chain to MAX_MESSAGE_KEYS - 1 (one less than capacity)
+    // This simulates a session that has been receiving out-of-order messages
+    // and is about to hit the eviction threshold
+    for counter in 0..(consts::MAX_MESSAGE_KEYS - 1) as u32 {
+        let keys = create_test_message_key_generator(counter);
+        state.set_message_keys(&sender_key, keys).unwrap();
+    }
+
+    (state, sender_key)
+}
+
+// Benchmark message key insertion with amortized eviction.
+// This tests the set_message_keys optimization with PRUNE_THRESHOLD.
+// We insert 200 keys beyond MAX_MESSAGE_KEYS to measure multiple eviction cycles.
+#[library_benchmark]
+#[bench::eviction(setup = setup_message_key_eviction)]
+fn bench_message_key_eviction(data: (SessionState, wacore_libsignal::protocol::PublicKey)) {
+    let (mut state, sender_key) = data;
+    let start_counter = (consts::MAX_MESSAGE_KEYS - 1) as u32;
+
+    // Insert 200 keys beyond capacity - this will trigger eviction cycles
+    // With PRUNE_THRESHOLD=50, we expect ~4 eviction events
+    for i in 0..200u32 {
+        let counter = start_counter + i;
+        let keys = create_test_message_key_generator(counter);
+        state.set_message_keys(&sender_key, keys).unwrap();
+    }
+
+    black_box(state);
+}
+
 library_benchmark_group!(
     name = dm_group;
     benchmarks =
@@ -710,11 +1256,30 @@ library_benchmark_group!(
     benchmarks = bench_full_dm_conversation
 );
 
+library_benchmark_group!(
+    name = signature_group;
+    benchmarks =
+        bench_signature_creation,
+        bench_signature_verification,
+        bench_key_generation
+);
+
+library_benchmark_group!(
+    name = session_optimization_group;
+    benchmarks =
+        bench_decrypt_with_previous_session,
+        bench_out_of_order_decryption,
+        bench_promote_matching_session,
+        bench_message_key_eviction
+);
+
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
     library_benchmark_groups =
         dm_group,
         group_messaging_group,
-        conversation_group
+        conversation_group,
+        signature_group,
+        session_optimization_group
 );

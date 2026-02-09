@@ -27,17 +27,16 @@ impl StanzaHandler for MessageHandler {
     }
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        // Extract the chat ID (from attribute) to serialize processing for this chat.
+        // Extract the chat ID to serialize processing for this chat.
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
-        let chat_id = node.attrs().string("from");
-
-        if chat_id.is_empty() {
-            return false;
-        }
-
-        // Node is already Arc-wrapped - no cloning needed!
-        // This is the key optimization: we pass the same Arc through the system.
+        let chat_id = match node.attrs().optional_jid("from") {
+            Some(jid) => jid.to_string(),
+            None => {
+                warn!("Message stanza missing required 'from' attribute");
+                return false;
+            }
+        };
 
         // CRITICAL: Acquire the enqueue lock BEFORE getting/creating the queue.
         // This ensures that messages are enqueued in the exact order they arrive,
@@ -73,7 +72,7 @@ impl StanzaHandler for MessageHandler {
                 tokio::spawn(async move {
                     while let Some(msg_node) = rx.recv().await {
                         let client = client_for_worker.clone();
-                        Box::pin(client.handle_encrypted_message(msg_node)).await;
+                        Box::pin(client.handle_incoming_message(msg_node)).await;
                     }
                     // Clean up when channel closes to prevent memory leaks
                     queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;

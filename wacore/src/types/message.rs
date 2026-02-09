@@ -1,12 +1,57 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde::Serialize;
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Unique identifier for a message stanza within a chat.
+/// Used for deduplication and retry tracking.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StanzaKey {
+    pub chat: Jid,
+    pub id: MessageId,
+}
+
+impl StanzaKey {
+    pub fn new(chat: Jid, id: MessageId) -> Self {
+        Self { chat, id }
+    }
+}
+
+/// Addressing mode for a group (phone number vs LID).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AddressingMode {
+    #[default]
     Pn,
     Lid,
+}
+
+impl AddressingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AddressingMode::Pn => "pn",
+            AddressingMode::Lid => "lid",
+        }
+    }
+}
+
+impl std::fmt::Display for AddressingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<&str> for AddressingMode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "lid" => Ok(AddressingMode::Lid),
+            "pn" | "" => Ok(AddressingMode::Pn),
+            _ => Err(anyhow::anyhow!("unknown addressing_mode: {value}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -113,4 +158,60 @@ pub struct MessageInfo {
     pub meta_info: MsgMetaInfo,
     pub verified_name: Option<wa::VerifiedNameCertificate>,
     pub device_sent_meta: Option<DeviceSentMeta>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edit_attribute_parsing_and_serialization() {
+        // Test all known edit attribute values
+        let attrs = vec![
+            ("", EditAttribute::Empty),
+            ("1", EditAttribute::MessageEdit),
+            ("2", EditAttribute::PinInChat),
+            ("3", EditAttribute::AdminEdit),
+            ("7", EditAttribute::SenderRevoke),
+            ("8", EditAttribute::AdminRevoke),
+        ];
+
+        for (string_val, expected_attr) in attrs {
+            let parsed = EditAttribute::from(string_val.to_string());
+            assert_eq!(parsed, expected_attr);
+            assert_eq!(parsed.to_string_val(), string_val);
+        }
+
+        // Unknown values should be preserved
+        assert_eq!(
+            EditAttribute::from("99".to_string()),
+            EditAttribute::Unknown("99".to_string())
+        );
+        assert_eq!(
+            EditAttribute::Unknown("anything".to_string()).to_string_val(),
+            ""
+        );
+    }
+
+    #[test]
+    fn test_decrypt_fail_hide_logic_for_edits() {
+        // Documents the logic used in prepare_group_stanza (wacore/src/send.rs).
+        // The decrypt-fail="hide" attribute is added for edited messages to hide
+        // failed decryption attempts. However, admin revokes should NOT have it
+        // because WhatsApp Web doesn't include it, and the server rejects it.
+
+        fn should_add_decrypt_fail_hide(edit: &EditAttribute) -> bool {
+            *edit != EditAttribute::Empty && *edit != EditAttribute::AdminRevoke
+        }
+
+        // Should add decrypt-fail="hide"
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::MessageEdit));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::PinInChat));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::AdminEdit));
+        assert!(should_add_decrypt_fail_hide(&EditAttribute::SenderRevoke));
+
+        // Should NOT add decrypt-fail="hide"
+        assert!(!should_add_decrypt_fail_hide(&EditAttribute::Empty));
+        assert!(!should_add_decrypt_fail_hide(&EditAttribute::AdminRevoke));
+    }
 }

@@ -1,26 +1,18 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
+use crate::lid_pn_cache::LearningSource;
 use crate::types::events::Event;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
+use wacore::stanza::business::BusinessNotification;
+use wacore::stanza::devices::DeviceNotification;
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-use wacore::types::events::{DeviceListUpdate, DeviceListUpdateType};
+use wacore::types::events::{
+    BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
+};
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
-
-/// Extract device IDs from child `<device>` elements of a node.
-fn extract_device_ids(node: &Node) -> Vec<u32> {
-    node.children()
-        .map(|device_nodes| {
-            device_nodes
-                .iter()
-                .filter(|n| n.tag == "device")
-                .filter_map(|n| n.attrs().optional_u64("id").map(|id| id as u32))
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// Handler for `<notification>` stanzas.
 ///
@@ -64,7 +56,10 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Just acknowledge without syncing.
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name = collection_node.attrs().string("name");
+                    let name = collection_node
+                        .attrs()
+                        .optional_string("name")
+                        .unwrap_or("<unknown>");
                     let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
                     debug!(
                         target: "Client/AppState",
@@ -99,8 +94,13 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // This is sent when the user enters the code on their phone
             crate::pair_code::handle_pair_code_notification(client, node).await;
         }
+        "business" => {
+            // Handle business notification (WhatsApp Web: handleBusinessNotification)
+            // Notifies about business account status changes: verified name, profile, removal
+            handle_business_notification(client, node).await;
+        }
         _ => {
-            warn!(target: "Client", "TODO: Implement handler for <notification type='{notification_type}'>");
+            warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
                 .core
                 .event_bus
@@ -115,62 +115,59 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 /// Device notifications have the structure:
 /// ```xml
 /// <notification type="devices" from="user@s.whatsapp.net">
-///   <add> or <remove> or <update hash="...">
-///     <device id="1" />
-///     <device id="2" />
+///   <add device_hash="..."> or <remove device_hash="..."> or <update hash="...">
+///     <device jid="user:device@server"/>
+///     <key-index-list ts="..."/>
 ///   </add/remove/update>
 /// </notification>
 /// ```
 async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
-    // Extract user JID from the "from" attribute
-    let from_jid = match node.attrs().optional_jid("from") {
-        Some(jid) => jid,
-        None => {
-            warn!(target: "Client", "Device notification missing 'from' attribute");
+    // Parse using type-safe struct
+    let notification = match DeviceNotification::try_parse(node) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!("Failed to parse device notification: {e}");
             return;
         }
     };
 
-    let user = from_jid.user.clone();
-
-    // Determine update type and extract device list
-    let Some(children) = node.children() else {
-        warn!(target: "Client", "Device notification has no children");
-        return;
-    };
-
-    for child in children.iter() {
-        let (update_type, hash) = match child.tag.as_str() {
-            "add" => (DeviceListUpdateType::Add, None),
-            "remove" => (DeviceListUpdateType::Remove, None),
-            "update" => {
-                let hash = child.attrs().optional_string("hash").map(|s| s.to_string());
-                (DeviceListUpdateType::Update, hash)
-            }
-            _ => continue,
-        };
-
-        let devices = extract_device_ids(child);
-
-        debug!(
-            target: "Client",
-            "Device notification: user={}, type={:?}, devices={:?}, hash={:?}",
-            user, update_type, devices, hash
-        );
-
-        // Invalidate the device cache for this user
-        // This ensures the next lookup fetches fresh data
-        client.invalidate_device_cache(&user).await;
-
-        // Dispatch event to notify application layer
-        let event = Event::DeviceListUpdate(DeviceListUpdate {
-            user: from_jid.clone(),
-            update_type,
-            devices,
-            hash,
-        });
-        client.core.event_bus.dispatch(&event);
+    // Learn LID-PN mapping if present
+    if let Some((lid, pn)) = notification.lid_pn_mapping()
+        && let Err(e) = client
+            .add_lid_pn_mapping(lid, pn, LearningSource::DeviceNotification)
+            .await
+    {
+        warn!("Failed to add LID-PN mapping from device notification: {e}");
     }
+
+    // Process the single operation (per WhatsApp Web: one operation per notification)
+    let op = &notification.operation;
+    debug!(
+        "Device notification: user={}, type={:?}, devices={:?}",
+        notification.user(),
+        op.operation_type,
+        op.device_ids()
+    );
+
+    client.invalidate_device_cache(notification.user()).await;
+
+    // Dispatch event to notify application layer
+    let event = Event::DeviceListUpdate(DeviceListUpdate {
+        user: notification.from.clone(),
+        lid_user: notification.lid_user.clone(),
+        update_type: op.operation_type.into(),
+        devices: op
+            .devices
+            .iter()
+            .map(|d| DeviceNotificationInfo {
+                device_id: d.device_id(),
+                key_index: d.key_index,
+            })
+            .collect(),
+        key_index: op.key_index.clone(),
+        contact_hash: op.contact_hash.clone(),
+    });
+    client.core.event_bus.dispatch(&event);
 }
 
 /// Parsed device info from account_sync notification
@@ -310,57 +307,113 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
     }
 }
 
+/// Handle business notification (WhatsApp Web: `WAWebHandleBusinessNotification`).
+async fn handle_business_notification(client: &Arc<Client>, node: &Node) {
+    let notification = match BusinessNotification::try_parse(node) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(target: "Client/Business", "Failed to parse business notification: {e}");
+            return;
+        }
+    };
+
+    debug!(
+        target: "Client/Business",
+        "Business notification: from={}, type={}, jid={:?}",
+        notification.from,
+        notification.notification_type,
+        notification.jid
+    );
+
+    let update_type = BusinessUpdateType::from(notification.notification_type.clone());
+    let verified_name = notification
+        .verified_name
+        .as_ref()
+        .and_then(|vn| vn.name.clone());
+
+    let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
+        jid: notification.from.clone(),
+        update_type,
+        timestamp: notification.timestamp,
+        target_jid: notification.jid.clone(),
+        hash: notification.hash.clone(),
+        verified_name,
+        product_ids: notification.product_ids.clone(),
+        collection_ids: notification.collection_ids.clone(),
+        subscriptions: notification.subscriptions.clone(),
+    });
+
+    match notification.notification_type {
+        wacore::stanza::business::BusinessNotificationType::RemoveJid
+        | wacore::stanza::business::BusinessNotificationType::RemoveHash => {
+            info!(
+                target: "Client/Business",
+                "Contact {} is no longer a business account",
+                notification.from
+            );
+        }
+        wacore::stanza::business::BusinessNotificationType::VerifiedNameJid
+        | wacore::stanza::business::BusinessNotificationType::VerifiedNameHash => {
+            if let Some(name) = &notification
+                .verified_name
+                .as_ref()
+                .and_then(|vn| vn.name.as_ref())
+            {
+                info!(
+                    target: "Client/Business",
+                    "Contact {} verified business name: {}",
+                    notification.from,
+                    name
+                );
+            }
+        }
+        wacore::stanza::business::BusinessNotificationType::Profile
+        | wacore::stanza::business::BusinessNotificationType::ProfileHash => {
+            debug!(
+                target: "Client/Business",
+                "Contact {} business profile updated (hash: {:?})",
+                notification.from,
+                notification.hash
+            );
+        }
+        _ => {}
+    }
+
+    client.core.event_bus.dispatch(&event);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wacore::stanza::devices::DeviceNotificationType;
     use wacore::types::events::DeviceListUpdateType;
     use wacore_binary::builder::NodeBuilder;
 
-    /// Helper to parse device notification and extract update info
-    fn parse_device_notification_info(
-        node: &wacore_binary::node::Node,
-    ) -> Vec<(DeviceListUpdateType, Vec<u32>, Option<String>)> {
-        let Some(children) = node.children() else {
-            return vec![];
-        };
-
-        let mut results = vec![];
-        for child in children.iter() {
-            let (update_type, hash) = match child.tag.as_str() {
-                "add" => (DeviceListUpdateType::Add, None),
-                "remove" => (DeviceListUpdateType::Remove, None),
-                "update" => {
-                    let hash = child.attrs().optional_string("hash").map(|s| s.to_string());
-                    (DeviceListUpdateType::Update, hash)
-                }
-                _ => continue,
-            };
-
-            let devices = extract_device_ids(child);
-
-            results.push((update_type, devices, hash));
-        }
-        results
-    }
-
     #[test]
     fn test_parse_device_add_notification() {
+        // Per WhatsApp Web: add operation has single device + key-index-list
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([NodeBuilder::new("add")
                 .children([
-                    NodeBuilder::new("device").attr("id", "1").build(),
-                    NodeBuilder::new("device").attr("id", "2").build(),
+                    NodeBuilder::new("device")
+                        .attr("jid", "1234567890:1@s.whatsapp.net")
+                        .build(),
+                    NodeBuilder::new("key-index-list")
+                        .attr("ts", "1000")
+                        .bytes(vec![0x01, 0x02, 0x03])
+                        .build(),
                 ])
                 .build()])
             .build();
 
-        let results = parse_device_notification_info(&node);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, DeviceListUpdateType::Add);
-        assert_eq!(results[0].1, vec![1, 2]);
-        assert_eq!(results[0].2, None);
+        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        assert_eq!(parsed.operation.operation_type, DeviceNotificationType::Add);
+        assert_eq!(parsed.operation.device_ids(), vec![1]);
+        // Verify key index info
+        assert!(parsed.operation.key_index.is_some());
+        assert_eq!(parsed.operation.key_index.as_ref().unwrap().timestamp, 1000);
     }
 
     #[test]
@@ -369,14 +422,23 @@ mod tests {
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([NodeBuilder::new("remove")
-                .children([NodeBuilder::new("device").attr("id", "3").build()])
+                .children([
+                    NodeBuilder::new("device")
+                        .attr("jid", "1234567890:3@s.whatsapp.net")
+                        .build(),
+                    NodeBuilder::new("key-index-list")
+                        .attr("ts", "2000")
+                        .build(),
+                ])
                 .build()])
             .build();
 
-        let results = parse_device_notification_info(&node);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, DeviceListUpdateType::Remove);
-        assert_eq!(results[0].1, vec![3]);
+        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        assert_eq!(
+            parsed.operation.operation_type,
+            DeviceNotificationType::Remove
+        );
+        assert_eq!(parsed.operation.device_ids(), vec![3]);
     }
 
     #[test]
@@ -386,49 +448,94 @@ mod tests {
             .attr("from", "1234567890@s.whatsapp.net")
             .children([NodeBuilder::new("update")
                 .attr("hash", "2:abcdef123456")
-                .children([NodeBuilder::new("device").attr("id", "0").build()])
                 .build()])
             .build();
 
-        let results = parse_device_notification_info(&node);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, DeviceListUpdateType::Update);
-        assert_eq!(results[0].1, vec![0]);
-        assert_eq!(results[0].2, Some("2:abcdef123456".to_string()));
+        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        assert_eq!(
+            parsed.operation.operation_type,
+            DeviceNotificationType::Update
+        );
+        assert_eq!(
+            parsed.operation.contact_hash,
+            Some("2:abcdef123456".to_string())
+        );
+        // Update operations don't have devices (just hash for lookup)
+        assert!(parsed.operation.devices.is_empty());
     }
 
     #[test]
-    fn test_parse_empty_device_notification() {
+    fn test_parse_empty_device_notification_fails() {
+        // Per WhatsApp Web: at least one operation (add/remove/update) is required
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .build();
 
-        let results = parse_device_notification_info(&node);
-        assert!(results.is_empty());
+        let result = DeviceNotification::try_parse(&node);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required operation")
+        );
     }
 
     #[test]
-    fn test_parse_multiple_device_operations() {
+    fn test_parse_multiple_operations_uses_priority() {
+        // Per WhatsApp Web: only ONE operation is processed with priority remove > add > update
+        // If both remove and add are present, remove should be processed
         let node = NodeBuilder::new("notification")
             .attr("type", "devices")
             .attr("from", "1234567890@s.whatsapp.net")
             .children([
                 NodeBuilder::new("add")
-                    .children([NodeBuilder::new("device").attr("id", "5").build()])
+                    .children([
+                        NodeBuilder::new("device")
+                            .attr("jid", "1234567890:5@s.whatsapp.net")
+                            .build(),
+                        NodeBuilder::new("key-index-list")
+                            .attr("ts", "3000")
+                            .build(),
+                    ])
                     .build(),
                 NodeBuilder::new("remove")
-                    .children([NodeBuilder::new("device").attr("id", "2").build()])
+                    .children([
+                        NodeBuilder::new("device")
+                            .attr("jid", "1234567890:2@s.whatsapp.net")
+                            .build(),
+                        NodeBuilder::new("key-index-list")
+                            .attr("ts", "3001")
+                            .build(),
+                    ])
                     .build(),
             ])
             .build();
 
-        let results = parse_device_notification_info(&node);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, DeviceListUpdateType::Add);
-        assert_eq!(results[0].1, vec![5]);
-        assert_eq!(results[1].0, DeviceListUpdateType::Remove);
-        assert_eq!(results[1].1, vec![2]);
+        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        // Should process remove, not add (priority: remove > add > update)
+        assert_eq!(
+            parsed.operation.operation_type,
+            DeviceNotificationType::Remove
+        );
+        assert_eq!(parsed.operation.device_ids(), vec![2]);
+    }
+
+    #[test]
+    fn test_device_list_update_type_from_notification_type() {
+        assert_eq!(
+            DeviceListUpdateType::from(DeviceNotificationType::Add),
+            DeviceListUpdateType::Add
+        );
+        assert_eq!(
+            DeviceListUpdateType::from(DeviceNotificationType::Remove),
+            DeviceListUpdateType::Remove
+        );
+        assert_eq!(
+            DeviceListUpdateType::from(DeviceNotificationType::Update),
+            DeviceListUpdateType::Update
+        );
     }
 
     // Tests for account_sync device parsing

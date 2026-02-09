@@ -1,9 +1,12 @@
+//! User device list synchronization.
+//!
+//! Device list IQ specification is defined in `wacore::iq::usync`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
 use log::{debug, warn};
 use std::collections::HashSet;
+use wacore::iq::usync::DeviceListSpec;
 use wacore_binary::jid::Jid;
-use wacore_binary::node::NodeContent;
 
 impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
@@ -12,17 +15,14 @@ impl Client {
         let mut jids_to_fetch: HashSet<Jid> = HashSet::new();
         let mut all_devices = Vec::new();
 
-        // 1. Check the cache first
         for jid in jids.iter().map(|j| j.to_non_ad()) {
             if let Some(cached_devices) = self.get_device_cache().await.get(&jid).await {
                 all_devices.extend(cached_devices);
-                continue; // Found fresh entry, skip network fetch
+                continue;
             }
-            // Not in cache or stale, add to the fetch set (de-duplicated)
             jids_to_fetch.insert(jid);
         }
 
-        // 2. Fetch missing JIDs from the network
         if !jids_to_fetch.is_empty() {
             debug!(
                 "get_user_devices: Cache miss, fetching from network for {} unique users",
@@ -31,20 +31,12 @@ impl Client {
 
             let sid = self.generate_request_id();
             let jids_vec: Vec<Jid> = jids_to_fetch.into_iter().collect();
-            let usync_node = wacore::usync::build_get_user_devices_query(&jids_vec, sid.as_str());
+            let spec = DeviceListSpec::new(jids_vec, sid);
 
-            let iq = crate::request::InfoQuery::get(
-                "usync",
-                server_jid(),
-                Some(NodeContent::Nodes(vec![usync_node])),
-            );
-            let resp_node = self.send_iq(iq).await?;
-            let user_device_lists =
-                wacore::usync::parse_get_user_devices_response_with_phash(&resp_node)?;
+            let response = self.execute(spec).await?;
 
             // Extract and persist LID mappings from the response
-            let lid_mappings = wacore::usync::parse_lid_mappings_from_response(&resp_node);
-            for mapping in lid_mappings {
+            for mapping in &response.lid_mappings {
                 if let Err(err) = self
                     .add_lid_pn_mapping(
                         &mapping.lid,
@@ -65,8 +57,7 @@ impl Client {
                 );
             }
 
-            // 3. Update the cache with the newly fetched data (now with phash)
-            for user_list in &user_device_lists {
+            for user_list in &response.device_lists {
                 self.get_device_cache()
                     .await
                     .insert(user_list.user.clone(), user_list.devices.clone())
@@ -118,7 +109,8 @@ impl Client {
             }
 
             // Collect all devices for return
-            let fetched_devices: Vec<Jid> = user_device_lists
+            let fetched_devices: Vec<Jid> = response
+                .device_lists
                 .into_iter()
                 .flat_map(|u| u.devices)
                 .collect();

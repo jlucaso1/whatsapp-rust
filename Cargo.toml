@@ -18,7 +18,9 @@ members = [
     "wacore",
     "wacore/appstate",
     "wacore/binary",
+    "wacore/derive",
     "wacore/libsignal",
+    "wacore/noise",
     "waproto",
     "whatsapp-ui",
 ]
@@ -40,6 +42,7 @@ bytes = { version = "1.5", default-features = false, features = ["serde"] }
 chrono = { version = "0.4", default-features = false }
 ctr = { version = "0.9", default-features = false }
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hkdf = { version = "0.12.3", default-features = false }
 hmac = { version = "0.12.1", default-features = false, features = ["reset"] }
@@ -48,7 +51,7 @@ log = "0.4"
 prost = { version = "0.14.1", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.1", default-features = false }
 rand = "0.9"
-rand_core = "0.9"
+rand_core = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde-big-array = "0.5"
 serde_json = { version = "1.0", default-features = false }
@@ -60,10 +63,13 @@ tokio = { version = "1.48.0", default-features = false }
 wacore = { path = "./wacore", version = "0.2.0" }
 wacore-appstate = { path = "./wacore/appstate", version = "0.2.0" }
 wacore-binary = { path = "./wacore/binary", version = "0.2.0" }
+wacore-derive = { path = "./wacore/derive", version = "0.2.0" }
 wacore-libsignal = { path = "./wacore/libsignal", version = "0.2.0" }
+wacore-noise = { path = "./wacore/noise", version = "0.2.0" }
 waproto = { path = "./waproto", version = "0.2.0" }
 
 [features]
+debug-snapshots = []
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
 default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
@@ -115,6 +121,10 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
 
+[[example]]
+name = "benchmark"
+required-features = ["danger-skip-tls-verify"]
+
 [profile.release]
 opt-level = "z"
 debug = false
@@ -134,20 +144,16 @@ strip = false
 # Profiling profile: optimized with debug symbols for heaptrack/valgrind
 [profile.profiling]
 inherits = "release"
-debug = 2            # Full debug info for stack traces
-strip = false        # Keep symbols
-lto = false          # Disable LTO for faster builds and better traces
-opt-level = 2        # Still optimized but not aggressive
+debug = 2
+strip = false
+lto = false
+opt-level = 2
 
-# Patch gpui to use forked version with YUV surface support
-# This ensures gpui-component uses the same gpui version as whatsapp-ui
 [patch.crates-io]
 gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
-# Also patch gpui-component to use main branch which may have newer GPUI API support
 gpui-component = { git = "https://github.com/longbridge/gpui-component.git" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git" }
 
-# Patch zed-industries/zed to use our forked version (for gpui-component's git dependency)
 [patch."https://github.com/zed-industries/zed"]
 gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
 collections = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "collections" }

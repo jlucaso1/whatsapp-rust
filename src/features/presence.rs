@@ -1,26 +1,15 @@
 use crate::client::Client;
-use log::{debug, info, warn};
+use log::{debug, warn};
+use wacore::StringEnum;
 use wacore_binary::builder::NodeBuilder;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presence status for online/offline state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum PresenceStatus {
+    #[str = "available"]
     Available,
+    #[str = "unavailable"]
     Unavailable,
-}
-
-impl PresenceStatus {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PresenceStatus::Available => "available",
-            PresenceStatus::Unavailable => "unavailable",
-        }
-    }
-}
-
-impl std::fmt::Display for PresenceStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }
 
 impl From<crate::types::presence::Presence> for PresenceStatus {
@@ -32,6 +21,7 @@ impl From<crate::types::presence::Presence> for PresenceStatus {
     }
 }
 
+/// Feature handle for presence operations.
 pub struct Presence<'a> {
     client: &'a Client,
 }
@@ -41,6 +31,7 @@ impl<'a> Presence<'a> {
         Self { client }
     }
 
+    /// Set the presence status.
     pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error> {
         let device_snapshot = self
             .client
@@ -60,6 +51,10 @@ impl<'a> Presence<'a> {
             ));
         }
 
+        if status == PresenceStatus::Available {
+            self.client.send_unified_session().await;
+        }
+
         let presence_type = status.as_str();
 
         let node = NodeBuilder::new("presence")
@@ -67,25 +62,31 @@ impl<'a> Presence<'a> {
             .attr("name", &device_snapshot.push_name)
             .build();
 
-        info!(
+        debug!(
             "Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
-            node.attrs.get("name").map_or("", |s| s.as_str())
+            node.attrs
+                .get("name")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
         );
 
         self.client.send_node(node).await.map_err(|e| e.into())
     }
 
+    /// Set presence to available (online).
     pub async fn set_available(&self) -> Result<(), anyhow::Error> {
         self.set(PresenceStatus::Available).await
     }
 
+    /// Set presence to unavailable (offline).
     pub async fn set_unavailable(&self) -> Result<(), anyhow::Error> {
         self.set(PresenceStatus::Unavailable).await
     }
 }
 
 impl Client {
+    /// Access presence operations.
     #[allow(clippy::wrong_self_convention)]
     pub fn presence(&self) -> Presence<'_> {
         Presence::new(self)
@@ -95,16 +96,163 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bot::Bot;
+    use crate::http::{HttpClient, HttpRequest, HttpResponse};
+    use crate::store::SqliteStore;
+    use crate::store::commands::DeviceCommand;
+    use anyhow::Result;
+    use std::sync::Arc;
+    use wacore::store::traits::Backend;
+    use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
-    #[test]
-    fn test_presence_status_display() {
-        assert_eq!(PresenceStatus::Available.to_string(), "available");
-        assert_eq!(PresenceStatus::Unavailable.to_string(), "unavailable");
+    // Mock HTTP client for testing
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
+            Ok(HttpResponse {
+                status_code: 200,
+                body: br#"self.__swData=JSON.parse(/*BTDS*/"{\"dynamic_data\":{\"SiteData\":{\"server_revision\":1026131876,\"client_revision\":1026131876}}}");"#.to_vec(),
+            })
+        }
     }
 
-    #[test]
-    fn test_presence_status_as_str() {
-        assert_eq!(PresenceStatus::Available.as_str(), "available");
-        assert_eq!(PresenceStatus::Unavailable.as_str(), "unavailable");
+    async fn create_test_backend() -> Arc<dyn Backend> {
+        let temp_db = format!(
+            "file:memdb_presence_{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        );
+        Arc::new(
+            SqliteStore::new(&temp_db)
+                .await
+                .expect("Failed to create test SqliteStore"),
+        ) as Arc<dyn Backend>
+    }
+
+    /// Verifies WhatsApp Web behavior: presence deferred until pushname available.
+    #[tokio::test]
+    async fn test_presence_rejected_when_pushname_empty() {
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert!(
+            snapshot.push_name.is_empty(),
+            "Pushname should be empty on fresh device"
+        );
+
+        let result: Result<(), anyhow::Error> =
+            client.presence().set(PresenceStatus::Available).await;
+
+        assert!(
+            result.is_err(),
+            "Presence should fail when pushname is empty"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot send presence without a push name set"),
+            "Error should indicate missing pushname"
+        );
+    }
+
+    /// Simulates pushname arriving from app state sync (setting_pushName mutation).
+    #[tokio::test]
+    async fn test_presence_succeeds_after_pushname_set() {
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        client
+            .persistence_manager()
+            .process_command(DeviceCommand::SetPushName("Test User".to_string()))
+            .await;
+
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert_eq!(snapshot.push_name, "Test User");
+
+        // Validation passes; error should be connection-related, not pushname
+        let result: Result<(), anyhow::Error> =
+            client.presence().set(PresenceStatus::Available).await;
+
+        if let Err(e) = result {
+            let err_msg = e.to_string();
+            assert!(
+                !err_msg.contains("push name"),
+                "Should not fail due to pushname: {}",
+                err_msg
+            );
+            assert!(
+                err_msg.contains("not connected") || err_msg.contains("NotConnected"),
+                "Expected connection error, got: {}",
+                err_msg
+            );
+        }
+    }
+
+    /// Matches WAWebPushNameSync.js: fresh pairing -> app state sync -> presence.
+    #[tokio::test]
+    async fn test_pushname_presence_flow_matches_whatsapp_web() {
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        // Fresh device has empty pushname
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert!(snapshot.push_name.is_empty());
+
+        // Presence deferred when pushname empty
+        let result: Result<(), anyhow::Error> =
+            client.presence().set(PresenceStatus::Available).await;
+        assert!(result.is_err());
+
+        // Pushname arrives via app state sync
+        client
+            .persistence_manager()
+            .process_command(DeviceCommand::SetPushName("WhatsApp User".to_string()))
+            .await;
+
+        // Now presence validation passes
+        let result: Result<(), anyhow::Error> =
+            client.presence().set(PresenceStatus::Available).await;
+
+        if let Err(e) = result {
+            assert!(
+                !e.to_string().contains("push name"),
+                "Error should be connection-related: {}",
+                e
+            );
+        }
     }
 }

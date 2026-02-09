@@ -7,6 +7,7 @@ use log::{debug, warn};
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use wacore::libsignal::crypto::DecryptionError;
 use wacore::libsignal::protocol::SenderKeyDistributionMessage;
 use wacore::libsignal::protocol::group_decrypt;
@@ -63,6 +64,52 @@ pub(crate) enum RetryReason {
 }
 
 impl Client {
+    /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.
+    fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &MessageInfo) {
+        // Send delivery receipt immediately in the background.
+        let client_clone = self.clone();
+        let info_clone = info.clone();
+        tokio::spawn(async move {
+            client_clone.send_delivery_receipt(&info_clone).await;
+        });
+
+        // Dispatch to event bus
+        self.core
+            .event_bus
+            .dispatch(&Event::Message(Box::new(msg), info.clone()));
+    }
+
+    /// Handles a newsletter plaintext message.
+    /// Newsletters are not E2E encrypted and use the <plaintext> tag directly.
+    async fn handle_newsletter_message(self: &Arc<Self>, node: &Node, info: &MessageInfo) {
+        let Some(plaintext_node) = node.get_optional_child_by_tag(&["plaintext"]) else {
+            log::warn!(
+                "[msg:{}] Received newsletter message without <plaintext> child: {}",
+                info.id,
+                node.tag
+            );
+            return;
+        };
+
+        if let Some(wacore_binary::node::NodeContent::Bytes(bytes)) = &plaintext_node.content {
+            match wa::Message::decode(bytes.as_slice()) {
+                Ok(msg) => {
+                    log::info!(
+                        "[msg:{}] Received newsletter plaintext message from {}",
+                        info.id,
+                        info.source.chat
+                    );
+                    self.dispatch_parsed_message(msg, info);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[msg:{}] Failed to decode newsletter plaintext: {e}",
+                        info.id
+                    );
+                }
+            }
+        }
+    }
     /// Dispatches an `UndecryptableMessage` event to notify consumers that a message
     /// could not be decrypted. This is called when decryption fails and we need to
     /// show a placeholder to the user (like "Waiting for this message...").
@@ -116,25 +163,35 @@ impl Client {
                         // Max retries reached, don't increment
                         Op::Nop
                     } else {
-                        // Increment the counter
                         Op::Put(current + 1)
                     }
                 } else {
-                    // No entry exists, insert initial count of 1
                     Op::Put(1_u8)
                 };
                 std::future::ready(op)
             })
             .await;
 
-        // Extract the new count from the result
         match result {
             moka::ops::compute::CompResult::Inserted(entry) => Some(entry.into_value()),
             moka::ops::compute::CompResult::ReplacedWith(entry) => Some(entry.into_value()),
             moka::ops::compute::CompResult::Unchanged(_) => None, // Max retries reached
-            moka::ops::compute::CompResult::StillNone(_) => None, // Should not happen
-            moka::ops::compute::CompResult::Removed(_) => None,   // Should not happen
+            moka::ops::compute::CompResult::StillNone(_) => None,
+            moka::ops::compute::CompResult::Removed(_) => None,
         }
+    }
+
+    /// Helper to generate consistent cache keys for retry logic.
+    /// Key format: "{chat}:{msg_id}:{sender}"
+    pub(crate) async fn make_retry_cache_key(
+        &self,
+        chat: &Jid,
+        msg_id: &str,
+        sender: &Jid,
+    ) -> String {
+        let chat = self.resolve_encryption_jid(chat).await;
+        let sender = self.resolve_encryption_jid(sender).await;
+        format!("{}:{}:{}", chat, msg_id, sender)
     }
 
     /// Spawns a task that sends a retry receipt for a failed decryption.
@@ -160,11 +217,14 @@ impl Client {
     /// * `info` - The message info for the failed message
     /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
-        let cache_key = format!("{}:{}:{}", info.source.chat, info.id, info.source.sender);
         let client = Arc::clone(self);
         let info = info.clone();
 
         tokio::spawn(async move {
+            let cache_key = client
+                .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                .await;
+
             // Atomically increment retry count and check if we should continue
             let Some(retry_count) = client.increment_retry_count(&cache_key).await else {
                 // Max retries reached
@@ -218,7 +278,7 @@ impl Client {
         });
     }
 
-    pub(crate) async fn handle_encrypted_message(self: Arc<Self>, node: Arc<Node>) {
+    pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<Node>) {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => Arc::new(info),
             Err(e) => {
@@ -227,23 +287,14 @@ impl Client {
             }
         };
 
+        // Newsletters use <plaintext> instead of <enc> because they are not E2E encrypted.
+        if info.source.chat.is_newsletter() {
+            self.handle_newsletter_message(&node, &info).await;
+            return;
+        }
+
         // Determine the JID to use for end-to-end decryption.
-        //
-        // CRITICAL: WhatsApp Web ALWAYS uses LID-based addresses for Signal sessions when
-        // a LID mapping is known. This is implemented in WAWebSignalAddress.toString():
-        //
-        //   var n = o("WAWebWidFactory").asUserWidOrThrow(this.wid);
-        //   var a = !n.isLid() && n.isUser();  // true if PN
-        //   var i = a ? o("WAWebApiContact").getCurrentLid(n) : n;  // Get LID if PN
-        //   if (i == null) {
-        //     return [this.wid.user, t, "@c.us"].join("");  // No LID, use PN
-        //   } else {
-        //     return [i.user, t, "@lid"].join("");  // Use LID
-        //   }
-        //
-        // This means sessions are stored under the LID address, not the PN address.
-        // When we receive a PN-addressed message, we must look up the session using
-        // the LID address (if a LID mapping is known) to match WhatsApp Web's behavior.
+        // ... (previous JID resolution comments)
         let sender_encryption_jid = {
             let sender = &info.source.sender;
             let alt = info.source.sender_alt.as_ref();
@@ -276,10 +327,7 @@ impl Client {
                 }
                 sender.clone()
             } else if sender.server == pn_server {
-                // Sender is PN - check if we have a LID mapping.
-                // WhatsApp Web uses LID for sessions when available.
-
-                // First, cache/update the mapping if sender_lid attribute is present
+                // ... (PN to LID resolution logic)
                 if let Some(alt_jid) = alt
                     && alt_jid.server == lid_server
                 {
@@ -301,55 +349,31 @@ impl Client {
                         sender.user, alt_jid.user
                     );
 
-                    // Use the LID from the message attribute for session lookup
-                    let lid_jid = Jid {
+                    Jid {
                         user: alt_jid.user.clone(),
                         server: lid_server.to_string(),
                         device: sender.device,
                         agent: sender.agent,
                         integrator: sender.integrator,
-                    };
-                    log::debug!(
-                        "Using LID {} for session lookup (sender was PN {})",
-                        lid_jid,
-                        sender
-                    );
-                    lid_jid
+                    }
                 } else if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&sender.user).await
                 {
-                    // No sender_lid attribute, but we have a cached LID mapping
-                    let lid_jid = Jid {
+                    Jid {
                         user: lid_user.clone(),
                         server: lid_server.to_string(),
                         device: sender.device,
                         agent: sender.agent,
                         integrator: sender.integrator,
-                    };
-                    log::debug!(
-                        "Using cached LID {} for session lookup (sender was PN {})",
-                        lid_jid,
-                        sender
-                    );
-                    lid_jid
+                    }
                 } else {
-                    // No LID mapping known - use PN address
-                    log::debug!("No LID mapping for {}, using PN for session lookup", sender);
                     sender.clone()
                 }
             } else {
-                // Other server type (bot, hosted, group, broadcast, etc.) - use as-is
-                // Note: Group senders will be handled specially below (skipped for session processing)
                 sender.clone()
             }
         };
 
-        log::debug!(
-            "Message from {} (sender: {}, encryption JID: {}, is_from_me: {})",
-            info.source.chat,
-            info.source.sender,
-            sender_encryption_jid,
-            info.source.is_from_me
-        );
+        let has_unavailable = node.get_optional_child("unavailable").is_some();
 
         let mut all_enc_nodes = Vec::new();
 
@@ -360,9 +384,11 @@ impl Client {
         if let Some(participants_node) = participants {
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
-                let to_jid = to_node.attrs().string("jid");
+                let to_jid = match to_node.attrs().optional_string("jid") {
+                    Some(jid) => jid.to_string(),
+                    None => continue,
+                };
                 let own_jid = self.get_pn().await;
-
                 if let Some(our_jid) = own_jid
                     && to_jid == our_jid.to_string()
                 {
@@ -372,8 +398,20 @@ impl Client {
             }
         }
 
-        if all_enc_nodes.is_empty() {
-            log::warn!("Received message without <enc> child: {}", node.tag);
+        if all_enc_nodes.is_empty() && !has_unavailable {
+            log::warn!(
+                "[msg:{}] Received non-newsletter message without <enc> child: {}",
+                info.id,
+                node.tag
+            );
+            return;
+        }
+
+        if has_unavailable {
+            log::debug!(
+                "[msg:{}] Message has <unavailable> child, skipping decryption",
+                info.id
+            );
             return;
         }
 
@@ -381,7 +419,13 @@ impl Client {
         let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
 
         for &enc_node in &all_enc_nodes {
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = match enc_node.attrs().optional_string("type") {
+                Some(t) => t.to_string(),
+                None => {
+                    log::warn!("Enc node missing 'type' attribute, skipping");
+                    continue;
+                }
+            };
 
             if let Some(handler) = self.custom_enc_handlers.get(&enc_type) {
                 let handler_clone = handler.clone();
@@ -459,7 +503,7 @@ impl Client {
                 || info.source.chat.is_status_broadcast();
 
             if should_process_skmsg {
-                if let Err(e) = self
+                match self
                     .clone()
                     .process_group_enc_batch(
                         &group_content_enc_nodes,
@@ -468,7 +512,74 @@ impl Client {
                     )
                     .await
                 {
-                    log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                    Ok(true) => {
+                        // Optimization: Re-queue locally!
+                        // The message failed due to NoSession (NoSenderKey), but we haven't retried yet.
+                        // We will sleep briefly and re-queue it to this chat's serial queue.
+                        // This allows a pending pkmsg (in the queue or socket buffer) to be processed first.
+                        let client = self.clone();
+                        let chat_id = info.source.chat.to_string();
+                        let node_clone = node.clone();
+                        let msg_id = info.id.clone();
+                        let info_clone = info.clone();
+
+                        log::info!(
+                            "Re-queueing message {} from {} (NoSession) with 500ms delay",
+                            msg_id,
+                            info.source.chat
+                        );
+
+                        // First check if the message queue exists before inserting cache marker
+                        // This prevents dropping messages if the queue doesn't exist
+                        if client.message_queues.get(&chat_id).await.is_some() {
+                            // Queue exists, insert cache marker to prevent re-queue loops
+                            let cache_key = client
+                                .make_retry_cache_key(
+                                    &info.source.chat,
+                                    &info.id,
+                                    &info.source.sender,
+                                )
+                                .await;
+                            client.local_retry_cache.insert(cache_key, ()).await;
+
+                            tokio::spawn(async move {
+                                // Short delay to allow dependent messages (pkmsg) to process
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                                // Try to re-queue the message
+                                if let Some(sender) = client.message_queues.get(&chat_id).await {
+                                    if let Err(e) = sender.send(node_clone).await {
+                                        log::warn!("Failed to re-queue message: {}", e);
+                                        // Fallback to retry receipt if send fails
+                                        client.spawn_retry_receipt(
+                                            &info_clone,
+                                            RetryReason::NoSession,
+                                        );
+                                    }
+                                } else {
+                                    // Queue disappeared between check and send, fallback to retry receipt
+                                    log::warn!(
+                                        "Message queue for {} disappeared, falling back to retry receipt",
+                                        chat_id
+                                    );
+                                    client.spawn_retry_receipt(&info_clone, RetryReason::NoSession);
+                                }
+                            });
+                        } else {
+                            // Queue doesn't exist, skip local re-queue and go straight to retry receipt
+                            log::warn!(
+                                "Message queue for {} not found, skipping local re-queue, using retry receipt",
+                                chat_id
+                            );
+                            client.spawn_retry_receipt(&info_clone, RetryReason::NoSession);
+                        }
+                    }
+                    Ok(false) => {
+                        // Processed successfully or handled errors (e.g. sent retry receipt)
+                    }
+                    Err(e) => {
+                        log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                    }
                 }
             } else {
                 // Only show warning if session messages actually FAILED (not duplicates)
@@ -553,7 +664,13 @@ impl Client {
                     continue;
                 }
             };
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = match enc_node.attrs().optional_string("type") {
+                Some(t) => t.to_string(),
+                None => {
+                    log::warn!("Enc node missing 'type' attribute (batch session)");
+                    continue;
+                }
+            };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
             let parsed_message = if enc_type == "pkmsg" {
@@ -575,6 +692,35 @@ impl Client {
             };
 
             let signal_address = sender_encryption_jid.to_protocol_address();
+
+            if enc_type == "pkmsg" {
+                // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
+                #[cfg(feature = "debug-snapshots")]
+                {
+                    use base64::prelude::*;
+                    let payload = serde_json::json!({
+                        "id": info.id,
+                        "sender_jid": sender_encryption_jid.to_string(),
+                        "timestamp": info.timestamp,
+                        "enc_type": enc_type,
+                        "payload_base64": BASE64_STANDARD.encode(ciphertext),
+                    });
+
+                    let content_bytes = serde_json::to_vec_pretty(&payload).unwrap_or_default();
+
+                    if let Err(e) = self
+                        .persistence_manager
+                        .create_snapshot(&format!("pre_pkmsg_{}", info.id), Some(&content_bytes))
+                        .await
+                    {
+                        log::warn!("Failed to create snapshot for pkmsg: {}", e);
+                    }
+                }
+                #[cfg(not(feature = "debug-snapshots"))]
+                {
+                    // No-op if disabled
+                }
+            }
 
             let decrypt_res = message_decrypt(
                 &parsed_message,
@@ -838,9 +984,9 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
-    ) -> Result<(), DecryptionError> {
+    ) -> Result<bool, DecryptionError> {
         if enc_nodes.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let device_arc = self.persistence_manager.get_device_arc().await;
 
@@ -876,6 +1022,21 @@ impl Client {
 
             match decrypt_result {
                 Ok(padded_plaintext) => {
+                    // Check if this message was previously re-queued and clear cache
+                    let cache_key = self
+                        .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                        .await;
+                    if self.local_retry_cache.remove(&cache_key).await.is_some() {
+                        // Successfully decrypted a message that was previously re-queued
+                        self.retry_metrics
+                            .local_requeue_success
+                            .fetch_add(1, Ordering::Relaxed);
+                        log::debug!(
+                            "[msg:{}] Successfully decrypted message that was previously re-queued",
+                            info.id
+                        );
+                    }
+
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
@@ -900,17 +1061,38 @@ impl Client {
                     // This is expected when messages are redelivered, just continue silently
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
+                    // Optimization: Check if this message was already re-queued locally
+                    let cache_key = self
+                        .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                        .await;
+                    let already_requeued = self.local_retry_cache.get(&cache_key).await.is_some();
+
+                    if !already_requeued {
+                        // First NoSenderKey: trigger local re-queue
+                        self.retry_metrics
+                            .local_requeue_attempts
+                            .fetch_add(1, Ordering::Relaxed);
+                        // Signal caller to re-queue this message
+                        // Do NOT send retry receipt yet
+                        return Ok(true);
+                    }
+
+                    // Second NoSenderKey (already re-queued): fall back to network retry
+                    self.retry_metrics
+                        .local_requeue_fallback
+                        .fetch_add(1, Ordering::Relaxed);
                     warn!(
-                        "No sender key state for batched group message from {}: {}. Sending retry receipt.",
-                        info.source.sender, msg
+                        "No sender key state for batched group message [msg:{}] from {}: {}. Sending retry receipt (already requeued).",
+                        info.id, info.source.sender, msg
                     );
                     // Use spawn_retry_receipt which has retry count tracking
-                    // NoSenderKeyState is similar to NoSession - we need the SKDM
+                    // NoSenderKeyState is similar to NoSession - we need SKDM
                     self.spawn_retry_receipt(info, RetryReason::NoSession);
                 }
                 Err(e) => {
                     log::error!(
-                        "Group batch decrypt failed for group {} sender {}: {:?}",
+                        "Group batch decrypt failed [msg:{}] for group {} sender {}: {:?}",
+                        info.id,
                         sender_key_name.group_id(),
                         sender_key_name.sender_id(),
                         e
@@ -918,7 +1100,7 @@ impl Client {
                 }
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     async fn handle_decrypted_plaintext(
@@ -928,86 +1110,69 @@ impl Client {
         padding_version: u8,
         info: &MessageInfo,
     ) -> Result<(), anyhow::Error> {
-        // Send delivery receipt immediately in the background.
-        // This should not block further message processing.
-        let client_clone = self.clone();
-        let info_clone = info.clone();
-        tokio::spawn(async move {
-            client_clone.send_delivery_receipt(&info_clone).await;
-        });
-
         let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
         log::info!(
-            "Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            "[msg:{}] Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            info.id,
             info.source.sender,
             plaintext_slice.len(),
             enc_type
         );
 
-        if enc_type == "skmsg" {
-            match wa::Message::decode(plaintext_slice) {
-                Ok(group_msg) => {
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::Message(Box::new(group_msg), info.clone()));
+        match wa::Message::decode(plaintext_slice) {
+            Ok(mut original_msg) => {
+                // Post-decryption logic (SKDM, sync keys, etc.)
+                if let Some(skdm) = &original_msg.sender_key_distribution_message
+                    && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
+                {
+                    self.handle_sender_key_distribution_message(
+                        &info.source.chat,
+                        &info.source.sender,
+                        axolotl_bytes,
+                    )
+                    .await;
                 }
-                Err(e) => log::warn!("Failed to unmarshal decrypted skmsg plaintext: {e}"),
-            }
-        } else {
-            match wa::Message::decode(plaintext_slice) {
-                Ok(mut original_msg) => {
-                    if let Some(skdm) = &original_msg.sender_key_distribution_message
-                        && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
-                    {
-                        self.handle_sender_key_distribution_message(
-                            &info.source.chat,
-                            &info.source.sender,
-                            axolotl_bytes,
-                        )
+
+                if let Some(protocol_msg) = &original_msg.protocol_message
+                    && let Some(keys) = &protocol_msg.app_state_sync_key_share
+                {
+                    self.handle_app_state_sync_key_share(keys).await;
+                }
+
+                if let Some(protocol_msg) = &original_msg.protocol_message
+                    && let Some(pdo_response) =
+                        &protocol_msg.peer_data_operation_request_response_message
+                {
+                    self.handle_pdo_response(pdo_response, info).await;
+                }
+
+                // Note: original_msg might be modified by take() below
+                let history_sync_taken = original_msg
+                    .protocol_message
+                    .as_mut()
+                    .and_then(|pm| pm.history_sync_notification.take());
+
+                if let Some(history_sync) = history_sync_taken {
+                    self.handle_history_sync(info.id.clone(), history_sync)
                         .await;
-                    }
-
-                    if let Some(protocol_msg) = &original_msg.protocol_message
-                        && let Some(keys) = &protocol_msg.app_state_sync_key_share
-                    {
-                        self.handle_app_state_sync_key_share(keys).await;
-                    }
-
-                    // Handle PDO (Peer Data Operation) responses from our primary phone
-                    if let Some(protocol_msg) = &original_msg.protocol_message
-                        && let Some(pdo_response) =
-                            &protocol_msg.peer_data_operation_request_response_message
-                    {
-                        self.handle_pdo_response(pdo_response, info).await;
-                    }
-
-                    // Take ownership of history_sync_notification to avoid cloning large inline payload
-                    let history_sync_taken = original_msg
-                        .protocol_message
-                        .as_mut()
-                        .and_then(|pm| pm.history_sync_notification.take());
-
-                    if let Some(history_sync) = history_sync_taken {
-                        log::info!(
-                            "Received HistorySyncNotification, dispatching for download and processing."
-                        );
-                        let client_clone = self.clone();
-                        let msg_id = info.id.clone();
-                        tokio::spawn(async move {
-                            // Enqueue history sync task to dedicated worker
-                            // history_sync is moved, not cloned - avoids copying large inline payload
-                            client_clone.handle_history_sync(msg_id, history_sync).await;
-                        });
-                    }
-
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::Message(Box::new(original_msg), info.clone()));
                 }
-                Err(e) => log::warn!("Failed to unmarshal decrypted pkmsg/msg plaintext: {e}"),
+
+                // Skip dispatch for messages that only carry sender key distribution
+                // (protocol-level key exchange) with no user-visible content.
+                // These arrive as a separate pkmsg enc node alongside the actual
+                // group message (skmsg) and would otherwise surface as "unknown".
+                if is_sender_key_distribution_only(&original_msg) {
+                    log::debug!(
+                        "[msg:{}] Skipping event dispatch for sender key distribution message",
+                        info.id
+                    );
+                } else {
+                    self.dispatch_parsed_message(original_msg, info);
+                }
+                Ok(())
             }
+            Err(e) => Err(anyhow::anyhow!("Failed to decode decrypted plaintext: {e}")),
         }
-        Ok(())
     }
 
     pub(crate) async fn parse_message_info(
@@ -1123,9 +1288,23 @@ impl Client {
             .map(|s| s.to_string())
             .unwrap_or_default();
 
+        let id = attrs.required_string("id")?.to_string();
+        // server_id must be in range 99-2147476647 (per WhatsApp Web)
+        let server_id = attrs
+            .optional_u64("server_id")
+            .filter(|&v| (99..=2_147_476_647).contains(&v))
+            .unwrap_or(0) as i32;
+
+        // Ensure newsletter JID is normalized: should be just {user}@newsletter
+        if source.chat.is_newsletter() {
+            source.chat.device = 0;
+            source.chat.agent = 0;
+        }
+
         Ok(MessageInfo {
             source,
-            id: attrs.string("id"),
+            id,
+            server_id,
             push_name: attrs
                 .optional_string("notify")
                 .map(|s| s.to_string())
@@ -1316,6 +1495,30 @@ impl Client {
     }
 }
 
+/// Returns `true` if the message contains only a SenderKey distribution
+/// (internal key-exchange for group encryption) and no user-visible content.
+///
+/// When sending a group message, WhatsApp includes the SKDM in a separate
+/// `pkmsg` enc node.  We must process it (store the sender key) but should
+/// not surface it as a user event.
+fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
+    let has_skdm = msg.sender_key_distribution_message.is_some()
+        || msg
+            .fast_ratchet_key_sender_key_distribution_message
+            .is_some();
+
+    if !has_skdm {
+        return false;
+    }
+
+    // Strip protocol-only fields and check if anything user-visible remains.
+    let mut stripped = msg.clone();
+    stripped.sender_key_distribution_message = None;
+    stripped.fast_ratchet_key_sender_key_distribution_message = None;
+    stripped.message_context_info = None;
+    stripped == wa::Message::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1336,7 +1539,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_message_info_for_status_broadcast() {
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_status_test?mode=memory&cache=shared")
                 .await
@@ -1352,7 +1554,6 @@ mod tests {
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
 
-        // 2. Create the test node mirroring the logs
         let node = NodeBuilder::new("message")
             .attr("from", status_broadcast_jid_str)
             .attr("id", "8A8CCCC7E6E466D9EE8CA11A967E485A")
@@ -1361,13 +1562,11 @@ mod tests {
             .attr("type", "media")
             .build();
 
-        // 3. Run the function under test
         let info = client
             .parse_message_info(&node)
             .await
             .expect("parse_message_info should not fail");
 
-        // 4. Assert the correct behavior
         let expected_sender: Jid = participant_jid_str
             .parse()
             .expect("test JID should be valid");
@@ -1393,7 +1592,6 @@ mod tests {
     async fn test_process_session_enc_batch_handles_session_not_found_gracefully() {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_graceful_fail?mode=memory&cache=shared")
                 .await
@@ -1418,7 +1616,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 2. Create a valid but undecryptable SignalMessage (encrypted with a dummy key)
+        // Create a valid but undecryptable SignalMessage
         let dummy_key = [0u8; 32];
         let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
         let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
@@ -1441,29 +1639,21 @@ mod tests {
             .build();
         let enc_nodes = vec![&enc_node];
 
-        // 3. Run the function under test
-        // The function now returns (any_success, any_duplicate, dispatched_undecryptable).
-        // With a SessionNotFound error, it should return (false, false, true) since it dispatches an event.
+        // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
             .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
             .await;
 
-        // 4. Assert the desired behavior: the function continues gracefully
-        // The function should return (false, false, true) (no successful decryption, no duplicates, but dispatched event)
         assert!(
             !success && !had_duplicates && dispatched,
             "process_session_enc_batch should return (false, false, true) when SessionNotFound occurs and dispatches event"
         );
-
-        // Note: Verifying event dispatch would require adding a test event handler.
-        // For this test, we're just ensuring the function doesn't panic and returns the correct status.
     }
 
     #[tokio::test]
-    async fn test_handle_encrypted_message_skips_skmsg_after_msg_failure() {
+    async fn test_handle_incoming_message_skips_skmsg_after_msg_failure() {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 
-        // 1. Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_skip_skmsg_test?mode=memory&cache=shared")
                 .await
@@ -1483,8 +1673,7 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        // 2. Create a message node with both msg and skmsg
-        // The msg will fail to decrypt (no session), so skmsg should be skipped
+        // Create msg + skmsg node; msg will fail (no session), so skmsg should be skipped
         let dummy_key = [0u8; 32];
         let sender_ratchet = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).public_key;
         let sender_identity_pair = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
@@ -1521,14 +1710,8 @@ mod tests {
                 .build(),
         );
 
-        // 3. Run the function
-        // This should NOT panic or cause a retry loop. The skmsg should be skipped.
-        client.handle_encrypted_message(message_node).await;
-
-        // 4. Assert
-        // If we get here without panicking, the test passes.
-        // The key improvement is that we won't send a retry receipt for the skmsg
-        // since we detected the msg failure and skipped skmsg processing entirely.
+        // Should not panic or retry loop - skmsg is skipped after msg failure
+        client.handle_incoming_message(message_node).await;
     }
 
     /// Test case for reproducing sender key JID mismatch in LID group messages
@@ -1551,8 +1734,6 @@ mod tests {
             process_sender_key_distribution_message,
         };
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
-
-        // Setup
         let backend = Arc::new(
             SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
                 .await
@@ -1566,8 +1747,6 @@ mod tests {
         let (_client, _sync_rx) =
             Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
 
-        // Simulate own LID: 100000000000001.1:75@lid (note: using device 75 to match real scenario)
-        // Phone number: 15551234567:75@s.whatsapp.net
         let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
             .expect("test JID should be valid");
@@ -1578,8 +1757,7 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        // Step 1: Create a real sender key distribution message using LID address
-        // This mimics what happens in handle_sender_key_distribution_message
+        // Create SKDM using LID address (mimics handle_sender_key_distribution_message)
         let lid_protocol_address = own_lid.to_protocol_address();
         let lid_sender_key_name =
             SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
@@ -1596,7 +1774,6 @@ mod tests {
             .expect("Failed to create SKDM")
         };
 
-        // Step 2: Process the SKDM to ensure it's stored properly
         {
             let mut device_guard = device_arc.write().await;
             process_sender_key_distribution_message(
@@ -1608,12 +1785,7 @@ mod tests {
             .expect("Failed to process SKDM with LID address");
         }
 
-        println!(
-            "✅ Step 1: Stored sender key under LID address: {}",
-            lid_protocol_address
-        );
-
-        // Step 3: Try to retrieve using PHONE NUMBER address (THE BUG)
+        // Try to retrieve using PHONE NUMBER address (THE BUG)
         let phone_protocol_address = own_phone.to_protocol_address();
         let phone_sender_key_name =
             SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
@@ -1623,40 +1795,25 @@ mod tests {
             device_guard.load_sender_key(&phone_sender_key_name).await
         };
 
-        println!(
-            "❌ Step 2: Lookup with phone number address failed (expected): {}",
-            phone_protocol_address
-        );
         assert!(
             phone_lookup_result
                 .expect("lookup should not error")
                 .is_none(),
-            "Sender key should NOT be found when looking up with phone number address (this demonstrates the bug)"
+            "Sender key should NOT be found when looking up with phone number address (demonstrates the bug)"
         );
 
-        // Step 4: Try to retrieve using LID address (THE FIX)
+        // Try to retrieve using LID address (THE FIX)
         let lid_lookup_result = {
             let mut device_guard = device_arc.write().await;
             device_guard.load_sender_key(&lid_sender_key_name).await
         };
 
-        println!("✅ Step 3: Lookup with LID address succeeded (this is the fix)");
         assert!(
             lid_lookup_result
                 .expect("lookup should not error")
                 .is_some(),
             "Sender key SHOULD be found when looking up with LID address (same as storage)"
         );
-
-        println!("\n🎯 Summary:");
-        println!("   - LID protocol address: {}", lid_protocol_address);
-        println!("   - Phone protocol address: {}", phone_protocol_address);
-        println!(
-            "   - Storage key format: {}:{}",
-            group_jid, lid_protocol_address
-        );
-        println!("   - Bug: Using phone address for lookup after storing with LID address");
-        println!("   - Fix: Always use info.source.sender (LID) for both storage and retrieval");
     }
 
     /// Test that sender key consistency is maintained for multiple LID participants
@@ -1763,11 +1920,6 @@ mod tests {
                 lid_str
             );
         }
-
-        println!(
-            "✅ All {} LID participants have isolated sender keys",
-            participants.len()
-        );
     }
 
     /// Test that LID JID parsing handles various edge cases correctly
@@ -1968,8 +2120,6 @@ mod tests {
                 .user,
             "15551234567"
         );
-
-        println!("✅ sender_alt extraction working correctly for LID groups");
     }
 
     /// Test that device query logic uses phone numbers for LID participants
@@ -2038,8 +2188,6 @@ mod tests {
         assert_eq!(jids_to_query.len(), 2);
         assert!(jids_to_query.iter().any(|j| j.user == "15551234567"));
         assert!(jids_to_query.iter().any(|j| j.user == "551234567890"));
-
-        println!("✅ LID-to-phone mapping working correctly for device queries");
     }
 
     /// Test edge case: Group with mixed LID and phone number participants
@@ -2093,8 +2241,6 @@ mod tests {
         for jid in &jids_to_query {
             assert_eq!(jid.server, SERVER_JID);
         }
-
-        println!("✅ Mixed LID and phone number participants handled correctly");
     }
 
     /// Test edge case: Own JID check in LID mode
@@ -2130,8 +2276,6 @@ mod tests {
         // Verify we're checking using the phone number
         assert_eq!(own_jid_to_check.user, "15551234567");
         assert_eq!(own_jid_to_check.server, SERVER_JID);
-
-        println!("✅ Own JID check correctly uses phone number in LID mode");
     }
 
     /// Test that sender key operations always use the display JID (LID)
@@ -2214,8 +2358,6 @@ mod tests {
                 .is_none(),
             "Sender key should NOT be found with encryption JID (phone number)"
         );
-
-        println!("✅ Sender key operations correctly use display JID, not encryption JID");
     }
 
     /// Test edge case: Second message with only skmsg (no pkmsg/msg)
@@ -2277,10 +2419,7 @@ mod tests {
                 .expect("Failed to process SKDM");
         }
 
-        println!("✅ Step 1: Sender key established for {}", sender_jid);
-
-        // Step 2: Create a message with ONLY skmsg (no pkmsg/msg)
-        // This simulates the second message after session is established
+        // Create message with ONLY skmsg (simulating second message after session established)
         let skmsg_ciphertext = {
             let mut device_guard = device_arc.write().await;
             let sender_key_msg = wacore::libsignal::protocol::group_encrypt(
@@ -2312,19 +2451,8 @@ mod tests {
                 .build(),
         );
 
-        // Step 3: Handle the message (should NOT skip skmsg)
-        // Before the fix, this would log:
-        // "Skipping skmsg decryption for message SECOND_MSG_TEST from 100000000000001.1:75@lid
-        //  because the initial session/senderkey message failed to decrypt."
-        //
-        // After the fix, it should decrypt successfully.
-        client.handle_encrypted_message(message_node).await;
-
-        println!("✅ Step 2: Second message with only skmsg processed successfully");
-
-        // The test passes if we reach here without errors
-        // In a real scenario, we'd verify the message was decrypted and the event was dispatched
-        // For now, we're just ensuring the code path doesn't skip the skmsg incorrectly
+        // Should NOT skip skmsg - before the fix this would incorrectly skip
+        client.handle_incoming_message(message_node).await;
     }
 
     /// Test case for UntrustedIdentity error handling and recovery
@@ -2400,14 +2528,7 @@ mod tests {
             success
         );
 
-        // The key here is that this didn't panic or crash
-        // The fix ensures that when UntrustedIdentity occurs, the deletion uses the full
-        // protocol address (e.g., "559981212574.0") not just the name part (e.g., "559981212574")
-        println!("✅ UntrustedIdentity error handling:");
-        println!("   - Error caught gracefully without panic");
-        println!("   - Deletion uses full protocol address: <name>.<device_id>");
-        println!("   - No fatal error propagated");
-        println!("   - Process continues normally");
+        // The key is that this didn't panic - deletion uses full protocol address
     }
 
     /// Test case: Error handling during batch processing
@@ -2478,11 +2599,6 @@ mod tests {
             .await;
 
         log::info!("Test: Batch processing completed - success: {}", success);
-
-        println!("✅ Error handling in batch processing:");
-        println!("   - Multiple messages processed without panic");
-        println!("   - Each error handled independently");
-        println!("   - Batch processor continues through all messages");
     }
 
     /// Test case: Error handling in group chat context
@@ -2543,11 +2659,6 @@ mod tests {
             .await;
 
         log::info!("Test: Group message processed - success: {}", success);
-
-        println!("✅ Error handling in group chat:");
-        println!("   - Sender with error handled gracefully");
-        println!("   - No panic when processing group messages with errors");
-        println!("   - Error doesn't affect group processing");
     }
 
     /// Test case: DM message parsing for self-sent messages via LID
@@ -2627,22 +2738,15 @@ mod tests {
             "sender_alt should be None for self-sent DMs (peer_recipient_pn is recipient's PN)"
         );
 
-        // 3. Chat should be the recipient
         assert_eq!(
             info.source.chat.user, "39492358562039",
             "Chat should be the recipient's LID"
         );
 
-        // 4. Sender should be own LID
         assert_eq!(
             info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
-
-        println!("✅ Self-sent DM via LID:");
-        println!("   - is_from_me correctly detected: true");
-        println!("   - sender_alt correctly NOT set (peer_recipient_pn is recipient's PN)");
-        println!("   - Decryption will use own PN via is_from_me fallback path");
     }
 
     /// Test case: DM message parsing for messages from others via LID
@@ -2706,14 +2810,11 @@ mod tests {
             .await
             .expect("parse_message_info should succeed");
 
-        // Assertions:
-        // 1. is_from_me should be false
         assert!(
             !info.source.is_from_me,
             "Should NOT be detected as self-sent"
         );
 
-        // 2. sender_alt should be populated from sender_pn
         assert!(
             info.source.sender_alt.is_some(),
             "sender_alt should be set from sender_pn attribute"
@@ -2728,22 +2829,15 @@ mod tests {
             "sender_alt should contain sender's phone number"
         );
 
-        // 3. Chat should be the sender (non-AD version)
         assert_eq!(
             info.source.chat.user, "39492358562039",
             "Chat should be the sender's LID (non-AD)"
         );
 
-        // 4. Sender should be the other user's LID
         assert_eq!(
             info.source.sender.user, "39492358562039",
             "Sender should be other user's LID"
         );
-
-        println!("✅ DM from other user via LID:");
-        println!("   - is_from_me correctly detected: false");
-        println!("   - sender_alt correctly set from sender_pn attribute");
-        println!("   - Decryption will use sender_alt for session lookup");
     }
 
     /// Test case: DM message to self (own chat, like "Notes to Myself")
@@ -2805,35 +2899,25 @@ mod tests {
             .await
             .expect("parse_message_info should succeed");
 
-        // Assertions:
-        // 1. is_from_me should be true
         assert!(
             info.source.is_from_me,
             "Should detect self-sent message to self-chat"
         );
 
-        // 2. sender_alt should be None (we don't use peer_recipient_pn for self-sent)
         assert!(
             info.source.sender_alt.is_none(),
             "sender_alt should be None for self-sent messages"
         );
 
-        // 3. Chat should be the recipient (self)
         assert_eq!(
             info.source.chat.user, "100000000000001",
             "Chat should be self (recipient)"
         );
 
-        // 4. Sender should be own LID
         assert_eq!(
             info.source.sender.user, "100000000000001",
             "Sender should be own LID"
         );
-
-        println!("✅ DM to self (self-chat):");
-        println!("   - is_from_me correctly detected: true");
-        println!("   - sender_alt correctly NOT set");
-        println!("   - Decryption will use own PN via is_from_me fallback path");
     }
 
     /// Test that receiving a DM with sender_lid populates the lid_pn_cache.
@@ -2886,11 +2970,11 @@ mod tests {
                 .build()])
             .build();
 
-        // Call handle_encrypted_message - this will fail to decrypt (no real session)
+        // Call handle_incoming_message - this will fail to decrypt (no real session)
         // but it should still populate the cache before attempting decryption
         client
             .clone()
-            .handle_encrypted_message(Arc::new(dm_node))
+            .handle_incoming_message(Arc::new(dm_node))
             .await;
 
         // Verify the cache was populated
@@ -2904,13 +2988,6 @@ mod tests {
             lid,
             "Cached LID should match the sender_lid from the message"
         );
-
-        println!("✅ test_lid_pn_cache_populated_on_message_with_sender_lid passed:");
-        println!(
-            "   - Received DM from {}@s.whatsapp.net with sender_lid={}@lid",
-            phone, lid
-        );
-        println!("   - Cache correctly populated: {} -> {}", phone, lid);
     }
 
     /// Test that messages without sender_lid do NOT populate the cache.
@@ -2947,21 +3024,16 @@ mod tests {
                 .build()])
             .build();
 
-        // Call handle_encrypted_message
+        // Call handle_incoming_message
         client
             .clone()
-            .handle_encrypted_message(Arc::new(dm_node))
+            .handle_incoming_message(Arc::new(dm_node))
             .await;
 
-        // Verify the cache was NOT populated
         assert!(
             client.lid_pn_cache.get_current_lid(phone).await.is_none(),
             "Cache should NOT be populated for messages without sender_lid"
         );
-
-        println!("✅ test_lid_pn_cache_not_populated_without_sender_lid passed:");
-        println!("   - Received DM without sender_lid attribute");
-        println!("   - Cache correctly remains empty");
     }
 
     /// Test that messages from LID senders with participant_pn DO populate the cache.
@@ -3005,10 +3077,10 @@ mod tests {
                 .build()])
             .build();
 
-        // Call handle_encrypted_message
+        // Call handle_incoming_message
         client
             .clone()
-            .handle_encrypted_message(Arc::new(group_node))
+            .handle_incoming_message(Arc::new(group_node))
             .await;
 
         // Verify the cache WAS populated (bidirectional cache)
@@ -3031,10 +3103,6 @@ mod tests {
             phone,
             "Cached phone number should match"
         );
-
-        println!("✅ test_lid_pn_cache_populated_for_lid_sender_with_participant_pn passed:");
-        println!("   - Received message from LID sender with participant_pn");
-        println!("   - Cache correctly populated with bidirectional mapping");
     }
 
     /// Test that multiple messages from the same sender update the cache correctly.
@@ -3075,7 +3143,7 @@ mod tests {
 
             client
                 .clone()
-                .handle_encrypted_message(Arc::new(dm_node))
+                .handle_incoming_message(Arc::new(dm_node))
                 .await;
         }
 
@@ -3087,10 +3155,6 @@ mod tests {
             lid,
             "Cached LID should be correct after multiple messages"
         );
-
-        println!("✅ test_lid_pn_cache_handles_repeated_messages passed:");
-        println!("   - Received 3 messages from same sender");
-        println!("   - Cache correctly maintains the mapping");
     }
 
     /// Test that PN-addressed messages use LID for session lookup when LID mapping is known.
@@ -3183,14 +3247,14 @@ mod tests {
             "lid"
         );
 
-        // Now simulate what handle_encrypted_message does: determine encryption JID
-        // We can't easily call handle_encrypted_message, so we'll test the logic directly
+        // Now simulate what handle_incoming_message does: determine encryption JID
+        // We can't easily call handle_incoming_message, so we'll test the logic directly
         let sender = &info.source.sender;
         let alt = info.source.sender_alt.as_ref();
         let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
         let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
 
-        // Apply the same logic as in handle_encrypted_message
+        // Apply the same logic as in handle_incoming_message
         let sender_encryption_jid = if sender.server == lid_server {
             sender.clone()
         } else if sender.server == pn_server {
@@ -3238,10 +3302,6 @@ mod tests {
             format!("{}@lid.0", lid),
             "Protocol address should be in LID format"
         );
-
-        println!("✅ test_pn_message_uses_lid_for_session_lookup_when_mapping_known passed:");
-        println!("   - PN message with sender_lid attribute correctly uses LID for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
     /// Test that PN-addressed messages use cached LID even without sender_lid attribute.
@@ -3351,10 +3411,6 @@ mod tests {
             format!("{}@lid.0", lid),
             "Protocol address should be in LID format from cached mapping"
         );
-
-        println!("✅ test_pn_message_uses_cached_lid_without_sender_lid_attribute passed:");
-        println!("   - PN message without sender_lid attribute uses cached LID for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
     /// Test that PN-addressed messages use PN when no LID mapping is known.
@@ -3451,15 +3507,8 @@ mod tests {
             format!("{}@c.us.0", phone),
             "Protocol address should be in PN format when no LID mapping"
         );
-
-        println!("✅ test_pn_message_uses_pn_when_no_lid_mapping passed:");
-        println!("   - PN message without LID mapping uses PN for session lookup");
-        println!("   - Protocol address: {}", protocol_address);
     }
 
-    // ==================== RETRY LOGIC TESTS ====================
-    //
-    // These tests verify the retry count tracking, max retry limits,
     // and PDO fallback behavior to ensure robust message recovery.
 
     /// Helper to create a test MessageInfo with customizable fields
@@ -3884,7 +3933,6 @@ mod tests {
 
     /// Test: Status broadcast messages should always try skmsg even if pkmsg fails
     ///
-    /// Based on WhatsApp Web behavior from `.cargo/captured-js/lx-whGBdTEw.js`:
     /// - WhatsApp Web tracks pkmsg and skmsg failures separately
     /// - If pkmsg fails but skmsg succeeds, result is SUCCESS
     /// - For status@broadcast, we might have sender key cached from previous status
@@ -3936,7 +3984,7 @@ mod tests {
 
     /// Test: Verify should_process_skmsg logic for status broadcast
     ///
-    /// Simulates the decision logic from handle_encrypted_message:
+    /// Simulates the decision logic from handle_incoming_message:
     /// - For status@broadcast, should_process_skmsg should be true even when
     ///   session_decrypted_successfully=false and session_had_duplicates=false
     #[test]
@@ -3963,7 +4011,7 @@ mod tests {
         for (jid_str, session_empty, session_success, session_dupe, expected) in test_cases {
             let chat_jid: Jid = jid_str.parse().expect("JID should parse");
 
-            // Recreate the should_process_skmsg logic from handle_encrypted_message
+            // Recreate the should_process_skmsg logic from handle_incoming_message
             let should_process_skmsg =
                 session_empty || session_success || session_dupe || chat_jid.is_status_broadcast();
 
@@ -3980,5 +4028,331 @@ mod tests {
                 should_process_skmsg
             );
         }
+    }
+
+    /// Test: parse_message_info returns error when message "id" attribute is missing
+    ///
+    /// Missing message IDs would cause silent collisions in caches/keys, so this
+    /// must be a hard error rather than defaulting to an empty string.
+    #[tokio::test]
+    async fn test_parse_message_info_missing_id_returns_error() {
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_missing_id_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "15551234567@s.whatsapp.net")
+            .attr("t", "1759295366")
+            .attr("type", "text")
+            .build();
+
+        let result = client.parse_message_info(&node).await;
+
+        assert!(
+            result.is_err(),
+            "parse_message_info should fail when 'id' is missing"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("id"),
+            "Error message should mention missing 'id' attribute: {}",
+            err_msg
+        );
+    }
+    #[tokio::test]
+    async fn test_local_requeue_optimization() {
+        // Setup integration test environment
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        use crate::store::SqliteStore;
+        use crate::store::persistence_manager::PersistenceManager;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::node::NodeContent;
+
+        // 1. Setup Client
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_requeue_test?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("test backend should initialize"),
+        );
+        // Note: Using None for override_version
+        let (client, _rx) =
+            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+
+        // 2. Configure Test Data
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+        let msg_id = "TEST_MSG_REQUEUE_1";
+
+        // Manual queue initialization (since it's not created until first message usually)
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        client
+            .message_queues
+            .insert(group_jid.to_string(), tx)
+            .await;
+
+        // 3. Trigger Message Processing (Simulate receiving skmsg BEFORE session)
+        // Construction of mock Signal Message Payload
+        // We need to trigger "NoSenderKeyState" (lookup failure), not "TooShort".
+        // Structure: [Version(1)] + [Protobuf] + [Signature(64)].
+        // Version = 0x33 (3).
+        // Protobuf: Field 1 (KeyID)=1, Field 2 (Iteration)=1, Field 3 (Ciphertext)=Bytes.
+        // 08 01 10 01 1A 00
+        let mut content = vec![0x33, 0x08, 0x01, 0x10, 0x01, 0x1A, 0x00];
+        // Append 64 bytes of dummy signature to satisfy length checks
+        content.extend(vec![0u8; 64]);
+
+        // Build enc node first
+        let mut enc_node = NodeBuilder::new("enc")
+            .attr("type", "skmsg")
+            .attr("v", "2")
+            .build();
+        enc_node.content = Some(NodeContent::Bytes(content));
+
+        // Build message node containing enc node
+        let valid_skmsg_node = NodeBuilder::new("message")
+            .attr("id", msg_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![enc_node])
+            .build();
+
+        // Run handle_incoming_message
+        // It will fail decryption. If payload is accepted as valid Signal structure,
+        // it will attempt to load SenderKey. Since store is empty, it returns NoSenderKey.
+        // This triggers our re-queue optimization.
+        client
+            .clone()
+            .handle_incoming_message(Arc::new(valid_skmsg_node.clone()))
+            .await;
+
+        // Verify cache IMMEDIATELY
+        // Asserting presence means we successfully triggered the "NoSenderKey" path.
+        let retry_cache_key = client
+            .make_retry_cache_key(&group_jid, msg_id, &sender_jid)
+            .await;
+        assert!(
+            client.local_retry_cache.contains_key(&retry_cache_key),
+            "Message should be in local_retry_cache (Optimization NOT triggered - check error logs)"
+        );
+
+        // 4. Verify Re-Queueing
+        // The re-queued message should appear in `rx` after ~500ms.
+        let queued_msg =
+            tokio::time::timeout(tokio::time::Duration::from_millis(1000), rx.recv()).await;
+        assert!(
+            queued_msg.is_ok(),
+            "Timed out waiting for re-queued message"
+        );
+        assert!(
+            queued_msg.unwrap().is_some(),
+            "Queue should contain the message"
+        );
+
+        // 5. Verify No Network Retry for 1st attempt
+        // message_retry_counts tracks network retries.
+        // It should be EMPTY because we skipped spawn_retry_receipt.
+        let retry_key = format!("{}:{}:{}", group_jid, msg_id, sender_jid);
+        assert!(
+            client.message_retry_counts.get(&retry_key).await.is_none(),
+            "Should NOT have sent network retry receipt yet"
+        );
+
+        // 6. Simulate Second Pass (Re-queued message processed)
+        // Now if we process the re-queued message:
+        // Cache entry exists. So it should trigger network retry (fall back).
+        client
+            .clone()
+            .handle_incoming_message(Arc::new(valid_skmsg_node))
+            .await;
+
+        // Verify retry count allows network retry now
+        // spawn_retry_receipt spawns a task, so we need to wait for it to update the cache.
+        // Use retry loop instead of fixed sleep to avoid flaky test under load.
+        for _ in 0..20 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            if client.message_retry_counts.get(&retry_key).await == Some(1) {
+                break;
+            }
+        }
+        assert_eq!(
+            client.message_retry_counts.get(&retry_key).await,
+            Some(1),
+            "Should have sent network retry receipt on 2nd attempt"
+        );
+    }
+    #[tokio::test]
+    async fn test_local_requeue_edge_cases() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        use crate::store::SqliteStore;
+        use crate::store::persistence_manager::PersistenceManager;
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::node::NodeContent;
+
+        // One-time setup
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_requeue_edge?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _) = Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+
+        let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
+        let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
+
+        // 1. Garbage Data Test (Too Short)
+        // Should NOT trigger re-queue (cache should remain empty for this ID)
+        let garbage_id = "GARBAGE_u1928";
+        let garbage_node = NodeBuilder::new("message")
+            .attr("id", garbage_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![{
+                let mut n = NodeBuilder::new("enc")
+                    .attr("type", "skmsg")
+                    .attr("v", "2")
+                    .build();
+                n.content = Some(NodeContent::Bytes(vec![1, 2, 3])); // Too short
+                n
+            }])
+            .build();
+
+        client
+            .clone()
+            .handle_incoming_message(Arc::new(garbage_node))
+            .await;
+
+        let retry_cache_key = client
+            .make_retry_cache_key(&group_jid, garbage_id, &sender_jid)
+            .await;
+        assert!(
+            !client.local_retry_cache.contains_key(&retry_cache_key),
+            "Garbage message should NOT be re-queued/cached"
+        );
+
+        // 2. Concurrent/Duplicate Test
+        // Send a valid-format message that triggers NoSenderKey.
+        // Send it TWICE.
+        // 1st -> ReQueued.
+        // 2nd -> Network Retry Fallback.
+        let dup_id = "DUP_MSG_123";
+        // Manual queue init
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        client
+            .message_queues
+            .insert(group_jid.to_string(), tx)
+            .await;
+
+        // Pseudo-valid SenderKeyMessage: Version 3 + Protobuf + Fake Sig
+        let mut content = vec![0x33, 0x08, 0x01, 0x10, 0x01, 0x1A, 0x00];
+        content.extend(vec![0u8; 64]); // fake sig
+
+        let dup_node = NodeBuilder::new("message")
+            .attr("id", dup_id)
+            .attr("from", group_jid.to_string())
+            .attr("participant", sender_jid.to_string())
+            .attr("type", "text")
+            .children(vec![{
+                let mut n = NodeBuilder::new("enc")
+                    .attr("type", "skmsg")
+                    .attr("v", "2")
+                    .build();
+                n.content = Some(NodeContent::Bytes(content));
+                n
+            }])
+            .build();
+
+        let dup_arc = Arc::new(dup_node);
+
+        // First Pass
+        client
+            .clone()
+            .handle_incoming_message(dup_arc.clone())
+            .await;
+
+        let retry_key = client
+            .make_retry_cache_key(&group_jid, dup_id, &sender_jid)
+            .await;
+        assert!(
+            client.local_retry_cache.contains_key(&retry_key),
+            "First dup message should be cached/requeued"
+        );
+        assert!(client.message_retry_counts.get(&retry_key).await.is_none());
+
+        // Second Pass (Immediate duplicate)
+        client.clone().handle_incoming_message(dup_arc).await;
+
+        // Should have triggered retry receipt logic (increment count)
+        // Wait slightly for spawn to update cache
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            client.message_retry_counts.get(&retry_key).await,
+            Some(1),
+            "Second dup message should trigger network retry fallback"
+        );
+    }
+
+    #[test]
+    fn test_is_sender_key_distribution_only() {
+        let skdm = wa::message::SenderKeyDistributionMessage {
+            group_id: Some("group".into()),
+            axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
+        };
+
+        // Empty message → false (no SKDM)
+        assert!(!is_sender_key_distribution_only(&wa::Message::default()));
+
+        // SKDM only → true
+        assert!(is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            ..Default::default()
+        }));
+
+        // SKDM + message_context_info → still true (context_info is metadata)
+        assert!(is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            message_context_info: Some(wa::MessageContextInfo::default()),
+            ..Default::default()
+        }));
+
+        // SKDM + sticker → false (has user content)
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            sticker_message: Some(Box::new(wa::message::StickerMessage::default())),
+            ..Default::default()
+        }));
+
+        // SKDM + text → false (has user content)
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            sender_key_distribution_message: Some(skdm.clone()),
+            conversation: Some("hello".into()),
+            ..Default::default()
+        }));
+
+        // protocol_message only (no SKDM) → false
+        assert!(!is_sender_key_distribution_only(&wa::Message {
+            protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
+            ..Default::default()
+        }));
     }
 }

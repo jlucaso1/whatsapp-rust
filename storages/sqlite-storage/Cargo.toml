@@ -21,6 +21,10 @@ diesel_migrations = { version = "2.3.1", default-features = false, features = [
 log = { workspace = true }
 prost = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 wacore = { workspace = true }
+wacore-binary = { workspace = true }
 waproto = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }

@@ -258,6 +258,10 @@ pub trait JidExt {
             || self.server() == BOT_SERVER
     }
 
+    fn is_newsletter(&self) -> bool {
+        self.server() == NEWSLETTER_SERVER
+    }
+
     /// Returns true if this is a hosted/Cloud API device.
     /// Hosted devices have device ID 99 or use @hosted/@hosted.lid server.
     /// These devices should be excluded from group message fanout.
@@ -425,6 +429,19 @@ impl Jid {
         self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
     }
 
+    /// Normalize the JID for use in pre-key bundle storage and lookup.
+    ///
+    /// WhatsApp servers may return JIDs with varied agent fields, or we might derive them
+    /// with agent fields in some contexts. However, pre-key bundles are stored and looked up
+    /// using a normalized key where the agent is 0 for standard servers (s.whatsapp.net, lid).
+    pub fn normalize_for_prekey_bundle(&self) -> Self {
+        let mut jid = self.clone();
+        if jid.server == DEFAULT_USER_SERVER || jid.server == HIDDEN_USER_SERVER {
+            jid.agent = 0;
+        }
+        jid
+    }
+
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
             self.server.clone()
@@ -435,6 +452,30 @@ impl Jid {
             )
         }
     }
+
+    /// Compare device identity (user, server, device) without allocation.
+    #[inline]
+    pub fn device_eq(&self, other: &Jid) -> bool {
+        self.user == other.user && self.server == other.server && self.device == other.device
+    }
+
+    /// Get a borrowing key for O(1) HashSet lookups by device identity.
+    #[inline]
+    pub fn device_key(&self) -> DeviceKey<'_> {
+        DeviceKey {
+            user: &self.user,
+            server: &self.server,
+            device: self.device,
+        }
+    }
+}
+
+/// Borrowing key for device identity (user, server, device). Use with HashSet for O(1) lookups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey<'a> {
+    pub user: &'a str,
+    pub server: &'a str,
+    pub device: u16,
 }
 
 impl<'a> JidExt for JidRef<'a> {

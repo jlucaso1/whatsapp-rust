@@ -15,4 +15,4 @@ pub mod util;
 pub use attrs::{AttrParser, AttrParserRef};
 pub use error::{BinaryError, Result};
 pub use marshal::{marshal, marshal_ref, marshal_ref_to, marshal_to};
-pub use node::{Node, NodeRef};
+pub use node::{Node, NodeRef, NodeValue};

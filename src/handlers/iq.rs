@@ -24,7 +24,7 @@ impl StanzaHandler for IqHandler {
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
         if !client.handle_iq(&node).await {
-            warn!(target: "Client", "Received unhandled IQ: {}", DisplayableNode(&node));
+            warn!("Received unhandled IQ: {}", DisplayableNode(&node));
         }
         true
     }

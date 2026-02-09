@@ -25,7 +25,8 @@ impl fmt::Display for KeyType {
 }
 
 impl KeyType {
-    fn value(&self) -> u8 {
+    /// Returns the byte value used in serialized key format.
+    pub fn value(&self) -> u8 {
         match &self {
             KeyType::Djb => 0x05u8,
         }
@@ -201,17 +202,76 @@ impl fmt::Debug for PublicKey {
     }
 }
 
+use curve25519_dalek::edwards::CompressedEdwardsY;
+use curve25519_dalek::scalar::Scalar;
+use std::sync::OnceLock;
+
+/// Cached data for XEdDSA signing.
+/// This avoids an expensive scalar multiplication on every signature
+/// and caches the scalar representation to avoid repeated modular reduction.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum PrivateKeyData {
-    DjbPrivateKey([u8; curve25519::PRIVATE_KEY_LENGTH]),
+struct EdwardsCacheData {
+    /// Cached scalar representation of the private key
+    scalar: Scalar,
+    ed_public_key: CompressedEdwardsY,
+    sign_bit: u8,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, derive_more::From)]
+/// Stores the private key bytes with lazy-initialized cached values for XEdDSA signing.
+/// The Edwards public key is computed on first signature, not at key creation.
+/// This keeps key generation fast while subsequent signatures benefit from caching.
+#[derive(Debug, Clone)]
+enum PrivateKeyData {
+    DjbPrivateKey {
+        /// The raw 32-byte private key
+        key: [u8; curve25519::PRIVATE_KEY_LENGTH],
+        /// Lazily-initialized Edwards cache (computed on first signature)
+        edwards_cache: OnceLock<EdwardsCacheData>,
+    },
+}
+
+impl PartialEq for PrivateKeyData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                PrivateKeyData::DjbPrivateKey { key: k1, .. },
+                PrivateKeyData::DjbPrivateKey { key: k2, .. },
+            ) => k1.ct_eq(k2).into(),
+        }
+    }
+}
+
+impl Eq for PrivateKeyData {}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct PrivateKey {
     key: PrivateKeyData,
 }
 
+impl From<PrivateKeyData> for PrivateKey {
+    fn from(key: PrivateKeyData) -> Self {
+        Self { key }
+    }
+}
+
 impl PrivateKey {
+    /// Lazily computes and caches the signing data (scalar + Edwards public key).
+    #[inline]
+    fn get_edwards_cache(&self) -> &EdwardsCacheData {
+        match &self.key {
+            PrivateKeyData::DjbPrivateKey { key, edwards_cache } => {
+                edwards_cache.get_or_init(|| {
+                    let temp = curve25519::PrivateKey::from(*key);
+                    EdwardsCacheData {
+                        scalar: temp.cached_scalar(),
+                        ed_public_key: temp.cached_ed_public_key(),
+                        sign_bit: temp.cached_sign_bit(),
+                    }
+                })
+            }
+        }
+    }
+
     pub fn deserialize(value: &[u8]) -> Result<Self, CurveError> {
         if value.len() != curve25519::PRIVATE_KEY_LENGTH {
             Err(CurveError::BadKeyLength(KeyType::Djb, value.len()))
@@ -220,23 +280,29 @@ impl PrivateKey {
             key.copy_from_slice(&value[..curve25519::PRIVATE_KEY_LENGTH]);
             // Clamping is not necessary but is kept for backward compatibility
             key = scalar::clamp_integer(key);
+            // Edwards cache will be computed lazily on first signature
             Ok(Self {
-                key: PrivateKeyData::DjbPrivateKey(key),
+                key: PrivateKeyData::DjbPrivateKey {
+                    key,
+                    edwards_cache: OnceLock::new(),
+                },
             })
         }
     }
 
     pub fn serialize(&self) -> &[u8; 32] {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(v) => v,
+            PrivateKeyData::DjbPrivateKey { key, .. } => key,
         }
     }
 
     pub fn public_key(&self) -> Result<PublicKey, CurveError> {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(private_key) => {
-                let public_key =
-                    curve25519::PrivateKey::from(*private_key).derive_public_key_bytes();
+            PrivateKeyData::DjbPrivateKey { key, .. } => {
+                // For public key derivation, we need the X25519 public key, not Edwards
+                // Use from_bytes_without_cache since we don't need the Edwards cache
+                let private_key = curve25519::PrivateKey::from_bytes_without_cache(*key);
+                let public_key = private_key.derive_public_key_bytes();
                 Ok(PublicKey::new(PublicKeyData::DjbPublicKey(public_key)))
             }
         }
@@ -244,7 +310,7 @@ impl PrivateKey {
 
     pub fn key_type(&self) -> KeyType {
         match &self.key {
-            PrivateKeyData::DjbPrivateKey(_) => KeyType::Djb,
+            PrivateKeyData::DjbPrivateKey { .. } => KeyType::Djb,
         }
     }
 
@@ -261,18 +327,25 @@ impl PrivateKey {
         message: &[&[u8]],
         csprng: &mut R,
     ) -> Result<[u8; 64], CurveError> {
-        match self.key {
-            PrivateKeyData::DjbPrivateKey(k) => {
-                let private_key = curve25519::PrivateKey::from(k);
+        match &self.key {
+            PrivateKeyData::DjbPrivateKey { key, .. } => {
+                let cache = self.get_edwards_cache();
+                let private_key = curve25519::PrivateKey::from_bytes_with_cache(
+                    *key,
+                    cache.scalar,
+                    cache.ed_public_key,
+                    cache.sign_bit,
+                );
                 Ok(private_key.calculate_signature(csprng, message))
             }
         }
     }
 
     pub fn calculate_agreement(&self, their_key: &PublicKey) -> Result<[u8; 32], CurveError> {
-        match (self.key, their_key.key) {
-            (PrivateKeyData::DjbPrivateKey(priv_key), PublicKeyData::DjbPublicKey(pub_key)) => {
-                let private_key = curve25519::PrivateKey::from(priv_key);
+        match (&self.key, their_key.key) {
+            (PrivateKeyData::DjbPrivateKey { key, .. }, PublicKeyData::DjbPublicKey(pub_key)) => {
+                // Use from_bytes_without_cache since agreement doesn't need the Edwards cache
+                let private_key = curve25519::PrivateKey::from_bytes_without_cache(*key);
                 Ok(private_key.calculate_agreement(&pub_key))
             }
         }
@@ -287,7 +360,7 @@ impl TryFrom<&[u8]> for PrivateKey {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct KeyPair {
     pub public_key: PublicKey,
     pub private_key: PrivateKey,
@@ -295,14 +368,18 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn generate<R: Rng + CryptoRng>(csprng: &mut R) -> Self {
-        let private_key = curve25519::PrivateKey::new(csprng);
+        // Generate key WITHOUT computing Edwards cache (lazy initialization).
+        // The Edwards point computation is deferred until first signature.
+        let temp = curve25519::PrivateKey::new_without_cache(csprng);
+        let key = temp.private_key_bytes();
 
-        let public_key = PublicKey::from(PublicKeyData::DjbPublicKey(
-            private_key.derive_public_key_bytes(),
-        ));
-        let private_key = PrivateKey::from(PrivateKeyData::DjbPrivateKey(
-            private_key.private_key_bytes(),
-        ));
+        let public_key =
+            PublicKey::from(PublicKeyData::DjbPublicKey(temp.derive_public_key_bytes()));
+        // Edwards cache will be computed lazily on first signature
+        let private_key = PrivateKey::from(PrivateKeyData::DjbPrivateKey {
+            key,
+            edwards_cache: OnceLock::new(),
+        });
 
         Self {
             public_key,
@@ -348,5 +425,200 @@ impl TryFrom<PrivateKey> for KeyPair {
     fn try_from(value: PrivateKey) -> Result<Self, CurveError> {
         let public_key = value.public_key()?;
         Ok(Self::new(public_key, value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rng() -> impl rand::CryptoRng + rand::Rng {
+        rand::rng()
+    }
+
+    #[test]
+    fn test_signature_with_lazy_cache() {
+        let mut csprng = rng();
+
+        // Generate key with lazy cache (no Edwards computation yet)
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Test message for signature";
+
+        // First signature should compute and cache Edwards point
+        let signature1 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 1");
+
+        // Verify signature is valid
+        assert!(keypair.public_key.verify_signature(message, &signature1));
+
+        // Second signature should use cached Edwards point
+        let signature2 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 2");
+
+        // Both signatures should verify (may differ due to random nonce)
+        assert!(keypair.public_key.verify_signature(message, &signature2));
+    }
+
+    #[test]
+    fn test_signature_consistency_after_serialization() {
+        let mut csprng = rng();
+
+        // Generate key and sign
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Test message";
+        let signature = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("signature");
+
+        // Serialize and deserialize private key
+        let serialized = keypair.private_key.serialize();
+        let restored_private = PrivateKey::deserialize(serialized).expect("deserialize");
+
+        // Sign again with restored key (should have fresh lazy cache)
+        let signature2 = restored_private
+            .calculate_signature(message, &mut csprng)
+            .expect("signature 2");
+
+        // Both signatures should verify against original public key
+        assert!(keypair.public_key.verify_signature(message, &signature));
+        assert!(keypair.public_key.verify_signature(message, &signature2));
+    }
+
+    #[test]
+    fn test_cloned_key_signatures() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+        let message = b"Clone test message";
+
+        // First signature initializes cache
+        let sig1 = keypair
+            .calculate_signature(message, &mut csprng)
+            .expect("sig1");
+
+        // Clone the keypair
+        let cloned = keypair.clone();
+
+        // Cloned key should also produce valid signatures
+        let sig2 = cloned
+            .calculate_signature(message, &mut csprng)
+            .expect("sig2");
+
+        // Both should verify
+        assert!(keypair.public_key.verify_signature(message, &sig1));
+        assert!(cloned.public_key.verify_signature(message, &sig2));
+        assert!(keypair.public_key.verify_signature(message, &sig2));
+    }
+
+    #[test]
+    fn test_multiple_signatures_same_key() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Sign many messages
+        for i in 0..100 {
+            let message = format!("Message number {}", i);
+            let signature = keypair
+                .calculate_signature(message.as_bytes(), &mut csprng)
+                .expect("signature");
+
+            // Each signature should verify
+            assert!(
+                keypair
+                    .public_key
+                    .verify_signature(message.as_bytes(), &signature),
+                "Signature {} failed to verify",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_key_agreement_works_without_signing() {
+        let mut csprng = rng();
+
+        // Create two keypairs
+        let alice = KeyPair::generate(&mut csprng);
+        let bob = KeyPair::generate(&mut csprng);
+
+        // Key agreement should work without ever signing (no Edwards cache needed)
+        let alice_shared = alice
+            .calculate_agreement(&bob.public_key)
+            .expect("alice agreement");
+        let bob_shared = bob
+            .calculate_agreement(&alice.public_key)
+            .expect("bob agreement");
+
+        // Shared secrets should match
+        assert_eq!(alice_shared, bob_shared);
+    }
+
+    #[test]
+    fn test_public_key_derivation_without_signing() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Public key should be derivable without signing (no Edwards cache needed)
+        let derived_public = keypair.private_key.public_key().expect("public key");
+
+        // Should match the original public key
+        assert_eq!(derived_public, keypair.public_key);
+    }
+
+    #[test]
+    fn test_signature_sign_bit_preserved() {
+        let mut csprng = rng();
+
+        // Generate many keys and verify sign bit handling
+        for _ in 0..20 {
+            let keypair = KeyPair::generate(&mut csprng);
+            let message = b"Sign bit test";
+
+            let signature = keypair
+                .calculate_signature(message, &mut csprng)
+                .expect("signature");
+
+            // Signature should be exactly 64 bytes
+            assert_eq!(signature.len(), 64);
+
+            // The sign bit is encoded in the MSB of the last byte
+            // Verify the signature is valid (which tests that sign bit is correct)
+            assert!(keypair.public_key.verify_signature(message, &signature));
+        }
+    }
+
+    #[test]
+    fn test_multipart_signature() {
+        let mut csprng = rng();
+
+        let keypair = KeyPair::generate(&mut csprng);
+
+        // Sign a multipart message
+        let part1 = b"Hello, ";
+        let part2 = b"World!";
+
+        let signature = keypair
+            .private_key
+            .calculate_signature_for_multipart_message(&[part1, part2], &mut csprng)
+            .expect("multipart signature");
+
+        // Verify with concatenated message
+        let full_message = [&part1[..], &part2[..]].concat();
+        assert!(
+            keypair
+                .public_key
+                .verify_signature(&full_message, &signature)
+        );
+
+        // Also verify with multipart verification
+        assert!(
+            keypair
+                .public_key
+                .verify_signature_for_multipart_message(&[part1, part2], &signature)
+        );
     }
 }

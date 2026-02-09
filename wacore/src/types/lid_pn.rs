@@ -33,6 +33,8 @@ pub enum LearningSource {
     BlocklistInactive,
     /// Mapping learned from device pairing (own JID <-> LID)
     Pairing,
+    /// Mapping learned from device notification (when `lid` attribute present)
+    DeviceNotification,
     /// Mapping learned from other/unknown source
     Other,
 }
@@ -50,6 +52,7 @@ impl LearningSource {
             LearningSource::BlocklistActive => "blocklist_active",
             LearningSource::BlocklistInactive => "blocklist_inactive",
             LearningSource::Pairing => "pairing",
+            LearningSource::DeviceNotification => "device_notification",
             LearningSource::Other => "other",
         }
     }
@@ -66,6 +69,7 @@ impl LearningSource {
             "blocklist_active" => LearningSource::BlocklistActive,
             "blocklist_inactive" => LearningSource::BlocklistInactive,
             "pairing" => LearningSource::Pairing,
+            "device_notification" => LearningSource::DeviceNotification,
             _ => LearningSource::Other,
         }
     }
@@ -132,6 +136,7 @@ mod tests {
             (LearningSource::BlocklistActive, "blocklist_active"),
             (LearningSource::BlocklistInactive, "blocklist_inactive"),
             (LearningSource::Pairing, "pairing"),
+            (LearningSource::DeviceNotification, "device_notification"),
             (LearningSource::Other, "other"),
         ];
 

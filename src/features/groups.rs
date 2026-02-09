@@ -1,20 +1,26 @@
 use crate::client::Client;
-use crate::request::InfoQuery;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use wacore::client::context::GroupInfo;
-use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{GROUP_SERVER, Jid};
-use wacore_binary::node::NodeContent;
+use wacore::iq::groups::{
+    AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteLinkIq, GroupCreateIq,
+    GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
+    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupDescriptionIq, SetGroupSubjectIq,
+    normalize_participants,
+};
+use wacore::types::message::AddressingMode;
+use wacore_binary::jid::Jid;
 
-static G_US_JID: LazyLock<Jid> = LazyLock::new(|| Jid::new("", GROUP_SERVER));
+pub use wacore::iq::groups::{
+    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, MemberAddMode,
+    MemberLinkMode, MembershipApprovalMode, ParticipantChangeResponse,
+};
 
 #[derive(Debug, Clone)]
 pub struct GroupMetadata {
     pub id: Jid,
     pub subject: String,
     pub participants: Vec<GroupParticipant>,
-    pub addressing_mode: crate::types::message::AddressingMode,
+    pub addressing_mode: AddressingMode,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +28,21 @@ pub struct GroupParticipant {
     pub jid: Jid,
     pub phone_number: Option<Jid>,
     pub is_admin: bool,
+}
+
+impl From<GroupParticipantResponse> for GroupParticipant {
+    fn from(p: GroupParticipantResponse) -> Self {
+        Self {
+            jid: p.jid,
+            phone_number: p.phone_number,
+            is_admin: p.participant_type.is_admin(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateGroupResult {
+    pub gid: Jid,
 }
 
 pub struct Groups<'a> {
@@ -38,46 +59,25 @@ impl<'a> Groups<'a> {
             return Ok(cached);
         }
 
-        let query_node = NodeBuilder::new("query")
-            .attr("request", "interactive")
-            .build();
+        let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
-        let iq = InfoQuery::get(
-            "w:g2",
-            jid.clone(),
-            Some(NodeContent::Nodes(vec![query_node])),
-        );
+        let participants: Vec<Jid> = group.participants.iter().map(|p| p.jid.clone()).collect();
 
-        let resp_node = self.client.send_iq(iq).await?;
-
-        let group_node = resp_node
-            .get_optional_child("group")
-            .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
-
-        let mut participants = Vec::new();
-        let mut lid_to_pn_map = HashMap::new();
-
-        let addressing_mode_str = group_node
-            .attrs()
-            .optional_string("addressing_mode")
-            .unwrap_or("pn");
-        let addressing_mode = match addressing_mode_str {
-            "lid" => crate::types::message::AddressingMode::Lid,
-            _ => crate::types::message::AddressingMode::Pn,
+        let lid_to_pn_map: HashMap<String, Jid> = if group.addressing_mode == AddressingMode::Lid {
+            group
+                .participants
+                .iter()
+                .filter_map(|p| {
+                    p.phone_number
+                        .as_ref()
+                        .map(|pn| (p.jid.user.clone(), pn.clone()))
+                })
+                .collect()
+        } else {
+            HashMap::new()
         };
 
-        for participant_node in group_node.get_children_by_tag("participant") {
-            let participant_jid = participant_node.attrs().jid("jid");
-            participants.push(participant_jid.clone());
-
-            if addressing_mode == crate::types::message::AddressingMode::Lid
-                && let Some(phone_number) = participant_node.attrs().optional_jid("phone_number")
-            {
-                lid_to_pn_map.insert(participant_jid.user.clone(), phone_number);
-            }
-        }
-
-        let mut info = GroupInfo::new(participants, addressing_mode);
+        let mut info = GroupInfo::new(participants, group.addressing_mode);
         if !lid_to_pn_map.is_empty() {
             info.set_lid_to_pn_map(lid_to_pn_map);
         }
@@ -92,128 +92,143 @@ impl<'a> Groups<'a> {
     }
 
     pub async fn get_participating(&self) -> Result<HashMap<String, GroupMetadata>, anyhow::Error> {
-        let participants_node = NodeBuilder::new("participants").build();
-        let description_node = NodeBuilder::new("description").build();
-        let participating_node = NodeBuilder::new("participating")
-            .children([participants_node, description_node])
-            .build();
+        let response = self.client.execute(GroupParticipatingIq::new()).await?;
 
-        let iq = InfoQuery::get(
-            "w:g2",
-            G_US_JID.clone(),
-            Some(NodeContent::Nodes(vec![participating_node])),
-        );
-
-        let resp_node = self.client.send_iq(iq).await?;
-
-        let mut result = HashMap::new();
-
-        if let Some(groups_node) = resp_node.get_optional_child("groups") {
-            for group_node in groups_node.get_children_by_tag("group") {
-                let group_id_str = group_node.attrs().string("id");
-                let group_jid: Jid = if group_id_str.contains('@') {
-                    group_id_str
-                        .parse()
-                        .unwrap_or_else(|_| Jid::group(&group_id_str))
-                } else {
-                    Jid::group(&group_id_str)
-                };
-
-                let subject = group_node
-                    .attrs()
-                    .optional_string("subject")
-                    .unwrap_or_default()
-                    .to_string();
-
-                let addressing_mode_str = group_node
-                    .attrs()
-                    .optional_string("addressing_mode")
-                    .unwrap_or("pn");
-                let addressing_mode = match addressing_mode_str {
-                    "lid" => crate::types::message::AddressingMode::Lid,
-                    _ => crate::types::message::AddressingMode::Pn,
-                };
-
-                let mut participants = Vec::new();
-                for participant_node in group_node.get_children_by_tag("participant") {
-                    let jid = participant_node.attrs().jid("jid");
-                    let phone_number = participant_node.attrs().optional_jid("phone_number");
-                    let admin_type = participant_node.attrs().optional_string("type");
-                    let is_admin = admin_type == Some("admin") || admin_type == Some("superadmin");
-
-                    participants.push(GroupParticipant {
-                        jid,
-                        phone_number,
-                        is_admin,
-                    });
-                }
-
+        let result = response
+            .groups
+            .into_iter()
+            .map(|group| {
+                let key = group.id.to_string();
                 let metadata = GroupMetadata {
-                    id: group_jid.clone(),
-                    subject,
-                    participants,
-                    addressing_mode,
+                    id: group.id,
+                    subject: group.subject.into_string(),
+                    participants: group.participants.into_iter().map(Into::into).collect(),
+                    addressing_mode: group.addressing_mode,
                 };
-
-                result.insert(group_jid.to_string(), metadata);
-            }
-        }
+                (key, metadata)
+            })
+            .collect();
 
         Ok(result)
     }
 
     pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
-        let query_node = NodeBuilder::new("query")
-            .attr("request", "interactive")
-            .build();
-
-        let iq = InfoQuery::get(
-            "w:g2",
-            jid.clone(),
-            Some(NodeContent::Nodes(vec![query_node])),
-        );
-
-        let resp_node = self.client.send_iq(iq).await?;
-
-        let group_node = resp_node
-            .get_optional_child("group")
-            .ok_or_else(|| anyhow::anyhow!("<group> not found in group info response"))?;
-
-        let subject = group_node
-            .attrs()
-            .optional_string("subject")
-            .unwrap_or_default()
-            .to_string();
-
-        let addressing_mode_str = group_node
-            .attrs()
-            .optional_string("addressing_mode")
-            .unwrap_or("pn");
-        let addressing_mode = match addressing_mode_str {
-            "lid" => crate::types::message::AddressingMode::Lid,
-            _ => crate::types::message::AddressingMode::Pn,
-        };
-
-        let mut participants = Vec::new();
-        for participant_node in group_node.get_children_by_tag("participant") {
-            let participant_jid = participant_node.attrs().jid("jid");
-            let phone_number = participant_node.attrs().optional_jid("phone_number");
-            let admin_type = participant_node.attrs().optional_string("type");
-            let is_admin = admin_type == Some("admin") || admin_type == Some("superadmin");
-
-            participants.push(GroupParticipant {
-                jid: participant_jid,
-                phone_number,
-                is_admin,
-            });
-        }
+        let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
         Ok(GroupMetadata {
-            id: jid.clone(),
-            subject,
-            participants,
-            addressing_mode,
+            id: group.id,
+            subject: group.subject.into_string(),
+            participants: group.participants.into_iter().map(Into::into).collect(),
+            addressing_mode: group.addressing_mode,
         })
+    }
+
+    pub async fn create_group(
+        &self,
+        mut options: GroupCreateOptions,
+    ) -> Result<CreateGroupResult, anyhow::Error> {
+        // Resolve phone numbers for LID participants that don't have one
+        let mut resolved_participants = Vec::with_capacity(options.participants.len());
+
+        for participant in options.participants {
+            let resolved = if participant.jid.is_lid() && participant.phone_number.is_none() {
+                let phone_number = self
+                    .client
+                    .get_phone_number_from_lid(&participant.jid.user)
+                    .await
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Missing phone number mapping for LID {}", participant.jid)
+                    })?;
+                participant.with_phone_number(Jid::pn(phone_number))
+            } else {
+                participant
+            };
+            resolved_participants.push(resolved);
+        }
+
+        options.participants = normalize_participants(&resolved_participants);
+
+        let gid = self.client.execute(GroupCreateIq::new(options)).await?;
+
+        Ok(CreateGroupResult { gid })
+    }
+
+    pub async fn set_subject(&self, jid: &Jid, subject: GroupSubject) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupSubjectIq::new(jid, subject))
+            .await?)
+    }
+
+    /// Sets or deletes a group's description.
+    ///
+    /// `prev` is the current description ID (from group metadata) used for
+    /// conflict detection. Pass `None` if unknown.
+    pub async fn set_description(
+        &self,
+        jid: &Jid,
+        description: Option<GroupDescription>,
+        prev: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupDescriptionIq::new(jid, description, prev))
+            .await?)
+    }
+
+    pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        Ok(self.client.execute(LeaveGroupIq::new(jid)).await?)
+    }
+
+    pub async fn add_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(AddParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn remove_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(RemoveParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn promote_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(PromoteParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn demote_participants(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(DemoteParticipantsIq::new(jid, participants))
+            .await?)
+    }
+
+    pub async fn get_invite_link(&self, jid: &Jid, reset: bool) -> Result<String, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(GetGroupInviteLinkIq::new(jid, reset))
+            .await?)
     }
 }
 
@@ -244,11 +259,13 @@ mod tests {
                 phone_number: None,
                 is_admin: true,
             }],
-            addressing_mode: crate::types::message::AddressingMode::Pn,
+            addressing_mode: AddressingMode::Pn,
         };
 
         assert_eq!(metadata.subject, "Test Group");
         assert_eq!(metadata.participants.len(), 1);
         assert!(metadata.participants[0].is_admin);
     }
+
+    // Protocol-level tests (node building, parsing, validation) are in wacore/src/iq/groups.rs
 }

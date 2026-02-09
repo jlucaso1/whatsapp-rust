@@ -113,7 +113,7 @@ pub async fn message_encrypt(
     let message = if let Some(items) = session_state.unacknowledged_pre_key_message_items()? {
         let local_registration_id = session_state.local_registration_id();
 
-        log::info!(
+        log::debug!(
             "Building PreKeyWhisperMessage for: {} with preKeyId: {}",
             remote_address,
             items
@@ -505,7 +505,7 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
         match result {
             Ok(ptext) => {
-                log::info!(
+                log::debug!(
                     "decrypted {:?} message from {} with current session state (base key {})",
                     original_message_type,
                     remote_address,
@@ -563,11 +563,19 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
         }
     }
 
-    // Try some old sessions:
-    let mut updated_session = None;
+    // Try some old sessions using take/restore pattern to avoid cloning all sessions.
+    // We take ownership of one session at a time, try to decrypt, and either:
+    // - Promote it if successful (session already removed by take)
+    // - Restore it if failed (put it back at the same index)
+    let previous_count = record.previous_session_count();
+    let mut idx = 0;
 
-    for (idx, previous) in record.previous_session_states().enumerate() {
-        let mut previous = previous?;
+    while idx < previous_count {
+        // Take ownership of this session (removes from list)
+        let Some(mut previous) = record.take_previous_session(idx) else {
+            // Should not happen since we checked count, but handle gracefully
+            break;
+        };
 
         let result = decrypt_message_with_state(
             CurrentOrPrevious::Previous,
@@ -580,7 +588,7 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
 
         match result {
             Ok(ptext) => {
-                log::info!(
+                log::debug!(
                     "decrypted {:?} message from {} with PREVIOUS session state (base key {})",
                     original_message_type,
                     remote_address,
@@ -588,53 +596,55 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                         .sender_ratchet_key_for_logging()
                         .expect("successful decrypt always has a valid base key"),
                 );
-                updated_session = Some((ptext, idx, previous));
-                break;
+                // Promote this session (it's already been removed by take_previous_session)
+                record.promote_state(previous);
+                return Ok(DecryptionResult {
+                    plaintext: ptext,
+                    used_previous_session: true,
+                });
             }
             Err(SignalProtocolError::DuplicatedMessage(chain, counter)) => {
+                // Restore the session before returning error
+                record.restore_previous_session(idx, previous);
                 return Err(SignalProtocolError::DuplicatedMessage(chain, counter));
             }
             Err(e) => {
                 log_decryption_failure(&previous, &e);
                 errs.push(e);
+                // Restore the session at the same index and move to next
+                record.restore_previous_session(idx, previous);
+                idx += 1;
             }
         }
     }
 
-    if let Some((ptext, idx, updated_session)) = updated_session {
-        record.promote_old_session(idx, updated_session);
-        Ok(DecryptionResult {
-            plaintext: ptext,
-            used_previous_session: true,
-        })
-    } else {
-        let previous_state_count = || record.previous_session_states().len();
+    // No session worked - log error and return failure
+    let previous_state_count = record.previous_session_count();
 
-        if let Some(current_state) = record.session_state() {
-            log::error!(
-                "No valid session for recipient: {}, current session base key {}, number of previous states: {}",
-                remote_address,
-                current_state
-                    .sender_ratchet_key_for_logging()
-                    .unwrap_or_else(|e| format!("<error: {e}>")),
-                previous_state_count(),
-            );
-        } else {
-            log::error!(
-                "No valid session for recipient: {}, (no current session state), number of previous states: {}",
-                remote_address,
-                previous_state_count(),
-            );
-        }
+    if let Some(current_state) = record.session_state() {
         log::error!(
-            "{}",
-            create_decryption_failure_log(remote_address, &errs, record, ciphertext)?
+            "No valid session for recipient: {}, current session base key {}, number of previous states: {}",
+            remote_address,
+            current_state
+                .sender_ratchet_key_for_logging()
+                .unwrap_or_else(|e| format!("<error: {e}>")),
+            previous_state_count,
         );
-        Err(SignalProtocolError::InvalidMessage(
-            original_message_type,
-            "decryption failed",
-        ))
+    } else {
+        log::error!(
+            "No valid session for recipient: {}, (no current session state), number of previous states: {}",
+            remote_address,
+            previous_state_count,
+        );
     }
+    log::error!(
+        "{}",
+        create_decryption_failure_log(remote_address, &errs, record, ciphertext)?
+    );
+    Err(SignalProtocolError::InvalidMessage(
+        original_message_type,
+        "decryption failed",
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -697,13 +707,31 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
                 "cannot decrypt without remote identity key",
             ))?;
 
+    let local_identity_key = state.local_identity_key()?;
+
     let mac_valid = ciphertext.verify_mac(
         &their_identity_key,
-        &state.local_identity_key()?,
+        &local_identity_key,
         message_keys.mac_key(),
     )?;
 
     if !mac_valid {
+        let their_id_fingerprint = hex::encode(their_identity_key.public_key().public_key_bytes());
+        let local_id_fingerprint = hex::encode(local_identity_key.public_key().public_key_bytes());
+
+        let mac_key_bytes = message_keys.mac_key();
+        let mac_key_fingerprint: String = hex::encode(mac_key_bytes).chars().take(8).collect();
+
+        log::error!(
+            "MAC verification failed for message from {}. \
+             Remote Identity: {}, \
+             Local Identity: {}, \
+             MAC Key Fingerprint: {}...",
+            remote_address,
+            their_id_fingerprint,
+            local_id_fingerprint,
+            mac_key_fingerprint
+        );
         return Err(SignalProtocolError::InvalidMessage(
             original_message_type,
             "MAC verification failed",

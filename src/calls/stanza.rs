@@ -186,7 +186,10 @@ impl ParsedCallStanza {
         }
 
         let mut attrs = node.attrs();
-        let stanza_id = attrs.string("id");
+        let stanza_id = attrs
+            .optional_string("id")
+            .unwrap_or_default()
+            .to_string();
         let from: Jid = attrs.jid("from");
         let timestamp = attrs
             .optional_string("t")
@@ -211,7 +214,10 @@ impl ParsedCallStanza {
             .ok_or_else(|| CallError::Parse("no signaling type child found".to_string()))?;
 
         let mut sig_attrs = signaling_node.attrs();
-        let call_id = sig_attrs.string("call-id");
+        let call_id = sig_attrs
+            .optional_string("call-id")
+            .unwrap_or_default()
+            .to_string();
         let call_creator: Jid = sig_attrs.jid("call-creator");
         let group_jid = sig_attrs.optional_jid("group-jid");
         let caller_pn = sig_attrs.optional_jid("caller_pn");

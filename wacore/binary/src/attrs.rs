@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{BinaryError, Result};
 use crate::jid::Jid;
-use crate::node::{Attrs, Node, NodeRef, ValueRef};
+use crate::node::{Attrs, Node, NodeRef, NodeValue, ValueRef};
 
 pub struct AttrParser<'a> {
     pub attrs: &'a Attrs,
@@ -57,6 +57,26 @@ impl<'a> AttrParserRef<'a> {
         self.get_raw(key, false).and_then(|v| v.as_str())
     }
 
+    /// Get a required string attribute, returning an error if missing.
+    ///
+    /// Prefer this over `string()` for required attributes as it makes
+    /// the error explicit rather than silently defaulting to empty string.
+    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+        self.optional_string(key)
+            .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
+    }
+
+    /// Get string, defaulting to empty string if missing.
+    ///
+    /// # Deprecation
+    ///
+    /// This method silently defaults to an empty string when the attribute is missing.
+    /// Use `optional_string()` with explicit error handling or `required_string()`
+    /// to avoid silent failures.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use optional_string() with explicit handling or required_string() instead"
+    )]
     pub fn string(&mut self, key: &str) -> String {
         self.get_raw(key, true)
             .map(|v| v.to_string_cow().into_owned())
@@ -179,7 +199,7 @@ impl<'a> AttrParser<'a> {
         }
     }
 
-    fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a String> {
+    fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a NodeValue> {
         let val = self.attrs.get(key);
         if require && val.is_none() {
             self.errors.push(BinaryError::AttrParse(format!(
@@ -189,25 +209,60 @@ impl<'a> AttrParser<'a> {
         val
     }
 
-    // --- String ---
-    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).map(|s| s.as_str())
+    /// Get the string representation of the value (for numeric parsing, etc.)
+    fn get_string_value(&mut self, key: &str, require: bool) -> Option<Cow<'a, str>> {
+        self.get_raw(key, require).map(|v| match v {
+            NodeValue::String(s) => Cow::Borrowed(s.as_str()),
+            NodeValue::Jid(j) => Cow::Owned(j.to_string()),
+        })
     }
 
+    // --- String ---
+    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
+        self.get_raw(key, false).and_then(|v| v.as_str())
+    }
+
+    /// Get a required string attribute, returning an error if missing.
+    ///
+    /// Prefer this over `string()` for required attributes as it makes
+    /// the error explicit rather than silently defaulting to empty string.
+    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+        self.optional_string(key)
+            .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
+    }
+
+    /// Get string, defaulting to empty string if missing.
+    ///
+    /// # Deprecation
+    ///
+    /// This method silently defaults to an empty string when the attribute is missing.
+    /// Use `optional_string()` with explicit error handling or `required_string()`
+    /// to avoid silent failures.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use optional_string() with explicit handling or required_string() instead"
+    )]
     pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true).cloned().unwrap_or_default()
+        self.get_raw(key, true)
+            .map(|v| v.to_string_value())
+            .unwrap_or_default()
     }
 
     // --- JID ---
+    /// Get JID from the value.
+    /// If the value is a JID variant, returns it directly without parsing (zero allocation clone).
+    /// If the value is a string, parses it as a JID.
     pub fn optional_jid(&mut self, key: &str) -> Option<Jid> {
-        self.get_raw(key, false)
-            .and_then(|s| match Jid::from_str(s) {
+        self.get_raw(key, false).and_then(|v| match v {
+            NodeValue::Jid(j) => Some(j.clone()),
+            NodeValue::String(s) => match Jid::from_str(s) {
                 Ok(jid) => Some(jid),
                 Err(e) => {
                     self.errors.push(BinaryError::from(e));
                     None
                 }
-            })
+            },
+        })
     }
 
     pub fn jid(&mut self, key: &str) -> Jid {
@@ -221,7 +276,7 @@ impl<'a> AttrParser<'a> {
 
     // --- Boolean ---
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {
-        self.get_raw(key, require)
+        self.get_string_value(key, require)
             .and_then(|s| match s.parse::<bool>() {
                 Ok(val) => Some(val),
                 Err(e) => {
@@ -243,7 +298,7 @@ impl<'a> AttrParser<'a> {
 
     // --- u64 ---
     pub fn optional_u64(&mut self, key: &str) -> Option<u64> {
-        self.get_raw(key, false)
+        self.get_string_value(key, false)
             .and_then(|s| match s.parse::<u64>() {
                 Ok(val) => Some(val),
                 Err(e) => {
@@ -274,7 +329,7 @@ impl<'a> AttrParser<'a> {
     }
 
     fn get_i64(&mut self, key: &str, require: bool) -> Option<i64> {
-        self.get_raw(key, require)
+        self.get_string_value(key, require)
             .and_then(|s| match s.parse::<i64>() {
                 Ok(val) => Some(val),
                 Err(e) => {

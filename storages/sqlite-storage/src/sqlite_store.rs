@@ -4,6 +4,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
+use diesel::upsert::excluded;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::warn;
 use prost::Message;
@@ -14,6 +15,7 @@ use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
@@ -37,12 +39,14 @@ type DeviceRow = (
     i64,
     i64,
     Option<Vec<u8>>,
+    Option<String>,
 );
 
 #[derive(Clone)]
 pub struct SqliteStore {
     pub(crate) pool: SqlitePool,
     pub(crate) db_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(crate) database_path: String,
     device_id: i32,
 }
 
@@ -75,6 +79,33 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
     }
 }
 
+fn parse_database_path(database_url: &str) -> Result<String> {
+    // Reject in-memory databases
+    if database_url == ":memory:" {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    // Strip query string and fragment
+    let path = database_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(database_url);
+
+    // Remove sqlite:// prefix if present
+    let path = path.trim_start_matches("sqlite://");
+
+    // Check if the resulting path looks like an in-memory marker
+    if path == ":memory:" || path.starts_with(":memory:?") {
+        return Err(StoreError::Database(
+            "Snapshot not supported for in-memory databases".to_string(),
+        ));
+    }
+
+    Ok(path.to_string())
+}
+
 impl SqliteStore {
     pub async fn new(database_url: &str) -> std::result::Result<Self, StoreError> {
         let manager = ConnectionManager::<SqliteConnection>::new(database_url);
@@ -105,9 +136,12 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
+        let database_path = parse_database_path(database_url)?;
+
         Ok(Self {
             pool,
             db_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            database_path,
             device_id: 1,
         })
     }
@@ -192,6 +226,7 @@ impl SqliteStore {
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
         let edge_routing_info = device_data.edge_routing_info.clone();
+        let props_hash = device_data.props_hash.clone();
         let new_lid = device_data
             .lid
             .as_ref()
@@ -227,6 +262,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info.clone()),
+                    device::props_hash.eq(props_hash.clone()),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -247,6 +283,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(app_version_tertiary),
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info),
+                    device::props_hash.eq(props_hash),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -307,6 +344,7 @@ impl SqliteStore {
                     device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
                     device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
                     device::edge_routing_info.eq(None::<Vec<u8>>),
+                    device::props_hash.eq(None::<String>),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -387,6 +425,7 @@ impl SqliteStore {
             app_version_tertiary,
             app_version_last_fetched_ms,
             edge_routing_info,
+            props_hash,
         )) = row
         {
             let id = if !pn_str.is_empty() {
@@ -441,6 +480,7 @@ impl SqliteStore {
                     DEVICE_PROPS.clone()
                 },
                 edge_routing_info,
+                props_hash,
             }))
         } else {
             Ok(None)
@@ -919,15 +959,27 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for m in mutations {
-                diesel::insert_into(app_state_mutation_macs::table)
-                    .values((
+
+            let records: Vec<_> = mutations
+                .iter()
+                .map(|m| {
+                    (
                         app_state_mutation_macs::name.eq(&name),
                         app_state_mutation_macs::version.eq(version as i64),
                         app_state_mutation_macs::index_mac.eq(&m.index_mac),
                         app_state_mutation_macs::value_mac.eq(&m.value_mac),
                         app_state_mutation_macs::device_id.eq(device_id),
-                    ))
+                    )
+                })
+                .collect();
+
+            // SQLite variable limit is typically 999 or 32766.
+            // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
+            const CHUNK_SIZE: usize = 100;
+
+            for chunk in records.chunks(CHUNK_SIZE) {
+                diesel::insert_into(app_state_mutation_macs::table)
+                    .values(chunk)
                     .on_conflict((
                         app_state_mutation_macs::name,
                         app_state_mutation_macs::index_mac,
@@ -935,8 +987,10 @@ impl SqliteStore {
                     ))
                     .do_update()
                     .set((
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                        app_state_mutation_macs::version
+                            .eq(excluded(app_state_mutation_macs::version)),
+                        app_state_mutation_macs::value_mac
+                            .eq(excluded(app_state_mutation_macs::value_mac)),
                     ))
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -964,12 +1018,17 @@ impl SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for idx in index_macs {
+
+            // SQLite variable limit is usually 999 or higher.
+            // We use a safe chunk size to stay well within limits.
+            const CHUNK_SIZE: usize = 500;
+
+            for chunk in index_macs.chunks(CHUNK_SIZE) {
                 diesel::delete(
                     app_state_mutation_macs::table.filter(
                         app_state_mutation_macs::name
                             .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq(&idx))
+                            .and(app_state_mutation_macs::index_mac.eq_any(chunk))
                             .and(app_state_mutation_macs::device_id.eq(device_id)),
                     ),
                 )
@@ -1258,11 +1317,11 @@ impl AppSyncStore for SqliteStore {
 
 #[async_trait]
 impl ProtocolStore for SqliteStore {
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>> {
+    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<Jid>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -1272,20 +1331,30 @@ impl ProtocolStore for SqliteStore {
                 .filter(skdm_recipients::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(recipients)
+            let jids: Vec<Jid> = recipients
+                .iter()
+                .filter_map(|s| match s.parse::<Jid>() {
+                    Ok(jid) => Some(jid),
+                    Err(e) => {
+                        warn!("Failed to parse SKDM recipient '{}': {}", s, e);
+                        None
+                    }
+                })
+                .collect();
+            Ok(jids)
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()> {
+    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
         if device_jids.is_empty() {
             return Ok(());
         }
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        let device_jids: Vec<String> = device_jids.to_vec();
+        let device_jid_strs: Vec<String> = device_jids.iter().map(|j| j.to_string()).collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1294,14 +1363,24 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            for device_jid in device_jids {
-                diesel::insert_into(skdm_recipients::table)
-                    .values((
+
+            let values: Vec<_> = device_jid_strs
+                .iter()
+                .map(|device_jid| {
+                    (
                         skdm_recipients::group_jid.eq(&group_jid),
-                        skdm_recipients::device_jid.eq(&device_jid),
+                        skdm_recipients::device_jid.eq(device_jid),
                         skdm_recipients::device_id.eq(device_id),
                         skdm_recipients::created_at.eq(now),
-                    ))
+                    )
+                })
+                .collect();
+
+            const CHUNK_SIZE: usize = 200; // SQLite variable limit ~999, 4 cols/row
+
+            for chunk in values.chunks(CHUNK_SIZE) {
+                diesel::insert_into(skdm_recipients::table)
+                    .values(chunk)
                     .on_conflict((
                         skdm_recipients::group_jid,
                         skdm_recipients::device_jid,
@@ -1730,6 +1809,88 @@ impl DeviceStore for SqliteStore {
     async fn create(&self) -> Result<i32> {
         SqliteStore::create_new_device(self).await
     }
+
+    async fn snapshot_db(&self, name: &str, extra_content: Option<&[u8]>) -> Result<()> {
+        fn sanitize_snapshot_name(name: &str) -> Result<String> {
+            const MAX_LENGTH: usize = 100;
+
+            let sanitized: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+
+            let sanitized = sanitized
+                .split('.')
+                .filter(|part| !part.is_empty() && *part != "..")
+                .collect::<Vec<_>>()
+                .join(".");
+
+            let sanitized = sanitized.trim_matches(['/', '\\', '.']);
+
+            if sanitized.is_empty() {
+                return Err(StoreError::Database(
+                    "Snapshot name cannot be empty after sanitization".to_string(),
+                ));
+            }
+
+            if sanitized.len() > MAX_LENGTH {
+                return Err(StoreError::Database(format!(
+                    "Snapshot name exceeds maximum length of {} characters",
+                    MAX_LENGTH
+                )));
+            }
+
+            Ok(sanitized.to_string())
+        }
+
+        let sanitized_name = sanitize_snapshot_name(name)?;
+
+        let pool = self.pool.clone();
+        let db_path = self.database_path.clone();
+        let extra_data = extra_content.map(|b| b.to_vec());
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            // Construct target path: db_path.snapshot-TIMESTAMP-SANITIZED_NAME
+            let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, sanitized_name);
+
+            // Use VACUUM INTO to create a consistent backup
+            // Note: We escape single quotes in the path just in case
+            let query = format!("VACUUM INTO '{}'", target_path.replace("'", "''"));
+
+            diesel::sql_query(query)
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Save extra content if provided
+            if let Some(data) = extra_data {
+                let extra_path = format!("{}.json", target_path);
+                std::fs::write(&extra_path, data).map_err(|e| {
+                    StoreError::Database(format!("Failed to write snapshot extra content: {}", e))
+                })?;
+            }
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1737,9 +1898,64 @@ mod tests {
     use super::*;
 
     async fn create_test_store() -> SqliteStore {
-        SqliteStore::new(":memory:")
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let db_name = format!("file:memdb_test_{}?mode=memory&cache=shared", timestamp);
+        SqliteStore::new(&db_name)
             .await
             .expect("Failed to create test store")
+    }
+
+    #[test]
+    fn test_parse_database_path_regular_path() {
+        let path = "/var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_sqlite_prefix() {
+        let path = "sqlite:///var/lib/whatsapp/database.db";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/whatsapp/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_query_params() {
+        let path = "file:database.db?mode=memory&cache=shared";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_fragment() {
+        let path = "file:database.db#fragment";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "file:database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_with_both_query_and_fragment() {
+        let path = "sqlite:///var/lib/database.db?mode=ro#backup";
+        let result = parse_database_path(path).unwrap();
+        assert_eq!(result, "/var/lib/database.db");
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_rejected() {
+        let result = parse_database_path(":memory:");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_parse_database_path_in_memory_with_query_rejected() {
+        let result = parse_database_path(":memory:?cache=shared");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[tokio::test]

@@ -8,6 +8,7 @@ use crate::AppStateError;
 use crate::decode::{Mutation, decode_record};
 use crate::hash::{HashState, generate_patch_mac};
 use crate::keys::ExpandedAppStateKeys;
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use waproto::whatsapp as wa;
 
@@ -75,6 +76,15 @@ where
     // Update hash state directly from records (no cloning needed)
     initial_state.update_hash_from_records(&snapshot.records);
 
+    debug!(
+        target: "AppState",
+        "Snapshot {} v{}: {} records, ltHash ends with ...{}",
+        collection_name,
+        version,
+        snapshot.records.len(),
+        hex::encode(&initial_state.hash[120..])
+    );
+
     // Validate snapshot MAC if requested
     if validate_macs
         && let (Some(mac_expected), Some(key_id)) = (
@@ -84,6 +94,14 @@ where
     {
         let keys = get_keys(key_id)?;
         let computed = initial_state.generate_snapshot_mac(collection_name, &keys.snapshot_mac);
+        trace!(
+            target: "AppState",
+            "Snapshot {} v{} MAC validation: computed={}, expected={}",
+            collection_name,
+            version,
+            hex::encode(&computed),
+            hex::encode(mac_expected)
+        );
         if computed != *mac_expected {
             return Err(AppStateError::SnapshotMACMismatch);
         }
@@ -162,7 +180,7 @@ where
     state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
 
     // Update hash state - the closure handles finding previous values
-    let (_warnings, result) = state.update_hash(&patch.mutations, |index_mac, idx| {
+    let (hash_update_result, result) = state.update_hash(&patch.mutations, |index_mac, idx| {
         // First check previous mutations in this patch (for overwrites within same patch)
         for prev in patch.mutations[..idx].iter().rev() {
             if let Some(rec) = &prev.record
@@ -181,10 +199,27 @@ where
     });
     result.map_err(|_| AppStateError::MismatchingLTHash)?;
 
+    debug!(
+        target: "AppState",
+        "Patch {} v{}: {} mutations, ltHash ends with ...{}, hasMissingRemove={}",
+        collection_name,
+        state.version,
+        patch.mutations.len(),
+        hex::encode(&state.hash[120..]),
+        hash_update_result.has_missing_remove
+    );
+
     // Validate MACs if requested
     if validate_macs && let Some(key_id) = patch.key_id.as_ref().and_then(|k| k.id.as_ref()) {
         let keys = get_keys(key_id)?;
-        validate_patch_macs(patch, state, &keys, collection_name, had_no_prior_state)?;
+        validate_patch_macs(
+            patch,
+            state,
+            &keys,
+            collection_name,
+            had_no_prior_state,
+            hash_update_result.has_missing_remove,
+        )?;
     }
 
     // Decode all mutations and collect MACs in a single pass
@@ -244,12 +279,16 @@ where
 ///   WhatsApp Web handles this case by throwing a retryable error ("empty lthash"), but we
 ///   can safely skip validation and process the mutations for usability. The state will be
 ///   corrected on the next proper sync with a snapshot.
+/// * `has_missing_remove` - If true, a REMOVE mutation was missing its previous value.
+///   WhatsApp Web tracks this and makes MAC validation failures non-fatal in this case,
+///   because the ltHash is expected to diverge when we can't subtract a value we don't have.
 pub fn validate_patch_macs(
     patch: &wa::SyncdPatch,
     state: &HashState,
     keys: &ExpandedAppStateKeys,
     collection_name: &str,
     had_no_prior_state: bool,
+    has_missing_remove: bool,
 ) -> Result<(), AppStateError> {
     // Skip ALL MAC validation if we had no prior state.
     // When we receive patches without a snapshot for a never-synced collection,
@@ -263,8 +302,35 @@ pub fn validate_patch_macs(
 
     if let Some(snap_mac) = patch.snapshot_mac.as_ref() {
         let computed_snap = state.generate_snapshot_mac(collection_name, &keys.snapshot_mac);
+        trace!(
+            target: "AppState",
+            "Patch {} v{} snapshotMAC: computed={}, expected={}",
+            collection_name,
+            state.version,
+            hex::encode(&computed_snap),
+            hex::encode(snap_mac)
+        );
         if computed_snap != *snap_mac {
-            return Err(AppStateError::PatchSnapshotMACMismatch);
+            // WhatsApp Web behavior: if hasMissingRemove is true, MAC mismatch is expected
+            // because we couldn't subtract the value we don't have. Log and continue.
+            if has_missing_remove {
+                log::warn!(
+                    target: "AppState",
+                    "Patch {} v{} snapshotMAC mismatch (expected due to hasMissingRemove=true), continuing",
+                    collection_name,
+                    state.version
+                );
+                // Don't fail - WhatsApp Web continues processing in this case
+            } else {
+                debug!(
+                    target: "AppState",
+                    "Patch {} v{} snapshotMAC MISMATCH! ltHash=...{}",
+                    collection_name,
+                    state.version,
+                    hex::encode(&state.hash[120..])
+                );
+                return Err(AppStateError::PatchSnapshotMACMismatch);
+            }
         }
     }
 
@@ -272,7 +338,17 @@ pub fn validate_patch_macs(
         let version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
         let computed_patch = generate_patch_mac(patch, collection_name, &keys.patch_mac, version);
         if computed_patch != *patch_mac {
-            return Err(AppStateError::PatchMACMismatch);
+            // Also skip patchMac validation if hasMissingRemove, since snapshotMac is part of it
+            if has_missing_remove {
+                log::warn!(
+                    target: "AppState",
+                    "Patch {} v{} patchMAC mismatch (expected due to hasMissingRemove=true), continuing",
+                    collection_name,
+                    state.version
+                );
+            } else {
+                return Err(AppStateError::PatchMACMismatch);
+            }
         }
     }
 

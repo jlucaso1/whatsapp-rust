@@ -1,0 +1,29 @@
+[package]
+name = "wacore-noise"
+version = "0.2.0"
+edition = "2024"
+authors = ["João Lucas <jlucaso@hotmail.com>"]
+license = "MIT"
+repository = "https://github.com/jlucaso1/whatsapp-rust"
+description = "Noise Protocol implementation for WhatsApp with AES-256-GCM"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aes-gcm = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+hkdf = { workspace = true }
+log = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+wacore-binary = { workspace = true }
+wacore-libsignal = { workspace = true }
+waproto = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }

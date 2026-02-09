@@ -71,8 +71,8 @@ impl PairUtils {
             Some(
                 NodeBuilder::new("iq")
                     .attrs([
-                        ("to", to.clone()),
-                        ("id", id.clone()),
+                        ("to", to.to_string_value()),
+                        ("id", id.to_string_value()),
                         ("type", "result".to_string()),
                     ])
                     .build(),
@@ -207,10 +207,7 @@ impl PairUtils {
         let device_signature = device_state
             .identity_key
             .private_key
-            .calculate_signature(
-                &msg_to_sign,
-                &mut rand::rngs::OsRng::unwrap_err(rand_core::OsRng),
-            )
+            .calculate_signature(&msg_to_sign, &mut rand::rngs::OsRng.unwrap_err())
             .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",

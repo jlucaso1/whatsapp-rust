@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use wacore::net::{HttpClient, HttpRequest, HttpResponse};
+use wacore::net::{HttpClient, HttpRequest, HttpResponse, StreamingHttpResponse};
 
 /// HTTP client implementation using `ureq` for synchronous HTTP requests.
 /// Since `ureq` is blocking, all requests are wrapped in `tokio::task::spawn_blocking`.
@@ -60,5 +60,34 @@ impl HttpClient for UreqHttpClient {
             })
         })
         .await?
+    }
+
+    fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
+        // Note: no spawn_blocking here — this is called FROM within spawn_blocking
+        // by the streaming download code. The entire HTTP fetch + decrypt happens
+        // in one blocking thread.
+        let response = match request.method.as_str() {
+            "GET" => {
+                let mut req = ureq::get(&request.url);
+                for (key, value) in &request.headers {
+                    req = req.header(key, value);
+                }
+                req.call()?
+            }
+            method => {
+                return Err(anyhow::anyhow!(
+                    "Streaming only supports GET, got: {}",
+                    method
+                ));
+            }
+        };
+
+        let status_code = response.status().as_u16();
+        let reader = response.into_body().into_reader();
+
+        Ok(StreamingHttpResponse {
+            status_code,
+            body: Box::new(reader),
+        })
     }
 }

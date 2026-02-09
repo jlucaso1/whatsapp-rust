@@ -160,11 +160,22 @@ impl DownloadUtils {
         Ok(requests)
     }
 
-    pub fn decrypt_stream<R: std::io::Read>(
+    /// Decrypt a media stream, writing plaintext chunks to the given writer.
+    ///
+    /// Reads encrypted data in 8KB chunks from `reader`, decrypts with AES-256-CBC,
+    /// verifies HMAC-SHA256 integrity, and writes decrypted plaintext to `writer`.
+    /// Returns the number of plaintext bytes written.
+    ///
+    /// If MAC verification fails, an error is returned. Note that some data may
+    /// already have been written to `writer` before the MAC is checked (the MAC
+    /// covers the last 10 bytes of the stream). Callers should discard the writer
+    /// contents on error.
+    pub fn decrypt_stream_to_writer<R: std::io::Read, W: std::io::Write>(
         mut reader: R,
         media_key: &[u8],
         app_info: MediaType,
-    ) -> Result<Vec<u8>> {
+        writer: &mut W,
+    ) -> Result<u64> {
         use aes::Aes256;
         #[allow(deprecated)]
         use aes::cipher::generic_array::GenericArray;
@@ -183,7 +194,7 @@ impl DownloadUtils {
         let cipher =
             Aes256::new_from_slice(&cipher_key).map_err(|_| anyhow!("Bad AES key length"))?;
 
-        let mut plaintext: Vec<u8> = Vec::new();
+        let mut bytes_written: u64 = 0;
         let mut tail: Vec<u8> = Vec::with_capacity(BLOCK + MAC_SIZE);
         let mut prev_block = iv;
 
@@ -209,7 +220,8 @@ impl DownloadUtils {
                         for (b, p) in block.iter_mut().zip(prev_block.iter()) {
                             *b ^= *p;
                         }
-                        plaintext.extend_from_slice(&block);
+                        writer.write_all(&block)?;
+                        bytes_written += BLOCK as u64;
                         prev_block = match <[u8; BLOCK]>::try_from(cblock) {
                             Ok(arr) => arr,
                             Err(_) => return Err(anyhow!("Failed to convert block to array")),
@@ -259,9 +271,24 @@ impl DownloadUtils {
             return Err(anyhow!("Bad PKCS7 padding bytes"));
         }
         final_plain.truncate(final_plain.len() - pad_len);
-        plaintext.extend_from_slice(&final_plain);
+        writer.write_all(&final_plain)?;
+        bytes_written += final_plain.len() as u64;
 
-        Ok(plaintext)
+        Ok(bytes_written)
+    }
+
+    /// Decrypt a media stream, returning the plaintext as a `Vec<u8>`.
+    ///
+    /// This is a convenience wrapper around [`decrypt_stream_to_writer`] that
+    /// accumulates output in memory.
+    pub fn decrypt_stream<R: std::io::Read>(
+        reader: R,
+        media_key: &[u8],
+        app_info: MediaType,
+    ) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        Self::decrypt_stream_to_writer(reader, media_key, app_info, &mut buf)?;
+        Ok(buf)
     }
 
     pub fn get_media_keys(

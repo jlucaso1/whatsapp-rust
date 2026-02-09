@@ -1,13 +1,14 @@
 use crate::socket::NoiseSocket;
 use crate::transport::{Transport, TransportEvent};
 use log::{debug, info, warn};
+use prost::Message;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
 use wacore::handshake::{
-    EdgeRoutingError, HandshakeState, MAX_EDGE_ROUTING_LEN, build_edge_routing_preintro,
-    utils::HandshakeError as CoreHandshakeError,
+    HandshakeError as CoreHandshakeError, HandshakeState, build_handshake_header,
 };
+use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -21,8 +22,6 @@ pub enum HandshakeError {
     Timeout,
     #[error("Unexpected event during handshake: {0}")]
     UnexpectedEvent(String),
-    #[error("Edge routing error: {0}")]
-    EdgeRouting(#[from] EdgeRoutingError),
 }
 
 type Result<T> = std::result::Result<T, HandshakeError>;
@@ -32,46 +31,28 @@ pub async fn do_handshake(
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
 ) -> Result<Arc<NoiseSocket>> {
-    let mut handshake_state = HandshakeState::new(&device.core)?;
+    // Prepare the client payload (convert Device-specific data to bytes)
+    let client_payload = device.core.get_client_payload().encode_to_vec();
+
+    let mut handshake_state = HandshakeState::new(
+        device.core.noise_key.clone(),
+        client_payload,
+        NOISE_START_PATTERN,
+        &WA_CONN_HEADER,
+    )?;
     let mut frame_decoder = wacore::framing::FrameDecoder::new();
 
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
 
     // Build the connection header, optionally with edge routing pre-intro
-    let header: Vec<u8> = if let Some(ref routing_info) = device.core.edge_routing_info {
-        if routing_info.len() > MAX_EDGE_ROUTING_LEN {
-            warn!(
-                target: "Client",
-                "Edge routing info ({} bytes) exceeds the {}-byte limit; falling back to WA_CONN_HEADER",
-                routing_info.len(),
-                MAX_EDGE_ROUTING_LEN
-            );
-            wacore_binary::consts::WA_CONN_HEADER.to_vec()
-        } else {
-            match build_edge_routing_preintro(routing_info) {
-                Ok(mut header) => {
-                    debug!(
-                        target: "Client",
-                        "Sending edge routing pre-intro ({} bytes) for optimized reconnection",
-                        routing_info.len()
-                    );
-                    header.extend_from_slice(&wacore_binary::consts::WA_CONN_HEADER);
-                    header
-                }
-                Err(EdgeRoutingError::RoutingInfoTooLarge) => {
-                    warn!(
-                        target: "Client",
-                        "Routing info unexpectedly exceeds {} bytes; skipping pre-intro",
-                        MAX_EDGE_ROUTING_LEN
-                    );
-                    wacore_binary::consts::WA_CONN_HEADER.to_vec()
-                }
-            }
-        }
-    } else {
-        wacore_binary::consts::WA_CONN_HEADER.to_vec()
-    };
+    let (header, used_edge_routing) =
+        build_handshake_header(device.core.edge_routing_info.as_deref());
+    if used_edge_routing {
+        debug!("Sending edge routing pre-intro for optimized reconnection");
+    } else if device.core.edge_routing_info.is_some() {
+        warn!("Edge routing info provided but not used (possibly too large)");
+    }
 
     // First message includes the WA connection header (with optional edge routing)
     let framed = wacore::framing::encode_frame(&client_hello_bytes, Some(&header))
@@ -117,7 +98,7 @@ pub async fn do_handshake(
     transport.send(framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
-    info!(target: "Client", "Handshake complete, switching to encrypted communication");
+    info!("Handshake complete, switching to encrypted communication");
 
     Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
 }

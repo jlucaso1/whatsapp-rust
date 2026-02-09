@@ -7,4 +7,4 @@
 /*.db*
 .env
 docs
-.claude/
+.claude

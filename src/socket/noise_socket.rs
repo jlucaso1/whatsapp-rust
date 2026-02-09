@@ -4,11 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use wacore::aes_gcm::{
-    Aes256Gcm,
-    aead::{Aead, AeadInPlace},
-};
-use wacore::handshake::utils::generate_iv;
+use wacore::handshake::NoiseCipher;
 
 const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
@@ -23,7 +19,7 @@ struct SendJob {
 }
 
 pub struct NoiseSocket {
-    read_key: Arc<Aes256Gcm>,
+    read_key: Arc<NoiseCipher>,
     read_counter: Arc<AtomicU32>,
     /// Channel to send jobs to the dedicated sender task.
     /// Using a channel instead of a mutex avoids blocking callers while
@@ -36,7 +32,11 @@ pub struct NoiseSocket {
 }
 
 impl NoiseSocket {
-    pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
+    pub fn new(
+        transport: Arc<dyn Transport>,
+        write_key: NoiseCipher,
+        read_key: NoiseCipher,
+    ) -> Self {
         let write_key = Arc::new(write_key);
         let read_key = Arc::new(read_key);
 
@@ -66,7 +66,7 @@ impl NoiseSocket {
     /// The task owns the write counter and processes jobs one at a time.
     async fn sender_task(
         transport: Arc<dyn Transport>,
-        write_key: Arc<Aes256Gcm>,
+        write_key: Arc<NoiseCipher>,
         mut send_job_rx: mpsc::Receiver<SendJob>,
     ) {
         let mut write_counter: u32 = 0;
@@ -91,7 +91,7 @@ impl NoiseSocket {
     /// Process a single send job: encrypt and send the message.
     async fn process_send_job(
         transport: &Arc<dyn Transport>,
-        write_key: &Arc<Aes256Gcm>,
+        write_key: &Arc<NoiseCipher>,
         write_counter: &mut u32,
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
@@ -106,8 +106,7 @@ impl NoiseSocket {
             out_buf.extend_from_slice(&plaintext_buf);
             plaintext_buf.clear();
 
-            let iv = generate_iv(counter);
-            if let Err(e) = write_key.encrypt_in_place(iv.as_ref().into(), b"", &mut out_buf) {
+            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut out_buf) {
                 return Err(EncryptSendError::crypto(
                     anyhow::anyhow!(e.to_string()),
                     plaintext_buf,
@@ -137,8 +136,7 @@ impl NoiseSocket {
             let plaintext_arc_for_task = plaintext_arc.clone();
 
             let spawn_result = tokio::task::spawn_blocking(move || {
-                let iv = generate_iv(counter);
-                write_key.encrypt(iv.as_ref().into(), &plaintext_arc_for_task[..])
+                write_key.encrypt_with_counter(counter, &plaintext_arc_for_task[..])
             })
             .await;
 
@@ -203,9 +201,8 @@ impl NoiseSocket {
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
-        let iv = generate_iv(counter);
         self.read_key
-            .decrypt(iv.as_ref().into(), ciphertext)
+            .decrypt_with_counter(counter, ciphertext)
             .map_err(|e| SocketError::Crypto(e.to_string()))
     }
 }
@@ -222,7 +219,6 @@ impl Drop for NoiseSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore::aes_gcm::{Aes256Gcm, KeyInit};
 
     #[tokio::test]
     async fn test_encrypt_and_send_returns_both_buffers() {
@@ -231,10 +227,8 @@ mod tests {
 
         // Create dummy keys for testing
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
         let socket = NoiseSocket::new(transport, write_key, read_key);
 
@@ -272,7 +266,7 @@ mod tests {
         // the first byte (which contains the task index)
         struct RecordingTransport {
             recorded_order: Arc<Mutex<Vec<u8>>>,
-            read_key: Aes256Gcm,
+            read_key: NoiseCipher,
             counter: std::sync::atomic::AtomicU32,
         }
 
@@ -286,9 +280,8 @@ mod tests {
                     let counter = self
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let iv = super::generate_iv(counter);
 
-                    if let Ok(plaintext) = self.read_key.decrypt(iv.as_ref().into(), ciphertext)
+                    if let Ok(plaintext) = self.read_key.decrypt_with_counter(counter, ciphertext)
                         && !plaintext.is_empty()
                     {
                         let index = plaintext[0];
@@ -304,15 +297,12 @@ mod tests {
 
         let recorded_order = Arc::new(Mutex::new(Vec::new()));
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
         let transport = Arc::new(RecordingTransport {
             recorded_order: recorded_order.clone(),
-            read_key: Aes256Gcm::new_from_slice(&key)
-                .expect("32-byte key should be valid for AES-256-GCM"),
+            read_key: NoiseCipher::new(&key).expect("32-byte key should be valid"),
             counter: std::sync::atomic::AtomicU32::new(0),
         });
 
@@ -371,10 +361,8 @@ mod tests {
         });
 
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
         let socket = NoiseSocket::new(transport, write_key, read_key);
 
@@ -437,10 +425,8 @@ mod tests {
 
         let transport = Arc::new(NoOpTransport);
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
         let socket = NoiseSocket::new(transport, write_key, read_key);
 

@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-19
+          toolchain: nightly-2026-01-30
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-19
+          toolchain: nightly-2026-01-30
           components: clippy
       - name: Install system dependencies (cached)
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-19
+          toolchain: nightly-2026-01-30
       - name: Install system dependencies (cached)
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:

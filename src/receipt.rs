@@ -6,13 +6,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
+
+
 use wacore_binary::node::Node;
 
 impl Client {
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
-        let id = attrs.string("id");
+        let id = match attrs.optional_string("id") {
+            Some(id) => id.to_string(),
+            None => {
+                log::warn!("Receipt stanza missing required 'id' attribute");
+                return;
+            }
+        };
         let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
         let participant = attrs.optional_jid("participant");
 
@@ -96,106 +104,64 @@ impl Client {
         }
     }
 
-    /// Sends read receipts to mark messages as read.
+    /// Sends read receipts for one or more messages.
     ///
-    /// This function batches multiple message IDs for the same sender and sends
-    /// a single receipt stanza per sender. This is used when a user opens a chat
-    /// and views messages.
-    ///
-    /// # Arguments
-    /// * `chat_jid` - The JID of the chat (group or individual)
-    /// * `messages` - List of (message_id, sender_jid) tuples to mark as read
-    pub async fn send_read_receipts(&self, chat_jid: &Jid, messages: &[(String, Jid)]) {
-        use wacore_binary::jid::STATUS_BROADCAST_USER;
-
-        // Don't send receipts for status broadcasts
-        if chat_jid.user == STATUS_BROADCAST_USER {
-            return;
+    /// For group messages, pass the message sender as `sender`.
+    pub async fn mark_as_read(
+        &self,
+        chat: &Jid,
+        sender: Option<&Jid>,
+        message_ids: Vec<String>,
+    ) -> Result<(), anyhow::Error> {
+        if message_ids.is_empty() {
+            return Ok(());
         }
 
-        if messages.is_empty() {
-            return;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
+
+        let mut builder = NodeBuilder::new("receipt")
+            .attr("to", chat.to_string())
+            .attr("type", "read")
+            .attr("id", &message_ids[0])
+            .attr("t", &timestamp);
+
+        if let Some(sender) = sender {
+            builder = builder.attr("participant", sender.to_string());
         }
 
-        let is_group = chat_jid.is_group();
-
-        // Group messages by sender for batching
-        let mut by_sender: HashMap<Jid, Vec<String>> = HashMap::new();
-        for (msg_id, sender) in messages {
-            by_sender
-                .entry(sender.clone())
-                .or_default()
-                .push(msg_id.clone());
+        // Additional message IDs go into <list><item id="..."/></list>
+        if message_ids.len() > 1 {
+            let items: Vec<wacore_binary::node::Node> = message_ids[1..]
+                .iter()
+                .map(|id| NodeBuilder::new("item").attr("id", id).build())
+                .collect();
+            builder = builder.children(vec![NodeBuilder::new("list").children(items).build()]);
         }
 
-        // Send one receipt per sender
-        for (sender, msg_ids) in by_sender {
-            if msg_ids.is_empty() {
-                continue;
-            }
+        let node = builder.build();
 
-            // First message ID goes in the 'id' attribute
-            let first_id = msg_ids[0].clone();
-            let additional_ids: Vec<_> = msg_ids.into_iter().skip(1).collect();
+        info!(target: "Client/Receipt", "Sending read receipt for {} message(s) to {}", message_ids.len(), chat);
 
-            let mut attrs = HashMap::new();
-            attrs.insert("id".to_string(), first_id.clone());
-            attrs.insert("to".to_string(), chat_jid.to_string());
-            attrs.insert("type".to_string(), "read".to_string());
-
-            // For group messages, include the participant (original sender)
-            if is_group {
-                attrs.insert("participant".to_string(), sender.to_string());
-            }
-
-            // Build the receipt node
-            let mut builder = NodeBuilder::new("receipt").attrs(attrs);
-
-            // If there are additional message IDs, add them in a <list> element
-            if !additional_ids.is_empty() {
-                let items: Vec<Node> = additional_ids
-                    .iter()
-                    .map(|id: &String| NodeBuilder::new("item").attr("id", id.clone()).build())
-                    .collect();
-                let list_node = NodeBuilder::new("list").children(items).build();
-                builder = builder.children(vec![list_node]);
-            }
-
-            let receipt_node = builder.build();
-
-            let total_count = 1 + additional_ids.len();
-            info!(
-                target: "Client/Receipt",
-                "Sending read receipt for {} message(s) in {} (sender: {})",
-                total_count, chat_jid, sender
-            );
-
-            if let Err(e) = self.send_node(receipt_node).await {
-                log::warn!(
-                    target: "Client/Receipt",
-                    "Failed to send read receipt for {} messages: {:?}",
-                    total_count, e
-                );
-            }
-        }
+        self.send_node(node)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send read receipt: {}", e))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
     use crate::types::message::{MessageInfo, MessageSource};
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -238,11 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_delivery_receipt_group() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -278,11 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_own_messages() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -320,11 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_empty_id() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -360,11 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_status_broadcast() {
-        let backend = Arc::new(
-            SqliteStore::new(":memory:")
-                .await
-                .expect("test backend should initialize"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await

@@ -1,8 +1,8 @@
+use crate::stanza::BusinessSubscription;
 use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta};
 use crate::types::message::MessageInfo;
 use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
-use crate::types::user::PrivacySettings;
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use prost::Message;
@@ -95,16 +95,6 @@ impl LazyConversation {
             conv.messages.shrink_to_fit();
             conv
         })
-    }
-
-    /// Returns true if the conversation has been parsed.
-    pub fn is_parsed(&self) -> bool {
-        self.parsed.get().is_some()
-    }
-
-    /// Get the raw bytes size (useful for debugging/metrics).
-    pub fn raw_size(&self) -> usize {
-        self.raw_bytes.len()
     }
 }
 
@@ -200,18 +190,104 @@ pub enum DeviceListUpdateType {
     Update,
 }
 
+impl From<crate::stanza::devices::DeviceNotificationType> for DeviceListUpdateType {
+    fn from(t: crate::stanza::devices::DeviceNotificationType) -> Self {
+        match t {
+            crate::stanza::devices::DeviceNotificationType::Add => Self::Add,
+            crate::stanza::devices::DeviceNotificationType::Remove => Self::Remove,
+            crate::stanza::devices::DeviceNotificationType::Update => Self::Update,
+        }
+    }
+}
+
+/// Device information from notification.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceNotificationInfo {
+    /// Device ID (extracted from JID)
+    pub device_id: u32,
+    /// Optional key index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_index: Option<u32>,
+}
+
 /// Device list update notification.
 /// Emitted when a user's device list changes (device added/removed/updated).
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceListUpdate {
-    /// The user whose device list changed
+    /// The user whose device list changed (from attribute)
     pub user: Jid,
+    /// Optional LID user (for LID-PN mapping)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lid_user: Option<Jid>,
     /// Type of update (add/remove/update)
     pub update_type: DeviceListUpdateType,
-    /// List of device IDs affected
-    pub devices: Vec<u32>,
-    /// Hash for cache validation (if provided)
+    /// Affected devices with detailed info
+    pub devices: Vec<DeviceNotificationInfo>,
+    /// Key index info (for add/remove)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_index: Option<crate::stanza::devices::KeyIndexInfo>,
+    /// Contact hash (for update - used for contact lookup)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_hash: Option<String>,
+}
+
+/// Type of business status update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BusinessUpdateType {
+    RemovedAsBusiness,
+    VerifiedNameChanged,
+    ProfileUpdated,
+    ProductsUpdated,
+    CollectionsUpdated,
+    SubscriptionsUpdated,
+    Unknown,
+}
+
+impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateType {
+    fn from(t: crate::stanza::business::BusinessNotificationType) -> Self {
+        match t {
+            crate::stanza::business::BusinessNotificationType::RemoveJid
+            | crate::stanza::business::BusinessNotificationType::RemoveHash => {
+                Self::RemovedAsBusiness
+            }
+            crate::stanza::business::BusinessNotificationType::VerifiedNameJid
+            | crate::stanza::business::BusinessNotificationType::VerifiedNameHash => {
+                Self::VerifiedNameChanged
+            }
+            crate::stanza::business::BusinessNotificationType::Profile
+            | crate::stanza::business::BusinessNotificationType::ProfileHash => {
+                Self::ProfileUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Product => Self::ProductsUpdated,
+            crate::stanza::business::BusinessNotificationType::Collection => {
+                Self::CollectionsUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Subscriptions => {
+                Self::SubscriptionsUpdated
+            }
+            crate::stanza::business::BusinessNotificationType::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Business status update notification.
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessStatusUpdate {
+    pub jid: Jid,
+    pub update_type: BusinessUpdateType,
+    pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_jid: Option<Jid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub product_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub collection_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<BusinessSubscription>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -267,13 +343,12 @@ pub enum Event {
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
 
-    /// Incoming call offer received
+    /// Business account status changed (verified name, profile, conversion to personal)
+    BusinessStatusUpdate(BusinessStatusUpdate),
+
     CallOffer(CallOffer),
-    /// Call accepted by remote party
     CallAccepted(CallAccepted),
-    /// Call rejected by remote party
     CallRejected(CallRejected),
-    /// Call ended/terminated
     CallEnded(CallEnded),
 
     StreamReplaced(StreamReplaced),
@@ -309,15 +384,6 @@ pub struct ClientOutdated;
 pub struct Connected;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct KeepAliveTimeout {
-    pub error_count: i32,
-    pub last_success: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct KeepAliveRestored;
-
-#[derive(Debug, Clone, Serialize)]
 pub struct LoggedOut {
     pub on_connect: bool,
     pub reason: ConnectFailureReason,
@@ -325,9 +391,6 @@ pub struct LoggedOut {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManualLoginReconnect;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TempBanReason {
@@ -472,11 +535,6 @@ pub struct ConnectFailure {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CatRefreshError {
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct StreamError {
     pub code: String,
     pub raw: Option<Node>,
@@ -558,18 +616,6 @@ pub struct UserAboutUpdate {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IdentityChange {
-    pub jid: Jid,
-    pub timestamp: DateTime<Utc>,
-    pub implicit: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PrivacySettingsUpdate {
-    pub new_settings: PrivacySettings,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
@@ -590,17 +636,6 @@ pub struct PinUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
-    pub from_full_sync: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StarUpdate {
-    pub chat_jid: Jid,
-    pub sender_jid: Option<Jid>,
-    pub is_from_me: bool,
-    pub message_id: MessageId,
-    pub timestamp: DateTime<Utc>,
-    pub action: Box<wa::sync_action_value::StarAction>,
     pub from_full_sync: bool,
 }
 
@@ -652,38 +687,26 @@ pub struct NewsletterLiveUpdate {
     pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
 }
 
-/// Incoming call offer event.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallOffer {
-    /// Basic call metadata (from, timestamp, call_id, call_creator)
     pub meta: BasicCallMeta,
-    /// Media type (audio or video)
     pub media_type: CallMediaType,
-    /// Whether this was delivered while offline
     pub is_offline: bool,
-    /// Remote peer metadata (platform, version)
     pub remote_meta: CallRemoteMeta,
-    /// Group JID if this is a group call
     pub group_jid: Option<Jid>,
 }
 
-/// Call accepted event - the remote party accepted our outgoing call.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallAccepted {
-    /// Basic call metadata
     pub meta: BasicCallMeta,
 }
 
-/// Call rejected event - the remote party rejected the call.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallRejected {
-    /// Basic call metadata
     pub meta: BasicCallMeta,
 }
 
-/// Call ended event - the call was terminated.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallEnded {
-    /// Basic call metadata
     pub meta: BasicCallMeta,
 }

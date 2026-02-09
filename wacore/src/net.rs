@@ -4,6 +4,9 @@ use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Default WhatsApp Web websocket endpoint.
+pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
+
 /// An event produced by the transport layer.
 #[derive(Debug, Clone)]
 pub enum TransportEvent {
@@ -87,9 +90,27 @@ impl HttpResponse {
     }
 }
 
+/// An HTTP response with a streaming body reader instead of a buffered `Vec<u8>`.
+/// Used for large downloads where buffering the entire response would be wasteful.
+pub struct StreamingHttpResponse {
+    pub status_code: u16,
+    pub body: Box<dyn std::io::Read + Send>,
+}
+
 /// Trait for executing HTTP requests in a runtime-agnostic way
 #[async_trait]
 pub trait HttpClient: Send + Sync {
     /// Executes a given HTTP request and returns the response.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
+
+    /// Synchronous streaming variant. Returns a reader over the response body
+    /// instead of buffering it all in memory.
+    ///
+    /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
+    /// Override to enable streaming downloads.
+    fn execute_streaming(&self, _request: HttpRequest) -> Result<StreamingHttpResponse> {
+        Err(anyhow::anyhow!(
+            "Streaming not supported by this HTTP client"
+        ))
+    }
 }

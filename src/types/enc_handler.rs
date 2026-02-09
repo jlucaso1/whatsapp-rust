@@ -51,7 +51,11 @@ mod tests {
             enc_node: &Node,
             _info: &MessageInfo,
         ) -> Result<()> {
-            let enc_type = enc_node.attrs().string("type");
+            let enc_type = enc_node
+                .attrs()
+                .optional_string("type")
+                .unwrap_or("unknown")
+                .to_string();
             self.calls.lock().await.push(enc_type);
             Ok(())
         }
@@ -65,11 +69,7 @@ mod tests {
         let mock_handler = MockEncHandler::new();
 
         // Build bot with custom handler and in-memory DB
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
@@ -94,11 +94,7 @@ mod tests {
         let handler2 = MockEncHandler::new();
 
         // Build bot with in-memory DB
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
@@ -123,11 +119,7 @@ mod tests {
         use crate::bot::Bot;
 
         // Build bot without custom handlers but with in-memory DB
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(":memory:")
-                .await
-                .expect("Failed to create SQLite backend"),
-        );
+        let backend = crate::test_utils::create_test_backend().await;
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();

@@ -1,8 +1,6 @@
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use once_cell::sync::Lazy;
 use prost::Message;
-use rand::TryRngCore;
-use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use wacore_binary::jid::Jid;
@@ -41,12 +39,6 @@ pub mod key_pair_serde {
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
         Ok(KeyPair::new(public_key, private_key))
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ProcessedMessageKey {
-    pub to: Jid,
-    pub id: String,
 }
 
 fn build_base_client_payload(
@@ -122,6 +114,10 @@ pub struct Device {
     /// When present, this should be sent as a pre-intro before the Noise handshake.
     #[serde(default)]
     pub edge_routing_info: Option<Vec<u8>>,
+    /// Hash from the last props (A/B experiment config) fetch.
+    /// Sent on subsequent connects to enable delta updates instead of full fetches.
+    #[serde(default)]
+    pub props_hash: Option<String>,
 }
 
 impl Default for Device {
@@ -132,34 +128,33 @@ impl Default for Device {
 
 impl Device {
     pub fn new() -> Self {
+        use rand::Rng;
         use rand::RngCore;
 
-        let identity_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+        let mut rng = rand::rng();
+        let identity_key_pair = IdentityKeyPair::generate(&mut rng);
 
         let identity_key: KeyPair = KeyPair::new(
             *identity_key_pair.public_key(),
-            *identity_key_pair.private_key(),
+            identity_key_pair.private_key().clone(),
         );
-        let signed_pre_key = KeyPair::generate(&mut OsRng.unwrap_err());
+        let signed_pre_key = KeyPair::generate(&mut rng);
         let signature_box = identity_key_pair
             .private_key()
-            .calculate_signature(
-                &signed_pre_key.public_key.serialize(),
-                &mut OsRng.unwrap_err(),
-            )
+            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut rng)
             .expect("signing with valid Ed25519 key should succeed");
         let signed_pre_key_signature: [u8; 64] = signature_box
             .as_ref()
             .try_into()
             .expect("Ed25519 signature is always 64 bytes");
         let mut adv_secret_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut adv_secret_key);
+        rng.fill_bytes(&mut adv_secret_key);
 
         Self {
             pn: None,
             lid: None,
-            registration_id: 3718719151,
-            noise_key: KeyPair::generate(&mut OsRng.unwrap_err()),
+            registration_id: rng.random_range(1..=2147483647),
+            noise_key: KeyPair::generate(&mut rng),
             identity_key,
             signed_pre_key,
             signed_pre_key_id: 1,
@@ -173,6 +168,7 @@ impl Device {
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
             edge_routing_info: None,
+            props_hash: None,
         }
     }
 
@@ -199,12 +195,16 @@ impl Device {
         &mut self,
         os: Option<String>,
         version: Option<wa::device_props::AppVersion>,
+        platform_type: Option<wa::device_props::PlatformType>,
     ) {
         if let Some(os) = os {
             self.device_props.os = Some(os);
         }
         if let Some(version) = version {
             self.device_props.version = Some(version);
+        }
+        if let Some(platform_type) = platform_type {
+            self.device_props.platform_type = Some(platform_type as i32);
         }
     }
 
@@ -270,5 +270,19 @@ impl Device {
         payload.passive = Some(false);
         payload.pull = Some(false);
         payload
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_registration_id_range() {
+        for _ in 0..1000 {
+            let device = Device::new();
+            assert!(device.registration_id >= 1);
+            assert!(device.registration_id <= 2147483647);
+        }
     }
 }

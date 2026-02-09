@@ -12,7 +12,6 @@
 //! (by `created_at` timestamp) is considered "current".
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub use wacore::types::{LearningSource, LidPnEntry};
@@ -112,15 +111,16 @@ impl LidPnCache {
     ///
     /// This should be called during client initialization to populate
     /// the cache from the database.
-    pub async fn warm_up(&self, entries: Vec<LidPnEntry>) {
-        let count = entries.len();
+    pub async fn warm_up(&self, entries: impl IntoIterator<Item = LidPnEntry>) {
         let start = std::time::Instant::now();
+        let mut count = 0;
 
         for entry in entries {
             self.add(entry).await;
+            count += 1;
         }
 
-        log::info!(
+        log::debug!(
             "LID-PN cache warmed up with {} entries in {:?}",
             count,
             start.elapsed()
@@ -151,9 +151,6 @@ impl LidPnCache {
         pn_map.len()
     }
 }
-
-/// Thread-safe shared reference to the LID-PN cache
-pub type SharedLidPnCache = Arc<LidPnCache>;
 
 #[cfg(test)]
 mod tests {
@@ -327,6 +324,7 @@ mod tests {
             (LearningSource::BlocklistActive, "blocklist_active"),
             (LearningSource::BlocklistInactive, "blocklist_inactive"),
             (LearningSource::Pairing, "pairing"),
+            (LearningSource::DeviceNotification, "device_notification"),
             (LearningSource::Other, "other"),
         ];
 

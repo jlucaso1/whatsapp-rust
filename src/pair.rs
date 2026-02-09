@@ -4,7 +4,6 @@ use crate::types::events::{Event, PairError, PairSuccess};
 use log::{error, info, warn};
 use prost::Message;
 use rand::TryRngCore;
-use rand_core::OsRng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
@@ -16,8 +15,8 @@ pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let device_state = DeviceState {
-        identity_key: store.identity_key,
-        noise_key: store.noise_key,
+        identity_key: store.identity_key.clone(),
+        noise_key: store.noise_key.clone(),
         adv_secret_key: store.adv_secret_key,
     };
     PairUtils::make_qr_data(&device_state, ref_str)
@@ -25,12 +24,11 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
 
 pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
-    if node
+    if !node
         .attrs
         .get("from")
-        .map(|s| s.as_str())
-        .unwrap_or_default()
-        != SERVER_JID
+        .map(|from| from == SERVER_JID)
+        .unwrap_or(false)
     {
         return false;
     }
@@ -49,8 +47,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 
                     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
                     let device_state = DeviceState {
-                        identity_key: device_snapshot.identity_key,
-                        noise_key: device_snapshot.noise_key,
+                        identity_key: device_snapshot.identity_key.clone(),
+                        noise_key: device_snapshot.noise_key.clone(),
                         adv_secret_key: device_snapshot.adv_secret_key,
                     };
 
@@ -128,6 +126,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
     // Clear pair code state if active
     *client.pair_code_state.lock().await = wacore::pair_code::PairCodeState::Completed;
 
+    client.update_server_time_offset(request_node);
+
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
         None => {
@@ -180,8 +180,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -272,6 +272,11 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 return;
             }
 
+            let client_for_unified = client.clone();
+            tokio::spawn(async move {
+                client_for_unified.send_unified_session().await;
+            });
+
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.
             client
@@ -321,12 +326,12 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = KeyPair::generate(&mut OsRng::unwrap_err(OsRng));
+    let master_ephemeral = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
