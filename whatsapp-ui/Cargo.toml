@@ -30,14 +30,8 @@ gpui-component-assets = "0.5.0"
 # Image handling
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
-# QR code generation
-qrcode = "0.14"
-
 # Ordered maps for deterministic cache eviction
 indexmap = "2"
-
-# Protobuf encoding
-prost = "0.14"
 
 # Logging
 log = "0.4"
@@ -45,6 +39,12 @@ mp4 = "0.14.0"
 ogg = "0.9"
 openh264 = "0.9.0"  # H.264 software decoder
 opus = "0.3"
+
+# Protobuf encoding
+prost = "0.14"
+
+# QR code generation
+qrcode = "0.14"
 rand.workspace = true
 rust-embed = "8.9.0"
 smallvec = "1.15.1"

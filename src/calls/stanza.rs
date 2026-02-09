@@ -186,10 +186,7 @@ impl ParsedCallStanza {
         }
 
         let mut attrs = node.attrs();
-        let stanza_id = attrs
-            .optional_string("id")
-            .unwrap_or_default()
-            .to_string();
+        let stanza_id = attrs.optional_string("id").unwrap_or_default().to_string();
         let from: Jid = attrs.jid("from");
         let timestamp = attrs
             .optional_string("t")

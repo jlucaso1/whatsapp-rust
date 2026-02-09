@@ -477,9 +477,27 @@ impl StreamingVideoDecoder {
                     self.combined_buffer.clear();
 
                     // Extract all planes contiguously into the single buffer
-                    extract_plane_append(&mut self.combined_buffer, yuv.y(), width, height, y_stride);
-                    extract_plane_append(&mut self.combined_buffer, yuv.u(), uv_width, uv_height, u_stride);
-                    extract_plane_append(&mut self.combined_buffer, yuv.v(), uv_width, uv_height, v_stride);
+                    extract_plane_append(
+                        &mut self.combined_buffer,
+                        yuv.y(),
+                        width,
+                        height,
+                        y_stride,
+                    );
+                    extract_plane_append(
+                        &mut self.combined_buffer,
+                        yuv.u(),
+                        uv_width,
+                        uv_height,
+                        u_stride,
+                    );
+                    extract_plane_append(
+                        &mut self.combined_buffer,
+                        yuv.v(),
+                        uv_width,
+                        uv_height,
+                        v_stride,
+                    );
 
                     // Convert to SharedBytes (takes ownership, O(1) move) and slice into planes
                     // This is 1 allocation vs 3, with zero-copy slicing for Y/U/V views

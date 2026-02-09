@@ -7,7 +7,6 @@ use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 
-
 use wacore_binary::node::Node;
 
 impl Client {
