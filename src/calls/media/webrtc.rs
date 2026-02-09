@@ -37,6 +37,7 @@ use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::ice::network_type::NetworkType;
 use webrtc::ice::udp_mux::{UDPMuxDefault, UDPMuxParams};
 use webrtc::ice::udp_network::UDPNetwork;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
@@ -45,7 +46,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
-use super::ice_interceptor::InterceptedUdpConn;
+use super::ice_interceptor::RelayUdpConn;
 use crate::calls::{RelayData, WHATSAPP_RELAY_PORT};
 
 /// Hardcoded DTLS fingerprint used by WhatsApp Web.
@@ -104,7 +105,7 @@ pub struct WebRtcTransportConfig {
 impl Default for WebRtcTransportConfig {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(20), // WhatsApp Web: _e = 20000
             ice_debug: false,
         }
     }
@@ -440,25 +441,44 @@ impl WebRtcTransport {
             .parse()
             .map_err(|_| WebRtcError::ConnectionFailed)?;
 
-        // Create intercepted UDP connection that fakes STUN Binding responses.
-        // WhatsApp's relay doesn't respond to ICE STUN Binding requests - it expects
-        // DTLS immediately. Our interceptor fakes the binding responses so webrtc-rs
-        // thinks ICE succeeded and proceeds to DTLS.
-        let intercepted_conn = InterceptedUdpConn::new(relay_addr).await.map_err(|e| {
-            warn!("Failed to create intercepted connection: {}", e);
+        // Create UDP connection to relay. All packets (STUN, DTLS, SCTP) are
+        // forwarded directly — the relay handles STUN Binding authentication using
+        // the credentials we put in the SDP (ice-ufrag=auth_token, ice-pwd=relay_key).
+        let relay_conn = RelayUdpConn::new(relay_addr).await.map_err(|e| {
+            warn!("Failed to create relay connection: {}", e);
             WebRtcError::ConnectionFailed
         })?;
 
         info!(
-            "Created ICE interceptor for {} (local: {}, remote: {})",
+            "Created relay connection for {} (local: {}, remote: {})",
             relay_info.relay_name,
-            intercepted_conn.local_addr(),
-            intercepted_conn.remote_addr()
+            relay_conn.local_addr(),
+            relay_conn.remote_addr()
         );
 
-        // Create UDPMux with our intercepted connection
-        // Note: UDPMuxDefault::new returns Arc<UDPMuxDefault>, so no need to wrap in Arc
-        let udp_mux = UDPMuxDefault::new(UDPMuxParams::new(intercepted_conn));
+        // Pre-flight: send a bare STUN Binding Request to test relay reachability.
+        // This runs BEFORE UDPMux takes over (after which we can't read directly).
+        match relay_conn.probe_relay().await {
+            Ok(Some(resp)) => {
+                info!(
+                    "Relay {} is reachable (probe got {} byte response)",
+                    relay_info.relay_name,
+                    resp.len()
+                );
+            }
+            Ok(None) => {
+                warn!(
+                    "Relay {} did not respond to probe — may still work with authenticated STUN",
+                    relay_info.relay_name
+                );
+            }
+            Err(e) => {
+                warn!("Relay {} probe error: {}", relay_info.relay_name, e);
+            }
+        }
+
+        // Create UDPMux with our relay connection
+        let udp_mux = UDPMuxDefault::new(UDPMuxParams::new(relay_conn));
 
         // Create the WebRTC API with muxed network
         let api = Self::create_api_with_mux(udp_mux.clone()).await?;
@@ -531,6 +551,15 @@ impl WebRtcTransport {
             },
         ));
 
+        // Log overall peer connection state changes (includes ICE + DTLS + SCTP)
+        let relay_name_for_pc = relay_info.relay_name.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(move |state| {
+            let relay_name = relay_name_for_pc.clone();
+            Box::pin(async move {
+                info!("PeerConnection state for {}: {:?}", relay_name, state);
+            })
+        }));
+
         // Set up ICE candidate handler for logging
         let relay_name_for_cand = relay_info.relay_name.clone();
         peer_connection.on_ice_candidate(Box::new(move |candidate| {
@@ -552,15 +581,13 @@ impl WebRtcTransport {
         // Set local description - this triggers ICE candidate gathering
         peer_connection.set_local_description(offer.clone()).await?;
 
-        // Wait a short time for ICE candidate gathering (we don't need our local candidates
-        // since we're replacing them with the relay anyway)
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Get the SDP (with or without gathered candidates - doesn't matter)
-        let local_desc = peer_connection.local_description().await;
-        let original_sdp = local_desc
-            .map(|d| d.sdp)
-            .unwrap_or_else(|| offer.sdp.clone());
+        // Use the offer SDP directly (before ICE gathering), exactly like WhatsApp Web JS:
+        //   var l = yield a.createOffer();
+        //   yield a.setLocalDescription(l);
+        //   var s = l.sdp || "";        // Uses offer.sdp, NOT localDescription.sdp
+        //   var u = xe(s, e);
+        //   yield a.setRemoteDescription({sdp: u, type: "answer"});
+        let original_sdp = offer.sdp.clone();
         debug!(
             "Original SDP for {}:\n{}",
             relay_info.relay_name, original_sdp
@@ -572,14 +599,19 @@ impl WebRtcTransport {
             relay_info.relay_name, modified_sdp
         );
 
-        // Set the modified SDP as remote answer
+        // Log the exact credentials being used for STUN authentication
+        info!(
+            "ICE credentials for {}: ice-ufrag={} ({} chars), ice-pwd={} ({} chars)",
+            relay_info.relay_name,
+            &relay_info.auth_token[..relay_info.auth_token.len().min(20)],
+            relay_info.auth_token.len(),
+            &relay_info.relay_key[..relay_info.relay_key.len().min(20)],
+            relay_info.relay_key.len()
+        );
+
+        // Set the modified SDP as remote answer — no delay, matching JS behavior
         let answer = RTCSessionDescription::answer(modified_sdp)?;
         peer_connection.set_remote_description(answer).await?;
-
-        // IMPORTANT: Add a small delay to allow the async candidate addition task to complete.
-        // webrtc-rs spawns a tokio task to add remote candidates, and connectivity checks
-        // might start before the task completes, resulting in "no candidate pairs".
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Wait for DataChannel to open OR timeout OR ICE failure
         let deadline = tokio::time::Instant::now() + timeout;
@@ -643,10 +675,10 @@ impl WebRtcTransport {
         Ok(api)
     }
 
-    /// Create the WebRTC API with a UDPMux for intercepted connections.
+    /// Create the WebRTC API with a UDPMux for relay connections.
     ///
-    /// This allows us to inject our InterceptedUdpConn which fakes STUN Binding
-    /// responses so webrtc-rs proceeds to DTLS without waiting for ICE.
+    /// This allows us to inject our RelayUdpConn which routes all packets
+    /// directly to the WhatsApp relay server for STUN/DTLS/SCTP.
     async fn create_api_with_mux(
         udp_mux: Arc<UDPMuxDefault>,
     ) -> Result<webrtc::api::API, WebRtcError> {
@@ -663,6 +695,33 @@ impl WebRtcTransport {
 
         // Use our muxed UDP network with the intercepted connection
         setting_engine.set_udp_network(UDPNetwork::Muxed(udp_mux));
+
+        // Restrict to IPv4 only. With UDPMux, both IPv4 and IPv6 local candidates
+        // share the same underlying socket. The ICE agent's find_remote_candidate()
+        // uses the local candidate's network_type to look up the remote candidate.
+        // If the IPv6 candidate reads a packet from an IPv4 relay, the lookup fails
+        // (searches UDP6 for an IPv4 address) and the packet is discarded — breaking
+        // DTLS handshake. WhatsApp relays are always IPv4, so restrict to UDP4.
+        setting_engine.set_network_types(vec![NetworkType::Udp4]);
+
+        // Disable certificate fingerprint verification at the WebRTC level.
+        // The WhatsApp relay uses a hardcoded fingerprint (WHATSAPP_DTLS_FINGERPRINT)
+        // for SDP but the relay's actual DTLS certificate may differ. The DTLS library
+        // already has insecure_skip_verify=true, but webrtc-rs does an additional
+        // fingerprint check after DTLS completes — disable that too.
+        setting_engine.disable_certificate_fingerprint_verification(true);
+
+        // Safety net: explicitly set DTLS role to Client. In our flow this is
+        // technically a no-op because the remote answer says setup:passive, and
+        // webrtc-rs's first-priority check (inverse of remote role) already
+        // yields DTLSRole::Client. But this guards against edge cases where the
+        // remote role falls through to the second-priority check.
+        setting_engine
+            .set_answering_dtls_role(webrtc::dtls_transport::dtls_role::DTLSRole::Client)
+            .map_err(|e| {
+                warn!("Failed to set DTLS role: {}", e);
+                WebRtcError::ConnectionFailed
+            })?;
 
         let api = APIBuilder::new()
             .with_media_engine(media_engine)
@@ -692,28 +751,55 @@ impl WebRtcTransport {
         // Convert relay_key to base64 (like WhatsApp Web's ice-pwd)
         let relay_key = base64::engine::general_purpose::STANDARD.encode(relay_key_bytes);
 
+        info!(
+            "Relay key: {} raw bytes → {} base64 chars, raw_hex={:02x?}",
+            relay_key_bytes.len(),
+            relay_key.len(),
+            &relay_key_bytes[..relay_key_bytes.len().min(8)]
+        );
+
         let mut all_relays = Vec::new();
 
         // Extract ALL endpoints with protocol=0 (UDP) addresses
         for endpoint in &relay_data.endpoints {
-            // Get auth token (preferred) or relay token
-            let auth_token_bytes = match relay_data
+            // Get auth token (preferred) or relay token — matches JS: t.authToken ?? t.token
+            let (token_type, auth_token_bytes) = if let Some(token) = relay_data
                 .auth_tokens
                 .get(endpoint.auth_token_id as usize)
-                .or_else(|| relay_data.relay_tokens.get(endpoint.token_id as usize))
+                .filter(|t| !t.is_empty())
             {
-                Some(token) => token,
-                None => {
-                    warn!(
-                        "Skipping relay {} - no valid auth token (auth_token_id={}, token_id={})",
-                        endpoint.relay_name, endpoint.auth_token_id, endpoint.token_id
-                    );
-                    continue;
-                }
+                ("auth_token", token)
+            } else if let Some(token) = relay_data
+                .relay_tokens
+                .get(endpoint.token_id as usize)
+                .filter(|t| !t.is_empty())
+            {
+                ("relay_token", token)
+            } else {
+                warn!(
+                    "Skipping relay {} - no valid token (auth_token_id={}, token_id={})",
+                    endpoint.relay_name, endpoint.auth_token_id, endpoint.token_id
+                );
+                continue;
             };
 
-            // Convert auth_token to base64 (like WhatsApp Web's ice-ufrag)
+            // Check if the raw bytes look like they're already base64 text (potential double-encoding)
+            let looks_like_base64_text = auth_token_bytes
+                .iter()
+                .all(|&b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=');
+
+            // Convert token to base64 (like WhatsApp Web's ice-ufrag)
             let auth_token = base64::engine::general_purpose::STANDARD.encode(auth_token_bytes);
+
+            info!(
+                "Relay {} token: type={}, {} raw bytes → {} base64 chars, looks_like_text={}, first8_hex={:02x?}",
+                endpoint.relay_name,
+                token_type,
+                auth_token_bytes.len(),
+                auth_token.len(),
+                looks_like_base64_text,
+                &auth_token_bytes[..auth_token_bytes.len().min(8)]
+            );
 
             // Find ALL protocol=0 (UDP) addresses for this endpoint
             for addr in &endpoint.addresses {
@@ -738,7 +824,7 @@ impl WebRtcTransport {
                 if let Some(ipv6) = &addr.ipv6 {
                     all_relays.push(RelayConnectionInfo {
                         ip: ipv6.clone(),
-                        port: addr.port_v6.unwrap_or(WHATSAPP_RELAY_PORT),
+                        port: WHATSAPP_RELAY_PORT, // Always 3480 (WhatsApp Web ignores port_v6)
                         auth_token: auth_token.clone(),
                         relay_key: relay_key.clone(),
                         relay_name: endpoint.relay_name.clone(),

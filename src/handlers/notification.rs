@@ -99,6 +99,21 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Notifies about business account status changes: verified name, profile, removal
             handle_business_notification(client, node).await;
         }
+        "privacy_token" => {
+            // Privacy token notification (WhatsApp Web: WAWebHandlePrivacyTokensNotification)
+            // Contains trusted contact tokens used for profile pic privacy and phone number privacy.
+            // Structure: <tokens><token type="trusted_contact" t="timestamp">bytes</token></tokens>
+            handle_privacy_token_notification(client, node).await;
+        }
+        "w:gp2" => {
+            // Group notification (participant changes, subject changes, etc.)
+            // These are informational - we already handle group operations via IQ.
+            debug!("Received group notification (w:gp2) - acknowledged");
+        }
+        "status" => {
+            // Status (stories) notification - status updates posted by contacts.
+            debug!("Received status notification - acknowledged");
+        }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
@@ -304,6 +319,80 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             device.jid,
             device.key_index
         );
+    }
+}
+
+/// Handle privacy token notification (WhatsApp Web: `WAWebHandlePrivacyTokensNotification`).
+///
+/// Privacy token notifications contain trusted contact tokens used for:
+/// - Profile picture privacy (hiding profile pics from non-contacts)
+/// - Phone number privacy in calls
+/// - Spam reporting with privacy context
+///
+/// Structure:
+/// ```xml
+/// <notification type="privacy_token" from="user@s.whatsapp.net" sender_lid="...@lid">
+///   <tokens>
+///     <token type="trusted_contact" t="1234567890"><!-- binary tcToken --></token>
+///   </tokens>
+/// </notification>
+/// ```
+async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
+    let from = node.attrs().optional_string("from").unwrap_or("<unknown>");
+
+    let Some(tokens_node) = node.get_optional_child_by_tag(&["tokens"]) else {
+        debug!(
+            target: "Client/PrivacyToken",
+            "privacy_token notification from {} has no <tokens> child",
+            from
+        );
+        return;
+    };
+
+    let Some(children) = tokens_node.children() else {
+        debug!(
+            target: "Client/PrivacyToken",
+            "privacy_token notification from {} has empty <tokens>",
+            from
+        );
+        return;
+    };
+
+    for token_node in children.iter().filter(|c| c.tag == "token") {
+        let token_type = token_node
+            .attrs()
+            .optional_string("type")
+            .unwrap_or("unknown");
+        let timestamp = token_node.attrs().optional_u64("t").unwrap_or(0);
+
+        match token_type {
+            "trusted_contact" => {
+                let token_len = token_node
+                    .content
+                    .as_ref()
+                    .map(|c| match c {
+                        wacore_binary::node::NodeContent::Bytes(b) => b.len(),
+                        _ => 0,
+                    })
+                    .unwrap_or(0);
+
+                debug!(
+                    target: "Client/PrivacyToken",
+                    "Received trusted_contact token from {} ({} bytes, ts={})",
+                    from, token_len, timestamp
+                );
+                // TODO: Store tcToken in per-contact storage for use in:
+                // - Profile picture IQ requests (when profile_scraping_privacy_token_in_photo_iq is enabled)
+                // - Call privacy elements (passed to WASM/native VOIP stack)
+            }
+            _ => {
+                debug!(
+                    target: "Client/PrivacyToken",
+                    "Unknown privacy token type '{}' from {}",
+                    token_type, from
+                );
+            }
+        }
     }
 }
 

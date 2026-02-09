@@ -98,6 +98,7 @@ impl Client {
         let mut adapter =
             crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
 
+        let mut rng = rand::rngs::OsRng.unwrap_err();
         let call_key = decrypt_call_key(
             &mut adapter.session_store,
             &mut adapter.identity_store,
@@ -106,7 +107,7 @@ impl Client {
             sender,
             ciphertext,
             enc_type,
-            &mut rand::rngs::OsRng.unwrap_err(),
+            &mut rng,
         )
         .await?;
 

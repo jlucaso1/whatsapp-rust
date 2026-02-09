@@ -250,8 +250,13 @@ impl CallManager {
             builder = builder.encrypted_key(key);
         }
 
-        // Add audio params (default codec settings)
-        builder = builder.audio(AcceptAudioParams::default());
+        // Add audio params - offers include both 8kHz and 16kHz (per WhatsApp Web)
+        builder = builder
+            .audio(AcceptAudioParams {
+                codec: "opus".to_string(),
+                rate: 8000,
+            })
+            .audio(AcceptAudioParams::default()); // 16kHz
 
         // Add video params if video call
         if is_video {
@@ -259,7 +264,11 @@ impl CallManager {
         }
 
         // Add net and encopt elements (required for proper call initiation)
-        builder = builder.net_medium(2).encopt_keygen(2);
+        // Offers use net_medium=3 (WiFi+cellular), accepts use net_medium=2 (WiFi)
+        builder = builder.net_medium(3).encopt_keygen(2);
+
+        // Add capability bytes (from real WhatsApp Web logs)
+        builder = builder.capability(vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07]);
 
         // Add device identity for pkmsg offers (required for PreKey messages)
         if let Some(identity) = device_identity {
@@ -306,42 +315,12 @@ impl CallManager {
         Ok(())
     }
 
-    /// Accept an incoming call (basic stanza without encrypted key).
+    /// Accept an incoming call.
     ///
-    /// For a fully functional accept, use `accept_call_with_key` instead which
-    /// includes the encrypted call key required for media connection.
+    /// Builds an accept stanza with audio/video codec parameters.
+    /// Note: Accept stanzas do NOT include `<enc>` - the call key is exchanged
+    /// in the Offer only (decrypted and stored during ringing phase).
     pub async fn accept_call(&self, call_id: &CallId) -> Result<Node, CallError> {
-        self.accept_call_with_key(call_id, None).await
-    }
-
-    /// Accept an incoming call with an encrypted call key.
-    ///
-    /// This builds a complete accept stanza with:
-    /// - Encrypted call key (`<enc type="msg" v="2">...`)
-    /// - Audio codec parameters (`<audio enc="opus" rate="16000">`)
-    /// - Video codec parameters if video call (`<video enc="vp8">`)
-    ///
-    /// # Arguments
-    /// * `call_id` - The call to accept
-    /// * `encrypted_key` - The encrypted call key (encrypted using Signal protocol
-    ///   for the call creator). If None, builds a basic accept stanza.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Generate and encrypt call key
-    /// let call_key = CallEncryptionKey::generate();
-    /// let encrypted = encrypt_call_key(&mut session_store, &mut identity_store,
-    ///                                   &peer_jid, &call_key).await?;
-    ///
-    /// // Build accept stanza with encrypted key
-    /// let stanza = call_manager.accept_call_with_key(&call_id, Some(encrypted)).await?;
-    /// client.send_node(stanza).await?;
-    /// ```
-    pub async fn accept_call_with_key(
-        &self,
-        call_id: &CallId,
-        encrypted_key: Option<EncryptedCallKey>,
-    ) -> Result<Node, CallError> {
         let mut calls = self.calls.write().await;
         let info = calls
             .get_mut(call_id.as_str())
@@ -367,11 +346,6 @@ impl CallManager {
             SignalingType::Accept,
         )
         .video(is_video);
-
-        // Add encrypted key if provided
-        if let Some(key) = encrypted_key {
-            builder = builder.encrypted_key(key);
-        }
 
         // Add audio params (use offer params or default)
         let audio = if let Some(ref mp) = info.offer_media_params
@@ -669,6 +643,13 @@ impl CallManager {
             .and_then(|info| info.offer_relay_data.clone())
     }
 
+    /// Store the decrypted call encryption key in the CallInfo.
+    pub async fn store_call_encryption(&self, call_id: &CallId, key: CallEncryptionKey) {
+        if let Some(info) = self.calls.write().await.get_mut(call_id.as_str()) {
+            info.set_encryption_key(key);
+        }
+    }
+
     pub async fn store_relay_data(
         &self,
         call_id: &CallId,
@@ -882,6 +863,18 @@ impl CallManager {
             .get(call_id.as_str())
             .and_then(|info| info.encryption.as_ref())
             .map(|enc| enc.derived_keys.clone())
+    }
+
+    /// Check if a call has encryption keys already decrypted and stored.
+    ///
+    /// This is useful to avoid redundant decryption attempts (e.g., when the UI
+    /// accepts a call, it can check this before trying to decrypt again).
+    pub async fn has_call_encryption(&self, call_id: &CallId) -> bool {
+        self.calls
+            .read()
+            .await
+            .get(call_id.as_str())
+            .is_some_and(|info| info.encryption.is_some())
     }
 
     /// Get the master encryption key for a call.

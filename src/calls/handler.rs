@@ -2,13 +2,17 @@
 
 use super::encryption::derive_call_keys;
 use super::signaling::{ResponseType, SignalingType};
-use super::stanza::{OfferEncData, ParsedCallStanza, build_call_ack, build_call_receipt};
+use super::stanza::{
+    OfferEncData, ParsedCallStanza, RelayLatencyMeasurement, TransportParams, build_call_ack,
+    build_call_receipt,
+};
 use super::transport::TransportPayload;
 use crate::client::Client;
 use crate::handlers::traits::StanzaHandler;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
+use wacore::types::call::CallId;
 use wacore::types::events::{CallAccepted, CallEnded, CallOffer, CallRejected, Event};
 use wacore_binary::node::Node;
 
@@ -127,7 +131,13 @@ impl CallHandler {
                 client.send_node(receipt).await?;
             }
             Some(ResponseType::Ack) => {
-                let ack = build_call_ack(&parsed.stanza_id, &parsed.from, parsed.signaling_type);
+                let ack = build_call_ack(
+                    &parsed.stanza_id,
+                    &parsed.from,
+                    parsed.signaling_type,
+                    Some(&parsed.call_id),
+                    Some(&parsed.call_creator),
+                );
                 client.send_node(ack).await?;
             }
             None => {}
@@ -149,6 +159,126 @@ impl CallHandler {
             debug!("Skipping offline call {} (stale)", parsed.call_id);
         } else if let Err(e) = call_manager.register_incoming_call(parsed).await {
             warn!("Failed to register call {}: {}", parsed.call_id, e);
+        } else {
+            let call_id = CallId::new(&parsed.call_id);
+
+            // Decrypt and store the call key from the offer's <enc> element
+            if let Some(enc_data) = &parsed.offer_enc_data {
+                let sender_jid = parsed.caller_pn.as_ref().unwrap_or(&parsed.call_creator);
+                match client
+                    .decrypt_call_key_from(sender_jid, &enc_data.ciphertext, enc_data.enc_type)
+                    .await
+                {
+                    Ok(call_key) => {
+                        call_manager.store_call_encryption(&call_id, call_key).await;
+                        debug!("Decrypted and stored call key for {}", parsed.call_id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to decrypt call key for {}: {}", parsed.call_id, e);
+                    }
+                }
+            }
+
+            // Auto-send preaccept (shows "ringing" to caller)
+            match call_manager.send_preaccept(&call_id).await {
+                Ok(preaccept_node) => {
+                    if let Err(e) = client.send_node(preaccept_node).await {
+                        warn!("Failed to send preaccept for {}: {}", parsed.call_id, e);
+                    } else {
+                        debug!("Auto-sent preaccept for {}", parsed.call_id);
+                    }
+                }
+                Err(e) => warn!("Failed to build preaccept for {}: {}", parsed.call_id, e),
+            }
+
+            // Send relay_latency measurements so the server can perform relay_election.
+            // Both peers must report latencies for relay election to happen.
+            // Use c2r_rtt estimates from the offer's relay data (same approach as caller).
+            if let Some(relay_data) = &parsed.relay_data {
+                for endpoint in &relay_data.endpoints {
+                    let token = relay_data
+                        .relay_tokens
+                        .get(endpoint.token_id as usize)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let (ipv4, port) = endpoint
+                        .addresses
+                        .iter()
+                        .find_map(|addr| {
+                            addr.ipv4.as_ref().map(|ip| (Some(ip.clone()), addr.port))
+                        })
+                        .unwrap_or((None, 3478));
+
+                    let latency_ms = endpoint.c2r_rtt_ms.unwrap_or(50);
+                    let measurement = RelayLatencyMeasurement {
+                        relay_name: endpoint.relay_name.clone(),
+                        latency_ms,
+                        ipv4,
+                        port,
+                        token,
+                    };
+
+                    match call_manager
+                        .send_relay_latency(&call_id, vec![measurement])
+                        .await
+                    {
+                        Ok(stanza) => {
+                            if let Err(e) = client.send_node(stanza).await {
+                                warn!(
+                                    "Failed to send relay latency for {}: {}",
+                                    endpoint.relay_name, e
+                                );
+                            } else {
+                                debug!(
+                                    "Sent relay latency for {} ({}ms) for call {}",
+                                    endpoint.relay_name, latency_ms, parsed.call_id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to build relay latency for {}: {}",
+                                endpoint.relay_name, e
+                            );
+                        }
+                    }
+                }
+
+                // Send TRANSPORT stanza — the peer expects this for candidate exchange
+                let transport_params = TransportParams {
+                    p2p_cand_round: Some(0),
+                    transport_message_type: Some(0),
+                    net_protocol: 0,
+                    net_medium: 2,
+                };
+                match call_manager
+                    .send_transport(&call_id, transport_params)
+                    .await
+                {
+                    Ok(transport_node) => {
+                        if let Err(e) = client.send_node(transport_node).await {
+                            warn!(
+                                "Failed to send transport for call {}: {}",
+                                parsed.call_id, e
+                            );
+                        } else {
+                            debug!("Sent transport stanza for call {}", parsed.call_id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to build transport for call {}: {}",
+                            parsed.call_id, e
+                        );
+                    }
+                }
+            }
+
+            // NOTE: We do NOT auto-connect relays here. Early relay binding
+            // caused a double-connection issue: this spawned one WebRTC connection,
+            // and the UI accept path spawned another — both competed for the same
+            // relay auth_token. Relay connection is now deferred to the UI accept path.
         }
 
         // Notify callback with parsed offer data
@@ -257,7 +387,7 @@ impl CallHandler {
         );
 
         let call_manager = client.get_call_manager().await;
-        let call_id = wacore::types::call::CallId::new(&parsed.call_id);
+        let call_id = CallId::new(&parsed.call_id);
 
         if let Err(e) = call_manager
             .store_elected_relay(&call_id, election.elected_relay_idx)
@@ -314,10 +444,16 @@ impl CallHandler {
             parsed.call_id, call_key.generation
         );
 
+        let call_manager = client.get_call_manager().await;
+        let call_id = CallId::new(&parsed.call_id);
+
+        // Store the new encryption key in CallInfo
+        call_manager
+            .store_call_encryption(&call_id, call_key.clone())
+            .await;
+
         let derived_keys = derive_call_keys(&call_key);
-        client
-            .get_call_manager()
-            .await
+        call_manager
             .notify_enc_rekey(&parsed.call_id, &derived_keys)
             .await;
     }

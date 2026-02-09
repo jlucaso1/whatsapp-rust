@@ -342,65 +342,12 @@ fn main() {
                                     }
                                 }
 
-                                // --- Step 4: Send ACCEPT with encrypted key ---
+                                // --- Step 4: Send ACCEPT ---
+                                // Note: Accept stanzas do NOT include <enc>. The call key
+                                // is exchanged in the Offer only and decrypted during ringing.
                                 info!("   Step 4: Sending ACCEPT...");
-                                let has_session = client.has_signal_session(&caller_lid).await;
-                                info!("   Has session with {}: {}", caller_lid, has_session);
 
-                                let encrypted_key = if has_session {
-                                    info!("   Using existing session for call key encryption...");
-                                    match client.encrypt_call_key_for(&caller_lid).await {
-                                        Ok((our_call_key, encrypted_key)) => {
-                                            info!("   Generated call key: type={:?}, {} bytes ciphertext",
-                                                encrypted_key.enc_type,
-                                                encrypted_key.ciphertext.len());
-
-                                            let derived = whatsapp_rust::calls::derive_call_keys(&our_call_key);
-                                            info!("   Derived SRTP keys: hbh={} bytes, e2e={} bytes",
-                                                derived.hbh_srtp.master_key.len() + derived.hbh_srtp.master_salt.len(),
-                                                derived.e2e_sframe.len());
-                                            Some(encrypted_key)
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to encrypt call key: {}", e);
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    // Try to establish session via caller_pn
-                                    let caller_pn = call_info.as_ref().and_then(|info| info.caller_pn.clone());
-                                    if let Some(pn) = caller_pn {
-                                        info!("   No session found, establishing via PN: {}", pn);
-                                        match client.ensure_call_session(&pn).await {
-                                            Ok(_) => {
-                                                match client.encrypt_call_key_for(&caller_lid).await {
-                                                    Ok((our_call_key, encrypted_key)) => {
-                                                        info!("   Generated call key after session establishment");
-                                                        let derived = whatsapp_rust::calls::derive_call_keys(&our_call_key);
-                                                        info!("   Derived SRTP keys: hbh={} bytes, e2e={} bytes",
-                                                            derived.hbh_srtp.master_key.len() + derived.hbh_srtp.master_salt.len(),
-                                                            derived.e2e_sframe.len());
-                                                        Some(encrypted_key)
-                                                    }
-                                                    Err(e) => {
-                                                        warn!("Failed to encrypt after session establishment: {}", e);
-                                                        None
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                warn!("Failed to establish session: {}", e);
-                                                None
-                                            }
-                                        }
-                                    } else {
-                                        warn!("   No session and no caller_pn available");
-                                        None
-                                    }
-                                };
-
-                                // Send ACCEPT
-                                match call_manager.accept_call_with_key(&call_id, encrypted_key).await {
+                                match call_manager.accept_call(&call_id).await {
                                     Ok(accept_stanza) => {
                                         if let Some(children) = accept_stanza.children()
                                             && let Some(accept_node) = children.first()
@@ -417,6 +364,37 @@ fn main() {
                                     Err(e) => {
                                         error!("Failed to build ACCEPT stanza: {}", e);
                                     }
+                                }
+
+                                // --- Step 5: Connect to relay via WebRTC ---
+                                // This initiates the ICE/DTLS/SCTP connection to the relay.
+                                // The AckHandler may also trigger this, but we do it explicitly
+                                // to ensure relay connection starts immediately after accept.
+                                info!("   Step 5: Connecting to relay via WebRTC...");
+                                if let Some(relay_data) = call_manager.get_relay_data(&call_id).await {
+                                    let call_manager_clone = call_manager.clone();
+                                    let call_id_clone = call_id.clone();
+                                    tokio::spawn(async move {
+                                        match call_manager_clone
+                                            .connect_relay(&call_id_clone, &relay_data)
+                                            .await
+                                        {
+                                            Ok(relay_name) => {
+                                                info!(
+                                                    "WebRTC connected for call {}: relay={}",
+                                                    call_id_clone, relay_name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "WebRTC connection failed for call {}: {}",
+                                                    call_id_clone, e
+                                                );
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    warn!("No relay data available for call {} - cannot connect WebRTC", call_id);
                                 }
                             }
                         }

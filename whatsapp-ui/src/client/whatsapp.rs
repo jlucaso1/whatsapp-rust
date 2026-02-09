@@ -899,7 +899,18 @@ impl WhatsAppClient {
 
                 let guard = client_handle.lock().await;
                 if let Some(client) = guard.as_ref() {
-                    client.send_read_receipts(&chat_jid, &parsed_messages).await;
+                    // Group messages by sender, then send read receipts per sender
+                    use std::collections::HashMap;
+                    let mut by_sender: HashMap<Jid, Vec<String>> = HashMap::new();
+                    for (msg_id, sender) in parsed_messages {
+                        by_sender.entry(sender).or_default().push(msg_id);
+                    }
+                    for (sender, msg_ids) in by_sender {
+                        if let Err(e) = client.mark_as_read(&chat_jid, Some(&sender), msg_ids).await
+                        {
+                            warn!("Failed to mark messages as read: {}", e);
+                        }
+                    }
                 } else {
                     error!("Client not available for sending read receipts");
                 }

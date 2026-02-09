@@ -51,6 +51,7 @@ mod stun;
 mod transport;
 mod webrtc;
 
+pub use ice_interceptor::RelayUdpConn;
 pub use jitter::{JitterBuffer, JitterBufferConfig, JitterStats};
 pub use relay::{ConnectedRelay, RelayConnection, RelayConnectionConfig, RelayError, RelayState};
 pub use rtcp::{
@@ -75,6 +76,6 @@ pub use transport::{
     TransportState,
 };
 pub use webrtc::{
-    RelayConnectionInfo, WHATSAPP_DTLS_FINGERPRINT, WebRtcConnectionResult, WebRtcError,
-    WebRtcState, WebRtcTransport, WebRtcTransportConfig, manipulate_sdp,
+    DATA_CHANNEL_NAME, RelayConnectionInfo, WHATSAPP_DTLS_FINGERPRINT, WebRtcConnectionResult,
+    WebRtcError, WebRtcState, WebRtcTransport, WebRtcTransportConfig, manipulate_sdp,
 };

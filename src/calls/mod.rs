@@ -33,6 +33,7 @@ mod error;
 mod handler;
 mod manager;
 pub mod media;
+mod protocol_tests;
 mod signaling;
 mod stanza;
 mod state;

@@ -403,8 +403,29 @@ impl ParsedCallStanza {
     fn parse_indexed_tokens(children: &[Node], tag: &str) -> Vec<Vec<u8>> {
         let mut tokens: Vec<Vec<u8>> = Vec::new();
         for node in children.iter().filter(|c| c.tag == tag) {
-            let Some(NodeContent::Bytes(bytes)) = &node.content else {
-                continue;
+            let bytes = match &node.content {
+                Some(NodeContent::Bytes(b)) => b.clone(),
+                Some(NodeContent::String(s)) => {
+                    // Some clients send tokens as string content (e.g., base64 text)
+                    log::debug!(
+                        "parse_indexed_tokens: <{}> has String content ({} chars)",
+                        tag,
+                        s.len()
+                    );
+                    s.as_bytes().to_vec()
+                }
+                other => {
+                    log::debug!(
+                        "parse_indexed_tokens: <{}> has unexpected content type: {:?}",
+                        tag,
+                        other.as_ref().map(|c| match c {
+                            NodeContent::Bytes(b) => format!("Bytes({})", b.len()),
+                            NodeContent::String(s) => format!("String({})", s.len()),
+                            NodeContent::Nodes(n) => format!("Nodes({})", n.len()),
+                        })
+                    );
+                    continue;
+                }
             };
             let id = node
                 .attrs()
@@ -414,7 +435,7 @@ impl ParsedCallStanza {
             if id >= tokens.len() {
                 tokens.resize(id + 1, Vec::new());
             }
-            tokens[id] = bytes.clone();
+            tokens[id] = bytes;
         }
         tokens
     }
@@ -509,6 +530,31 @@ impl ParsedCallStanza {
         }
 
         let endpoints: Vec<RelayEndpoint> = endpoints_map.into_values().collect();
+
+        // Diagnostic logging: token inventory for debugging relay authentication
+        log::info!(
+            "Relay data parsed: relay_tokens={}, auth_tokens={}, relay_key={} bytes, endpoints={}",
+            relay_tokens.len(),
+            auth_tokens.len(),
+            relay_key.as_ref().map_or(0, |k| k.len()),
+            endpoints.len()
+        );
+        for (i, t) in relay_tokens.iter().enumerate() {
+            log::debug!(
+                "  relay_token[{}]: {} bytes, first4={:02x?}",
+                i,
+                t.len(),
+                &t[..t.len().min(4)]
+            );
+        }
+        for (i, t) in auth_tokens.iter().enumerate() {
+            log::debug!(
+                "  auth_token[{}]: {} bytes, first4={:02x?}",
+                i,
+                t.len(),
+                &t[..t.len().min(4)]
+            );
+        }
 
         Some(RelayData {
             hbh_key,
@@ -881,8 +927,9 @@ pub struct CallStanzaBuilder {
     stanza_id: Option<String>,
     /// Encrypted call key for offer/accept stanzas.
     encrypted_key: Option<EncryptedCallKey>,
-    /// Audio parameters for accept stanzas.
-    audio_params: Option<AcceptAudioParams>,
+    /// Audio parameters for accept/offer stanzas.
+    /// Offers include two entries (8kHz + 16kHz), accepts include one.
+    audio_params: Vec<AcceptAudioParams>,
     /// Video parameters for accept stanzas (only if video call).
     video_params: Option<AcceptVideoParams>,
     /// Parameters for PREACCEPT stanza.
@@ -900,6 +947,10 @@ pub struct CallStanzaBuilder {
     /// Device identity for pkmsg offers (ADV encoded identity).
     /// Required when sending encrypted key with type "pkmsg" (PreKey message).
     device_identity: Option<Vec<u8>>,
+    /// Privacy token bytes for offer stanzas.
+    privacy: Option<Vec<u8>>,
+    /// Capability bytes for offer stanzas (e.g., [0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07]).
+    capability: Option<Vec<u8>>,
 }
 
 impl CallStanzaBuilder {
@@ -920,7 +971,7 @@ impl CallStanzaBuilder {
             extra_attrs: HashMap::new(),
             stanza_id: None,
             encrypted_key: None,
-            audio_params: None,
+            audio_params: Vec::new(),
             video_params: None,
             preaccept_params: None,
             relay_latency_measurements: Vec::new(),
@@ -929,6 +980,8 @@ impl CallStanzaBuilder {
             net_medium: None,
             encopt_keygen: None,
             device_identity: None,
+            privacy: None,
+            capability: None,
         }
     }
 
@@ -969,11 +1022,12 @@ impl CallStanzaBuilder {
         self
     }
 
-    /// Set audio codec parameters for accept stanzas.
+    /// Add audio codec parameters.
     ///
     /// This adds an `<audio enc="opus" rate="16000"/>` element.
+    /// Can be called multiple times for offers (which include 8kHz + 16kHz).
     pub fn audio(mut self, params: AcceptAudioParams) -> Self {
-        self.audio_params = Some(params);
+        self.audio_params.push(params);
         self
     }
 
@@ -1042,6 +1096,22 @@ impl CallStanzaBuilder {
         self
     }
 
+    /// Set privacy token for offer stanzas.
+    ///
+    /// This adds `<privacy>hex_bytes</privacy>` element.
+    pub fn privacy(mut self, privacy_bytes: Vec<u8>) -> Self {
+        self.privacy = Some(privacy_bytes);
+        self
+    }
+
+    /// Set capability bytes for offer stanzas.
+    ///
+    /// This adds `<capability ver="1">hex_bytes</capability>` element.
+    pub fn capability(mut self, capability_bytes: Vec<u8>) -> Self {
+        self.capability = Some(capability_bytes);
+        self
+    }
+
     pub fn build(self) -> Node {
         // Build signaling child node
         let mut sig_builder = NodeBuilder::new(self.signaling_type.tag_name())
@@ -1077,20 +1147,6 @@ impl CallStanzaBuilder {
 
         // Collect children to add
         let mut children: Vec<Node> = Vec::new();
-
-        // Add <enc> element if encrypted key present (for Offer/Accept)
-        if matches!(
-            self.signaling_type,
-            SignalingType::Offer | SignalingType::Accept
-        ) && let Some(ref enc_key) = self.encrypted_key
-        {
-            let enc_node = NodeBuilder::new("enc")
-                .attr("type", enc_key.enc_type.to_string())
-                .attr("v", "2")
-                .bytes(enc_key.ciphertext.clone())
-                .build();
-            children.push(enc_node);
-        }
 
         // Handle PREACCEPT stanza elements
         if self.signaling_type == SignalingType::PreAccept
@@ -1147,12 +1203,24 @@ impl CallStanzaBuilder {
             children.push(net_node);
         }
 
-        // Add <audio> element if params present (for Offer/Accept)
+        // Add elements for Offer/Accept stanzas.
+        // WhatsApp Web offer order: <privacy>, <audio>x2, <net>, <capability>, <enc>, <encopt>, <device-identity>
+        // WhatsApp Web accept order: <audio>, <net>, <encopt>
         if matches!(
             self.signaling_type,
             SignalingType::Offer | SignalingType::Accept
         ) {
-            if let Some(ref audio) = self.audio_params {
+            // Add <privacy> for offers
+            if self.signaling_type == SignalingType::Offer
+                && let Some(ref privacy_bytes) = self.privacy
+            {
+                let hex: String = privacy_bytes.iter().map(|b| format!("{:02X}", b)).collect();
+                let privacy_node = NodeBuilder::new("privacy").string_content(&hex).build();
+                children.push(privacy_node);
+            }
+
+            // Add <audio> elements
+            for audio in &self.audio_params {
                 let audio_node = NodeBuilder::new("audio")
                     .attr("enc", &audio.codec)
                     .attr("rate", audio.rate.to_string())
@@ -1160,7 +1228,7 @@ impl CallStanzaBuilder {
                 children.push(audio_node);
             }
 
-            // Add <net medium="2" /> for Offer/Accept
+            // Add <net medium="..."/>
             if let Some(medium) = self.net_medium {
                 let net_node = NodeBuilder::new("net")
                     .attr("medium", medium.to_string())
@@ -1168,7 +1236,31 @@ impl CallStanzaBuilder {
                 children.push(net_node);
             }
 
-            // Add <encopt keygen="2" /> for Offer/Accept
+            // Add <capability> for offers
+            if self.signaling_type == SignalingType::Offer
+                && let Some(ref cap_bytes) = self.capability
+            {
+                let hex: String = cap_bytes.iter().map(|b| format!("{:02X}", b)).collect();
+                let cap_node = NodeBuilder::new("capability")
+                    .attr("ver", "1")
+                    .string_content(&hex)
+                    .build();
+                children.push(cap_node);
+            }
+
+            // Add <enc> for offers only (Accept has no enc per protocol)
+            if self.signaling_type == SignalingType::Offer
+                && let Some(ref enc_key) = self.encrypted_key
+            {
+                let enc_node = NodeBuilder::new("enc")
+                    .attr("type", enc_key.enc_type.to_string())
+                    .attr("v", "2")
+                    .bytes(enc_key.ciphertext.clone())
+                    .build();
+                children.push(enc_node);
+            }
+
+            // Add <encopt keygen="2"/>
             if let Some(keygen) = self.encopt_keygen {
                 let encopt_node = NodeBuilder::new("encopt")
                     .attr("keygen", keygen.to_string())
@@ -1250,13 +1342,35 @@ pub fn build_call_receipt(
 }
 
 /// Build an ack for a call signaling message.
-pub fn build_call_ack(stanza_id: &str, to: &Jid, signaling_type: SignalingType) -> Node {
-    NodeBuilder::new("ack")
+///
+/// Most ack types are flat: `<ack class="call" type="{tag}"/>`.
+/// The relaylatency ack is special and includes a child element:
+/// `<ack class="call" type="relaylatency"><relaylatency call-creator="..." call-id="..."/></ack>`
+pub fn build_call_ack(
+    stanza_id: &str,
+    to: &Jid,
+    signaling_type: SignalingType,
+    call_id: Option<&str>,
+    call_creator: Option<&Jid>,
+) -> Node {
+    let mut builder = NodeBuilder::new("ack")
         .attr("to", to.to_string())
         .attr("id", stanza_id)
         .attr("class", "call")
-        .attr("type", signaling_type.tag_name())
-        .build()
+        .attr("type", signaling_type.tag_name());
+
+    // relaylatency ack requires a child element with call-id and call-creator
+    if signaling_type == SignalingType::RelayLatency
+        && let (Some(cid), Some(creator)) = (call_id, call_creator)
+    {
+        let child = NodeBuilder::new("relaylatency")
+            .attr("call-creator", creator.to_string())
+            .attr("call-id", cid)
+            .build();
+        builder = builder.children(std::iter::once(child));
+    }
+
+    builder.build()
 }
 
 /// Parse relay data from an ACK node.
@@ -1449,7 +1563,7 @@ mod tests {
     fn test_build_call_ack() {
         let to: Jid = "123@lid".parse().unwrap();
 
-        let ack = build_call_ack("stanza456", &to, SignalingType::Transport);
+        let ack = build_call_ack("stanza456", &to, SignalingType::Transport, None, None);
 
         assert_eq!(ack.tag, "ack");
 
@@ -1458,6 +1572,43 @@ mod tests {
         assert_eq!(attrs.string("to"), to.to_string());
         assert_eq!(attrs.string("class"), "call");
         assert_eq!(attrs.string("type"), "transport");
+
+        // Non-relaylatency ack should NOT have children
+        assert!(ack.children().is_none());
+    }
+
+    /// Test relaylatency ack includes child element with call-id and call-creator.
+    /// Structure: `<ack class="call" type="relaylatency"><relaylatency call-creator="..." call-id="..."/></ack>`
+    #[test]
+    fn test_build_relaylatency_ack() {
+        let to: Jid = "123@lid".parse().unwrap();
+        let call_creator: Jid = "456@lid".parse().unwrap();
+        let call_id = "AC90CFD09DF712D981142B172706F9F2";
+
+        let ack = build_call_ack(
+            "stanza789",
+            &to,
+            SignalingType::RelayLatency,
+            Some(call_id),
+            Some(&call_creator),
+        );
+
+        assert_eq!(ack.tag, "ack");
+
+        let mut attrs = ack.attrs();
+        assert_eq!(attrs.string("type"), "relaylatency");
+        assert_eq!(attrs.string("class"), "call");
+
+        // Should have child <relaylatency> element
+        let children = ack
+            .children()
+            .expect("relaylatency ack should have children");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].tag, "relaylatency");
+
+        let mut child_attrs = children[0].attrs();
+        assert_eq!(child_attrs.string("call-id"), call_id);
+        assert_eq!(child_attrs.string("call-creator"), call_creator.to_string());
     }
 
     /// Test LID JID format used in calls.
@@ -2127,24 +2278,17 @@ mod tests {
         assert!(has_ipv6, "Should have IPv6 address");
     }
 
-    /// Test building accept stanza with encrypted key, audio, and video params.
+    /// Test building accept stanza has audio/video but NO enc element.
+    /// Per WhatsApp Web protocol, only Offer stanzas include `<enc>`.
     #[test]
     fn test_build_accept_stanza_with_all_params() {
-        use crate::calls::encryption::{EncType, EncryptedCallKey};
-
         let call_id = "TEST1234TEST1234TEST1234TEST1234";
         let creator: Jid = "123@lid".parse().unwrap();
         let to: Jid = "456@lid".parse().unwrap();
 
-        let encrypted_key = EncryptedCallKey {
-            ciphertext: vec![0xAA, 0xBB, 0xCC, 0xDD],
-            enc_type: EncType::Msg,
-        };
-
         let node =
             CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Accept)
                 .video(true)
-                .encrypted_key(encrypted_key)
                 .audio(AcceptAudioParams {
                     codec: "opus".to_string(),
                     rate: 16000,
@@ -2164,13 +2308,11 @@ mod tests {
 
         let accept_children = accept_node.children().unwrap();
 
-        // Should have enc, audio, video children
-        let enc_node = accept_children.iter().find(|c| c.tag == "enc");
-        assert!(enc_node.is_some(), "Should have <enc> element");
-        let enc_node = enc_node.unwrap();
-        let mut enc_attrs = enc_node.attrs();
-        assert_eq!(enc_attrs.string("type"), "msg");
-        assert_eq!(enc_attrs.string("v"), "2");
+        // Accept should NOT have <enc> - only Offer includes encrypted key
+        assert!(
+            !accept_children.iter().any(|c| c.tag == "enc"),
+            "Accept stanza must NOT have <enc> element"
+        );
 
         let audio_node = accept_children.iter().find(|c| c.tag == "audio");
         assert!(audio_node.is_some(), "Should have <audio> element");
@@ -2461,5 +2603,110 @@ mod tests {
         assert_eq!(params.net_medium, 2);
         assert!(params.p2p_cand_round.is_none());
         assert!(params.transport_message_type.is_none());
+    }
+
+    /// Test building an offer with dual audio, capability, and privacy elements.
+    /// Matches real WhatsApp Web offer structure.
+    #[test]
+    fn test_build_offer_with_full_elements() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Offer)
+                .privacy(vec![0x04, 0x01, 0x1D, 0xB8])
+                .audio(AcceptAudioParams {
+                    codec: "opus".to_string(),
+                    rate: 8000,
+                })
+                .audio(AcceptAudioParams {
+                    codec: "opus".to_string(),
+                    rate: 16000,
+                })
+                .net_medium(3)
+                .capability(vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07])
+                .encopt_keygen(2)
+                .build();
+
+        let children = node.children().unwrap();
+        let offer_node = &children[0];
+        assert_eq!(offer_node.tag, "offer");
+
+        let offer_children = offer_node.children().unwrap();
+
+        // Check <privacy> element
+        let privacy = offer_children.iter().find(|c| c.tag == "privacy");
+        assert!(privacy.is_some(), "Should have <privacy> element");
+
+        // Check dual <audio> elements
+        let audio_nodes: Vec<_> = offer_children.iter().filter(|c| c.tag == "audio").collect();
+        assert_eq!(audio_nodes.len(), 2, "Offer should have 2 audio elements");
+        let mut audio0_attrs = audio_nodes[0].attrs();
+        assert_eq!(audio0_attrs.string("rate"), "8000");
+        let mut audio1_attrs = audio_nodes[1].attrs();
+        assert_eq!(audio1_attrs.string("rate"), "16000");
+
+        // Check <net medium="3"/>
+        let net = offer_children.iter().find(|c| c.tag == "net");
+        assert!(net.is_some(), "Should have <net> element");
+        let mut net_attrs = net.unwrap().attrs();
+        assert_eq!(net_attrs.string("medium"), "3");
+
+        // Check <capability>
+        let capability = offer_children.iter().find(|c| c.tag == "capability");
+        assert!(capability.is_some(), "Should have <capability> element");
+
+        // Check <encopt>
+        let encopt = offer_children.iter().find(|c| c.tag == "encopt");
+        assert!(encopt.is_some(), "Should have <encopt> element");
+
+        // Verify element order: privacy < audio < net < capability < encopt
+        let tags: Vec<&str> = offer_children.iter().map(|c| c.tag.as_str()).collect();
+        let privacy_idx = tags.iter().position(|&t| t == "privacy").unwrap();
+        let first_audio_idx = tags.iter().position(|&t| t == "audio").unwrap();
+        let net_idx = tags.iter().position(|&t| t == "net").unwrap();
+        let cap_idx = tags.iter().position(|&t| t == "capability").unwrap();
+        let encopt_idx = tags.iter().position(|&t| t == "encopt").unwrap();
+
+        assert!(
+            privacy_idx < first_audio_idx,
+            "privacy should be before audio"
+        );
+        assert!(first_audio_idx < net_idx, "audio should be before net");
+        assert!(net_idx < cap_idx, "net should be before capability");
+        assert!(cap_idx < encopt_idx, "capability should be before encopt");
+    }
+
+    /// Test that Accept stanza does NOT include privacy or capability.
+    #[test]
+    fn test_accept_no_privacy_capability() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Accept)
+                .audio(AcceptAudioParams::default())
+                .net_medium(2)
+                .encopt_keygen(2)
+                .build();
+
+        let children = node.children().unwrap();
+        let accept_node = &children[0];
+        let accept_children = accept_node.children().unwrap();
+
+        assert!(
+            !accept_children.iter().any(|c| c.tag == "privacy"),
+            "Accept should NOT have <privacy>"
+        );
+        assert!(
+            !accept_children.iter().any(|c| c.tag == "capability"),
+            "Accept should NOT have <capability>"
+        );
+        assert!(
+            !accept_children.iter().any(|c| c.tag == "enc"),
+            "Accept should NOT have <enc>"
+        );
     }
 }
