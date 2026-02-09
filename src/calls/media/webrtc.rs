@@ -487,13 +487,19 @@ impl WebRtcTransport {
         let config = RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await?);
 
-        // Create the data channel (unordered for low latency, like WhatsApp Web)
+        // Create the data channel (unordered for low latency, like WhatsApp Web).
+        // Use negotiated=true with id=0 to force SCTP stream 0.
+        // Chrome assigns stream 0 to the first createDataChannel() call, but
+        // webrtc-rs assigns stream 2 by default. The relay expects bidirectional
+        // data on stream 0. Using negotiated mode skips the in-band
+        // DATA_CHANNEL_OPEN/ACK exchange and binds directly to the specified stream.
         let data_channel = peer_connection
             .create_data_channel(
                 DATA_CHANNEL_NAME,
                 Some(
                     webrtc::data_channel::data_channel_init::RTCDataChannelInit {
                         ordered: Some(false),
+                        negotiated: Some(0),
                         ..Default::default()
                     },
                 ),
