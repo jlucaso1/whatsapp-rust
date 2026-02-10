@@ -12,6 +12,25 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
+        if self.skip_history_sync_enabled() {
+            log::debug!(
+                "Skipping history sync for message {} (Type: {:?})",
+                message_id,
+                notification.sync_type()
+            );
+            // Send receipt so the phone considers this chunk delivered and stops
+            // retrying. This intentionally diverges from WhatsApp Web's AB prop
+            // drop path (which sends no receipt) because bots will never process
+            // history, and without the receipt the phone would keep re-uploading
+            // blobs that will never be consumed.
+            self.send_protocol_receipt(
+                message_id,
+                crate::types::presence::ReceiptType::HistorySync,
+            )
+            .await;
+            return;
+        }
+
         // Enqueue a MajorSyncTask for the dedicated sync worker to consume.
         let task = crate::sync_task::MajorSyncTask::HistorySync {
             message_id,

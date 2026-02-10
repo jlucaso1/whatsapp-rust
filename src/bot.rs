@@ -211,6 +211,7 @@ pub struct BotBuilder {
         Option<wa::device_props::PlatformType>,
     )>,
     pair_code_options: Option<PairCodeOptions>,
+    skip_history_sync: bool,
 }
 
 impl BotBuilder {
@@ -224,6 +225,7 @@ impl BotBuilder {
             override_version: None,
             os_info: None,
             pair_code_options: None,
+            skip_history_sync: false,
         }
     }
 
@@ -434,6 +436,32 @@ impl BotBuilder {
         self
     }
 
+    /// Skip processing of history sync notifications from the phone.
+    ///
+    /// When enabled, the client will acknowledge all incoming history sync
+    /// notifications (so the phone considers them delivered) but will not
+    /// download or process any historical data (INITIAL_BOOTSTRAP, RECENT,
+    /// FULL, PUSH_NAME, etc.). A debug log entry is emitted for each skipped
+    /// notification. This is useful for bot use cases where message history
+    /// is not needed.
+    ///
+    /// Default: `false` (history sync is processed normally).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_transport_factory(transport)
+    ///     .with_http_client(http_client)
+    ///     .skip_history_sync()
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn skip_history_sync(mut self) -> Self {
+        self.skip_history_sync = true;
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -490,6 +518,10 @@ impl BotBuilder {
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
             client.custom_enc_handlers.insert(enc_type, handler);
+        }
+
+        if self.skip_history_sync {
+            client.set_skip_history_sync(true);
         }
 
         Ok(Bot {
@@ -856,5 +888,40 @@ mod tests {
             device.device_props.platform_type,
             Some(custom_platform as i32)
         );
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_skip_history_sync() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(http_client)
+            .skip_history_sync()
+            .build()
+            .await
+            .expect("Failed to build bot with skip_history_sync");
+
+        assert!(bot.client().skip_history_sync_enabled());
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_default_history_sync_enabled() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let http_client = MockHttpClient;
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(http_client)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        assert!(!bot.client().skip_history_sync_enabled());
     }
 }
