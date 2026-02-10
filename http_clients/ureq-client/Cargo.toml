@@ -11,7 +11,7 @@ description = "Ureq-based HTTP client implementation for whatsapp-rust"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
-ureq = { version = "3.1.4", default-features = false, features = [
+ureq = { version = "3.2.0", default-features = false, features = [
     "rustls",
     "json",
 ] }
