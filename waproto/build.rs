@@ -27,6 +27,7 @@ fn main() -> std::io::Result<()> {
 
     // This part runs only when `GENERATE_PROTO=1` is in the environment.
     println!("cargo:rerun-if-changed=src/whatsapp.proto");
+    println!("cargo:rerun-if-changed=src/voip.proto");
     println!("cargo:warning=GENERATE_PROTO is set, regenerating proto definitions...");
 
     let mut config = prost_build::Config::new();
@@ -86,6 +87,7 @@ fn main() -> std::io::Result<()> {
     // so it can be version-controlled.
     config.out_dir("src/");
 
-    config.compile_protos(&["src/whatsapp.proto"], &["src/"])?;
+    // Compile both whatsapp.proto and voip.proto
+    config.compile_protos(&["src/whatsapp.proto", "src/voip.proto"], &["src/"])?;
     Ok(())
 }

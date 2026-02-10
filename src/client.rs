@@ -1,3 +1,4 @@
+mod call_crypto;
 mod context_impl;
 mod device_registry;
 mod lid_pn;
@@ -225,6 +226,9 @@ pub struct Client {
 
     /// Version override for testing or manual specification
     pub(crate) override_version: Option<(u32, u32, u32)>,
+
+    /// Call manager for VoIP call handling (lazily initialized)
+    pub(crate) call_manager: tokio::sync::RwLock<Option<Arc<crate::calls::CallManager>>>,
 }
 
 impl Client {
@@ -350,6 +354,7 @@ impl Client {
             synchronous_ack: false,
             http_client,
             override_version,
+            call_manager: tokio::sync::RwLock::new(None),
         };
 
         let arc = Arc::new(this);
@@ -404,8 +409,56 @@ impl Client {
             .await
     }
 
+    /// Get the call manager, initializing it if needed.
+    ///
+    /// The call manager is lazily initialized on first access using the device's
+    /// LID or phone number as the identity.
+    pub async fn get_call_manager(&self) -> Arc<crate::calls::CallManager> {
+        {
+            let guard = self.call_manager.read().await;
+            if let Some(ref manager) = *guard {
+                return manager.clone();
+            }
+        }
+
+        // Need to initialize
+        let mut guard = self.call_manager.write().await;
+        // Double-check after acquiring write lock
+        if let Some(ref manager) = *guard {
+            return manager.clone();
+        }
+
+        let device = self.persistence_manager.get_device_snapshot().await;
+        let our_jid = device
+            .lid
+            .clone()
+            .or_else(|| device.pn.clone())
+            .unwrap_or_else(|| {
+                // Fallback JID for when device has no LID or phone number yet
+                // This is a compile-time constant that is guaranteed to parse
+                "0@lid"
+                    .parse()
+                    .expect("fallback JID '0@lid' is a valid constant")
+            });
+
+        let manager =
+            crate::calls::CallManager::new(our_jid, crate::calls::CallManagerConfig::default());
+        *guard = Some(manager.clone());
+        manager
+    }
+
+    /// Set a custom call manager with a media callback.
+    ///
+    /// This allows external consumers to provide a callback for receiving
+    /// parsed call protocol data (relay info, transport, SRTP keys, etc.).
+    pub async fn set_call_manager(&self, manager: Arc<crate::calls::CallManager>) {
+        let mut guard = self.call_manager.write().await;
+        *guard = Some(manager);
+    }
+
     /// Create and configure the stanza router with all the handlers.
     fn create_stanza_router() -> crate::handlers::router::StanzaRouter {
+        use crate::calls::CallHandler;
         use crate::handlers::{
             basic::{AckHandler, FailureHandler, StreamErrorHandler, SuccessHandler},
             chatstate::ChatstateHandler,
@@ -430,10 +483,10 @@ impl Client {
         router.register(Arc::new(IbHandler));
         router.register(Arc::new(NotificationHandler));
         router.register(Arc::new(AckHandler));
+        router.register(Arc::new(CallHandler));
         router.register(Arc::new(ChatstateHandler));
 
         // Register unimplemented handlers
-        router.register(Arc::new(UnimplementedHandler::for_call()));
         router.register(Arc::new(UnimplementedHandler::for_presence()));
 
         router

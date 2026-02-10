@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub use wacore::{iq::privacy as privacy_settings, proto_helpers, store::traits};
 pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
@@ -34,6 +36,7 @@ pub mod retry;
 pub mod unified_session;
 
 pub mod appstate_sync;
+pub mod calls;
 pub mod history_sync;
 pub mod usync;
 

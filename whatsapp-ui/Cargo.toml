@@ -1,0 +1,66 @@
+[package]
+name = "whatsapp-ui"
+version = "0.1.0"
+edition = "2024"
+authors = ["João Lucas <jlucaso@hotmail.com>"]
+license = "MIT"
+description = "WhatsApp UI client with GPUI"
+
+[[bin]]
+name = "whatsapp-ui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+base64 = "0.22"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# Audio capture and encoding (for PTT voice messages)
+cpal = "0.15"
+env_logger = "0.11"
+
+# UI framework - GPUI with YUV surface support (forked Zed)
+gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
+gpui-component = "0.5.0"
+gpui-component-assets = "0.5.0"
+
+# Image handling
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# Ordered maps for deterministic cache eviction
+indexmap = "2"
+
+# Logging
+log = "0.4"
+mp4 = "0.14.0"
+ogg = "0.9"
+openh264 = "0.9.0"  # H.264 software decoder
+opus = "0.3"
+
+# Protobuf encoding
+prost = "0.14"
+
+# QR code generation
+qrcode = "0.14"
+rand.workspace = true
+rust-embed = "8.9.0"
+smallvec = "1.15.1"
+
+# Async utilities (for GPUI-compatible timers)
+smol = "2"
+
+# Audio processing (for waveform generation)
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3", "ogg", "pcm"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+wacore = { path = "../wacore" }
+wacore-binary = { workspace = true }
+waproto = { workspace = true }
+# WhatsApp client and related crates
+whatsapp-rust = { path = ".." }
+whatsapp-rust-tokio-transport = { path = "../transports/tokio-transport" }
+whatsapp-rust-ureq-http-client = { path = "../http_clients/ureq-client" }

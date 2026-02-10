@@ -1,5 +1,7 @@
 use crate::stanza::BusinessSubscription;
+use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta};
 use crate::types::message::MessageInfo;
+use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
@@ -79,7 +81,7 @@ impl LazyConversation {
         let conv = self
             .parsed
             .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default());
-        if conv.id.is_empty() { None } else { Some(conv) }
+        (!conv.id.is_empty()).then_some(conv)
     }
 
     /// Get the parsed conversation, parsing on first access.
@@ -343,6 +345,11 @@ pub enum Event {
 
     /// Business account status changed (verified name, profile, conversion to personal)
     BusinessStatusUpdate(BusinessStatusUpdate),
+
+    CallOffer(CallOffer),
+    CallAccepted(CallAccepted),
+    CallRejected(CallRejected),
+    CallEnded(CallEnded),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -654,4 +661,52 @@ pub struct MarkChatAsReadUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
     pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterJoin {
+    pub metadata: NewsletterMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLeave {
+    pub id: Jid,
+    pub role: NewsletterRole,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterMuteChange {
+    pub id: Jid,
+    pub mute: NewsletterMuteState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdate {
+    pub jid: Jid,
+    pub time: DateTime<Utc>,
+    pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallOffer {
+    pub meta: BasicCallMeta,
+    pub media_type: CallMediaType,
+    pub is_offline: bool,
+    pub remote_meta: CallRemoteMeta,
+    pub group_jid: Option<Jid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallAccepted {
+    pub meta: BasicCallMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallRejected {
+    pub meta: BasicCallMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallEnded {
+    pub meta: BasicCallMeta,
 }

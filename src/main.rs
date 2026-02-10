@@ -1,9 +1,10 @@
 use chrono::{Local, Utc};
-use log::{error, info};
+use log::{error, info, warn};
 use std::io::Cursor;
 use std::sync::Arc;
 use wacore::download::{Downloadable, MediaType};
 use wacore::proto_helpers::MessageExt;
+use wacore::types::call::CallId;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::{Bot, MessageContext};
@@ -222,6 +223,189 @@ fn main() {
                         }
                         Event::LoggedOut(_) => {
                             error!("❌ Bot was logged out!");
+                        }
+                        Event::CallOffer(offer) => {
+                            info!("📞 Incoming {} call from {} (call_id: {})",
+                                if offer.media_type == wacore::types::call::CallMediaType::Video { "video" } else { "audio" },
+                                offer.meta.from,
+                                offer.meta.call_id
+                            );
+                            info!("   Remote: {} v{}",
+                                offer.remote_meta.remote_platform,
+                                offer.remote_meta.remote_version
+                            );
+
+                            // Log offer details from CallManager
+                            let call_id = CallId::new(&offer.meta.call_id);
+                            let call_manager = client.get_call_manager().await;
+                            if let Some(call_info) = call_manager.get_call(&call_id).await {
+                                // Log relay data
+                                if let Some(ref relay) = call_info.offer_relay_data {
+                                    info!("   Relay: uuid={:?}, self_pid={:?}, peer_pid={:?}",
+                                        relay.uuid, relay.self_pid, relay.peer_pid);
+                                    info!("   Relay keys: hbh_key={} bytes, relay_key={} bytes",
+                                        relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
+                                        relay.relay_key.as_ref().map(|k| k.len()).unwrap_or(0));
+                                    info!("   Relay endpoints: {} endpoints, {} tokens, {} auth_tokens",
+                                        relay.endpoints.len(),
+                                        relay.relay_tokens.len(),
+                                        relay.auth_tokens.len());
+                                    for ep in &relay.endpoints {
+                                        info!("     - {} (id={}): {} addresses",
+                                            ep.relay_name, ep.relay_id, ep.addresses.len());
+                                    }
+                                }
+
+                                // Log media params
+                                if let Some(ref media) = call_info.offer_media_params {
+                                    for audio in &media.audio {
+                                        info!("   Audio: {} @ {}Hz", audio.codec, audio.rate);
+                                    }
+                                    if let Some(ref video) = media.video {
+                                        info!("   Video: {:?}", video.codec);
+                                    }
+                                }
+
+                                // Log enc data
+                                if let Some(ref enc) = call_info.offer_enc_data {
+                                    info!("   Encrypted key: type={:?}, {} bytes (v{})",
+                                        enc.enc_type, enc.ciphertext.len(), enc.version);
+                                }
+                            }
+
+                            if offer.is_offline {
+                                info!("   (Offline call - not accepting)");
+                            } else {
+                                // Complete call acceptance flow:
+                                // 1. PREACCEPT → shows "ringing" to caller
+                                // 2. RELAYLATENCY → relay selection
+                                // 3. MUTE_V2 → initial audio state
+                                // 4. ACCEPT → encrypted key and media params
+
+                                // Signal sessions are stored under LID addresses
+                                let caller_lid = offer.meta.call_creator.clone();
+                                info!("   Caller LID: {}", caller_lid);
+
+                                // --- Step 1: Send PREACCEPT immediately ---
+                                info!("   Step 1: Sending PREACCEPT...");
+                                match call_manager.send_preaccept(&call_id).await {
+                                    Ok(preaccept_stanza) => {
+                                        if let Err(e) = client.send_node(preaccept_stanza).await {
+                                            error!("Failed to send PREACCEPT: {}", e);
+                                        } else {
+                                            info!("   ✓ Sent PREACCEPT");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to build PREACCEPT: {}", e);
+                                    }
+                                }
+
+                                // --- Step 2: Send RELAYLATENCY with measurements ---
+                                info!("   Step 2: Sending RELAYLATENCY...");
+                                let call_info = call_manager.get_call(&call_id).await;
+                                if let Some(ref info) = call_info {
+                                    if let Some(ref relay_data) = info.offer_relay_data {
+                                        // Create measurements from relay endpoints with mock latency
+                                        let measurements = whatsapp_rust::calls::RelayLatencyMeasurement::from_relay_data(relay_data, 30);
+                                        info!("   Generated {} relay measurements", measurements.len());
+
+                                        match call_manager.send_relay_latency(&call_id, measurements).await {
+                                            Ok(relaylatency_stanza) => {
+                                                if let Err(e) = client.send_node(relaylatency_stanza).await {
+                                                    error!("Failed to send RELAYLATENCY: {}", e);
+                                                } else {
+                                                    info!("   ✓ Sent RELAYLATENCY");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to build RELAYLATENCY: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        info!("   No relay data in offer, skipping RELAYLATENCY");
+                                    }
+                                }
+
+                                // --- Step 3: Send MUTE_V2 (unmuted) ---
+                                info!("   Step 3: Sending MUTE_V2 (unmuted)...");
+                                match call_manager.send_mute_state(&call_id, false).await {
+                                    Ok(mute_stanza) => {
+                                        if let Err(e) = client.send_node(mute_stanza).await {
+                                            error!("Failed to send MUTE_V2: {}", e);
+                                        } else {
+                                            info!("   ✓ Sent MUTE_V2");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to build MUTE_V2: {}", e);
+                                    }
+                                }
+
+                                // --- Step 4: Send ACCEPT ---
+                                // Note: Accept stanzas do NOT include <enc>. The call key
+                                // is exchanged in the Offer only and decrypted during ringing.
+                                info!("   Step 4: Sending ACCEPT...");
+
+                                match call_manager.accept_call(&call_id).await {
+                                    Ok(accept_stanza) => {
+                                        if let Some(children) = accept_stanza.children()
+                                            && let Some(accept_node) = children.first()
+                                            && let Some(accept_children) = accept_node.children() {
+                                                let child_tags: Vec<&str> = accept_children.iter().map(|c| c.tag.as_str()).collect();
+                                                info!("   Accept stanza elements: {:?}", child_tags);
+                                            }
+                                        if let Err(e) = client.send_node(accept_stanza).await {
+                                            error!("Failed to send ACCEPT: {}", e);
+                                        } else {
+                                            info!("✅ Call accepted! All signaling complete for {}", offer.meta.call_id);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to build ACCEPT stanza: {}", e);
+                                    }
+                                }
+
+                                // --- Step 5: Connect to relay via WebRTC ---
+                                // This initiates the ICE/DTLS/SCTP connection to the relay.
+                                // The AckHandler may also trigger this, but we do it explicitly
+                                // to ensure relay connection starts immediately after accept.
+                                info!("   Step 5: Connecting to relay via WebRTC...");
+                                if let Some(relay_data) = call_manager.get_relay_data(&call_id).await {
+                                    let call_manager_clone = call_manager.clone();
+                                    let call_id_clone = call_id.clone();
+                                    tokio::spawn(async move {
+                                        match call_manager_clone
+                                            .connect_relay(&call_id_clone, &relay_data)
+                                            .await
+                                        {
+                                            Ok(relay_name) => {
+                                                info!(
+                                                    "WebRTC connected for call {}: relay={}",
+                                                    call_id_clone, relay_name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "WebRTC connection failed for call {}: {}",
+                                                    call_id_clone, e
+                                                );
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    warn!("No relay data available for call {} - cannot connect WebRTC", call_id);
+                                }
+                            }
+                        }
+                        Event::CallAccepted(accepted) => {
+                            info!("📞 Call {} accepted by remote", accepted.meta.call_id);
+                        }
+                        Event::CallRejected(rejected) => {
+                            info!("📞 Call {} rejected by remote", rejected.meta.call_id);
+                        }
+                        Event::CallEnded(ended) => {
+                            info!("📞 Call {} ended", ended.meta.call_id);
                         }
                         _ => {
                             // debug!("Received unhandled event: {:?}", event);

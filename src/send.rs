@@ -153,7 +153,6 @@ impl Client {
         edit: Option<crate::types::message::EditAttribute>,
         extra_stanza_nodes: Vec<Node>,
     ) -> Result<(), anyhow::Error> {
-        // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
             Some(id) => id,
             None => self.generate_message_id().await,
