@@ -226,12 +226,25 @@ pub struct Client {
     /// Version override for testing or manual specification
     pub(crate) override_version: Option<(u32, u32, u32)>,
 
-    /// When true, history sync notifications are silently ignored.
-    /// Set via `BotBuilder::skip_history_sync()`. Can also be toggled at runtime.
-    pub skip_history_sync: AtomicBool,
+    /// When true, history sync notifications are acknowledged but not downloaded
+    /// or processed. Set via `BotBuilder::skip_history_sync()`.
+    pub(crate) skip_history_sync: AtomicBool,
 }
 
 impl Client {
+    /// Enable or disable skipping of history sync notifications at runtime.
+    ///
+    /// When enabled, the client will acknowledge incoming history sync
+    /// notifications but will not download or process the data.
+    pub fn set_skip_history_sync(&self, enabled: bool) {
+        self.skip_history_sync.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Returns `true` if history sync notifications are currently being skipped.
+    pub fn skip_history_sync_enabled(&self) -> bool {
+        self.skip_history_sync.load(Ordering::Relaxed)
+    }
+
     pub async fn new(
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
