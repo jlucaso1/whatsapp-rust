@@ -3,7 +3,7 @@ use crate::mediaconn::MediaConn;
 use anyhow::{Result, anyhow};
 use std::io::{Seek, SeekFrom, Write};
 
-pub use wacore::download::{DownloadUtils, Downloadable, MediaType};
+pub use wacore::download::{DownloadUtils, Downloadable, MediaDecryption, MediaType};
 
 impl From<&MediaConn> for wacore::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
@@ -23,9 +23,9 @@ impl From<&MediaConn> for wacore::download::MediaConnection {
 /// Implements `Downloadable` from raw media parameters.
 struct DownloadParams {
     direct_path: String,
-    media_key: Vec<u8>,
+    media_key: Option<Vec<u8>>,
     file_sha256: Vec<u8>,
-    file_enc_sha256: Vec<u8>,
+    file_enc_sha256: Option<Vec<u8>>,
     file_length: u64,
     media_type: MediaType,
 }
@@ -35,10 +35,10 @@ impl Downloadable for DownloadParams {
         Some(&self.direct_path)
     }
     fn media_key(&self) -> Option<&[u8]> {
-        Some(&self.media_key)
+        self.media_key.as_deref()
     }
     fn file_enc_sha256(&self) -> Option<&[u8]> {
-        Some(&self.file_enc_sha256)
+        self.file_enc_sha256.as_deref()
     }
     fn file_sha256(&self) -> Option<&[u8]> {
         Some(&self.file_sha256)
@@ -53,13 +53,10 @@ impl Downloadable for DownloadParams {
 
 impl Client {
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
-        let media_conn = self.refresh_media_conn(false).await?;
-
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
+        let requests = self.prepare_requests(downloadable).await?;
 
         for request in requests {
-            match self.download_and_decrypt_with_request(&request).await {
+            match self.download_with_request(&request).await {
                 Ok(data) => return Ok(data),
                 Err(e) => {
                     log::warn!(
@@ -75,55 +72,15 @@ impl Client {
         Err(anyhow!("Failed to download from all available media hosts"))
     }
 
-    async fn download_and_decrypt_with_request(
-        &self,
-        request: &wacore::download::DownloadRequest,
-    ) -> Result<Vec<u8>> {
-        let url = request.url.clone();
-        let media_key = request.media_key.clone();
-        let app_info = request.app_info;
-        let http_request = crate::http::HttpRequest::get(url);
-        let response = self.http_client.execute(http_request).await?;
-
-        if response.status_code >= 300 {
-            return Err(anyhow!(
-                "Download failed with status: {}",
-                response.status_code
-            ));
-        }
-
-        // Decrypt in a blocking thread since it's CPU-intensive
-        tokio::task::spawn_blocking(move || {
-            DownloadUtils::decrypt_stream(&response.body[..], &media_key, app_info)
-        })
-        .await?
-    }
-
     pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
         &self,
         downloadable: &dyn Downloadable,
         mut writer: W,
     ) -> Result<()> {
-        let media_conn = self.refresh_media_conn(false).await?;
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
-        let mut last_err: Option<anyhow::Error> = None;
-        for req in requests {
-            match self
-                .download_and_write(&req.url, &req.media_key, req.app_info, &mut writer)
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_err = Some(e);
-                    continue;
-                }
-            }
-        }
-        match last_err {
-            Some(err) => Err(err),
-            None => Err(anyhow!("Failed to download from all available media hosts")),
-        }
+        let data = self.download(downloadable).await?;
+        writer.seek(SeekFrom::Start(0))?;
+        writer.write_all(&data)?;
+        Ok(())
     }
 
     /// Downloads and decrypts media from raw parameters without needing the original message.
@@ -138,22 +95,30 @@ impl Client {
     ) -> Result<Vec<u8>> {
         let params = DownloadParams {
             direct_path: direct_path.to_string(),
-            media_key: media_key.to_vec(),
+            media_key: Some(media_key.to_vec()),
             file_sha256: file_sha256.to_vec(),
-            file_enc_sha256: file_enc_sha256.to_vec(),
+            file_enc_sha256: Some(file_enc_sha256.to_vec()),
             file_length,
             media_type,
         };
         self.download(&params).await
     }
 
-    async fn download_and_write<W: Write + Seek + Send + Unpin>(
+    async fn prepare_requests(
         &self,
-        url: &str,
-        media_key: &[u8],
-        media_type: MediaType,
-        writer: &mut W,
-    ) -> Result<()> {
+        downloadable: &dyn Downloadable,
+    ) -> Result<Vec<wacore::download::DownloadRequest>> {
+        let media_conn = self.refresh_media_conn(false).await?;
+        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
+        DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)
+    }
+
+    async fn download_with_request(
+        &self,
+        request: &wacore::download::DownloadRequest,
+    ) -> Result<Vec<u8>> {
+        let url = request.url.clone();
+        let decryption = request.decryption.clone();
         let http_request = crate::http::HttpRequest::get(url);
         let response = self.http_client.execute(http_request).await?;
 
@@ -164,18 +129,25 @@ impl Client {
             ));
         }
 
-        let media_key = media_key.to_vec();
-        let encrypted_bytes = response.body;
-
-        // Decrypt and verify in a blocking thread since it's CPU-intensive
-        let plaintext = tokio::task::spawn_blocking(move || {
-            DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
-        })
-        .await??;
-
-        writer.seek(SeekFrom::Start(0))?;
-        writer.write_all(&plaintext)?;
-        Ok(())
+        match decryption {
+            MediaDecryption::Encrypted {
+                media_key,
+                media_type,
+            } => {
+                tokio::task::spawn_blocking(move || {
+                    DownloadUtils::decrypt_stream(&response.body[..], &media_key, media_type)
+                })
+                .await?
+            }
+            MediaDecryption::Plaintext { file_sha256 } => {
+                let body = response.body;
+                tokio::task::spawn_blocking(move || {
+                    DownloadUtils::validate_plaintext_sha256(&body, &file_sha256)?;
+                    Ok(body)
+                })
+                .await?
+            }
+        }
     }
 
     /// Downloads and decrypts media with streaming (constant memory usage).
@@ -189,9 +161,7 @@ impl Client {
         downloadable: &dyn Downloadable,
         writer: W,
     ) -> Result<W> {
-        let media_conn = self.refresh_media_conn(false).await?;
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
+        let requests = self.prepare_requests(downloadable).await?;
 
         let mut writer = writer;
         let mut last_err: Option<anyhow::Error> = None;
@@ -235,9 +205,9 @@ impl Client {
     ) -> Result<W> {
         let params = DownloadParams {
             direct_path: direct_path.to_string(),
-            media_key: media_key.to_vec(),
+            media_key: Some(media_key.to_vec()),
             file_sha256: file_sha256.to_vec(),
-            file_enc_sha256: file_enc_sha256.to_vec(),
+            file_enc_sha256: Some(file_enc_sha256.to_vec()),
             file_length,
             media_type,
         };
@@ -253,8 +223,7 @@ impl Client {
     ) -> Result<(W, Result<()>)> {
         let http_client = self.http_client.clone();
         let url = request.url.clone();
-        let media_key = request.media_key.clone();
-        let app_info = request.app_info;
+        let decryption = request.decryption.clone();
 
         tokio::task::spawn_blocking(move || {
             let mut writer = writer;
@@ -272,12 +241,26 @@ impl Client {
                     return Err(anyhow!("Download failed with status: {}", resp.status_code));
                 }
 
-                DownloadUtils::decrypt_stream_to_writer(
-                    resp.body,
-                    &media_key,
-                    app_info,
-                    &mut writer,
-                )?;
+                match &decryption {
+                    MediaDecryption::Encrypted {
+                        media_key,
+                        media_type,
+                    } => {
+                        DownloadUtils::decrypt_stream_to_writer(
+                            resp.body,
+                            media_key,
+                            *media_type,
+                            &mut writer,
+                        )?;
+                    }
+                    MediaDecryption::Plaintext { file_sha256 } => {
+                        DownloadUtils::copy_and_validate_plaintext_to_writer(
+                            resp.body,
+                            file_sha256,
+                            &mut writer,
+                        )?;
+                    }
+                }
                 writer.seek(SeekFrom::Start(0))?;
                 Ok(())
             })();
