@@ -94,58 +94,39 @@ pub trait Downloadable: Sync + Send {
 }
 
 macro_rules! impl_downloadable {
+    (@common $file_length_field:ident, $media_type:expr) => {
+        fn direct_path(&self) -> Option<&str> {
+            self.direct_path.as_deref()
+        }
+
+        fn media_key(&self) -> Option<&[u8]> {
+            self.media_key.as_deref()
+        }
+
+        fn file_enc_sha256(&self) -> Option<&[u8]> {
+            self.file_enc_sha256.as_deref()
+        }
+
+        fn file_sha256(&self) -> Option<&[u8]> {
+            self.file_sha256.as_deref()
+        }
+
+        fn file_length(&self) -> Option<u64> {
+            self.$file_length_field
+        }
+
+        fn app_info(&self) -> MediaType {
+            $media_type
+        }
+    };
     ($type:ty, $media_type:expr, $file_length_field:ident) => {
         impl Downloadable for $type {
-            fn direct_path(&self) -> Option<&str> {
-                self.direct_path.as_deref()
-            }
-
-            fn media_key(&self) -> Option<&[u8]> {
-                self.media_key.as_deref()
-            }
-
-            fn file_enc_sha256(&self) -> Option<&[u8]> {
-                self.file_enc_sha256.as_deref()
-            }
-
-            fn file_sha256(&self) -> Option<&[u8]> {
-                self.file_sha256.as_deref()
-            }
-
-            fn file_length(&self) -> Option<u64> {
-                self.$file_length_field
-            }
-
-            fn app_info(&self) -> MediaType {
-                $media_type
-            }
+            impl_downloadable!(@common $file_length_field, $media_type);
         }
     };
     ($type:ty, $media_type:expr, $file_length_field:ident, static_url) => {
         impl Downloadable for $type {
-            fn direct_path(&self) -> Option<&str> {
-                self.direct_path.as_deref()
-            }
-
-            fn media_key(&self) -> Option<&[u8]> {
-                self.media_key.as_deref()
-            }
-
-            fn file_enc_sha256(&self) -> Option<&[u8]> {
-                self.file_enc_sha256.as_deref()
-            }
-
-            fn file_sha256(&self) -> Option<&[u8]> {
-                self.file_sha256.as_deref()
-            }
-
-            fn file_length(&self) -> Option<u64> {
-                self.$file_length_field
-            }
-
-            fn app_info(&self) -> MediaType {
-                $media_type
-            }
+            impl_downloadable!(@common $file_length_field, $media_type);
 
             fn static_url(&self) -> Option<&str> {
                 self.static_url.as_deref()

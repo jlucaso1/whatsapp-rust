@@ -53,10 +53,7 @@ impl Downloadable for DownloadParams {
 
 impl Client {
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
-        let media_conn = self.refresh_media_conn(false).await?;
-
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
+        let requests = self.prepare_requests(downloadable).await?;
 
         for request in requests {
             match self.download_with_request(&request).await {
@@ -73,6 +70,47 @@ impl Client {
         }
 
         Err(anyhow!("Failed to download from all available media hosts"))
+    }
+
+    pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
+        &self,
+        downloadable: &dyn Downloadable,
+        mut writer: W,
+    ) -> Result<()> {
+        let data = self.download(downloadable).await?;
+        writer.seek(SeekFrom::Start(0))?;
+        writer.write_all(&data)?;
+        Ok(())
+    }
+
+    /// Downloads and decrypts media from raw parameters without needing the original message.
+    pub async fn download_from_params(
+        &self,
+        direct_path: &str,
+        media_key: &[u8],
+        file_sha256: &[u8],
+        file_enc_sha256: &[u8],
+        file_length: u64,
+        media_type: MediaType,
+    ) -> Result<Vec<u8>> {
+        let params = DownloadParams {
+            direct_path: direct_path.to_string(),
+            media_key: Some(media_key.to_vec()),
+            file_sha256: file_sha256.to_vec(),
+            file_enc_sha256: Some(file_enc_sha256.to_vec()),
+            file_length,
+            media_type,
+        };
+        self.download(&params).await
+    }
+
+    async fn prepare_requests(
+        &self,
+        downloadable: &dyn Downloadable,
+    ) -> Result<Vec<wacore::download::DownloadRequest>> {
+        let media_conn = self.refresh_media_conn(false).await?;
+        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
+        DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)
     }
 
     async fn download_with_request(
@@ -102,94 +140,14 @@ impl Client {
                 .await?
             }
             MediaDecryption::Plaintext { file_sha256 } => {
-                DownloadUtils::validate_plaintext_sha256(&response.body, &file_sha256)?;
-                Ok(response.body)
-            }
-        }
-    }
-
-    pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
-        &self,
-        downloadable: &dyn Downloadable,
-        mut writer: W,
-    ) -> Result<()> {
-        let media_conn = self.refresh_media_conn(false).await?;
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
-        let mut last_err: Option<anyhow::Error> = None;
-        for req in requests {
-            match self.download_and_write(&req, &mut writer).await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_err = Some(e);
-                    continue;
-                }
-            }
-        }
-        match last_err {
-            Some(err) => Err(err),
-            None => Err(anyhow!("Failed to download from all available media hosts")),
-        }
-    }
-
-    /// Downloads and decrypts media from raw parameters without needing the original message.
-    pub async fn download_from_params(
-        &self,
-        direct_path: &str,
-        media_key: &[u8],
-        file_sha256: &[u8],
-        file_enc_sha256: &[u8],
-        file_length: u64,
-        media_type: MediaType,
-    ) -> Result<Vec<u8>> {
-        let params = DownloadParams {
-            direct_path: direct_path.to_string(),
-            media_key: Some(media_key.to_vec()),
-            file_sha256: file_sha256.to_vec(),
-            file_enc_sha256: Some(file_enc_sha256.to_vec()),
-            file_length,
-            media_type,
-        };
-        self.download(&params).await
-    }
-
-    async fn download_and_write<W: Write + Seek + Send + Unpin>(
-        &self,
-        request: &wacore::download::DownloadRequest,
-        writer: &mut W,
-    ) -> Result<()> {
-        let http_request = crate::http::HttpRequest::get(&request.url);
-        let response = self.http_client.execute(http_request).await?;
-
-        if response.status_code >= 300 {
-            return Err(anyhow!(
-                "Download failed with status: {}",
-                response.status_code
-            ));
-        }
-
-        let plaintext = match &request.decryption {
-            MediaDecryption::Encrypted {
-                media_key,
-                media_type,
-            } => {
-                let media_key = media_key.clone();
-                let media_type = *media_type;
-                let encrypted_bytes = response.body;
+                let body = response.body;
                 tokio::task::spawn_blocking(move || {
-                    DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
+                    DownloadUtils::validate_plaintext_sha256(&body, &file_sha256)?;
+                    Ok(body)
                 })
-                .await??
+                .await?
             }
-            MediaDecryption::Plaintext { file_sha256 } => {
-                DownloadUtils::validate_plaintext_sha256(&response.body, file_sha256)?;
-                response.body
-            }
-        };
-
-        writer.seek(SeekFrom::Start(0))?;
-        writer.write_all(&plaintext)?;
-        Ok(())
+        }
     }
 
     /// Downloads and decrypts media with streaming (constant memory usage).
@@ -203,9 +161,7 @@ impl Client {
         downloadable: &dyn Downloadable,
         writer: W,
     ) -> Result<W> {
-        let media_conn = self.refresh_media_conn(false).await?;
-        let core_media_conn = wacore::download::MediaConnection::from(&media_conn);
-        let requests = DownloadUtils::prepare_download_requests(downloadable, &core_media_conn)?;
+        let requests = self.prepare_requests(downloadable).await?;
 
         let mut writer = writer;
         let mut last_err: Option<anyhow::Error> = None;
