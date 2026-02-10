@@ -3279,22 +3279,28 @@ mod tests {
             "Initial sequence should be 0"
         );
 
-        // First prepare_send should succeed and return sequence 1 (pre-increment like WhatsApp Web)
-        let result = client.unified_session.prepare_send().await;
-        assert!(result.is_some(), "First send should succeed");
-        let (node, seq) = result.unwrap();
-        assert_eq!(node.tag, "ib", "Should be an IB stanza");
-        assert_eq!(seq, 1, "First sequence should be 1 (pre-increment)");
+        // Duplicate prevention depends on the session ID staying the same between calls.
+        // Since the session ID is millisecond-based, use a retry loop to handle
+        // the rare case where we cross a millisecond boundary between calls.
+        loop {
+            client.unified_session.reset().await;
 
-        // Sequence counter should now be 1
-        assert_eq!(client.unified_session.sequence(), 1);
+            let result = client.unified_session.prepare_send().await;
+            assert!(result.is_some(), "First send should succeed");
+            let (node, seq) = result.unwrap();
+            assert_eq!(node.tag, "ib", "Should be an IB stanza");
+            assert_eq!(seq, 1, "First sequence should be 1 (pre-increment)");
+            assert_eq!(client.unified_session.sequence(), 1);
 
-        // Second prepare_send should be blocked (duplicate prevention)
-        let result2 = client.unified_session.prepare_send().await;
-        assert!(result2.is_none(), "Duplicate should be prevented");
-
-        // Sequence should still be 1 (not incremented for duplicates)
-        assert_eq!(client.unified_session.sequence(), 1);
+            let result2 = client.unified_session.prepare_send().await;
+            if result2.is_none() {
+                // Duplicate was prevented within the same millisecond
+                assert_eq!(client.unified_session.sequence(), 1);
+                break;
+            }
+            // Millisecond boundary crossed, retry
+            tokio::task::yield_now().await;
+        }
 
         // Clear last sent and try again - sequence resets on "new" session ID
         client.unified_session.clear_last_sent().await;
