@@ -12,6 +12,18 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
+        if self
+            .skip_history_sync
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            log::debug!(
+                "Skipping history sync for message {} (Type: {:?})",
+                message_id,
+                notification.sync_type()
+            );
+            return;
+        }
+
         // Enqueue a MajorSyncTask for the dedicated sync worker to consume.
         let task = crate::sync_task::MajorSyncTask::HistorySync {
             message_id,

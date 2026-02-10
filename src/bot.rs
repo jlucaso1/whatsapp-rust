@@ -211,6 +211,7 @@ pub struct BotBuilder {
         Option<wa::device_props::PlatformType>,
     )>,
     pair_code_options: Option<PairCodeOptions>,
+    skip_history_sync: bool,
 }
 
 impl BotBuilder {
@@ -224,6 +225,7 @@ impl BotBuilder {
             override_version: None,
             os_info: None,
             pair_code_options: None,
+            skip_history_sync: false,
         }
     }
 
@@ -434,6 +436,30 @@ impl BotBuilder {
         self
     }
 
+    /// Skip processing of history sync notifications from the phone.
+    ///
+    /// When enabled, the client will silently ignore all incoming history sync
+    /// data (INITIAL_BOOTSTRAP, RECENT, FULL, PUSH_NAME, etc.) without
+    /// downloading or processing them. This is useful for bot use cases
+    /// where message history is not needed.
+    ///
+    /// Default: `false` (history sync is processed normally).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_transport_factory(transport)
+    ///     .with_http_client(http_client)
+    ///     .skip_history_sync()
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn skip_history_sync(mut self) -> Self {
+        self.skip_history_sync = true;
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -490,6 +516,12 @@ impl BotBuilder {
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
             client.custom_enc_handlers.insert(enc_type, handler);
+        }
+
+        if self.skip_history_sync {
+            client
+                .skip_history_sync
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(Bot {

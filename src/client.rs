@@ -225,6 +225,10 @@ pub struct Client {
 
     /// Version override for testing or manual specification
     pub(crate) override_version: Option<(u32, u32, u32)>,
+
+    /// When true, history sync notifications are silently ignored.
+    /// Set via `BotBuilder::skip_history_sync()`. Can also be toggled at runtime.
+    pub skip_history_sync: AtomicBool,
 }
 
 impl Client {
@@ -350,6 +354,7 @@ impl Client {
             synchronous_ack: false,
             http_client,
             override_version,
+            skip_history_sync: AtomicBool::new(false),
         };
 
         let arc = Arc::new(this);
