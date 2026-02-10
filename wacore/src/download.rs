@@ -1,6 +1,5 @@
 use crate::libsignal::crypto::{CryptographicMac, aes_256_cbc_decrypt_into};
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 use base64::Engine as _;
 use base64::prelude::*;
 use hkdf::Hkdf;
@@ -53,7 +52,24 @@ impl MediaType {
     }
 }
 
-#[async_trait]
+/// Describes how downloaded media bytes should be processed after HTTP fetch.
+///
+/// Mirrors WhatsApp Web's `isMediaCryptoExpectedForMediaType()` pattern:
+/// encrypted (E2EE) media requires AES-256-CBC decryption + HMAC verification,
+/// while unencrypted media (newsletters/channels) only needs SHA-256 validation.
+#[derive(Debug, Clone)]
+pub enum MediaDecryption {
+    /// E2E encrypted media: decrypt with AES-256-CBC using HKDF-expanded
+    /// keys from the media key, then verify HMAC-SHA256 integrity.
+    Encrypted {
+        media_key: Vec<u8>,
+        media_type: MediaType,
+    },
+    /// Unencrypted media (newsletter/channel): verify SHA-256 hash of
+    /// the raw downloaded bytes. No decryption needed.
+    Plaintext { file_sha256: Vec<u8> },
+}
+
 pub trait Downloadable: Sync + Send {
     fn direct_path(&self) -> Option<&str>;
     fn media_key(&self) -> Option<&[u8]>;
@@ -61,11 +77,24 @@ pub trait Downloadable: Sync + Send {
     fn file_sha256(&self) -> Option<&[u8]>;
     fn file_length(&self) -> Option<u64>;
     fn app_info(&self) -> MediaType;
+
+    /// Static CDN URL for direct download, bypassing host construction.
+    /// Present on some message types (ImageMessage, VideoMessage) when
+    /// sent in newsletter/channel chats.
+    fn static_url(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether this media requires decryption.
+    /// Returns `true` if `media_key` is present (E2EE media),
+    /// `false` otherwise (newsletter/channel media).
+    fn is_encrypted(&self) -> bool {
+        self.media_key().is_some()
+    }
 }
 
 macro_rules! impl_downloadable {
     ($type:ty, $media_type:expr, $file_length_field:ident) => {
-        #[async_trait]
         impl Downloadable for $type {
             fn direct_path(&self) -> Option<&str> {
                 self.direct_path.as_deref()
@@ -92,10 +121,51 @@ macro_rules! impl_downloadable {
             }
         }
     };
+    ($type:ty, $media_type:expr, $file_length_field:ident, static_url) => {
+        impl Downloadable for $type {
+            fn direct_path(&self) -> Option<&str> {
+                self.direct_path.as_deref()
+            }
+
+            fn media_key(&self) -> Option<&[u8]> {
+                self.media_key.as_deref()
+            }
+
+            fn file_enc_sha256(&self) -> Option<&[u8]> {
+                self.file_enc_sha256.as_deref()
+            }
+
+            fn file_sha256(&self) -> Option<&[u8]> {
+                self.file_sha256.as_deref()
+            }
+
+            fn file_length(&self) -> Option<u64> {
+                self.$file_length_field
+            }
+
+            fn app_info(&self) -> MediaType {
+                $media_type
+            }
+
+            fn static_url(&self) -> Option<&str> {
+                self.static_url.as_deref()
+            }
+        }
+    };
 }
 
-impl_downloadable!(wa::message::ImageMessage, MediaType::Image, file_length);
-impl_downloadable!(wa::message::VideoMessage, MediaType::Video, file_length);
+impl_downloadable!(
+    wa::message::ImageMessage,
+    MediaType::Image,
+    file_length,
+    static_url
+);
+impl_downloadable!(
+    wa::message::VideoMessage,
+    MediaType::Video,
+    file_length,
+    static_url
+);
 impl_downloadable!(
     wa::message::DocumentMessage,
     MediaType::Document,
@@ -106,12 +176,10 @@ impl_downloadable!(wa::message::StickerMessage, MediaType::Sticker, file_length)
 impl_downloadable!(ExternalBlobReference, MediaType::AppState, file_size_bytes);
 impl_downloadable!(HistorySyncNotification, MediaType::History, file_length);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DownloadRequest {
     pub url: String,
-    /// Media key for decryption. `None` for unencrypted media (e.g. newsletters).
-    pub media_key: Option<Vec<u8>>,
-    pub app_info: MediaType,
+    pub decryption: MediaDecryption,
 }
 
 pub struct MediaConnection {
@@ -130,43 +198,114 @@ impl DownloadUtils {
         downloadable: &dyn Downloadable,
         media_conn: &MediaConnection,
     ) -> Result<Vec<DownloadRequest>> {
-        let direct_path = downloadable
-            .direct_path()
-            .ok_or_else(|| anyhow!("Missing direct_path"))?;
-        let media_key = downloadable.media_key();
-        let app_info = downloadable.app_info();
+        let is_encrypted = downloadable.is_encrypted();
+        let media_type = downloadable.app_info();
 
-        // For encrypted media, we need file_enc_sha256 as the URL token.
-        // For unencrypted media (newsletters), use file_sha256 instead.
-        let token = if media_key.is_some() {
-            let file_enc_sha256 = downloadable
-                .file_enc_sha256()
-                .ok_or_else(|| anyhow!("Missing file_enc_sha256"))?;
-            BASE64_URL_SAFE_NO_PAD.encode(file_enc_sha256)
+        let decryption = if is_encrypted {
+            let media_key = downloadable
+                .media_key()
+                .ok_or_else(|| anyhow!("Missing media_key for encrypted media"))?
+                .to_vec();
+            MediaDecryption::Encrypted {
+                media_key,
+                media_type,
+            }
         } else {
             let file_sha256 = downloadable
                 .file_sha256()
-                .ok_or_else(|| anyhow!("Missing file_sha256 for unencrypted media"))?;
-            BASE64_URL_SAFE_NO_PAD.encode(file_sha256)
+                .ok_or_else(|| anyhow!("Missing file_sha256 for unencrypted media"))?
+                .to_vec();
+            MediaDecryption::Plaintext { file_sha256 }
         };
 
-        let mut requests = Vec::new();
-        for host in &media_conn.hosts {
-            let url = format!(
-                "https://{hostname}{direct_path}?auth={auth}&token={token}",
-                hostname = host.hostname,
-                direct_path = direct_path,
-                auth = media_conn.auth,
-            );
-
-            requests.push(DownloadRequest {
-                url,
-                media_key: media_key.map(|k| k.to_vec()),
-                app_info,
-            });
+        // Static URL: use directly without host construction.
+        // WhatsApp Web uses staticUrl for newsletter CDN media.
+        if let Some(static_url) = downloadable.static_url() {
+            return Ok(vec![DownloadRequest {
+                url: static_url.to_string(),
+                decryption,
+            }]);
         }
 
+        let direct_path = downloadable
+            .direct_path()
+            .ok_or_else(|| anyhow!("Missing direct_path"))?;
+
+        // Encrypted media uses file_enc_sha256 as URL token,
+        // unencrypted (newsletter) uses file_sha256 instead.
+        let token = if is_encrypted {
+            let hash = downloadable
+                .file_enc_sha256()
+                .ok_or_else(|| anyhow!("Missing file_enc_sha256"))?;
+            BASE64_URL_SAFE_NO_PAD.encode(hash)
+        } else {
+            let hash = downloadable
+                .file_sha256()
+                .ok_or_else(|| anyhow!("Missing file_sha256 for unencrypted media"))?;
+            BASE64_URL_SAFE_NO_PAD.encode(hash)
+        };
+
+        let requests = media_conn
+            .hosts
+            .iter()
+            .map(|host| DownloadRequest {
+                url: format!(
+                    "https://{}{direct_path}?auth={}&token={token}",
+                    host.hostname, media_conn.auth,
+                ),
+                decryption: decryption.clone(),
+            })
+            .collect();
+
         Ok(requests)
+    }
+
+    /// Validate SHA-256 hash of plaintext (unencrypted) media data.
+    ///
+    /// Used for newsletter/channel media which is not encrypted but
+    /// still needs integrity verification (matches WhatsApp Web's
+    /// `validateFilehash()` call for unencrypted downloads).
+    pub fn validate_plaintext_sha256(data: &[u8], expected_sha256: &[u8]) -> Result<()> {
+        use sha2::Digest;
+        let actual = Sha256::digest(data);
+        if actual.as_slice() != expected_sha256 {
+            return Err(anyhow!(
+                "SHA-256 mismatch for plaintext media: expected {}, got {}",
+                hex::encode(expected_sha256),
+                hex::encode(actual),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Stream plaintext (unencrypted) media to a writer while computing and
+    /// validating the SHA-256 hash. Returns the number of bytes written.
+    ///
+    /// On hash mismatch, data has already been written to the writer;
+    /// callers should discard writer contents on error.
+    pub fn copy_and_validate_plaintext_to_writer<R: std::io::Read, W: std::io::Write>(
+        mut reader: R,
+        expected_sha256: &[u8],
+        writer: &mut W,
+    ) -> Result<u64> {
+        use sha2::Digest;
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 8 * 1024];
+        let mut total: u64 = 0;
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            writer.write_all(&buf[..n])?;
+            total += n as u64;
+        }
+        let actual = hasher.finalize();
+        if actual.as_slice() != expected_sha256 {
+            return Err(anyhow!("SHA-256 mismatch for plaintext media"));
+        }
+        Ok(total)
     }
 
     /// Decrypt a media stream, writing plaintext chunks to the given writer.
@@ -357,5 +496,181 @@ impl DownloadUtils {
         aes_256_cbc_decrypt_into(ciphertext, &cipher_key, &iv, &mut output)
             .map_err(|e| anyhow!(e.to_string()))?;
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockDownloadable {
+        direct_path: Option<String>,
+        static_url: Option<String>,
+        media_key: Option<Vec<u8>>,
+        file_sha256: Option<Vec<u8>>,
+        file_enc_sha256: Option<Vec<u8>>,
+        media_type: MediaType,
+    }
+
+    impl Downloadable for MockDownloadable {
+        fn direct_path(&self) -> Option<&str> {
+            self.direct_path.as_deref()
+        }
+        fn media_key(&self) -> Option<&[u8]> {
+            self.media_key.as_deref()
+        }
+        fn file_enc_sha256(&self) -> Option<&[u8]> {
+            self.file_enc_sha256.as_deref()
+        }
+        fn file_sha256(&self) -> Option<&[u8]> {
+            self.file_sha256.as_deref()
+        }
+        fn file_length(&self) -> Option<u64> {
+            Some(1024)
+        }
+        fn app_info(&self) -> MediaType {
+            self.media_type
+        }
+        fn static_url(&self) -> Option<&str> {
+            self.static_url.as_deref()
+        }
+    }
+
+    fn mock_media_conn() -> MediaConnection {
+        MediaConnection {
+            hosts: vec![
+                MediaHost {
+                    hostname: "cdn1.example.com".into(),
+                },
+                MediaHost {
+                    hostname: "cdn2.example.com".into(),
+                },
+            ],
+            auth: "test-auth-token".into(),
+        }
+    }
+
+    #[test]
+    fn prepare_requests_encrypted() {
+        let d = MockDownloadable {
+            direct_path: Some("/v/t1/media.enc".into()),
+            static_url: None,
+            media_key: Some(vec![1; 32]),
+            file_sha256: Some(vec![2; 32]),
+            file_enc_sha256: Some(vec![3; 32]),
+            media_type: MediaType::Image,
+        };
+        let reqs = DownloadUtils::prepare_download_requests(&d, &mock_media_conn()).unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert!(matches!(
+            &reqs[0].decryption,
+            MediaDecryption::Encrypted { media_type, .. } if *media_type == MediaType::Image
+        ));
+        let expected_token = BASE64_URL_SAFE_NO_PAD.encode([3u8; 32]);
+        assert!(reqs[0].url.contains(&expected_token));
+        assert!(reqs[0].url.starts_with("https://cdn1.example.com"));
+        assert!(reqs[1].url.starts_with("https://cdn2.example.com"));
+    }
+
+    #[test]
+    fn prepare_requests_plaintext_newsletter() {
+        let d = MockDownloadable {
+            direct_path: Some("/newsletter/newsletter-image/abc".into()),
+            static_url: None,
+            media_key: None,
+            file_sha256: Some(vec![4; 32]),
+            file_enc_sha256: None,
+            media_type: MediaType::Image,
+        };
+        let reqs = DownloadUtils::prepare_download_requests(&d, &mock_media_conn()).unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert!(matches!(
+            &reqs[0].decryption,
+            MediaDecryption::Plaintext { file_sha256 } if file_sha256 == &vec![4u8; 32]
+        ));
+        // Token should be base64url of file_sha256 (not file_enc_sha256)
+        let expected_token = BASE64_URL_SAFE_NO_PAD.encode([4u8; 32]);
+        assert!(reqs[0].url.contains(&expected_token));
+    }
+
+    #[test]
+    fn prepare_requests_static_url() {
+        let d = MockDownloadable {
+            direct_path: Some("/unused".into()),
+            static_url: Some("https://static.cdn.example.com/media/abc123".into()),
+            media_key: None,
+            file_sha256: Some(vec![5; 32]),
+            file_enc_sha256: None,
+            media_type: MediaType::Image,
+        };
+        let reqs = DownloadUtils::prepare_download_requests(&d, &mock_media_conn()).unwrap();
+        // Static URL bypasses host construction → single request
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "https://static.cdn.example.com/media/abc123");
+        assert!(matches!(
+            &reqs[0].decryption,
+            MediaDecryption::Plaintext { .. }
+        ));
+    }
+
+    #[test]
+    fn prepare_requests_missing_direct_path_no_static_url() {
+        let d = MockDownloadable {
+            direct_path: None,
+            static_url: None,
+            media_key: Some(vec![1; 32]),
+            file_sha256: Some(vec![2; 32]),
+            file_enc_sha256: Some(vec![3; 32]),
+            media_type: MediaType::Image,
+        };
+        let err = DownloadUtils::prepare_download_requests(&d, &mock_media_conn()).unwrap_err();
+        assert!(err.to_string().contains("Missing direct_path"));
+    }
+
+    #[test]
+    fn validate_plaintext_sha256_ok() {
+        use sha2::Digest;
+        let data = b"test newsletter media content";
+        let hash = Sha256::digest(data);
+        assert!(DownloadUtils::validate_plaintext_sha256(data, hash.as_slice()).is_ok());
+    }
+
+    #[test]
+    fn validate_plaintext_sha256_mismatch() {
+        let data = b"test newsletter media content";
+        let wrong_hash = vec![0u8; 32];
+        let err = DownloadUtils::validate_plaintext_sha256(data, &wrong_hash).unwrap_err();
+        assert!(err.to_string().contains("SHA-256 mismatch"));
+    }
+
+    #[test]
+    fn copy_and_validate_plaintext_ok() {
+        use sha2::Digest;
+        use std::io::Cursor;
+        let data = b"streaming newsletter content";
+        let hash = Sha256::digest(data);
+        let reader = Cursor::new(data.to_vec());
+        let mut writer = Vec::new();
+        let bytes = DownloadUtils::copy_and_validate_plaintext_to_writer(
+            reader,
+            hash.as_slice(),
+            &mut writer,
+        )
+        .unwrap();
+        assert_eq!(bytes, data.len() as u64);
+        assert_eq!(writer, data);
+    }
+
+    #[test]
+    fn copy_and_validate_plaintext_mismatch() {
+        use std::io::Cursor;
+        let data = b"streaming newsletter content";
+        let wrong_hash = vec![0u8; 32];
+        let reader = Cursor::new(data.to_vec());
+        let mut writer = Vec::new();
+        let err =
+            DownloadUtils::copy_and_validate_plaintext_to_writer(reader, &wrong_hash, &mut writer)
+                .unwrap_err();
+        assert!(err.to_string().contains("SHA-256 mismatch"));
     }
 }
