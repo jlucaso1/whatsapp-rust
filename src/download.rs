@@ -23,7 +23,7 @@ impl From<&MediaConn> for wacore::download::MediaConnection {
 /// Implements `Downloadable` from raw media parameters.
 struct DownloadParams {
     direct_path: String,
-    media_key: Vec<u8>,
+    media_key: Option<Vec<u8>>,
     file_sha256: Vec<u8>,
     file_enc_sha256: Vec<u8>,
     file_length: u64,
@@ -35,7 +35,7 @@ impl Downloadable for DownloadParams {
         Some(&self.direct_path)
     }
     fn media_key(&self) -> Option<&[u8]> {
-        Some(&self.media_key)
+        self.media_key.as_deref()
     }
     fn file_enc_sha256(&self) -> Option<&[u8]> {
         Some(&self.file_enc_sha256)
@@ -92,11 +92,19 @@ impl Client {
             ));
         }
 
-        // Decrypt in a blocking thread since it's CPU-intensive
-        tokio::task::spawn_blocking(move || {
-            DownloadUtils::decrypt_stream(&response.body[..], &media_key, app_info)
-        })
-        .await?
+        match media_key {
+            Some(key) => {
+                // Decrypt in a blocking thread since it's CPU-intensive
+                tokio::task::spawn_blocking(move || {
+                    DownloadUtils::decrypt_stream(&response.body[..], &key, app_info)
+                })
+                .await?
+            }
+            None => {
+                // Unencrypted media (e.g. newsletter) - return raw bytes
+                Ok(response.body)
+            }
+        }
     }
 
     pub async fn download_to_file<W: Write + Seek + Send + Unpin>(
@@ -110,7 +118,12 @@ impl Client {
         let mut last_err: Option<anyhow::Error> = None;
         for req in requests {
             match self
-                .download_and_write(&req.url, &req.media_key, req.app_info, &mut writer)
+                .download_and_write(
+                    &req.url,
+                    req.media_key.as_deref(),
+                    req.app_info,
+                    &mut writer,
+                )
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -138,7 +151,7 @@ impl Client {
     ) -> Result<Vec<u8>> {
         let params = DownloadParams {
             direct_path: direct_path.to_string(),
-            media_key: media_key.to_vec(),
+            media_key: Some(media_key.to_vec()),
             file_sha256: file_sha256.to_vec(),
             file_enc_sha256: file_enc_sha256.to_vec(),
             file_length,
@@ -150,7 +163,7 @@ impl Client {
     async fn download_and_write<W: Write + Seek + Send + Unpin>(
         &self,
         url: &str,
-        media_key: &[u8],
+        media_key: Option<&[u8]>,
         media_type: MediaType,
         writer: &mut W,
     ) -> Result<()> {
@@ -164,14 +177,18 @@ impl Client {
             ));
         }
 
-        let media_key = media_key.to_vec();
-        let encrypted_bytes = response.body;
-
-        // Decrypt and verify in a blocking thread since it's CPU-intensive
-        let plaintext = tokio::task::spawn_blocking(move || {
-            DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
-        })
-        .await??;
+        let plaintext = match media_key {
+            Some(key) => {
+                let media_key = key.to_vec();
+                let encrypted_bytes = response.body;
+                // Decrypt and verify in a blocking thread since it's CPU-intensive
+                tokio::task::spawn_blocking(move || {
+                    DownloadUtils::verify_and_decrypt(&encrypted_bytes, &media_key, media_type)
+                })
+                .await??
+            }
+            None => response.body,
+        };
 
         writer.seek(SeekFrom::Start(0))?;
         writer.write_all(&plaintext)?;
@@ -235,7 +252,7 @@ impl Client {
     ) -> Result<W> {
         let params = DownloadParams {
             direct_path: direct_path.to_string(),
-            media_key: media_key.to_vec(),
+            media_key: Some(media_key.to_vec()),
             file_sha256: file_sha256.to_vec(),
             file_enc_sha256: file_enc_sha256.to_vec(),
             file_length,
@@ -272,12 +289,21 @@ impl Client {
                     return Err(anyhow!("Download failed with status: {}", resp.status_code));
                 }
 
-                DownloadUtils::decrypt_stream_to_writer(
-                    resp.body,
-                    &media_key,
-                    app_info,
-                    &mut writer,
-                )?;
+                match &media_key {
+                    Some(key) => {
+                        DownloadUtils::decrypt_stream_to_writer(
+                            resp.body,
+                            key,
+                            app_info,
+                            &mut writer,
+                        )?;
+                    }
+                    None => {
+                        // Unencrypted media - stream directly to writer
+                        let mut body = resp.body;
+                        std::io::copy(&mut body, &mut writer)?;
+                    }
+                }
                 writer.seek(SeekFrom::Start(0))?;
                 Ok(())
             })();

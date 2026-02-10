@@ -109,7 +109,8 @@ impl_downloadable!(HistorySyncNotification, MediaType::History, file_length);
 #[derive(Debug)]
 pub struct DownloadRequest {
     pub url: String,
-    pub media_key: Vec<u8>,
+    /// Media key for decryption. `None` for unencrypted media (e.g. newsletters).
+    pub media_key: Option<Vec<u8>>,
     pub app_info: MediaType,
 }
 
@@ -132,13 +133,22 @@ impl DownloadUtils {
         let direct_path = downloadable
             .direct_path()
             .ok_or_else(|| anyhow!("Missing direct_path"))?;
-        let media_key = downloadable
-            .media_key()
-            .ok_or_else(|| anyhow!("Missing media_key"))?;
-        let file_enc_sha256 = downloadable
-            .file_enc_sha256()
-            .ok_or_else(|| anyhow!("Missing file_enc_sha256"))?;
+        let media_key = downloadable.media_key();
         let app_info = downloadable.app_info();
+
+        // For encrypted media, we need file_enc_sha256 as the URL token.
+        // For unencrypted media (newsletters), use file_sha256 instead.
+        let token = if media_key.is_some() {
+            let file_enc_sha256 = downloadable
+                .file_enc_sha256()
+                .ok_or_else(|| anyhow!("Missing file_enc_sha256"))?;
+            BASE64_URL_SAFE_NO_PAD.encode(file_enc_sha256)
+        } else {
+            let file_sha256 = downloadable
+                .file_sha256()
+                .ok_or_else(|| anyhow!("Missing file_sha256 for unencrypted media"))?;
+            BASE64_URL_SAFE_NO_PAD.encode(file_sha256)
+        };
 
         let mut requests = Vec::new();
         for host in &media_conn.hosts {
@@ -147,12 +157,11 @@ impl DownloadUtils {
                 hostname = host.hostname,
                 direct_path = direct_path,
                 auth = media_conn.auth,
-                token = BASE64_URL_SAFE_NO_PAD.encode(file_enc_sha256)
             );
 
             requests.push(DownloadRequest {
                 url,
-                media_key: media_key.to_vec(),
+                media_key: media_key.map(|k| k.to_vec()),
                 app_info,
             });
         }
