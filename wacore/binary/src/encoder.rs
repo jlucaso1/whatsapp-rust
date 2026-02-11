@@ -4,10 +4,105 @@ use core::simd::Select;
 use core::simd::prelude::*;
 use core::simd::{Simd, u8x16};
 
-use crate::error::Result;
+use crate::error::{BinaryError, Result};
 use crate::jid::{self, Jid, JidRef};
 use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, NodeValue, ValueRef};
 use crate::token;
+
+pub(crate) trait ByteWriter {
+    fn write_u8(&mut self, value: u8) -> Result<()>;
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()>;
+}
+
+pub(crate) struct IoByteWriter<W: Write> {
+    writer: W,
+}
+
+impl<W: Write> IoByteWriter<W> {
+    fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<W: Write> ByteWriter for IoByteWriter<W> {
+    #[inline]
+    fn write_u8(&mut self, value: u8) -> Result<()> {
+        self.writer.write_all(&[value])?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes)?;
+        Ok(())
+    }
+}
+
+pub(crate) struct VecByteWriter<'a> {
+    buffer: &'a mut Vec<u8>,
+}
+
+impl<'a> VecByteWriter<'a> {
+    fn new(buffer: &'a mut Vec<u8>) -> Self {
+        Self { buffer }
+    }
+}
+
+impl ByteWriter for VecByteWriter<'_> {
+    #[inline]
+    fn write_u8(&mut self, value: u8) -> Result<()> {
+        self.buffer.push(value);
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+pub(crate) struct SliceByteWriter<'a> {
+    buffer: &'a mut [u8],
+    position: usize,
+}
+
+impl<'a> SliceByteWriter<'a> {
+    fn new(buffer: &'a mut [u8]) -> Self {
+        Self {
+            buffer,
+            position: 0,
+        }
+    }
+
+    #[inline]
+    fn bytes_written(&self) -> usize {
+        self.position
+    }
+}
+
+impl ByteWriter for SliceByteWriter<'_> {
+    #[inline]
+    fn write_u8(&mut self, value: u8) -> Result<()> {
+        if self.position >= self.buffer.len() {
+            return Err(BinaryError::UnexpectedEof);
+        }
+        self.buffer[self.position] = value;
+        self.position += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let end = self.position + bytes.len();
+        if end > self.buffer.len() {
+            return Err(BinaryError::UnexpectedEof);
+        }
+        self.buffer[self.position..end].copy_from_slice(bytes);
+        self.position = end;
+        Ok(())
+    }
+}
 
 /// Trait for encoding node structures (both owned Node and borrowed NodeRef).
 /// All encoding logic lives in the trait implementation, keeping
@@ -18,10 +113,10 @@ pub(crate) trait EncodeNode {
     fn has_content(&self) -> bool;
 
     /// Encode all attributes to the encoder
-    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()>;
+    fn encode_attrs<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()>;
 
     /// Encode content (string, bytes, or child nodes) to the encoder
-    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()>;
+    fn encode_content<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()>;
 }
 
 impl EncodeNode for Node {
@@ -37,7 +132,7 @@ impl EncodeNode for Node {
         self.content.is_some()
     }
 
-    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+    fn encode_attrs<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()> {
         for (k, v) in &self.attrs {
             encoder.write_string(k)?;
             match v {
@@ -48,7 +143,7 @@ impl EncodeNode for Node {
         Ok(())
     }
 
-    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+    fn encode_content<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()> {
         if let Some(content) = &self.content {
             match content {
                 NodeContent::String(s) => encoder.write_string(s)?,
@@ -78,7 +173,7 @@ impl EncodeNode for NodeRef<'_> {
         self.content.is_some()
     }
 
-    fn encode_attrs<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+    fn encode_attrs<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()> {
         for (k, v) in &self.attrs {
             encoder.write_string(k)?;
             match v {
@@ -89,7 +184,7 @@ impl EncodeNode for NodeRef<'_> {
         Ok(())
     }
 
-    fn encode_content<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<()> {
+    fn encode_content<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()> {
         if let Some(content) = self.content.as_deref() {
             match content {
                 NodeContentRef::String(s) => encoder.write_string(s)?,
@@ -106,36 +201,121 @@ impl EncodeNode for NodeRef<'_> {
     }
 }
 
-struct ParsedJid<'a> {
-    user: &'a str,
-    server: &'a str,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedJidMeta {
+    user_end: usize,
+    server_start: usize,
     domain_type: u8,
-    device: Option<u16>,
+    device: Option<u8>,
 }
 
-fn parse_jid(input: &str) -> Option<ParsedJid<'_>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct StrKey {
+    ptr: usize,
+    len: usize,
+}
+
+impl StrKey {
+    #[inline]
+    fn from_str(s: &str) -> Self {
+        Self {
+            ptr: s.as_ptr() as usize,
+            len: s.len(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringHint {
+    Empty,
+    SingleToken(u8),
+    DoubleToken { dict: u8, token: u8 },
+    PackedNibble,
+    PackedHex,
+    Jid(ParsedJidMeta),
+    RawBytes,
+}
+
+#[derive(Debug)]
+pub(crate) struct StringHintCache {
+    // Keys use (ptr, len) identity, so this cache is only valid while encoding
+    // the same immutable node/strings it was built from.
+    hints: Vec<(StrKey, StringHint)>,
+}
+
+impl Default for StringHintCache {
+    fn default() -> Self {
+        Self {
+            hints: Vec::with_capacity(32),
+        }
+    }
+}
+
+impl StringHintCache {
+    const MAX_HINT_ENTRIES: usize = 96;
+
+    #[inline]
+    fn hint_for(&self, s: &str) -> Option<StringHint> {
+        let key = StrKey::from_str(s);
+        self.hints
+            .iter()
+            .find_map(|(cached_key, hint)| (*cached_key == key).then_some(*hint))
+    }
+
+    #[inline]
+    fn hint_or_insert(&mut self, s: &str) -> StringHint {
+        let key = StrKey::from_str(s);
+        if let Some(existing) = self
+            .hints
+            .iter()
+            .find_map(|(cached_key, hint)| (*cached_key == key).then_some(*hint))
+        {
+            existing
+        } else {
+            let hint = classify_string_hint(s);
+            if self.hints.len() < Self::MAX_HINT_ENTRIES {
+                self.hints.push((key, hint));
+            }
+            hint
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct MarshaledSizePlan {
+    pub(crate) size: usize,
+    pub(crate) hints: StringHintCache,
+}
+
+fn parse_jid_meta(input: &str) -> Option<ParsedJidMeta> {
     let sep_idx = input.find('@')?;
-    let server = &input[sep_idx + 1..];
+    let server_start = sep_idx + 1;
+    let server = &input[server_start..];
     let user_combined = &input[..sep_idx];
 
-    let (user_agent, device) = match user_combined.split_once(':') {
-        Some((ua, device_part)) => {
-            let parsed_device = if device_part.is_empty() {
-                None
-            } else {
-                device_part.parse::<u16>().ok()
-            };
-            (ua, parsed_device)
+    let (user_agent, device) = if let Some(colon_idx) = user_combined.find(':') {
+        let device_part = &user_combined[colon_idx + 1..];
+        if let Ok(parsed_device) = device_part.parse::<u8>() {
+            (&user_combined[..colon_idx], Some(parsed_device))
+        } else {
+            (user_combined, None)
         }
-        None => (user_combined, None),
+    } else {
+        (user_combined, None)
     };
 
-    let (user, agent_override) = match user_agent.split_once('_') {
-        Some((u, agent_part)) => (u, agent_part.parse::<u16>().ok()),
-        None => (user_agent, None),
+    let (user_end, agent_override) = if let Some(underscore_idx) = user_agent.find('_') {
+        let agent_part = &user_agent[underscore_idx + 1..];
+        if let Ok(parsed_agent) = agent_part.parse::<u8>() {
+            (underscore_idx, Some(parsed_agent))
+        } else {
+            (user_agent.len(), None)
+        }
+    } else {
+        (user_agent.len(), None)
     };
 
-    let agent_byte = agent_override.unwrap_or(0) as u8;
+    let agent_byte = agent_override.unwrap_or(0);
     let domain_type = if server == jid::HIDDEN_USER_SERVER {
         1
     } else if server == jid::HOSTED_SERVER {
@@ -146,55 +326,325 @@ fn parse_jid(input: &str) -> Option<ParsedJid<'_>> {
         agent_byte
     };
 
-    Some(ParsedJid {
-        user,
-        server,
+    Some(ParsedJidMeta {
+        user_end,
+        server_start,
         domain_type,
         device,
     })
 }
 
-pub(crate) struct Encoder<W: Write> {
-    writer: W,
+#[inline]
+fn split_jid_from_meta(input: &str, meta: ParsedJidMeta) -> (&str, &str) {
+    (&input[..meta.user_end], &input[meta.server_start..])
 }
 
-impl<W: Write> Encoder<W> {
+#[inline]
+fn classify_string_hint(s: &str) -> StringHint {
+    if s.is_empty() {
+        return StringHint::Empty;
+    }
+
+    let is_likely_jid = s.len() <= 48;
+
+    if let Some(token) = token::index_of_single_token(s) {
+        StringHint::SingleToken(token)
+    } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
+        StringHint::DoubleToken { dict, token }
+    } else if validate_nibble(s) {
+        StringHint::PackedNibble
+    } else if validate_hex(s) {
+        StringHint::PackedHex
+    } else if is_likely_jid {
+        parse_jid_meta(s).map_or(StringHint::RawBytes, StringHint::Jid)
+    } else {
+        StringHint::RawBytes
+    }
+}
+
+pub(crate) fn build_marshaled_node_plan(node: &Node) -> MarshaledSizePlan {
+    let mut hints = StringHintCache::default();
+    let size = 1 + node_encoded_size_with_cache(node, &mut hints);
+    MarshaledSizePlan { size, hints }
+}
+
+pub(crate) fn build_marshaled_node_ref_plan(node: &NodeRef<'_>) -> MarshaledSizePlan {
+    let mut hints = StringHintCache::default();
+    let size = 1 + node_ref_encoded_size_with_cache(node, &mut hints);
+    MarshaledSizePlan { size, hints }
+}
+
+#[inline]
+fn list_start_encoded_size(len: usize) -> usize {
+    if len == 0 {
+        1
+    } else if len < 256 {
+        2
+    } else {
+        3
+    }
+}
+
+#[inline]
+fn binary_len_prefix_size(len: usize) -> usize {
+    if len < 256 {
+        2
+    } else if len < (1 << 20) {
+        4
+    } else {
+        5
+    }
+}
+
+#[inline]
+fn bytes_with_len_encoded_size(len: usize) -> usize {
+    binary_len_prefix_size(len) + len
+}
+
+#[inline]
+fn packed_encoded_size(value_len: usize) -> usize {
+    2 + value_len.div_ceil(2)
+}
+
+fn node_encoded_size_with_cache(node: &Node, hints: &mut StringHintCache) -> usize {
+    let content_len = usize::from(node.content.is_some());
+    let list_len = 1 + (node.attrs.len() * 2) + content_len;
+
+    let attrs_size: usize = node
+        .attrs
+        .iter()
+        .map(|(k, v)| {
+            let value_size = match v {
+                NodeValue::String(s) => string_encoded_size_with_cache(s, hints),
+                NodeValue::Jid(jid) => owned_jid_encoded_size_with_cache(jid, hints),
+            };
+            string_encoded_size_with_cache(k, hints) + value_size
+        })
+        .sum();
+
+    let content_size = match &node.content {
+        Some(NodeContent::String(s)) => string_encoded_size_with_cache(s, hints),
+        Some(NodeContent::Bytes(b)) => bytes_with_len_encoded_size(b.len()),
+        Some(NodeContent::Nodes(nodes)) => {
+            list_start_encoded_size(nodes.len())
+                + nodes
+                    .iter()
+                    .map(|child| node_encoded_size_with_cache(child, hints))
+                    .sum::<usize>()
+        }
+        None => 0,
+    };
+
+    list_start_encoded_size(list_len)
+        + string_encoded_size_with_cache(node.tag.as_str(), hints)
+        + attrs_size
+        + content_size
+}
+
+fn node_ref_encoded_size_with_cache(node: &NodeRef<'_>, hints: &mut StringHintCache) -> usize {
+    let content_len = usize::from(node.content.is_some());
+    let list_len = 1 + (node.attrs.len() * 2) + content_len;
+
+    let attrs_size: usize = node
+        .attrs
+        .iter()
+        .map(|(k, v)| {
+            let value_size = match v {
+                ValueRef::String(s) => string_encoded_size_with_cache(s, hints),
+                ValueRef::Jid(jid) => jid_ref_encoded_size_with_cache(jid, hints),
+            };
+            string_encoded_size_with_cache(k, hints) + value_size
+        })
+        .sum();
+
+    let content_size = match node.content.as_deref() {
+        Some(NodeContentRef::String(s)) => string_encoded_size_with_cache(s, hints),
+        Some(NodeContentRef::Bytes(b)) => bytes_with_len_encoded_size(b.len()),
+        Some(NodeContentRef::Nodes(nodes)) => {
+            list_start_encoded_size(nodes.len())
+                + nodes
+                    .iter()
+                    .map(|child| node_ref_encoded_size_with_cache(child, hints))
+                    .sum::<usize>()
+        }
+        None => 0,
+    };
+
+    list_start_encoded_size(list_len)
+        + string_encoded_size_with_cache(node.tag.as_ref(), hints)
+        + attrs_size
+        + content_size
+}
+
+#[inline]
+fn string_encoded_size_with_cache(s: &str, hints: &mut StringHintCache) -> usize {
+    let hint = hints.hint_or_insert(s);
+    string_encoded_size_from_hint_with_cache(s, hint, hints)
+}
+
+#[inline]
+fn string_encoded_size_from_hint_with_cache(
+    s: &str,
+    hint: StringHint,
+    hints: &mut StringHintCache,
+) -> usize {
+    match hint {
+        StringHint::Empty => 2,
+        StringHint::SingleToken(_) => 1,
+        StringHint::DoubleToken { .. } => 2,
+        StringHint::PackedNibble | StringHint::PackedHex => packed_encoded_size(s.len()),
+        StringHint::RawBytes => bytes_with_len_encoded_size(s.len()),
+        StringHint::Jid(meta) => parsed_jid_encoded_size_with_cache(s, meta, hints),
+    }
+}
+
+#[inline]
+fn parsed_jid_encoded_size_with_cache(
+    jid: &str,
+    meta: ParsedJidMeta,
+    hints: &mut StringHintCache,
+) -> usize {
+    let (user, server) = split_jid_from_meta(jid, meta);
+    if meta.device.is_some() {
+        3 + string_encoded_size_with_cache(user, hints)
+    } else {
+        let user_size = if user.is_empty() {
+            1
+        } else {
+            string_encoded_size_with_cache(user, hints)
+        };
+        1 + user_size + string_encoded_size_with_cache(server, hints)
+    }
+}
+
+#[inline]
+fn owned_jid_encoded_size_with_cache(jid: &Jid, hints: &mut StringHintCache) -> usize {
+    if jid.device > 0 {
+        3 + string_encoded_size_with_cache(&jid.user, hints)
+    } else {
+        let user_size = if jid.user.is_empty() {
+            1
+        } else {
+            string_encoded_size_with_cache(&jid.user, hints)
+        };
+        1 + user_size + string_encoded_size_with_cache(&jid.server, hints)
+    }
+}
+
+#[inline]
+fn jid_ref_encoded_size_with_cache(jid: &JidRef<'_>, hints: &mut StringHintCache) -> usize {
+    if jid.device > 0 {
+        3 + string_encoded_size_with_cache(&jid.user, hints)
+    } else {
+        let user_size = if jid.user.is_empty() {
+            1
+        } else {
+            string_encoded_size_with_cache(&jid.user, hints)
+        };
+        1 + user_size + string_encoded_size_with_cache(&jid.server, hints)
+    }
+}
+
+#[inline]
+fn validate_nibble(value: &str) -> bool {
+    if value.len() > token::PACKED_MAX as usize {
+        return false;
+    }
+    value
+        .as_bytes()
+        .iter()
+        .all(|&b| b.is_ascii_digit() || b == b'-' || b == b'.')
+}
+
+#[inline]
+fn validate_hex(value: &str) -> bool {
+    if value.len() > token::PACKED_MAX as usize {
+        return false;
+    }
+    value
+        .as_bytes()
+        .iter()
+        .all(|&b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+}
+
+pub(crate) struct Encoder<'a, W: ByteWriter> {
+    writer: W,
+    string_hints: Option<&'a StringHintCache>,
+}
+
+impl<W: Write> Encoder<'static, IoByteWriter<W>> {
     pub(crate) fn new(writer: W) -> Result<Self> {
-        let mut enc = Self { writer };
+        let mut enc = Self {
+            writer: IoByteWriter::new(writer),
+            string_hints: None,
+        };
+        enc.write_u8(0)?;
+        Ok(enc)
+    }
+}
+
+impl<'v> Encoder<'static, VecByteWriter<'v>> {
+    pub(crate) fn new_vec(buffer: &'v mut Vec<u8>) -> Result<Self> {
+        let mut enc = Self {
+            writer: VecByteWriter::new(buffer),
+            string_hints: None,
+        };
+        enc.write_u8(0)?;
+        Ok(enc)
+    }
+}
+
+impl<'a> Encoder<'a, SliceByteWriter<'a>> {
+    pub(crate) fn new_slice(
+        buffer: &'a mut [u8],
+        string_hints: Option<&'a StringHintCache>,
+    ) -> Result<Self> {
+        let mut enc = Self {
+            writer: SliceByteWriter::new(buffer),
+            string_hints,
+        };
         enc.write_u8(0)?;
         Ok(enc)
     }
 
+    #[inline]
+    pub(crate) fn bytes_written(&self) -> usize {
+        self.writer.bytes_written()
+    }
+}
+
+impl<'a, W: ByteWriter> Encoder<'a, W> {
+    #[inline(always)]
     fn write_u8(&mut self, val: u8) -> Result<()> {
-        self.writer.write_all(&[val])?;
-        Ok(())
+        self.writer.write_u8(val)
     }
 
+    #[inline(always)]
     fn write_u16_be(&mut self, val: u16) -> Result<()> {
-        self.writer.write_all(&val.to_be_bytes())?;
-        Ok(())
+        self.writer.write_bytes(&val.to_be_bytes())
     }
 
+    #[inline(always)]
     fn write_u32_be(&mut self, val: u32) -> Result<()> {
-        self.writer.write_all(&val.to_be_bytes())?;
-        Ok(())
+        self.writer.write_bytes(&val.to_be_bytes())
     }
 
+    #[inline(always)]
     fn write_u20_be(&mut self, value: u32) -> Result<()> {
         let bytes = [
             ((value >> 16) & 0x0F) as u8,
             ((value >> 8) & 0xFF) as u8,
             (value & 0xFF) as u8,
         ];
-        self.writer.write_all(&bytes)?;
-        Ok(())
+        self.writer.write_bytes(&bytes)
     }
 
+    #[inline(always)]
     fn write_raw_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer.write_all(bytes)?;
-        Ok(())
+        self.writer.write_bytes(bytes)
     }
 
+    #[inline(always)]
     fn write_bytes_with_len(&mut self, bytes: &[u8]) -> Result<()> {
         let len = bytes.len();
         if len < 256 {
@@ -210,49 +660,57 @@ impl<W: Write> Encoder<W> {
         self.write_raw_bytes(bytes)
     }
 
+    #[inline(always)]
     fn write_string(&mut self, s: &str) -> Result<()> {
-        // Empty strings must be encoded as BINARY_8 + 0
-        if s.is_empty() {
-            self.write_u8(token::BINARY_8)?;
-            self.write_u8(0)?;
-            return Ok(());
+        if let Some(string_hints) = self.string_hints
+            && let Some(hint) = string_hints.hint_for(s)
+        {
+            return self.write_string_with_hint(s, hint);
         }
+        self.write_string_uncached(s)
+    }
 
-        // Optimization: JID formats are tightly bounded (max ~41 chars for user+agent+device
-        // with domain). Use a small headroom threshold to avoid scanning long text payloads.
-        let is_likely_jid = s.len() <= 48;
+    #[inline(always)]
+    fn write_string_uncached(&mut self, s: &str) -> Result<()> {
+        self.write_string_with_hint(s, classify_string_hint(s))
+    }
 
-        if let Some(token) = token::index_of_single_token(s) {
-            self.write_u8(token)?;
-        } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
-            self.write_u8(token::DICTIONARY_0 + dict)?;
-            self.write_u8(token)?;
-        } else if Self::validate_nibble(s) {
-            self.write_packed_bytes(s, token::NIBBLE_8)?;
-        } else if Self::validate_hex(s) {
-            self.write_packed_bytes(s, token::HEX_8)?;
-        } else if is_likely_jid && let Some(jid) = parse_jid(s) {
-            self.write_jid(&jid)?;
-        } else {
-            self.write_bytes_with_len(s.as_bytes())?;
+    #[inline(always)]
+    fn write_string_with_hint(&mut self, s: &str, hint: StringHint) -> Result<()> {
+        match hint {
+            StringHint::Empty => {
+                self.write_u8(token::BINARY_8)?;
+                self.write_u8(0)?;
+            }
+            StringHint::SingleToken(token) => self.write_u8(token)?,
+            StringHint::DoubleToken { dict, token } => {
+                self.write_u8(token::DICTIONARY_0 + dict)?;
+                self.write_u8(token)?;
+            }
+            StringHint::PackedNibble => self.write_packed_bytes(s, token::NIBBLE_8)?,
+            StringHint::PackedHex => self.write_packed_bytes(s, token::HEX_8)?,
+            StringHint::Jid(meta) => self.write_jid_from_meta(s, meta)?,
+            StringHint::RawBytes => self.write_bytes_with_len(s.as_bytes())?,
         }
         Ok(())
     }
 
-    fn write_jid(&mut self, jid: &ParsedJid<'_>) -> Result<()> {
-        if let Some(device) = jid.device {
+    #[inline(always)]
+    fn write_jid_from_meta(&mut self, jid: &str, meta: ParsedJidMeta) -> Result<()> {
+        let (user, server) = split_jid_from_meta(jid, meta);
+        if let Some(device) = meta.device {
             self.write_u8(token::AD_JID)?;
-            self.write_u8(jid.domain_type)?;
-            self.write_u8(device as u8)?;
-            self.write_string(jid.user)?;
+            self.write_u8(meta.domain_type)?;
+            self.write_u8(device)?;
+            self.write_string(user)?;
         } else {
             self.write_u8(token::JID_PAIR)?;
-            if jid.user.is_empty() {
+            if user.is_empty() {
                 self.write_u8(token::LIST_EMPTY)?;
             } else {
-                self.write_string(jid.user)?;
+                self.write_string(user)?;
             }
-            self.write_string(jid.server)?;
+            self.write_string(server)?;
         }
         Ok(())
     }
@@ -262,9 +720,12 @@ impl<W: Write> Encoder<W> {
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
+            let device = u8::try_from(jid.device).map_err(|_| {
+                BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
+            })?;
             self.write_u8(token::AD_JID)?;
             self.write_u8(jid.agent)?;
-            self.write_u8(jid.device as u8)?;
+            self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
             // JID_PAIR format: user, server
@@ -284,9 +745,12 @@ impl<W: Write> Encoder<W> {
     fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
+            let device = u8::try_from(jid.device).map_err(|_| {
+                BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
+            })?;
             self.write_u8(token::AD_JID)?;
             self.write_u8(jid.agent)?;
-            self.write_u8(jid.device as u8)?;
+            self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
             // JID_PAIR format: user, server
@@ -301,44 +765,29 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    fn validate_nibble(value: &str) -> bool {
-        if value.len() > token::PACKED_MAX as usize {
-            return false;
-        }
-        value
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
-    }
-
-    fn pack_nibble(value: char) -> u8 {
+    #[inline(always)]
+    fn pack_nibble(value: u8) -> u8 {
         match value {
-            '-' => 10,
-            '.' => 11,
-            '\x00' => 15,
-            c if c.is_ascii_digit() => c as u8 - b'0',
+            b'-' => 10,
+            b'.' => 11,
+            0 => 15,
+            c if c.is_ascii_digit() => c - b'0',
             _ => panic!("Invalid char for nibble packing: {value}"),
         }
     }
 
-    fn validate_hex(value: &str) -> bool {
-        if value.len() > token::PACKED_MAX as usize {
-            return false;
-        }
-        value
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && (c.is_ascii_uppercase() || c.is_ascii_digit()))
-    }
-
-    fn pack_hex(value: char) -> u8 {
+    #[inline(always)]
+    fn pack_hex(value: u8) -> u8 {
         match value {
-            c if c.is_ascii_digit() => c as u8 - b'0',
-            c if ('A'..='F').contains(&c) => 10 + (c as u8 - b'A'),
-            '\x00' => 15,
+            c if c.is_ascii_digit() => c - b'0',
+            c if (b'A'..=b'F').contains(&c) => 10 + (c - b'A'),
+            0 => 15,
             _ => panic!("Invalid char for hex packing: {value}"),
         }
     }
 
-    fn pack_byte_pair(&self, packer: fn(char) -> u8, part1: char, part2: char) -> u8 {
+    #[inline(always)]
+    fn pack_byte_pair(packer: fn(u8) -> u8, part1: u8, part2: u8) -> u8 {
         (packer(part1) << 4) | packer(part2)
     }
 
@@ -357,43 +806,58 @@ impl<W: Write> Encoder<W> {
 
         let mut input_bytes = value.as_bytes();
 
-        while input_bytes.len() >= 16 {
-            let (chunk, rest) = input_bytes.split_at(16);
-            let input = u8x16::from_slice(chunk);
+        if data_type == token::NIBBLE_8 {
+            const NIBBLE_LOOKUP: [u8; 16] =
+                [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
+            let lookup = Simd::from_array(NIBBLE_LOOKUP);
+            let nibble_base = Simd::splat(b'-');
 
-            let nibbles = if data_type == token::NIBBLE_8 {
-                let indices = input.saturating_sub(Simd::splat(b'-'));
-                const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
-                Simd::from_array(LOOKUP).swizzle_dyn(indices)
-            } else {
-                let ascii_0 = Simd::splat(b'0');
-                let ascii_a = Simd::splat(b'A');
-                let ten = Simd::splat(10);
+            while input_bytes.len() >= 16 {
+                let (chunk, rest) = input_bytes.split_at(16);
+                let input = u8x16::from_slice(chunk);
+                let indices = input.saturating_sub(nibble_base);
+                let nibbles = lookup.swizzle_dyn(indices);
+
+                let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+                let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
+                let packed_bytes = packed.to_array();
+                self.write_raw_bytes(&packed_bytes[..8])?;
+
+                input_bytes = rest;
+            }
+
+            let mut bytes_iter = input_bytes.iter().copied();
+            while let Some(part1) = bytes_iter.next() {
+                let part2 = bytes_iter.next().unwrap_or(0);
+                self.write_u8(Self::pack_byte_pair(Self::pack_nibble, part1, part2))?;
+            }
+        } else {
+            let ascii_0 = Simd::splat(b'0');
+            let ascii_a = Simd::splat(b'A');
+            let ten = Simd::splat(10);
+
+            while input_bytes.len() >= 16 {
+                let (chunk, rest) = input_bytes.split_at(16);
+                let input = u8x16::from_slice(chunk);
 
                 let digit_vals = input - ascii_0;
                 let letter_vals = input - ascii_a + ten;
                 let is_letter = input.simd_ge(ascii_a);
-                is_letter.select(letter_vals, digit_vals)
-            };
+                let nibbles = is_letter.select(letter_vals, digit_vals);
 
-            let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
-            let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
-            let packed_bytes = packed.to_array();
-            self.write_raw_bytes(&packed_bytes[..8])?;
+                let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+                let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
+                let packed_bytes = packed.to_array();
+                self.write_raw_bytes(&packed_bytes[..8])?;
 
-            input_bytes = rest;
-        }
+                input_bytes = rest;
+            }
 
-        let packer: fn(char) -> u8 = if data_type == token::NIBBLE_8 {
-            Self::pack_nibble
-        } else {
-            Self::pack_hex
-        };
-
-        let mut chars = core::str::from_utf8(input_bytes)?.chars();
-        while let Some(part1) = chars.next() {
-            let part2 = chars.next().unwrap_or('\x00');
-            self.write_u8(self.pack_byte_pair(packer, part1, part2))?;
+            let mut bytes_iter = input_bytes.iter().copied();
+            while let Some(part1) = bytes_iter.next() {
+                let part2 = bytes_iter.next().unwrap_or(0);
+                self.write_u8(Self::pack_byte_pair(Self::pack_hex, part1, part2))?;
+            }
         }
         Ok(())
     }
@@ -520,42 +984,42 @@ mod tests {
     #[test]
     fn test_hex_validation() {
         // Valid hex strings (uppercase A-F, digits 0-9)
-        assert!(Encoder::<Vec<u8>>::validate_hex("0123456789ABCDEF"));
-        assert!(Encoder::<Vec<u8>>::validate_hex("DEADBEEF"));
-        assert!(Encoder::<Vec<u8>>::validate_hex("1234"));
+        assert!(validate_hex("0123456789ABCDEF"));
+        assert!(validate_hex("DEADBEEF"));
+        assert!(validate_hex("1234"));
 
         // Invalid: lowercase letters
-        assert!(!Encoder::<Vec<u8>>::validate_hex("abcdef"));
-        assert!(!Encoder::<Vec<u8>>::validate_hex("DeadBeef"));
+        assert!(!validate_hex("abcdef"));
+        assert!(!validate_hex("DeadBeef"));
 
         // Invalid: special characters
-        assert!(!Encoder::<Vec<u8>>::validate_hex("-"));
-        assert!(!Encoder::<Vec<u8>>::validate_hex("."));
-        assert!(!Encoder::<Vec<u8>>::validate_hex(" "));
+        assert!(!validate_hex("-"));
+        assert!(!validate_hex("."));
+        assert!(!validate_hex(" "));
 
         // Empty string is valid (but will be encoded as regular string)
-        assert!(Encoder::<Vec<u8>>::validate_hex(""));
+        assert!(validate_hex(""));
     }
 
     /// Test nibble packing validation
     #[test]
     fn test_nibble_validation() {
         // Valid nibble strings: digits, dash, dot
-        assert!(Encoder::<Vec<u8>>::validate_nibble("0123456789"));
-        assert!(Encoder::<Vec<u8>>::validate_nibble("-"));
-        assert!(Encoder::<Vec<u8>>::validate_nibble("."));
-        assert!(Encoder::<Vec<u8>>::validate_nibble("123-456.789"));
+        assert!(validate_nibble("0123456789"));
+        assert!(validate_nibble("-"));
+        assert!(validate_nibble("."));
+        assert!(validate_nibble("123-456.789"));
 
         // Invalid: letters
-        assert!(!Encoder::<Vec<u8>>::validate_nibble("abc"));
-        assert!(!Encoder::<Vec<u8>>::validate_nibble("123abc"));
+        assert!(!validate_nibble("abc"));
+        assert!(!validate_nibble("123abc"));
 
         // Invalid: uppercase letters
-        assert!(!Encoder::<Vec<u8>>::validate_nibble("ABC"));
+        assert!(!validate_nibble("ABC"));
 
         // Invalid: special characters other than - and .
-        assert!(!Encoder::<Vec<u8>>::validate_nibble("123!456"));
-        assert!(!Encoder::<Vec<u8>>::validate_nibble("@"));
+        assert!(!validate_nibble("123!456"));
+        assert!(!validate_nibble("@"));
     }
 
     /// Test BINARY_8, BINARY_20, BINARY_32 boundary transitions
@@ -624,11 +1088,11 @@ mod tests {
     fn test_packed_max_boundary() {
         // Exactly PACKED_MAX characters should be valid for packing
         let max_nibble = "0".repeat(token::PACKED_MAX as usize);
-        assert!(Encoder::<Vec<u8>>::validate_nibble(&max_nibble));
+        assert!(validate_nibble(&max_nibble));
 
         // One more than PACKED_MAX should NOT be packed
         let over_max = "0".repeat(token::PACKED_MAX as usize + 1);
-        assert!(!Encoder::<Vec<u8>>::validate_nibble(&over_max));
+        assert!(!validate_nibble(&over_max));
     }
 
     /// Test empty string encoding - should be BINARY_8 + 0, not just 0
@@ -699,7 +1163,7 @@ mod tests {
         use crate::decoder::Decoder;
         use crate::token;
 
-        // Short JID: should be encoded as JID token (256 bytes or less)
+        // Short JID: should be encoded as a JID token (48 bytes or less)
         let short_jid = "user@s.whatsapp.net";
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -712,7 +1176,7 @@ mod tests {
             "Short JID should be encoded as JID_PAIR token"
         );
 
-        // Long string (> 256 chars): should be encoded as raw bytes, not as JID
+        // Long string (> 48 chars): should be encoded as raw bytes, not as JID
         let long_text = "x".repeat(300) + "@s.whatsapp.net";
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -748,6 +1212,54 @@ mod tests {
             other => panic!("Expected bytes content, got {:?}", other),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_jid_parser_preserves_non_numeric_device_suffix() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let value = "foo:bar@s.whatsapp.net";
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(value.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match decoded.content {
+            Some(NodeContent::String(s)) => assert_eq!(s, value),
+            other => panic!("Expected string content, got {:?}", other),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_jid_parser_preserves_non_numeric_agent_suffix() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let value = "hello_world@s.whatsapp.net";
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(value.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match decoded.content {
+            Some(NodeContent::String(s)) => assert_eq!(s, value),
+            other => panic!("Expected string content, got {:?}", other),
+        }
         Ok(())
     }
 }

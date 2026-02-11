@@ -7,7 +7,10 @@ use iai_callgrind::{
 use std::hint::black_box;
 use std::io::Write;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::marshal::{marshal, marshal_ref, marshal_to, unmarshal_ref};
+use wacore_binary::marshal::{
+    marshal, marshal_auto, marshal_exact, marshal_ref, marshal_ref_auto, marshal_ref_exact,
+    marshal_to, marshal_to_vec, unmarshal_ref,
+};
 use wacore_binary::node::Node;
 use wacore_binary::util::unpack;
 
@@ -60,7 +63,7 @@ fn create_attr_node() -> Node {
 }
 
 // Creates a node with long string content to test the JID parsing optimization.
-// Long strings (> 256 chars) should skip JID parsing for better performance.
+// Long strings (> 48 chars) should skip JID parsing for better performance.
 fn create_long_string_node() -> Node {
     // Generate a 500+ character string that contains '@' but is NOT a valid JID.
     // Without the optimization, parse_jid would scan the entire string.
@@ -124,11 +127,45 @@ fn create_jid_heavy_node() -> Node {
         .build()
 }
 
+fn create_huge_bytes_node() -> Node {
+    NodeBuilder::new("message")
+        .attr("to", "server@s.whatsapp.net")
+        .attr("id", "huge-binary")
+        .bytes(vec![0x5A; 256 * 1024])
+        .build()
+}
+
+fn create_many_children_node() -> Node {
+    NodeBuilder::new("iq")
+        .attr("to", "server@s.whatsapp.net")
+        .attr("id", "many-children")
+        .children((0..2048).map(|i| {
+            NodeBuilder::new("item")
+                .attr("index", i.to_string())
+                .attr("type", "entry")
+                .string_content("ok")
+                .build()
+        }))
+        .build()
+}
+
 // Marshal benchmarks - self-contained, no setup needed
 #[library_benchmark]
 fn bench_marshal_allocating() -> Vec<u8> {
     let node = create_large_node();
     black_box(marshal(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_auto_allocating() -> Vec<u8> {
+    let node = create_large_node();
+    black_box(marshal_auto(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_exact_allocating() -> Vec<u8> {
+    let node = create_large_node();
+    black_box(marshal_exact(black_box(&node)).unwrap())
 }
 
 #[library_benchmark]
@@ -139,12 +176,68 @@ fn bench_marshal_reusing_buffer() -> Vec<u8> {
     black_box(buffer)
 }
 
+#[library_benchmark]
+fn bench_marshal_reusing_buffer_vec_writer() -> Vec<u8> {
+    let node = create_large_node();
+    let mut buffer = Vec::with_capacity(4096);
+    marshal_to_vec(black_box(&node), &mut buffer).unwrap();
+    black_box(buffer)
+}
+
 // Benchmark for marshaling nodes with long string content.
 // This demonstrates the JID parsing optimization: long strings skip parse_jid.
 #[library_benchmark]
 fn bench_marshal_long_string() -> Vec<u8> {
     let node = create_long_string_node();
     black_box(marshal(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_auto_long_string() -> Vec<u8> {
+    let node = create_long_string_node();
+    black_box(marshal_auto(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_exact_long_string() -> Vec<u8> {
+    let node = create_long_string_node();
+    black_box(marshal_exact(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_huge_bytes_allocating() -> Vec<u8> {
+    let node = create_huge_bytes_node();
+    black_box(marshal(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_auto_huge_bytes_allocating() -> Vec<u8> {
+    let node = create_huge_bytes_node();
+    black_box(marshal_auto(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_exact_huge_bytes_allocating() -> Vec<u8> {
+    let node = create_huge_bytes_node();
+    black_box(marshal_exact(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_many_children_allocating() -> Vec<u8> {
+    let node = create_many_children_node();
+    black_box(marshal(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_auto_many_children_allocating() -> Vec<u8> {
+    let node = create_many_children_node();
+    black_box(marshal_auto(black_box(&node)).unwrap())
+}
+
+#[library_benchmark]
+fn bench_marshal_exact_many_children_allocating() -> Vec<u8> {
+    let node = create_many_children_node();
+    black_box(marshal_exact(black_box(&node)).unwrap())
 }
 
 // Setup functions for unmarshal benchmarks - pre-compute marshaled data
@@ -215,6 +308,24 @@ fn bench_roundtrip(marshaled: Vec<u8>) -> Vec<u8> {
     black_box(marshal_ref(&node_ref).unwrap())
 }
 
+#[library_benchmark]
+#[bench::small(setup = setup_small_marshaled)]
+#[bench::large(setup = setup_large_marshaled)]
+fn bench_roundtrip_auto(marshaled: Vec<u8>) -> Vec<u8> {
+    // Skip the flag byte at position 0
+    let node_ref = unmarshal_ref(black_box(&marshaled[1..])).unwrap();
+    black_box(marshal_ref_auto(&node_ref).unwrap())
+}
+
+#[library_benchmark]
+#[bench::small(setup = setup_small_marshaled)]
+#[bench::large(setup = setup_large_marshaled)]
+fn bench_roundtrip_exact(marshaled: Vec<u8>) -> Vec<u8> {
+    // Skip the flag byte at position 0
+    let node_ref = unmarshal_ref(black_box(&marshaled[1..])).unwrap();
+    black_box(marshal_ref_exact(&node_ref).unwrap())
+}
+
 // Child iteration benchmark: tests get_children_by_tag performance
 // Simulates the recursive traversal pattern used in usync parsing
 #[library_benchmark]
@@ -242,7 +353,21 @@ fn bench_get_children_by_tag() {
 
 library_benchmark_group!(
     name = marshal_group;
-    benchmarks = bench_marshal_allocating, bench_marshal_reusing_buffer, bench_marshal_long_string
+    benchmarks =
+        bench_marshal_allocating,
+        bench_marshal_auto_allocating,
+        bench_marshal_exact_allocating,
+        bench_marshal_reusing_buffer,
+        bench_marshal_reusing_buffer_vec_writer,
+        bench_marshal_long_string,
+        bench_marshal_auto_long_string,
+        bench_marshal_exact_long_string,
+        bench_marshal_huge_bytes_allocating,
+        bench_marshal_auto_huge_bytes_allocating,
+        bench_marshal_exact_huge_bytes_allocating,
+        bench_marshal_many_children_allocating,
+        bench_marshal_auto_many_children_allocating,
+        bench_marshal_exact_many_children_allocating
 );
 
 library_benchmark_group!(
@@ -262,7 +387,7 @@ library_benchmark_group!(
 
 library_benchmark_group!(
     name = roundtrip_group;
-    benchmarks = bench_roundtrip
+    benchmarks = bench_roundtrip, bench_roundtrip_auto, bench_roundtrip_exact
 );
 
 library_benchmark_group!(
