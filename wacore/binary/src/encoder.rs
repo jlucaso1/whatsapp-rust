@@ -38,6 +38,30 @@ impl<W: Write> ByteWriter for IoByteWriter<W> {
     }
 }
 
+pub(crate) struct VecByteWriter<'a> {
+    buffer: &'a mut Vec<u8>,
+}
+
+impl<'a> VecByteWriter<'a> {
+    fn new(buffer: &'a mut Vec<u8>) -> Self {
+        Self { buffer }
+    }
+}
+
+impl ByteWriter for VecByteWriter<'_> {
+    #[inline]
+    fn write_u8(&mut self, value: u8) -> Result<()> {
+        self.buffer.push(value);
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
 pub(crate) struct SliceByteWriter<'a> {
     buffer: &'a mut [u8],
     position: usize,
@@ -530,8 +554,9 @@ fn validate_nibble(value: &str) -> bool {
         return false;
     }
     value
-        .chars()
-        .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
+        .as_bytes()
+        .iter()
+        .all(|&b| b.is_ascii_digit() || b == b'-' || b == b'.')
 }
 
 #[inline]
@@ -540,8 +565,9 @@ fn validate_hex(value: &str) -> bool {
         return false;
     }
     value
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() && (c.is_ascii_uppercase() || c.is_ascii_digit()))
+        .as_bytes()
+        .iter()
+        .all(|&b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
 }
 
 pub(crate) struct Encoder<'a, W: ByteWriter> {
@@ -553,6 +579,17 @@ impl<W: Write> Encoder<'static, IoByteWriter<W>> {
     pub(crate) fn new(writer: W) -> Result<Self> {
         let mut enc = Self {
             writer: IoByteWriter::new(writer),
+            string_hints: None,
+        };
+        enc.write_u8(0)?;
+        Ok(enc)
+    }
+}
+
+impl<'v> Encoder<'static, VecByteWriter<'v>> {
+    pub(crate) fn new_vec(buffer: &'v mut Vec<u8>) -> Result<Self> {
+        let mut enc = Self {
+            writer: VecByteWriter::new(buffer),
             string_hints: None,
         };
         enc.write_u8(0)?;
@@ -580,18 +617,22 @@ impl<'a> Encoder<'a, SliceByteWriter<'a>> {
 }
 
 impl<'a, W: ByteWriter> Encoder<'a, W> {
+    #[inline(always)]
     fn write_u8(&mut self, val: u8) -> Result<()> {
         self.writer.write_u8(val)
     }
 
+    #[inline(always)]
     fn write_u16_be(&mut self, val: u16) -> Result<()> {
         self.writer.write_bytes(&val.to_be_bytes())
     }
 
+    #[inline(always)]
     fn write_u32_be(&mut self, val: u32) -> Result<()> {
         self.writer.write_bytes(&val.to_be_bytes())
     }
 
+    #[inline(always)]
     fn write_u20_be(&mut self, value: u32) -> Result<()> {
         let bytes = [
             ((value >> 16) & 0x0F) as u8,
@@ -601,10 +642,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         self.writer.write_bytes(&bytes)
     }
 
+    #[inline(always)]
     fn write_raw_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_bytes(bytes)
     }
 
+    #[inline(always)]
     fn write_bytes_with_len(&mut self, bytes: &[u8]) -> Result<()> {
         let len = bytes.len();
         if len < 256 {
@@ -620,16 +663,17 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         self.write_raw_bytes(bytes)
     }
 
+    #[inline(always)]
     fn write_string(&mut self, s: &str) -> Result<()> {
         if let Some(string_hints) = self.string_hints
             && let Some(hint) = string_hints.hint_for(s)
         {
             return self.write_string_with_hint(s, hint);
         }
-        self.write_string_uncached(s)?;
-        Ok(())
+        self.write_string_uncached(s)
     }
 
+    #[inline(always)]
     fn write_string_uncached(&mut self, s: &str) -> Result<()> {
         match classify_string_hint(s) {
             StringHint::Empty => {
@@ -649,6 +693,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         Ok(())
     }
 
+    #[inline(always)]
     fn write_string_with_hint(&mut self, s: &str, hint: StringHint) -> Result<()> {
         match hint {
             StringHint::Empty => {
@@ -668,6 +713,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         Ok(())
     }
 
+    #[inline(always)]
     fn write_jid_from_meta(&mut self, jid: &str, meta: ParsedJidMeta) -> Result<()> {
         let (user, server) = split_jid_from_meta(jid, meta);
         if let Some(device) = meta.device {
@@ -731,26 +777,29 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         Ok(())
     }
 
-    fn pack_nibble(value: char) -> u8 {
+    #[inline(always)]
+    fn pack_nibble(value: u8) -> u8 {
         match value {
-            '-' => 10,
-            '.' => 11,
-            '\x00' => 15,
-            c if c.is_ascii_digit() => c as u8 - b'0',
+            b'-' => 10,
+            b'.' => 11,
+            0 => 15,
+            c if c.is_ascii_digit() => c - b'0',
             _ => panic!("Invalid char for nibble packing: {value}"),
         }
     }
 
-    fn pack_hex(value: char) -> u8 {
+    #[inline(always)]
+    fn pack_hex(value: u8) -> u8 {
         match value {
-            c if c.is_ascii_digit() => c as u8 - b'0',
-            c if ('A'..='F').contains(&c) => 10 + (c as u8 - b'A'),
-            '\x00' => 15,
+            c if c.is_ascii_digit() => c - b'0',
+            c if (b'A'..=b'F').contains(&c) => 10 + (c - b'A'),
+            0 => 15,
             _ => panic!("Invalid char for hex packing: {value}"),
         }
     }
 
-    fn pack_byte_pair(&self, packer: fn(char) -> u8, part1: char, part2: char) -> u8 {
+    #[inline(always)]
+    fn pack_byte_pair(packer: fn(u8) -> u8, part1: u8, part2: u8) -> u8 {
         (packer(part1) << 4) | packer(part2)
     }
 
@@ -769,43 +818,58 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
         let mut input_bytes = value.as_bytes();
 
-        while input_bytes.len() >= 16 {
-            let (chunk, rest) = input_bytes.split_at(16);
-            let input = u8x16::from_slice(chunk);
+        if data_type == token::NIBBLE_8 {
+            const NIBBLE_LOOKUP: [u8; 16] =
+                [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
+            let lookup = Simd::from_array(NIBBLE_LOOKUP);
+            let nibble_base = Simd::splat(b'-');
 
-            let nibbles = if data_type == token::NIBBLE_8 {
-                let indices = input.saturating_sub(Simd::splat(b'-'));
-                const LOOKUP: [u8; 16] = [10, 11, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255, 255, 255];
-                Simd::from_array(LOOKUP).swizzle_dyn(indices)
-            } else {
-                let ascii_0 = Simd::splat(b'0');
-                let ascii_a = Simd::splat(b'A');
-                let ten = Simd::splat(10);
+            while input_bytes.len() >= 16 {
+                let (chunk, rest) = input_bytes.split_at(16);
+                let input = u8x16::from_slice(chunk);
+                let indices = input.saturating_sub(nibble_base);
+                let nibbles = lookup.swizzle_dyn(indices);
+
+                let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+                let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
+                let packed_bytes = packed.to_array();
+                self.write_raw_bytes(&packed_bytes[..8])?;
+
+                input_bytes = rest;
+            }
+
+            let mut bytes_iter = input_bytes.iter().copied();
+            while let Some(part1) = bytes_iter.next() {
+                let part2 = bytes_iter.next().unwrap_or(0);
+                self.write_u8(Self::pack_byte_pair(Self::pack_nibble, part1, part2))?;
+            }
+        } else {
+            let ascii_0 = Simd::splat(b'0');
+            let ascii_a = Simd::splat(b'A');
+            let ten = Simd::splat(10);
+
+            while input_bytes.len() >= 16 {
+                let (chunk, rest) = input_bytes.split_at(16);
+                let input = u8x16::from_slice(chunk);
 
                 let digit_vals = input - ascii_0;
                 let letter_vals = input - ascii_a + ten;
                 let is_letter = input.simd_ge(ascii_a);
-                is_letter.select(letter_vals, digit_vals)
-            };
+                let nibbles = is_letter.select(letter_vals, digit_vals);
 
-            let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
-            let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
-            let packed_bytes = packed.to_array();
-            self.write_raw_bytes(&packed_bytes[..8])?;
+                let (evens, odds) = nibbles.deinterleave(nibbles.rotate_elements_left::<1>());
+                let packed: Simd<u8, 16> = (evens << Simd::splat(4)) | odds;
+                let packed_bytes = packed.to_array();
+                self.write_raw_bytes(&packed_bytes[..8])?;
 
-            input_bytes = rest;
-        }
+                input_bytes = rest;
+            }
 
-        let packer: fn(char) -> u8 = if data_type == token::NIBBLE_8 {
-            Self::pack_nibble
-        } else {
-            Self::pack_hex
-        };
-
-        let mut chars = core::str::from_utf8(input_bytes)?.chars();
-        while let Some(part1) = chars.next() {
-            let part2 = chars.next().unwrap_or('\x00');
-            self.write_u8(self.pack_byte_pair(packer, part1, part2))?;
+            let mut bytes_iter = input_bytes.iter().copied();
+            while let Some(part1) = bytes_iter.next() {
+                let part2 = bytes_iter.next().unwrap_or(0);
+                self.write_u8(Self::pack_byte_pair(Self::pack_hex, part1, part2))?;
+            }
         }
         Ok(())
     }

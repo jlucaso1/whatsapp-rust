@@ -9,7 +9,7 @@ use std::io::Write;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::marshal::{
     marshal, marshal_auto, marshal_exact, marshal_ref, marshal_ref_auto, marshal_ref_exact,
-    marshal_to, unmarshal_ref,
+    marshal_to, marshal_to_vec, unmarshal_ref,
 };
 use wacore_binary::node::Node;
 use wacore_binary::util::unpack;
@@ -173,6 +173,14 @@ fn bench_marshal_reusing_buffer() -> Vec<u8> {
     let node = create_large_node();
     let mut buffer = Vec::with_capacity(4096);
     marshal_to(black_box(&node), &mut buffer).unwrap();
+    black_box(buffer)
+}
+
+#[library_benchmark]
+fn bench_marshal_reusing_buffer_vec_writer() -> Vec<u8> {
+    let node = create_large_node();
+    let mut buffer = Vec::with_capacity(4096);
+    marshal_to_vec(black_box(&node), &mut buffer).unwrap();
     black_box(buffer)
 }
 
@@ -350,6 +358,7 @@ library_benchmark_group!(
         bench_marshal_auto_allocating,
         bench_marshal_exact_allocating,
         bench_marshal_reusing_buffer,
+        bench_marshal_reusing_buffer_vec_writer,
         bench_marshal_long_string,
         bench_marshal_auto_long_string,
         bench_marshal_exact_long_string,

@@ -34,9 +34,16 @@ pub fn marshal_to(node: &Node, writer: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+/// Serialize an owned node directly into a `Vec<u8>` using the fast vec writer path.
+pub fn marshal_to_vec(node: &Node, output: &mut Vec<u8>) -> Result<()> {
+    let mut encoder = Encoder::new_vec(output)?;
+    encoder.write_node(node)?;
+    Ok(())
+}
+
 pub fn marshal(node: &Node) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(DEFAULT_MARSHAL_CAPACITY);
-    marshal_to(node, &mut payload)?;
+    marshal_to_vec(node, &mut payload)?;
     Ok(payload)
 }
 
@@ -74,11 +81,18 @@ pub fn marshal_ref_to(node: &NodeRef<'_>, writer: &mut impl Write) -> Result<()>
     Ok(())
 }
 
+/// Serialize a borrowed node directly into a `Vec<u8>` using the fast vec writer path.
+pub fn marshal_ref_to_vec(node: &NodeRef<'_>, output: &mut Vec<u8>) -> Result<()> {
+    let mut encoder = Encoder::new_vec(output)?;
+    encoder.write_node(node)?;
+    Ok(())
+}
+
 /// Zero-copy serialization of a `NodeRef` to a new `Vec<u8>`.
 /// Prefer `marshal_ref_to` with a reusable buffer for best performance.
 pub fn marshal_ref(node: &NodeRef<'_>) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(DEFAULT_MARSHAL_CAPACITY);
-    marshal_ref_to(node, &mut payload)?;
+    marshal_ref_to_vec(node, &mut payload)?;
     Ok(payload)
 }
 
@@ -106,14 +120,14 @@ pub fn marshal_ref_exact(node: &NodeRef<'_>) -> Result<Vec<u8>> {
 #[inline]
 fn marshal_with_capacity(node: &Node, capacity: usize) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(capacity);
-    marshal_to(node, &mut payload)?;
+    marshal_to_vec(node, &mut payload)?;
     Ok(payload)
 }
 
 #[inline]
 fn marshal_ref_with_capacity(node: &NodeRef<'_>, capacity: usize) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(capacity);
-    marshal_ref_to(node, &mut payload)?;
+    marshal_ref_to_vec(node, &mut payload)?;
     Ok(payload)
 }
 
@@ -309,6 +323,35 @@ mod tests {
         marshal_ref_to(&node_ref, &mut payload_writer)?;
 
         assert_eq!(payload_alloc, payload_writer);
+        Ok(())
+    }
+
+    #[test]
+    fn test_marshal_to_vec_matches_marshal_to() -> TestResult {
+        let node = fixture_node();
+
+        let mut payload_vec_writer = Vec::new();
+        marshal_to_vec(&node, &mut payload_vec_writer)?;
+
+        let mut payload_writer = Vec::new();
+        marshal_to(&node, &mut payload_writer)?;
+
+        assert_eq!(payload_vec_writer, payload_writer);
+        Ok(())
+    }
+
+    #[test]
+    fn test_marshal_ref_to_vec_matches_marshal_ref_to() -> TestResult {
+        let node = fixture_node();
+        let node_ref = node.as_node_ref();
+
+        let mut payload_vec_writer = Vec::new();
+        marshal_ref_to_vec(&node_ref, &mut payload_vec_writer)?;
+
+        let mut payload_writer = Vec::new();
+        marshal_ref_to(&node_ref, &mut payload_writer)?;
+
+        assert_eq!(payload_vec_writer, payload_writer);
         Ok(())
     }
 

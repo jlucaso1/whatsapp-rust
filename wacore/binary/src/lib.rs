@@ -16,6 +16,6 @@ pub use attrs::{AttrParser, AttrParserRef};
 pub use error::{BinaryError, Result};
 pub use marshal::{
     marshal, marshal_auto, marshal_exact, marshal_ref, marshal_ref_auto, marshal_ref_exact,
-    marshal_ref_to, marshal_to,
+    marshal_ref_to, marshal_ref_to_vec, marshal_to, marshal_to_vec,
 };
 pub use node::{Node, NodeRef, NodeValue};
