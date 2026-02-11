@@ -63,7 +63,7 @@ fn create_attr_node() -> Node {
 }
 
 // Creates a node with long string content to test the JID parsing optimization.
-// Long strings (> 256 chars) should skip JID parsing for better performance.
+// Long strings (> 48 chars) should skip JID parsing for better performance.
 fn create_long_string_node() -> Node {
     // Generate a 500+ character string that contains '@' but is NOT a valid JID.
     // Without the optimization, parse_jid would scan the entire string.

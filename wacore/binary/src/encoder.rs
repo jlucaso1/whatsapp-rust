@@ -206,7 +206,7 @@ struct ParsedJidMeta {
     user_end: usize,
     server_start: usize,
     domain_type: u8,
-    device: Option<u16>,
+    device: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -238,6 +238,8 @@ enum StringHint {
 
 #[derive(Debug)]
 pub(crate) struct StringHintCache {
+    // Keys use (ptr, len) identity, so this cache is only valid while encoding
+    // the same immutable node/strings it was built from.
     hints: Vec<(StrKey, StringHint)>,
 }
 
@@ -292,33 +294,28 @@ fn parse_jid_meta(input: &str) -> Option<ParsedJidMeta> {
     let user_combined = &input[..sep_idx];
 
     let (user_agent, device) = if let Some(colon_idx) = user_combined.find(':') {
-        let ua = &user_combined[..colon_idx];
         let device_part = &user_combined[colon_idx + 1..];
-        let parsed_device = if device_part.is_empty() {
-            None
+        if let Ok(parsed_device) = device_part.parse::<u8>() {
+            (&user_combined[..colon_idx], Some(parsed_device))
         } else {
-            device_part.parse::<u16>().ok()
-        };
-        (ua, parsed_device)
+            (user_combined, None)
+        }
     } else {
         (user_combined, None)
     };
 
     let (user_end, agent_override) = if let Some(underscore_idx) = user_agent.find('_') {
         let agent_part = &user_agent[underscore_idx + 1..];
-        (
-            underscore_idx,
-            if agent_part.is_empty() {
-                None
-            } else {
-                agent_part.parse::<u16>().ok()
-            },
-        )
+        if let Ok(parsed_agent) = agent_part.parse::<u8>() {
+            (underscore_idx, Some(parsed_agent))
+        } else {
+            (user_agent.len(), None)
+        }
     } else {
         (user_agent.len(), None)
     };
 
-    let agent_byte = agent_override.unwrap_or(0) as u8;
+    let agent_byte = agent_override.unwrap_or(0);
     let domain_type = if server == jid::HIDDEN_USER_SERVER {
         1
     } else if server == jid::HOSTED_SERVER {
@@ -675,22 +672,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
     #[inline(always)]
     fn write_string_uncached(&mut self, s: &str) -> Result<()> {
-        match classify_string_hint(s) {
-            StringHint::Empty => {
-                self.write_u8(token::BINARY_8)?;
-                self.write_u8(0)?;
-            }
-            StringHint::SingleToken(token) => self.write_u8(token)?,
-            StringHint::DoubleToken { dict, token } => {
-                self.write_u8(token::DICTIONARY_0 + dict)?;
-                self.write_u8(token)?;
-            }
-            StringHint::PackedNibble => self.write_packed_bytes(s, token::NIBBLE_8)?,
-            StringHint::PackedHex => self.write_packed_bytes(s, token::HEX_8)?,
-            StringHint::Jid(meta) => self.write_jid_from_meta(s, meta)?,
-            StringHint::RawBytes => self.write_bytes_with_len(s.as_bytes())?,
-        }
-        Ok(())
+        self.write_string_with_hint(s, classify_string_hint(s))
     }
 
     #[inline(always)]
@@ -719,7 +701,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         if let Some(device) = meta.device {
             self.write_u8(token::AD_JID)?;
             self.write_u8(meta.domain_type)?;
-            self.write_u8(device as u8)?;
+            self.write_u8(device)?;
             self.write_string(user)?;
         } else {
             self.write_u8(token::JID_PAIR)?;
@@ -738,9 +720,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
+            let device = u8::try_from(jid.device).map_err(|_| {
+                BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
+            })?;
             self.write_u8(token::AD_JID)?;
             self.write_u8(jid.agent)?;
-            self.write_u8(jid.device as u8)?;
+            self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
             // JID_PAIR format: user, server
@@ -760,9 +745,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: agent/domain_type, device, user
+            let device = u8::try_from(jid.device).map_err(|_| {
+                BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
+            })?;
             self.write_u8(token::AD_JID)?;
             self.write_u8(jid.agent)?;
-            self.write_u8(jid.device as u8)?;
+            self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
             // JID_PAIR format: user, server
@@ -1175,7 +1163,7 @@ mod tests {
         use crate::decoder::Decoder;
         use crate::token;
 
-        // Short JID: should be encoded as JID token (256 bytes or less)
+        // Short JID: should be encoded as a JID token (48 bytes or less)
         let short_jid = "user@s.whatsapp.net";
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -1188,7 +1176,7 @@ mod tests {
             "Short JID should be encoded as JID_PAIR token"
         );
 
-        // Long string (> 256 chars): should be encoded as raw bytes, not as JID
+        // Long string (> 48 chars): should be encoded as raw bytes, not as JID
         let long_text = "x".repeat(300) + "@s.whatsapp.net";
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -1224,6 +1212,54 @@ mod tests {
             other => panic!("Expected bytes content, got {:?}", other),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_jid_parser_preserves_non_numeric_device_suffix() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let value = "foo:bar@s.whatsapp.net";
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(value.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match decoded.content {
+            Some(NodeContent::String(s)) => assert_eq!(s, value),
+            other => panic!("Expected string content, got {:?}", other),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_jid_parser_preserves_non_numeric_agent_suffix() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let value = "hello_world@s.whatsapp.net";
+        let node = Node::new(
+            "msg",
+            Attrs::new(),
+            Some(NodeContent::String(value.to_string())),
+        );
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let mut decoder = Decoder::new(&buffer[1..]);
+        let decoded = decoder.read_node_ref()?.to_owned();
+        match decoded.content {
+            Some(NodeContent::String(s)) => assert_eq!(s, value),
+            other => panic!("Expected string content, got {:?}", other),
+        }
         Ok(())
     }
 }

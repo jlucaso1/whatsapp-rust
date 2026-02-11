@@ -69,7 +69,9 @@ pub fn marshal_exact(node: &Node) -> Result<Vec<u8>> {
     let mut payload = vec![0; plan.size];
     let mut encoder = Encoder::new_slice(payload.as_mut_slice(), Some(&plan.hints))?;
     encoder.write_node(node)?;
-    debug_assert_eq!(encoder.bytes_written(), payload.len());
+    let written = encoder.bytes_written();
+    debug_assert_eq!(written, payload.len(), "plan size mismatch for Node");
+    payload.truncate(written);
     Ok(payload)
 }
 
@@ -113,7 +115,9 @@ pub fn marshal_ref_exact(node: &NodeRef<'_>) -> Result<Vec<u8>> {
     let mut payload = vec![0; plan.size];
     let mut encoder = Encoder::new_slice(payload.as_mut_slice(), Some(&plan.hints))?;
     encoder.write_node(node)?;
-    debug_assert_eq!(encoder.bytes_written(), payload.len());
+    let written = encoder.bytes_written();
+    debug_assert_eq!(written, payload.len(), "plan size mismatch for NodeRef");
+    payload.truncate(written);
     Ok(payload)
 }
 

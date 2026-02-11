@@ -114,8 +114,8 @@ impl<'a> Decoder<'a> {
     fn read_list_size(&mut self, tag: u8) -> Result<usize> {
         match tag {
             token::LIST_EMPTY => Ok(0),
-            248 => self.read_u8().map(|v| v as usize),
-            249 => self.read_u16_be().map(|v| v as usize),
+            token::LIST_8 => self.read_u8().map(|v| v as usize),
+            token::LIST_16 => self.read_u16_be().map(|v| v as usize),
             _ => Err(BinaryError::InvalidToken(tag)),
         }
     }
@@ -346,13 +346,20 @@ impl<'a> Decoder<'a> {
             let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
             let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
             if !(hi_valid & lo_valid).all() {
+                // Validate first, then decode scalar as a conservative fallback.
                 for byte in *chunk {
                     let high = (byte & 0xF0) >> 4;
                     let low = byte & 0x0F;
                     Self::unpack_nibble(high)?;
                     Self::unpack_nibble(low)?;
                 }
-                unreachable!("SIMD validation should match scalar validation");
+                for byte in *chunk {
+                    let high = (byte & 0xF0) >> 4;
+                    let low = byte & 0x0F;
+                    unpacked_bytes.push(Self::unpack_nibble(high)?);
+                    unpacked_bytes.push(Self::unpack_nibble(low)?);
+                }
+                continue;
             }
 
             let high_chars = lookup_table.swizzle_dyn(high_nibbles);
