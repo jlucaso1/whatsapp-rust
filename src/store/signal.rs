@@ -204,26 +204,36 @@ impl IdentityKeyStore for Device {
         identity_key: &IdentityKey,
     ) -> SignalResult<IdentityChange> {
         let address_str = address.to_string();
-        let key_bytes = identity_key.public_key().public_key_bytes();
-        let existing_identity_opt = self.get_identity(address).await?;
+        let key_bytes: [u8; 32] = identity_key
+            .public_key()
+            .public_key_bytes()
+            .try_into()
+            .map_err(|_| SignalProtocolError::InvalidArgument("Invalid key length".into()))?;
+        let existing_identity_bytes =
+            self.backend
+                .load_identity(&address_str)
+                .await
+                .map_err(|e| {
+                    SignalProtocolError::InvalidState("backend get_identity", e.to_string())
+                })?;
+
+        if existing_identity_bytes
+            .as_deref()
+            .is_some_and(|existing| existing == key_bytes.as_slice())
+        {
+            return Ok(IdentityChange::NewOrUnchanged);
+        }
 
         self.backend
-            .put_identity(
-                &address_str,
-                key_bytes.try_into().map_err(|_| {
-                    SignalProtocolError::InvalidArgument("Invalid key length".into())
-                })?,
-            )
+            .put_identity(&address_str, key_bytes)
             .await
             .map_err(|e| {
                 SignalProtocolError::InvalidState("backend put_identity", e.to_string())
             })?;
 
-        match existing_identity_opt {
-            None => Ok(IdentityChange::NewOrUnchanged),
-            Some(existing) if &existing == identity_key => Ok(IdentityChange::NewOrUnchanged),
-            Some(_) => Ok(IdentityChange::ReplacedExisting),
-        }
+        Ok(IdentityChange::from_changed(
+            existing_identity_bytes.is_some(),
+        ))
     }
 
     async fn is_trusted_identity(

@@ -12,7 +12,9 @@ use std::sync::{Arc, Once};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_websockets::{ClientBuilder, Connector, MaybeTlsStream, Message, WebSocketStream};
-use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_URL};
+use wacore::net::{
+    Transport, TransportEvent, TransportFactory, TransportSendError, WHATSAPP_WEB_WS_URL,
+};
 
 /// Ensures the rustls crypto provider is only installed once
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
@@ -136,14 +138,22 @@ impl Transport for TokioWebSocketTransport {
     /// The caller is responsible for any framing.
     async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let mut sink_guard = self.ws_sink.lock().await;
-        let sink = sink_guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Socket is closed"))?;
+        let Some(sink) = sink_guard.as_mut() else {
+            let mut is_connected_guard = self.is_connected.lock().await;
+            *is_connected_guard = false;
+            return Err(TransportSendError::ConnectionClosed.into());
+        };
 
         debug!("--> Sending {} bytes", data.len());
-        sink.send(Message::binary(data))
-            .await
-            .map_err(|e| anyhow::anyhow!("WebSocket send error: {}", e))?;
+        if let Err(e) = sink.send(Message::binary(data)).await {
+            // Ensure future sends fail fast after a terminal websocket send failure.
+            *sink_guard = None;
+            let mut is_connected_guard = self.is_connected.lock().await;
+            *is_connected_guard = false;
+            warn!("WebSocket send error; marking transport as closed: {e}");
+            return Err(TransportSendError::ConnectionClosed.into());
+        }
+
         Ok(())
     }
 

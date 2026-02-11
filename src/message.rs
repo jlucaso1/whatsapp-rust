@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::store::signal_adapter::SignalProtocolStoreAdapter;
+use crate::store::signal_adapter::BatchedSignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use chrono::DateTime;
@@ -33,6 +33,40 @@ const MAX_DECRYPT_RETRIES: u8 = 5;
 /// Retry count threshold for logging high retry warnings.
 /// WhatsApp Web logs metrics when retry count exceeds this value.
 const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
+
+async fn decrypt_session_message_with_blocking(
+    parsed_message: wacore::libsignal::protocol::CiphertextMessage,
+    signal_address: wacore::libsignal::protocol::ProtocolAddress,
+    adapter: BatchedSignalProtocolStoreAdapter,
+) -> Result<
+    (
+        BatchedSignalProtocolStoreAdapter,
+        wacore::libsignal::protocol::CiphertextMessage,
+        Result<Vec<u8>, SignalProtocolError>,
+    ),
+    tokio::task::JoinError,
+> {
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let mut adapter = adapter;
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let decrypt_res = runtime.block_on(async {
+            message_decrypt(
+                &parsed_message,
+                &signal_address,
+                &mut adapter.session_store,
+                &mut adapter.identity_store,
+                &mut adapter.pre_key_store,
+                &adapter.signed_pre_key_store,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+        });
+        (adapter, parsed_message, decrypt_res)
+    })
+    .await
+}
 
 /// Retry reason codes matching WhatsApp Web's RetryReason enum.
 /// These are included in the retry receipt to help the sender understand
@@ -650,8 +684,7 @@ impl Client {
         let _session_guard = session_mutex.lock().await;
 
         let mut adapter =
-            SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
-        let rng = rand::rngs::OsRng;
+            BatchedSignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
         let mut any_success = false;
         let mut any_duplicate = false;
         let mut dispatched_undecryptable = false;
@@ -722,17 +755,26 @@ impl Client {
                 }
             }
 
-            let decrypt_res = message_decrypt(
-                &parsed_message,
-                &signal_address,
-                &mut adapter.session_store,
-                &mut adapter.identity_store,
-                &mut adapter.pre_key_store,
-                &adapter.signed_pre_key_store,
-                &mut rng.unwrap_err(),
-                UsePQRatchet::No,
-            )
-            .await;
+            let (next_adapter, parsed_message, decrypt_res) =
+                match decrypt_session_message_with_blocking(
+                    parsed_message,
+                    signal_address.clone(),
+                    adapter,
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        log::error!(
+                            "spawn_blocking failed while decrypting message {} from {}: {}",
+                            info.id,
+                            info.source.sender,
+                            e
+                        );
+                        return (any_success, any_duplicate, dispatched_undecryptable);
+                    }
+                };
+            adapter = next_adapter;
 
             match decrypt_res {
                 Ok(padded_plaintext) => {
@@ -794,6 +836,7 @@ impl Client {
                             log::warn!("Failed to delete old identity for {}: {:?}", address, err);
                         } else {
                             log::info!("Successfully cleared old identity for {}", address);
+                            adapter.invalidate_identity(address).await;
                         }
 
                         // Re-attempt decryption with the new identity
@@ -803,17 +846,26 @@ impl Client {
                             address
                         );
 
-                        let retry_decrypt_res = message_decrypt(
-                            &parsed_message,
-                            &signal_address,
-                            &mut adapter.session_store,
-                            &mut adapter.identity_store,
-                            &mut adapter.pre_key_store,
-                            &adapter.signed_pre_key_store,
-                            &mut rng.unwrap_err(),
-                            UsePQRatchet::No,
-                        )
-                        .await;
+                        let (next_adapter, _parsed_message, retry_decrypt_res) =
+                            match decrypt_session_message_with_blocking(
+                                parsed_message,
+                                signal_address.clone(),
+                                adapter,
+                            )
+                            .await
+                            {
+                                Ok(result) => result,
+                                Err(e) => {
+                                    log::error!(
+                                        "spawn_blocking failed while retrying decrypt for message {} from {}: {}",
+                                        info.id,
+                                        info.source.sender,
+                                        e
+                                    );
+                                    return (any_success, any_duplicate, dispatched_undecryptable);
+                                }
+                            };
+                        adapter = next_adapter;
 
                         match retry_decrypt_res {
                             Ok(padded_plaintext) => {
@@ -918,19 +970,26 @@ impl Client {
                         let device_arc = self.persistence_manager.get_device_arc().await;
                         let device_guard = device_arc.write().await;
                         let address_str = signal_address.to_string();
-                        if let Err(err) = device_guard.backend.delete_session(&address_str).await {
+                        let deleted = if let Err(err) =
+                            device_guard.backend.delete_session(&address_str).await
+                        {
                             log::warn!(
                                 "Failed to delete stale session for {}: {:?}",
                                 signal_address,
                                 err
                             );
+                            false
                         } else {
                             log::info!(
                                 "Deleted stale session for {} to allow re-establishment",
                                 signal_address
                             );
-                        }
+                            true
+                        };
                         drop(device_guard);
+                        if deleted {
+                            adapter.invalidate_session(&signal_address).await;
+                        }
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
                         dispatched_undecryptable =
@@ -975,6 +1034,9 @@ impl Client {
                     }
                 }
             }
+        }
+        if let Err(flush_err) = adapter.flush().await {
+            log::warn!("Failed to flush cached Signal stores after decrypt batch: {flush_err}");
         }
         (any_success, any_duplicate, dispatched_undecryptable)
     }

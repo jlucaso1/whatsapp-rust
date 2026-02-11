@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
-use log::info;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
@@ -25,7 +25,7 @@ impl Client {
 
         let receipt_type = ReceiptType::from(receipt_type_str.to_string());
 
-        info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
+        debug!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
         let from_clone = from.clone();
         let sender = if from.is_group() {

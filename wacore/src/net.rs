@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Default WhatsApp Web websocket endpoint.
 pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
@@ -36,6 +37,13 @@ pub trait TransportFactory: Send + Sync {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error>;
+}
+
+/// Typed transport send failures that callers can downcast from `anyhow::Error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum TransportSendError {
+    #[error("transport connection is closed")]
+    ConnectionClosed,
 }
 
 /// A simple structure to represent an HTTP request

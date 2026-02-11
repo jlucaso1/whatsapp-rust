@@ -28,9 +28,9 @@ use log::{debug, error, info, trace, warn};
 use rand::RngCore;
 use scopeguard;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock, Weak};
 use wacore_binary::jid::Jid;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use thiserror::Error;
@@ -40,7 +40,10 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
-use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
+use crate::socket::{
+    NoiseSocket, SocketError,
+    error::{EncryptSendError, EncryptSendErrorKind},
+};
 use crate::sync_task::MajorSyncTask;
 
 /// Type alias for chatstate event handler functions.
@@ -89,11 +92,13 @@ pub(crate) struct RetryMetrics {
 
 pub struct Client {
     pub(crate) core: wacore::client::CoreClient,
+    self_weak: OnceLock<Weak<Client>>,
 
     pub(crate) persistence_manager: Arc<PersistenceManager>,
     pub(crate) media_conn: Arc<RwLock<Option<crate::mediaconn::MediaConn>>>,
 
     pub(crate) is_logged_in: Arc<AtomicBool>,
+    connection_alive: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
@@ -232,6 +237,13 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) fn shared(&self) -> Arc<Self> {
+        self.self_weak
+            .get()
+            .and_then(Weak::upgrade)
+            .expect("client self reference should be initialized")
+    }
+
     /// Enable or disable skipping of history sync notifications at runtime.
     ///
     /// When enabled, the client will acknowledge incoming history sync
@@ -261,9 +273,11 @@ impl Client {
 
         let this = Self {
             core,
+            self_weak: OnceLock::new(),
             persistence_manager: persistence_manager.clone(),
             media_conn: Arc::new(RwLock::new(None)),
             is_logged_in: Arc::new(AtomicBool::new(false)),
+            connection_alive: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
             shutdown_notifier: Arc::new(Notify::new()),
@@ -371,6 +385,9 @@ impl Client {
         };
 
         let arc = Arc::new(this);
+        arc.self_weak
+            .set(Arc::downgrade(&arc))
+            .expect("client self reference can only be set once");
 
         // Warm up the LID-PN cache from persistent storage
         let warm_up_arc = arc.clone();
@@ -559,6 +576,7 @@ impl Client {
         // handle_success will properly process the <success> stanza even if
         // a previous connection's post-login task bailed out early.
         self.is_logged_in.store(false, Ordering::Relaxed);
+        self.connection_alive.store(false, Ordering::Release);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
 
         let version_future = crate::version::resolve_and_update_version(
@@ -585,6 +603,7 @@ impl Client {
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
         *self.noise_socket.lock().await = Some(noise_socket);
+        self.connection_alive.store(true, Ordering::Release);
 
         // Notify waiters that socket is ready (before login)
         self.socket_ready_notifier.notify_waiters();
@@ -598,6 +617,7 @@ impl Client {
     pub async fn disconnect(self: &Arc<Self>) {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
+        self.connection_alive.store(false, Ordering::Release);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify_waiters();
 
@@ -609,6 +629,7 @@ impl Client {
 
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
+        self.connection_alive.store(false, Ordering::Release);
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
@@ -898,17 +919,41 @@ impl Client {
     /// Uses Arc<Node> to avoid cloning when spawning the async task.
     async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<Node>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(&node).await {
+            if let Err(e) = self.send_ack_for(&node).await
+                && !Self::is_connection_closed_error(&e)
+            {
                 warn!("Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
             // Node is already in Arc - just clone the Arc (cheap), not the Node
             tokio::spawn(async move {
-                if let Err(e) = this.send_ack_for(&node).await {
+                if let Err(e) = this.send_ack_for(&node).await
+                    && !Self::is_connection_closed_error(&e)
+                {
                     warn!("Failed to send ack: {e:?}");
                 }
             });
+        }
+    }
+
+    fn is_terminal_transport_send_error(e: &EncryptSendError) -> bool {
+        match e.kind {
+            EncryptSendErrorKind::ChannelClosed | EncryptSendErrorKind::Join => true,
+            EncryptSendErrorKind::Transport => e
+                .source
+                .downcast_ref::<wacore::net::TransportSendError>()
+                .is_some_and(|err| *err == wacore::net::TransportSendError::ConnectionClosed),
+            _ => false,
+        }
+    }
+
+    fn is_connection_closed_error(e: &ClientError) -> bool {
+        match e {
+            ClientError::NotConnected => true,
+            ClientError::Socket(SocketError::SocketClosed) => true,
+            ClientError::EncryptSend(send_err) => Self::is_terminal_transport_send_error(send_err),
+            _ => false,
         }
     }
 
@@ -1872,9 +1917,11 @@ impl Client {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.noise_socket
-            .try_lock()
-            .is_ok_and(|guard| guard.is_some())
+        self.connection_alive.load(Ordering::Acquire)
+            && self
+                .noise_socket
+                .try_lock()
+                .is_ok_and(|guard| guard.is_some())
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -2012,6 +2059,12 @@ impl Client {
     }
 
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
+        if !self.connection_alive.load(Ordering::Acquire)
+            || self.expected_disconnect.load(Ordering::Relaxed)
+        {
+            return Err(ClientError::NotConnected);
+        }
+
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
             Some(socket) => socket,
@@ -2044,6 +2097,9 @@ impl Client {
         {
             Ok(bufs) => bufs,
             Err(mut e) => {
+                if Self::is_terminal_transport_send_error(&e) {
+                    self.connection_alive.store(false, Ordering::Release);
+                }
                 let p_buf = std::mem::take(&mut e.plaintext_buf);
                 let mut pool = self.plaintext_buffer_pool.lock().await;
                 if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
@@ -2361,6 +2417,39 @@ mod tests {
 
         info!(
             "✅ test_ack_without_matching_waiter passed: ACK without matching waiter handled gracefully"
+        );
+    }
+
+    #[test]
+    fn test_terminal_transport_send_error_detection() {
+        let err = EncryptSendError::transport(
+            wacore::net::TransportSendError::ConnectionClosed,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(
+            Client::is_terminal_transport_send_error(&err),
+            "closed websocket send errors must be treated as terminal"
+        );
+        let client_err: ClientError = err.into();
+        assert!(
+            Client::is_connection_closed_error(&client_err),
+            "terminal send errors should be classified as closed connection errors"
+        );
+    }
+
+    #[test]
+    fn test_non_terminal_transport_send_error_detection() {
+        let err = EncryptSendError::transport(
+            anyhow::anyhow!("temporary websocket write timeout"),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(
+            !Client::is_terminal_transport_send_error(&err),
+            "temporary transport errors should not always be classified as terminal"
         );
     }
 
