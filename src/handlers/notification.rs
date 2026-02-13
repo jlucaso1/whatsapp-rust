@@ -99,6 +99,11 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Notifies about business account status changes: verified name, profile, removal
             handle_business_notification(client, node).await;
         }
+        "privacy_token" => {
+            // Handle incoming trusted contact privacy token notifications.
+            // Matches WhatsApp Web's WAWebHandlePrivacyTokenNotification.
+            handle_privacy_token_notification(client, node).await;
+        }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
@@ -304,6 +309,118 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             device.jid,
             device.key_index
         );
+    }
+}
+
+/// Handle incoming privacy_token notification.
+///
+/// Stores trusted contact tokens from contacts. Matches WhatsApp Web's
+/// `WAWebHandlePrivacyTokenNotification`.
+///
+/// Structure:
+/// ```xml
+/// <notification type="privacy_token" from="user@s.whatsapp.net" sender_lid="user@lid">
+///   <tokens>
+///     <token type="trusted_contact" t="1707000000"><!-- bytes --></token>
+///   </tokens>
+/// </notification>
+/// ```
+async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
+    use wacore::iq::tctoken::parse_privacy_token_notification;
+    use wacore::store::traits::TcTokenEntry;
+
+    // Resolve the sender to a LID JID for storage.
+    // WA Web uses `sender_lid` attr if present, otherwise resolves from `from`.
+    let sender_lid = node
+        .attrs()
+        .optional_jid("sender_lid")
+        .map(|j| j.user.clone());
+
+    let sender_lid = match sender_lid {
+        Some(lid) if !lid.is_empty() => lid,
+        _ => {
+            // Fall back to resolving from the `from` JID via LID-PN cache
+            let from_jid = match node.attrs().optional_jid("from") {
+                Some(jid) => jid,
+                None => {
+                    warn!(target: "Client/TcToken", "privacy_token notification missing 'from' attribute");
+                    return;
+                }
+            };
+
+            if from_jid.is_lid() {
+                from_jid.user.clone()
+            } else {
+                // Try to resolve phone number to LID
+                match client.lid_pn_cache.get_current_lid(&from_jid.user).await {
+                    Some(lid) => lid,
+                    None => {
+                        debug!(
+                            target: "Client/TcToken",
+                            "Cannot resolve LID for privacy_token sender {}, storing under PN",
+                            from_jid
+                        );
+                        from_jid.user.clone()
+                    }
+                }
+            }
+        }
+    };
+
+    // Parse the token data from the notification
+    let received_tokens = match parse_privacy_token_notification(node) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            warn!(target: "Client/TcToken", "Failed to parse privacy_token notification: {e}");
+            return;
+        }
+    };
+
+    if received_tokens.is_empty() {
+        debug!(target: "Client/TcToken", "privacy_token notification had no trusted_contact tokens");
+        return;
+    }
+
+    let backend = client.persistence_manager.backend();
+
+    for received in &received_tokens {
+        // Timestamp monotonicity guard: only store if incoming >= existing
+        if let Ok(Some(existing)) = backend.get_tc_token(&sender_lid).await {
+            if received.timestamp < existing.token_timestamp {
+                debug!(
+                    target: "Client/TcToken",
+                    "Skipping older token for {} (incoming={}, existing={})",
+                    sender_lid, received.timestamp, existing.token_timestamp
+                );
+                continue;
+            }
+
+            // Preserve existing sender_timestamp when updating token
+            let entry = TcTokenEntry {
+                token: received.token.clone(),
+                token_timestamp: received.timestamp,
+                sender_timestamp: existing.sender_timestamp,
+            };
+
+            if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                warn!(target: "Client/TcToken", "Failed to update tc_token for {}: {e}", sender_lid);
+            } else {
+                debug!(target: "Client/TcToken", "Updated tc_token for {} (t={})", sender_lid, received.timestamp);
+            }
+        } else {
+            // New token — no existing entry
+            let entry = TcTokenEntry {
+                token: received.token.clone(),
+                token_timestamp: received.timestamp,
+                sender_timestamp: None,
+            };
+
+            if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                warn!(target: "Client/TcToken", "Failed to store tc_token for {}: {e}", sender_lid);
+            } else {
+                debug!(target: "Client/TcToken", "Stored new tc_token for {} (t={})", sender_lid, received.timestamp);
+            }
+        }
     }
 }
 

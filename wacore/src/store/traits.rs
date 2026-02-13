@@ -37,6 +37,19 @@ pub struct LidPnMappingEntry {
     pub learning_source: String,
 }
 
+/// Trusted contact privacy token entry.
+///
+/// Matches WhatsApp Web's Chat.tcToken / tcTokenTimestamp / tcTokenSenderTimestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcTokenEntry {
+    /// Raw token bytes received from the server.
+    pub token: Vec<u8>,
+    /// Unix timestamp (seconds) when the token was received.
+    pub token_timestamp: i64,
+    /// Unix timestamp (seconds) when we last issued our token to this contact.
+    pub sender_timestamp: Option<i64>,
+}
+
 /// Device information for registry tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -224,6 +237,23 @@ pub trait ProtocolStore: Send + Sync {
     /// Get participants that need fresh SKDM (marked for forget).
     /// Consumes the marks (deletes them after reading).
     async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
+
+    // --- TcToken Storage ---
+
+    /// Get a trusted contact token for a JID (stored under LID).
+    async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>>;
+
+    /// Store or update a trusted contact token for a JID.
+    async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()>;
+
+    /// Delete a trusted contact token for a JID.
+    async fn delete_tc_token(&self, jid: &str) -> Result<()>;
+
+    /// Get all JIDs that have stored tc tokens.
+    async fn get_all_tc_token_jids(&self) -> Result<Vec<String>>;
+
+    /// Delete tc tokens with token_timestamp older than cutoff. Returns count deleted.
+    async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
 }
 
 /// Device data persistence operations.

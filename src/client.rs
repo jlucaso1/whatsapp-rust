@@ -1234,6 +1234,11 @@ impl Client {
                 if let Err(e) = r_digest {
                     warn!("Background init: Failed to send digest: {e:?}");
                 }
+
+                // Prune expired tcTokens on connect (matches WhatsApp Web's PrivacyTokenJob)
+                if let Err(e) = bg_client.tc_token().prune_expired().await {
+                    warn!("Background init: Failed to prune expired tc_tokens: {e:?}");
+                }
             });
 
             client_clone

@@ -2,9 +2,10 @@
 //!
 //! ## Profile Picture Wire Format
 //! ```xml
-//! <!-- Request -->
+//! <!-- Request (with optional tctoken for privacy gating) -->
 //! <iq xmlns="w:profile:picture" type="get" to="s.whatsapp.net" target="1234567890@s.whatsapp.net" id="...">
 //!   <picture type="preview" query="url"/>
+//!   <tctoken><!-- raw token bytes (optional) --></tctoken>
 //! </iq>
 //!
 //! <!-- Response (success) -->
@@ -21,6 +22,7 @@
 //! ```
 
 use crate::iq::spec::IqSpec;
+use crate::iq::tctoken::build_tc_token_node;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
@@ -57,6 +59,8 @@ impl ProfilePictureType {
 pub struct ProfilePictureSpec {
     pub jid: Jid,
     pub picture_type: ProfilePictureType,
+    /// Optional tctoken to include in the IQ for privacy gating.
+    pub tc_token: Option<Vec<u8>>,
 }
 
 impl ProfilePictureSpec {
@@ -64,6 +68,7 @@ impl ProfilePictureSpec {
         Self {
             jid: jid.clone(),
             picture_type: ProfilePictureType::Preview,
+            tc_token: None,
         }
     }
 
@@ -71,6 +76,7 @@ impl ProfilePictureSpec {
         Self {
             jid: jid.clone(),
             picture_type: ProfilePictureType::Full,
+            tc_token: None,
         }
     }
 
@@ -78,7 +84,14 @@ impl ProfilePictureSpec {
         Self {
             jid: jid.clone(),
             picture_type,
+            tc_token: None,
         }
+    }
+
+    /// Include a tctoken in the profile picture IQ for privacy gating.
+    pub fn with_tc_token(mut self, token: Vec<u8>) -> Self {
+        self.tc_token = Some(token);
+        self
     }
 }
 
@@ -91,10 +104,15 @@ impl IqSpec for ProfilePictureSpec {
             .attr("query", "url")
             .build();
 
+        let mut children = vec![picture_node];
+        if let Some(token) = &self.tc_token {
+            children.push(build_tc_token_node(token));
+        }
+
         InfoQuery::get(
             "w:profile:picture",
             Jid::new("", SERVER_JID),
-            Some(NodeContent::Nodes(vec![picture_node])),
+            Some(NodeContent::Nodes(children)),
         )
         .with_target_ref(&self.jid)
     }
@@ -234,5 +252,44 @@ mod tests {
 
         let result = spec.parse_response(&response).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_profile_picture_spec_with_tc_token() {
+        let jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let spec = ProfilePictureSpec::preview(&jid).with_tc_token(vec![0xCA, 0xFE, 0xBA, 0xBE]);
+
+        let iq = spec.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes.len(), 2);
+            assert_eq!(nodes[0].tag, "picture");
+            assert_eq!(nodes[1].tag, "tctoken");
+            match &nodes[1].content {
+                Some(NodeContent::Bytes(data)) => {
+                    assert_eq!(data, &[0xCA, 0xFE, 0xBA, 0xBE]);
+                }
+                _ => panic!("Expected binary content in tctoken node"),
+            }
+        } else {
+            panic!("Expected NodeContent::Nodes");
+        }
+    }
+
+    #[test]
+    fn test_profile_picture_spec_without_tc_token() {
+        let jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let spec = ProfilePictureSpec::preview(&jid);
+
+        let iq = spec.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(
+                nodes.len(),
+                1,
+                "Should only have picture node without tctoken"
+            );
+            assert_eq!(nodes[0].tag, "picture");
+        } else {
+            panic!("Expected NodeContent::Nodes");
+        }
     }
 }
