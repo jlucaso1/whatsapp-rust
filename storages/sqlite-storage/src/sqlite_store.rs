@@ -1790,6 +1790,136 @@ impl ProtocolStore for SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
+
+    async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<TcTokenEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let row: Option<(Vec<u8>, i64, Option<i64>)> = tc_tokens::table
+                .select((
+                    tc_tokens::token,
+                    tc_tokens::token_timestamp,
+                    tc_tokens::sender_timestamp,
+                ))
+                .filter(tc_tokens::jid.eq(&jid))
+                .filter(tc_tokens::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(
+                row.map(|(token, token_timestamp, sender_timestamp)| TcTokenEntry {
+                    token,
+                    token_timestamp,
+                    sender_timestamp,
+                }),
+            )
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        let entry = entry.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(tc_tokens::table)
+                .values((
+                    tc_tokens::jid.eq(&jid),
+                    tc_tokens::token.eq(&entry.token),
+                    tc_tokens::token_timestamp.eq(entry.token_timestamp),
+                    tc_tokens::sender_timestamp.eq(entry.sender_timestamp),
+                    tc_tokens::device_id.eq(device_id),
+                    tc_tokens::updated_at.eq(now),
+                ))
+                .on_conflict((tc_tokens::jid, tc_tokens::device_id))
+                .do_update()
+                .set((
+                    tc_tokens::token.eq(&entry.token),
+                    tc_tokens::token_timestamp.eq(entry.token_timestamp),
+                    tc_tokens::sender_timestamp.eq(entry.sender_timestamp),
+                    tc_tokens::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn delete_tc_token(&self, jid: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                tc_tokens::table
+                    .filter(tc_tokens::jid.eq(&jid))
+                    .filter(tc_tokens::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_all_tc_token_jids(&self) -> Result<Vec<String>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let jids: Vec<String> = tc_tokens::table
+                .select(tc_tokens::jid)
+                .filter(tc_tokens::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(jids)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let deleted = diesel::delete(
+                tc_tokens::table
+                    .filter(tc_tokens::token_timestamp.lt(cutoff_timestamp))
+                    .filter(tc_tokens::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(deleted as u32)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
 }
 
 #[async_trait]
@@ -2102,6 +2232,121 @@ mod tests {
             .await
             .expect("consume failed");
         assert!(consumed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_put_and_get() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1, 2, 3, 4, 5],
+            token_timestamp: 1707000000,
+            sender_timestamp: Some(1707000100),
+        };
+
+        store
+            .put_tc_token("user@lid", &entry)
+            .await
+            .expect("put failed");
+
+        let loaded = store
+            .get_tc_token("user@lid")
+            .await
+            .expect("get failed")
+            .expect("should exist");
+
+        assert_eq!(loaded.token, vec![1, 2, 3, 4, 5]);
+        assert_eq!(loaded.token_timestamp, 1707000000);
+        assert_eq!(loaded.sender_timestamp, Some(1707000100));
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_upsert() {
+        let store = create_test_store().await;
+
+        let entry1 = TcTokenEntry {
+            token: vec![1, 2, 3],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user@lid", &entry1).await.unwrap();
+
+        let entry2 = TcTokenEntry {
+            token: vec![4, 5, 6],
+            token_timestamp: 2000,
+            sender_timestamp: Some(1500),
+        };
+        store.put_tc_token("user@lid", &entry2).await.unwrap();
+
+        let loaded = store.get_tc_token("user@lid").await.unwrap().unwrap();
+        assert_eq!(loaded.token, vec![4, 5, 6]);
+        assert_eq!(loaded.token_timestamp, 2000);
+        assert_eq!(loaded.sender_timestamp, Some(1500));
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_delete() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1, 2, 3],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user@lid", &entry).await.unwrap();
+        store.delete_tc_token("user@lid").await.unwrap();
+
+        let result = store.get_tc_token("user@lid").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_get_all_jids() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user1@lid", &entry).await.unwrap();
+        store.put_tc_token("user2@lid", &entry).await.unwrap();
+        store.put_tc_token("user3@lid", &entry).await.unwrap();
+
+        let mut jids = store.get_all_tc_token_jids().await.unwrap();
+        jids.sort();
+        assert_eq!(jids, vec!["user1@lid", "user2@lid", "user3@lid"]);
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_delete_expired() {
+        let store = create_test_store().await;
+
+        let old = TcTokenEntry {
+            token: vec![1],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        let recent = TcTokenEntry {
+            token: vec![2],
+            token_timestamp: 5000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("old@lid", &old).await.unwrap();
+        store.put_tc_token("recent@lid", &recent).await.unwrap();
+
+        let deleted = store.delete_expired_tc_tokens(3000).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(store.get_tc_token("old@lid").await.unwrap().is_none());
+        assert!(store.get_tc_token("recent@lid").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_get_nonexistent() {
+        let store = create_test_store().await;
+        let result = store.get_tc_token("nonexistent@lid").await.unwrap();
+        assert!(result.is_none());
     }
 
     #[tokio::test]

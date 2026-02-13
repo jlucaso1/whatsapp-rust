@@ -505,6 +505,28 @@ mod tests {
         async fn consume_forget_marks(&self, _: &str) -> StoreResult<Vec<String>> {
             Ok(vec![])
         }
+        async fn get_tc_token(
+            &self,
+            _: &str,
+        ) -> StoreResult<Option<wacore::store::traits::TcTokenEntry>> {
+            Ok(None)
+        }
+        async fn put_tc_token(
+            &self,
+            _: &str,
+            _: &wacore::store::traits::TcTokenEntry,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn delete_tc_token(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_all_tc_token_jids(&self) -> StoreResult<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn delete_expired_tc_tokens(&self, _: i64) -> StoreResult<u32> {
+            Ok(0)
+        }
     }
 
     // Implement DeviceStore - Device persistence

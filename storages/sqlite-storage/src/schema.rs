@@ -140,6 +140,17 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    tc_tokens (jid, device_id) {
+        jid -> Text,
+        token -> Binary,
+        token_timestamp -> BigInt,
+        sender_timestamp -> Nullable<BigInt>,
+        device_id -> Integer,
+        updated_at -> BigInt,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_mutation_macs,
@@ -155,4 +166,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     sessions,
     signed_prekeys,
     skdm_recipients,
+    tc_tokens,
 );

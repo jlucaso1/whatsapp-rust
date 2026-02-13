@@ -1,7 +1,9 @@
 use crate::client::Client;
 use log::{debug, warn};
 use wacore::StringEnum;
+use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
 
 /// Presence status for online/offline state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
@@ -82,6 +84,33 @@ impl<'a> Presence<'a> {
     /// Set presence to unavailable (offline).
     pub async fn set_unavailable(&self) -> Result<(), anyhow::Error> {
         self.set(PresenceStatus::Unavailable).await
+    }
+
+    /// Subscribe to a contact's presence updates.
+    ///
+    /// Sends a `<presence type="subscribe">` stanza to the target JID.
+    /// If a valid tctoken exists for the contact, it is included as a child node.
+    ///
+    /// ## Wire Format
+    /// ```xml
+    /// <presence type="subscribe" to="user@s.whatsapp.net">
+    ///   <tctoken><!-- raw token bytes --></tctoken>
+    /// </presence>
+    /// ```
+    pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        debug!("presence subscribe: subscribing to {}", jid);
+
+        let mut builder = NodeBuilder::new("presence")
+            .attr("type", "subscribe")
+            .attr("to", jid.to_string());
+
+        // Include tctoken if available (no t attribute, matching WhatsApp Web)
+        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
+            builder = builder.children([build_tc_token_node(&token)]);
+        }
+
+        let node = builder.build();
+        self.client.send_node(node).await.map_err(|e| e.into())
     }
 }
 

@@ -13,4 +13,5 @@ pub mod privacy;
 pub mod props;
 pub mod spam_report;
 pub mod spec;
+pub mod tctoken;
 pub mod usync;

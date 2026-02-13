@@ -9,7 +9,7 @@ use log::debug;
 use std::collections::HashMap;
 use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
 use wacore::iq::usync::{ContactInfoSpec, IsOnWhatsAppSpec, UserInfoSpec};
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{Jid, JidExt};
 
 // Re-export types from wacore
 pub use wacore::iq::contacts::ProfilePicture;
@@ -68,7 +68,15 @@ impl<'a> Contacts<'a> {
         } else {
             ProfilePictureType::Full
         };
-        let spec = ProfilePictureSpec::new(jid, picture_type);
+        let mut spec = ProfilePictureSpec::new(jid, picture_type);
+
+        // Include tctoken for user JIDs (skip groups, newsletters)
+        if !jid.is_group()
+            && !jid.is_newsletter()
+            && let Some(token) = self.client.lookup_tc_token_for_jid(jid).await
+        {
+            spec = spec.with_tc_token(token);
+        }
 
         Ok(self.client.execute(spec).await?)
     }

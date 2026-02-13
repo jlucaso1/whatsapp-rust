@@ -446,6 +446,14 @@ impl Client {
                 .ok_or_else(|| anyhow!("Not logged in"))?;
             let account_info = device_snapshot.account.clone();
 
+            // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
+            // Skip for newsletters, groups, and own JID.
+            let mut extra_stanza_nodes = extra_stanza_nodes;
+            if !to.is_group() && !to.is_newsletter() {
+                self.maybe_include_tc_token(&to, &mut extra_stanza_nodes)
+                    .await;
+            }
+
             // Acquire lock only for encryption
             let session_mutex = self
                 .session_locks
@@ -481,6 +489,152 @@ impl Client {
         };
 
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
+    }
+
+    /// Look up and include a tctoken in outgoing 1:1 message stanza nodes.
+    ///
+    /// If a valid (non-expired) token exists, adds a `<tctoken>` child node.
+    /// If the token is missing or expired, attempts to issue new tokens via IQ.
+    async fn maybe_include_tc_token(&self, to: &Jid, extra_nodes: &mut Vec<Node>) {
+        use wacore::iq::tctoken::{
+            IssuePrivacyTokensSpec, build_tc_token_node, is_tc_token_expired,
+            should_send_new_tc_token,
+        };
+        use wacore::store::traits::TcTokenEntry;
+
+        // Skip for own JID — no need to send privacy token to ourselves
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        let is_self = snapshot
+            .pn
+            .as_ref()
+            .is_some_and(|pn| pn.is_same_user_as(to))
+            || snapshot
+                .lid
+                .as_ref()
+                .is_some_and(|lid| lid.is_same_user_as(to));
+        if is_self {
+            return;
+        }
+
+        // Resolve the destination to a LID for token lookup
+        let token_jid = if to.is_lid() {
+            to.user.clone()
+        } else {
+            match self.lid_pn_cache.get_current_lid(&to.user).await {
+                Some(lid) => lid,
+                None => to.user.clone(),
+            }
+        };
+
+        let backend = self.persistence_manager.backend();
+
+        // Look up existing token
+        let existing = match backend.get_tc_token(&token_jid).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
+                return;
+            }
+        };
+
+        match existing {
+            Some(entry) if !is_tc_token_expired(entry.token_timestamp) => {
+                // Valid token — include it in the stanza
+                extra_nodes.push(build_tc_token_node(&entry.token));
+
+                // Check if we should re-issue (bucket boundary crossed).
+                // Update sender_timestamp to mark we've sent our token in this bucket.
+                if should_send_new_tc_token(entry.sender_timestamp) {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let updated_entry = TcTokenEntry {
+                        sender_timestamp: Some(now),
+                        ..entry
+                    };
+                    if let Err(e) = backend.put_tc_token(&token_jid, &updated_entry).await {
+                        log::warn!(target: "Client/TcToken", "Failed to update sender_timestamp: {e}");
+                    }
+                }
+            }
+            _ => {
+                // Token missing or expired — try to issue
+                let to_lid = self.resolve_to_lid_jid(to).await;
+                match self
+                    .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
+                    .await
+                {
+                    Ok(response) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        for received in &response.tokens {
+                            let entry = TcTokenEntry {
+                                token: received.token.clone(),
+                                token_timestamp: received.timestamp,
+                                sender_timestamp: Some(now),
+                            };
+
+                            // Store the received token
+                            let store_jid = received.jid.user.clone();
+                            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+                                log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
+                            }
+
+                            // Include in message stanza
+                            if !received.token.is_empty() {
+                                extra_nodes.push(build_tc_token_node(&received.token));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}: {e}", to_lid);
+                        // Don't fail the message send — tctoken is optional
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up a valid (non-expired) tctoken for a JID. Returns the raw token bytes if found.
+    ///
+    /// Used by profile picture, presence subscribe, and other features that need tctoken gating.
+    pub(crate) async fn lookup_tc_token_for_jid(&self, jid: &Jid) -> Option<Vec<u8>> {
+        use wacore::iq::tctoken::is_tc_token_expired;
+
+        let token_jid = if jid.is_lid() {
+            jid.user.clone()
+        } else {
+            match self.lid_pn_cache.get_current_lid(&jid.user).await {
+                Some(lid) => lid,
+                None => jid.user.clone(),
+            }
+        };
+
+        let backend = self.persistence_manager.backend();
+        match backend.get_tc_token(&token_jid).await {
+            Ok(Some(entry)) if !is_tc_token_expired(entry.token_timestamp) => Some(entry.token),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
+                None
+            }
+        }
+    }
+
+    /// Resolve a JID to its LID form for tc_token storage.
+    async fn resolve_to_lid_jid(&self, jid: &Jid) -> Jid {
+        if jid.is_lid() {
+            return jid.clone();
+        }
+
+        if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
+            Jid::new(&lid_user, "lid")
+        } else {
+            jid.clone()
+        }
     }
 }
 

@@ -4,6 +4,7 @@ mod contacts;
 mod groups;
 mod mex;
 mod presence;
+mod tctoken;
 
 pub use blocking::{Blocking, BlocklistEntry};
 
@@ -20,3 +21,5 @@ pub use groups::{
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
 
 pub use presence::{Presence, PresenceStatus};
+
+pub use tctoken::TcToken;
