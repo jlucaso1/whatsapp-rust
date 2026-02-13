@@ -177,6 +177,8 @@ impl Client {
             let message_for_encrypt = message.clone();
             let to_for_encrypt = to.clone();
             let encryption_jid_for_encrypt = encryption_jid.clone();
+            // Peer encryption is a single-session operation. With the batched
+            // cache, store ops resolve from memory so the work is CPU-bound.
             let (mut store_adapter, stanza_result) = tokio::task::spawn_blocking(move || {
                 let runtime = tokio::runtime::Handle::current();
                 let mut store_adapter = BatchedSignalProtocolStoreAdapter::new(device_store_arc);
@@ -487,7 +489,9 @@ impl Client {
             let _session_guard = session_mutex.lock().await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let client = self.shared();
+            let client = self
+                .shared()
+                .ok_or_else(|| anyhow!("client is shutting down"))?;
             let to_for_encrypt = to.clone();
             let own_jid_for_encrypt = own_jid.clone();
             let account_info_for_encrypt = account_info.clone();
@@ -495,6 +499,8 @@ impl Client {
             let edit_for_encrypt = edit.clone();
             let extra_nodes_for_encrypt = extra_stanza_nodes.clone();
 
+            // DM encryption involves multiple devices. With the batched cache,
+            // store ops resolve from memory so the work is CPU-bound.
             let (mut store_adapter, stanza_result) = tokio::task::spawn_blocking(move || {
                 let runtime = tokio::runtime::Handle::current();
                 let mut store_adapter = BatchedSignalProtocolStoreAdapter::new(device_store_arc);

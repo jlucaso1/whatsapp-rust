@@ -237,11 +237,8 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn shared(&self) -> Arc<Self> {
-        self.self_weak
-            .get()
-            .and_then(Weak::upgrade)
-            .expect("client self reference should be initialized")
+    pub(crate) fn shared(&self) -> Option<Arc<Self>> {
+        self.self_weak.get().and_then(Weak::upgrade)
     }
 
     /// Enable or disable skipping of history sync notifications at runtime.
@@ -385,9 +382,9 @@ impl Client {
         };
 
         let arc = Arc::new(this);
-        arc.self_weak
-            .set(Arc::downgrade(&arc))
-            .expect("client self reference can only be set once");
+        if arc.self_weak.set(Arc::downgrade(&arc)).is_err() {
+            warn!("client self reference was already set");
+        }
 
         // Warm up the LID-PN cache from persistent storage
         let warm_up_arc = arc.clone();

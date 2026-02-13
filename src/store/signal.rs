@@ -209,13 +209,12 @@ impl IdentityKeyStore for Device {
             .public_key_bytes()
             .try_into()
             .map_err(|_| SignalProtocolError::InvalidArgument("Invalid key length".into()))?;
-        let existing_identity_bytes =
-            self.backend
-                .load_identity(&address_str)
-                .await
-                .map_err(|e| {
-                    SignalProtocolError::InvalidState("backend get_identity", e.to_string())
-                })?;
+        let existing_identity_bytes = self
+            .backend
+            .load_identity(&address_str)
+            .await
+            .map_err(|e| SignalProtocolError::InvalidState("backend get_identity", e.to_string()))?
+            .filter(|b| !b.is_empty());
 
         if existing_identity_bytes
             .as_deref()

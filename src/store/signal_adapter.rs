@@ -77,22 +77,42 @@ impl CachedSessionAdapter {
     }
 
     async fn flush(&mut self) -> Result<(), SignalProtocolError> {
-        let pending_writes = {
-            let mut cache = self.cache.lock().await;
-            let dirty = std::mem::take(&mut cache.dirty_sessions);
-            let mut writes = Vec::with_capacity(dirty.len());
-            for address in dirty {
-                if let Some(Some(record)) = cache.sessions.get(&address) {
-                    writes.push((address, record.clone()));
-                }
-            }
-            writes
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_sessions
+                .iter()
+                .filter_map(|address| {
+                    cache
+                        .sessions
+                        .get(address)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|record| (address.clone(), record.clone()))
+                })
+                .collect()
         };
 
         for (address, record) in pending_writes {
             SessionStore::store_session(&mut self.inner, &address, &record).await?;
+            self.cache.lock().await.dirty_sessions.remove(&address);
         }
 
+        Ok(())
+    }
+
+    pub async fn delete_session(
+        &mut self,
+        address: &ProtocolAddress,
+    ) -> Result<(), SignalProtocolError> {
+        let addr_str = address.to_string();
+        let device = self.inner.0.device.write().await;
+        device
+            .backend
+            .delete_session(&addr_str)
+            .await
+            .map_err(|e| SignalProtocolError::InvalidState("delete_session", e.to_string()))?;
+        drop(device);
+        self.invalidate(address).await;
         Ok(())
     }
 
@@ -115,20 +135,24 @@ impl CachedIdentityAdapter {
     }
 
     async fn flush(&mut self) -> Result<(), SignalProtocolError> {
-        let pending_writes = {
-            let mut cache = self.cache.lock().await;
-            let dirty = std::mem::take(&mut cache.dirty_identities);
-            let mut writes = Vec::with_capacity(dirty.len());
-            for address in dirty {
-                if let Some(Some(identity)) = cache.identities.get(&address) {
-                    writes.push((address, *identity));
-                }
-            }
-            writes
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_identities
+                .iter()
+                .filter_map(|address| {
+                    cache
+                        .identities
+                        .get(address)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|identity| (address.clone(), *identity))
+                })
+                .collect()
         };
 
         for (address, identity) in pending_writes {
             IdentityKeyStore::save_identity(&mut self.inner, &address, &identity).await?;
+            self.cache.lock().await.dirty_identities.remove(&address);
         }
 
         Ok(())
@@ -153,20 +177,28 @@ impl CachedSenderKeyAdapter {
     }
 
     async fn flush(&mut self) -> Result<(), SignalProtocolError> {
-        let pending_writes = {
-            let mut cache = self.cache.lock().await;
-            let dirty = std::mem::take(&mut cache.dirty_sender_keys);
-            let mut writes = Vec::with_capacity(dirty.len());
-            for sender_key_name in dirty {
-                if let Some(Some(record)) = cache.sender_keys.get(&sender_key_name) {
-                    writes.push((sender_key_name, record.clone()));
-                }
-            }
-            writes
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_sender_keys
+                .iter()
+                .filter_map(|name| {
+                    cache
+                        .sender_keys
+                        .get(name)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|record| (name.clone(), record.clone()))
+                })
+                .collect()
         };
 
         for (sender_key_name, record) in pending_writes {
             SenderKeyStore::store_sender_key(&mut self.inner, &sender_key_name, &record).await?;
+            self.cache
+                .lock()
+                .await
+                .dirty_sender_keys
+                .remove(&sender_key_name);
         }
 
         Ok(())
@@ -208,12 +240,15 @@ impl BatchedSignalProtocolStoreAdapter {
         Ok(())
     }
 
-    pub async fn invalidate_identity(&mut self, address: &ProtocolAddress) {
-        self.identity_store.invalidate(address).await;
+    pub async fn delete_session(
+        &mut self,
+        address: &ProtocolAddress,
+    ) -> Result<(), SignalProtocolError> {
+        self.session_store.delete_session(address).await
     }
 
-    pub async fn invalidate_session(&mut self, address: &ProtocolAddress) {
-        self.session_store.invalidate(address).await;
+    pub async fn invalidate_identity(&mut self, address: &ProtocolAddress) {
+        self.identity_store.invalidate(address).await;
     }
 
     pub async fn invalidate_sender_key(&mut self, sender_key_name: &SenderKeyName) {
@@ -362,12 +397,13 @@ impl IdentityKeyStore for CachedIdentityAdapter {
         identity: &IdentityKey,
     ) -> Result<IdentityChange, SignalProtocolError> {
         let existing = self.get_identity(address).await?;
-        let mut cache = self.cache.lock().await;
-        cache.identities.insert(address.clone(), Some(*identity));
-        cache.dirty_identities.insert(address.clone());
-        Ok(IdentityChange::from_changed(
-            existing.is_some_and(|current| current != *identity),
-        ))
+        let changed = existing.is_some_and(|current| current != *identity);
+        if existing.is_none() || changed {
+            let mut cache = self.cache.lock().await;
+            cache.identities.insert(address.clone(), Some(*identity));
+            cache.dirty_identities.insert(address.clone());
+        }
+        Ok(IdentityChange::from_changed(changed))
     }
 
     async fn is_trusted_identity(

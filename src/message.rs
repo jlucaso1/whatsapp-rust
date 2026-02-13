@@ -34,6 +34,12 @@ const MAX_DECRYPT_RETRIES: u8 = 5;
 /// WhatsApp Web logs metrics when retry count exceeds this value.
 const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
 
+/// Runs Signal message decryption on the blocking thread pool.
+///
+/// With the batched cache adapter, store operations (load/store session, identity)
+/// resolve from in-memory HashMaps, making the work effectively CPU-bound (crypto).
+/// On rare cache misses the inner store access will block the thread via `block_on`,
+/// which is acceptable since the blocking pool has many threads.
 async fn decrypt_session_message_with_blocking(
     parsed_message: wacore::libsignal::protocol::CiphertextMessage,
     signal_address: wacore::libsignal::protocol::ProtocolAddress,
@@ -966,29 +972,18 @@ impl Client {
                             info.source.sender
                         );
 
-                        // Delete the stale session
-                        let device_arc = self.persistence_manager.get_device_arc().await;
-                        let device_guard = device_arc.write().await;
-                        let address_str = signal_address.to_string();
-                        let deleted = if let Err(err) =
-                            device_guard.backend.delete_session(&address_str).await
-                        {
+                        // Delete the stale session (also invalidates the adapter cache)
+                        if let Err(err) = adapter.delete_session(&signal_address).await {
                             log::warn!(
                                 "Failed to delete stale session for {}: {:?}",
                                 signal_address,
                                 err
                             );
-                            false
                         } else {
                             log::info!(
                                 "Deleted stale session for {} to allow re-establishment",
                                 signal_address
                             );
-                            true
-                        };
-                        drop(device_guard);
-                        if deleted {
-                            adapter.invalidate_session(&signal_address).await;
                         }
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
