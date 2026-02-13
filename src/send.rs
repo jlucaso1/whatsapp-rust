@@ -502,6 +502,20 @@ impl Client {
         };
         use wacore::store::traits::TcTokenEntry;
 
+        // Skip for own JID — no need to send privacy token to ourselves
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        let is_self = snapshot
+            .pn
+            .as_ref()
+            .is_some_and(|pn| pn.is_same_user_as(to))
+            || snapshot
+                .lid
+                .as_ref()
+                .is_some_and(|lid| lid.is_same_user_as(to));
+        if is_self {
+            return;
+        }
+
         // Resolve the destination to a LID for token lookup
         let token_jid = if to.is_lid() {
             to.user.clone()
@@ -548,7 +562,7 @@ impl Client {
                 // Token missing or expired — try to issue
                 let to_lid = self.resolve_to_lid_jid(to).await;
                 match self
-                    .execute(IssuePrivacyTokensSpec::new(vec![to_lid.clone()]))
+                    .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
                     .await
                 {
                     Ok(response) => {
@@ -602,32 +616,6 @@ impl Client {
         let backend = self.persistence_manager.backend();
         match backend.get_tc_token(&token_jid).await {
             Ok(Some(entry)) if !is_tc_token_expired(entry.token_timestamp) => Some(entry.token),
-            Ok(_) => None,
-            Err(e) => {
-                log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
-                None
-            }
-        }
-    }
-
-    /// Look up a valid tctoken with its timestamp for a JID. Used for presence subscribe.
-    pub(crate) async fn lookup_tc_token_with_timestamp(&self, jid: &Jid) -> Option<(Vec<u8>, i64)> {
-        use wacore::iq::tctoken::is_tc_token_expired;
-
-        let token_jid = if jid.is_lid() {
-            jid.user.clone()
-        } else {
-            match self.lid_pn_cache.get_current_lid(&jid.user).await {
-                Some(lid) => lid,
-                None => jid.user.clone(),
-            }
-        };
-
-        let backend = self.persistence_manager.backend();
-        match backend.get_tc_token(&token_jid).await {
-            Ok(Some(entry)) if !is_tc_token_expired(entry.token_timestamp) => {
-                Some((entry.token, entry.token_timestamp))
-            }
             Ok(_) => None,
             Err(e) => {
                 log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);

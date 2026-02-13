@@ -1,7 +1,7 @@
 use crate::client::Client;
 use log::{debug, warn};
 use wacore::StringEnum;
-use wacore::iq::tctoken::build_tc_token_node_with_timestamp;
+use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
 
@@ -94,7 +94,7 @@ impl<'a> Presence<'a> {
     /// ## Wire Format
     /// ```xml
     /// <presence type="subscribe" to="user@s.whatsapp.net">
-    ///   <tctoken t="1707000000"><!-- raw token bytes --></tctoken>
+    ///   <tctoken><!-- raw token bytes --></tctoken>
     /// </presence>
     /// ```
     pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
@@ -104,9 +104,9 @@ impl<'a> Presence<'a> {
             .attr("type", "subscribe")
             .attr("to", jid.to_string());
 
-        // Include tctoken if available for this contact
-        if let Some((token, timestamp)) = self.client.lookup_tc_token_with_timestamp(jid).await {
-            builder = builder.children([build_tc_token_node_with_timestamp(&token, timestamp)]);
+        // Include tctoken if available (no t attribute, matching WhatsApp Web)
+        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
+            builder = builder.children([build_tc_token_node(&token)]);
         }
 
         let node = builder.build();

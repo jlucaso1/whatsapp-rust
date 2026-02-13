@@ -4,8 +4,9 @@
 //! ```xml
 //! <!-- Request (with optional tctoken for privacy gating) -->
 //! <iq xmlns="w:profile:picture" type="get" to="s.whatsapp.net" target="1234567890@s.whatsapp.net" id="...">
-//!   <picture type="preview" query="url"/>
-//!   <tctoken><!-- raw token bytes (optional) --></tctoken>
+//!   <picture type="preview" query="url">
+//!     <tctoken><!-- raw token bytes (optional) --></tctoken>
+//!   </picture>
 //! </iq>
 //!
 //! <!-- Response (success) -->
@@ -99,20 +100,19 @@ impl IqSpec for ProfilePictureSpec {
     type Response = Option<ProfilePicture>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let picture_node = NodeBuilder::new("picture")
+        let mut picture_builder = NodeBuilder::new("picture")
             .attr("type", self.picture_type.as_str())
-            .attr("query", "url")
-            .build();
+            .attr("query", "url");
 
-        let mut children = vec![picture_node];
+        // tctoken is a child of <picture>, matching WhatsApp Web's mixin merge pattern
         if let Some(token) = &self.tc_token {
-            children.push(build_tc_token_node(token));
+            picture_builder = picture_builder.children([build_tc_token_node(token)]);
         }
 
         InfoQuery::get(
             "w:profile:picture",
             Jid::new("", SERVER_JID),
-            Some(NodeContent::Nodes(children)),
+            Some(NodeContent::Nodes(vec![picture_builder.build()])),
         )
         .with_target_ref(&self.jid)
     }
@@ -261,10 +261,14 @@ mod tests {
 
         let iq = spec.build_iq();
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(nodes.len(), 2);
-            assert_eq!(nodes[0].tag, "picture");
-            assert_eq!(nodes[1].tag, "tctoken");
-            match &nodes[1].content {
+            assert_eq!(nodes.len(), 1, "IQ should have one child: picture");
+            let picture = &nodes[0];
+            assert_eq!(picture.tag, "picture");
+
+            // tctoken is a child of picture (matching WhatsApp Web's mixin merge)
+            let tctoken_children: Vec<_> = picture.get_children_by_tag("tctoken").collect();
+            assert_eq!(tctoken_children.len(), 1);
+            match &tctoken_children[0].content {
                 Some(NodeContent::Bytes(data)) => {
                     assert_eq!(data, &[0xCA, 0xFE, 0xBA, 0xBE]);
                 }
@@ -282,12 +286,11 @@ mod tests {
 
         let iq = spec.build_iq();
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(
-                nodes.len(),
-                1,
-                "Should only have picture node without tctoken"
-            );
-            assert_eq!(nodes[0].tag, "picture");
+            assert_eq!(nodes.len(), 1, "IQ should have one child: picture");
+            let picture = &nodes[0];
+            assert_eq!(picture.tag, "picture");
+            let tctoken_children: Vec<_> = picture.get_children_by_tag("tctoken").collect();
+            assert_eq!(tctoken_children.len(), 0, "No tctoken without token");
         } else {
             panic!("Expected NodeContent::Nodes");
         }

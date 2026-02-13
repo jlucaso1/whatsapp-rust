@@ -384,41 +384,47 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     let backend = client.persistence_manager.backend();
 
     for received in &received_tokens {
-        // Timestamp monotonicity guard: only store if incoming >= existing
-        if let Ok(Some(existing)) = backend.get_tc_token(&sender_lid).await {
-            if received.timestamp < existing.token_timestamp {
-                debug!(
-                    target: "Client/TcToken",
-                    "Skipping older token for {} (incoming={}, existing={})",
-                    sender_lid, received.timestamp, existing.token_timestamp
-                );
-                continue;
+        match backend.get_tc_token(&sender_lid).await {
+            Ok(Some(existing)) => {
+                // Timestamp monotonicity guard: only store if incoming >= existing
+                if received.timestamp < existing.token_timestamp {
+                    debug!(
+                        target: "Client/TcToken",
+                        "Skipping older token for {} (incoming={}, existing={})",
+                        sender_lid, received.timestamp, existing.token_timestamp
+                    );
+                    continue;
+                }
+
+                // Preserve existing sender_timestamp when updating token
+                let entry = TcTokenEntry {
+                    token: received.token.clone(),
+                    token_timestamp: received.timestamp,
+                    sender_timestamp: existing.sender_timestamp,
+                };
+
+                if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                    warn!(target: "Client/TcToken", "Failed to update tc_token for {}: {e}", sender_lid);
+                } else {
+                    debug!(target: "Client/TcToken", "Updated tc_token for {} (t={})", sender_lid, received.timestamp);
+                }
             }
+            Ok(None) => {
+                // New token — no existing entry
+                let entry = TcTokenEntry {
+                    token: received.token.clone(),
+                    token_timestamp: received.timestamp,
+                    sender_timestamp: None,
+                };
 
-            // Preserve existing sender_timestamp when updating token
-            let entry = TcTokenEntry {
-                token: received.token.clone(),
-                token_timestamp: received.timestamp,
-                sender_timestamp: existing.sender_timestamp,
-            };
-
-            if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
-                warn!(target: "Client/TcToken", "Failed to update tc_token for {}: {e}", sender_lid);
-            } else {
-                debug!(target: "Client/TcToken", "Updated tc_token for {} (t={})", sender_lid, received.timestamp);
+                if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                    warn!(target: "Client/TcToken", "Failed to store tc_token for {}: {e}", sender_lid);
+                } else {
+                    debug!(target: "Client/TcToken", "Stored new tc_token for {} (t={})", sender_lid, received.timestamp);
+                }
             }
-        } else {
-            // New token — no existing entry
-            let entry = TcTokenEntry {
-                token: received.token.clone(),
-                token_timestamp: received.timestamp,
-                sender_timestamp: None,
-            };
-
-            if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
-                warn!(target: "Client/TcToken", "Failed to store tc_token for {}: {e}", sender_lid);
-            } else {
-                debug!(target: "Client/TcToken", "Stored new tc_token for {} (t={})", sender_lid, received.timestamp);
+            Err(e) => {
+                warn!(target: "Client/TcToken", "Failed to read tc_token for {}: {e}, skipping", sender_lid);
             }
         }
     }

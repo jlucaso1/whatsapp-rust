@@ -38,7 +38,7 @@
 //! <tctoken><!-- raw token bytes --></tctoken>
 //! ```
 
-use crate::iq::node::{optional_attr, required_child};
+use crate::iq::node::{optional_attr, required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
@@ -57,12 +57,20 @@ pub const TC_TOKEN_NUM_BUCKETS: i64 = 4;
 /// Total rolling window duration in seconds (bucket_duration * num_buckets).
 pub const TC_TOKEN_TOTAL_DURATION: i64 = TC_TOKEN_BUCKET_DURATION * TC_TOKEN_NUM_BUCKETS;
 
-/// Check if a tcToken has expired (older than the rolling window).
-pub fn is_tc_token_expired(token_timestamp: i64) -> bool {
-    let now = std::time::SystemTime::now()
+/// Get the current unix timestamp in seconds.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i64;
+        .as_secs() as i64
+}
+
+/// Check if a tcToken has expired (older than the rolling window).
+pub fn is_tc_token_expired(token_timestamp: i64) -> bool {
+    is_tc_token_expired_at(token_timestamp, unix_now())
+}
+
+fn is_tc_token_expired_at(token_timestamp: i64, now: i64) -> bool {
     now - token_timestamp >= TC_TOKEN_TOTAL_DURATION
 }
 
@@ -75,28 +83,23 @@ fn bucket_index(timestamp: i64) -> i64 {
 ///
 /// Returns true if:
 /// - We have never issued a token (`sender_timestamp` is None)
-/// - The sender_timestamp is in a different bucket than the current time
+/// - The current bucket is ahead of the sender_timestamp bucket
 ///   (meaning a bucket boundary has been crossed)
 pub fn should_send_new_tc_token(sender_timestamp: Option<i64>) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    should_send_new_tc_token_at(sender_timestamp, unix_now())
+}
 
+fn should_send_new_tc_token_at(sender_timestamp: Option<i64>, now: i64) -> bool {
     match sender_timestamp {
         None => true,
-        Some(ts) => bucket_index(ts) != bucket_index(now),
+        Some(ts) => bucket_index(now) > bucket_index(ts),
     }
 }
 
 /// Compute the expiration cutoff timestamp for pruning.
 /// Tokens with `token_timestamp < cutoff` should be deleted.
 pub fn tc_token_expiration_cutoff() -> i64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    now - TC_TOKEN_TOTAL_DURATION
+    unix_now() - TC_TOKEN_TOTAL_DURATION
 }
 
 /// A token received from the server in an IQ response or notification.
@@ -104,6 +107,15 @@ pub fn tc_token_expiration_cutoff() -> i64 {
 pub struct ReceivedTcToken {
     /// The JID this token belongs to.
     pub jid: Jid,
+    /// Raw token bytes.
+    pub token: Vec<u8>,
+    /// Timestamp from the `t` attribute.
+    pub timestamp: i64,
+}
+
+/// Token data parsed from a notification (JID resolved by caller).
+#[derive(Debug, Clone)]
+pub struct ParsedTokenData {
     /// Raw token bytes.
     pub token: Vec<u8>,
     /// Timestamp from the `t` attribute.
@@ -121,12 +133,11 @@ pub struct IssuePrivacyTokensSpec {
 }
 
 impl IssuePrivacyTokensSpec {
-    pub fn new(jids: Vec<Jid>) -> Self {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        Self { jids, timestamp }
+    pub fn new(jids: &[Jid]) -> Self {
+        Self {
+            jids: jids.to_vec(),
+            timestamp: unix_now(),
+        }
     }
 }
 
@@ -170,20 +181,21 @@ impl IqSpec for IssuePrivacyTokensSpec {
 
         let mut tokens = Vec::new();
         for token_node in tokens_node.get_children_by_tag("token") {
-            let jid_str = optional_attr(token_node, "jid")
-                .ok_or_else(|| anyhow::anyhow!("missing jid in token response"))?;
+            let jid_str = required_attr(token_node, "jid")?;
             let jid: Jid = jid_str
                 .parse()
                 .map_err(|e| anyhow::anyhow!("invalid jid '{}': {}", jid_str, e))?;
-            let t_str = optional_attr(token_node, "t")
-                .ok_or_else(|| anyhow::anyhow!("missing t in token response"))?;
+            let t_str = required_attr(token_node, "t")?;
             let timestamp: i64 = t_str
                 .parse()
                 .map_err(|e| anyhow::anyhow!("invalid timestamp '{}': {}", t_str, e))?;
 
             let token_bytes = match &token_node.content {
                 Some(NodeContent::Bytes(data)) => data.clone(),
-                _ => Vec::new(),
+                _ => {
+                    log::warn!(target: "TcToken", "Token node for {} has no binary content, skipping", jid);
+                    continue;
+                }
             };
 
             tokens.push(ReceivedTcToken {
@@ -200,10 +212,11 @@ impl IqSpec for IssuePrivacyTokensSpec {
 /// Parse incoming privacy_token notification.
 ///
 /// Extracts token data from a `<notification type="privacy_token">` stanza.
-/// Returns None if the notification doesn't contain valid token data.
+/// Returns `ParsedTokenData` items without JID — the caller is responsible for
+/// resolving the sender JID from the notification's `sender_lid` / `from` attributes.
 pub fn parse_privacy_token_notification(
     notification: &Node,
-) -> Result<Vec<ReceivedTcToken>, anyhow::Error> {
+) -> Result<Vec<ParsedTokenData>, anyhow::Error> {
     let tokens_node = required_child(notification, "tokens")?;
 
     let mut tokens = Vec::new();
@@ -213,8 +226,7 @@ pub fn parse_privacy_token_notification(
             continue;
         }
 
-        let t_str = optional_attr(token_node, "t")
-            .ok_or_else(|| anyhow::anyhow!("missing t in privacy_token notification"))?;
+        let t_str = required_attr(token_node, "t")?;
         let timestamp: i64 = t_str.parse().map_err(|e| {
             anyhow::anyhow!(
                 "invalid timestamp '{}' in privacy_token notification: {}",
@@ -225,14 +237,13 @@ pub fn parse_privacy_token_notification(
 
         let token_bytes = match &token_node.content {
             Some(NodeContent::Bytes(data)) => data.clone(),
-            _ => Vec::new(),
+            _ => {
+                log::warn!(target: "TcToken", "Notification token node has no binary content, skipping");
+                continue;
+            }
         };
 
-        // JID comes from the notification's sender attributes, not from the token node itself.
-        // The caller is responsible for resolving the sender JID to a LID.
-        // We use an empty JID here as a placeholder — the caller fills it in.
-        tokens.push(ReceivedTcToken {
-            jid: Jid::default(),
+        tokens.push(ParsedTokenData {
             token: token_bytes,
             timestamp,
         });
@@ -246,7 +257,7 @@ pub fn build_tc_token_node(token: &[u8]) -> Node {
     NodeBuilder::new("tctoken").bytes(token.to_vec()).build()
 }
 
-/// Build a `<tctoken>` stanza child with timestamp for presence subscribe.
+/// Build a `<tctoken>` stanza child with timestamp attribute.
 pub fn build_tc_token_node_with_timestamp(token: &[u8], timestamp: i64) -> Node {
     NodeBuilder::new("tctoken")
         .attr("t", timestamp.to_string())
@@ -260,7 +271,6 @@ mod tests {
 
     #[test]
     fn test_bucket_index() {
-        // Bucket duration is 604800 (7 days)
         assert_eq!(bucket_index(0), 0);
         assert_eq!(bucket_index(604799), 0);
         assert_eq!(bucket_index(604800), 1);
@@ -270,64 +280,52 @@ mod tests {
 
     #[test]
     fn test_should_send_new_tc_token_none() {
-        // No sender_timestamp means we should always send
-        assert!(should_send_new_tc_token(None));
+        assert!(should_send_new_tc_token_at(None, 1_000_000));
     }
 
     #[test]
     fn test_should_send_new_tc_token_same_bucket() {
-        // Timestamp in the same bucket as now should not trigger
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        // Use a timestamp that's in the same bucket
-        let same_bucket_ts = (now / TC_TOKEN_BUCKET_DURATION) * TC_TOKEN_BUCKET_DURATION;
-        assert!(!should_send_new_tc_token(Some(same_bucket_ts)));
+        let now = 2 * TC_TOKEN_BUCKET_DURATION + 100;
+        let same_bucket_ts = 2 * TC_TOKEN_BUCKET_DURATION;
+        assert!(!should_send_new_tc_token_at(Some(same_bucket_ts), now));
     }
 
     #[test]
     fn test_should_send_new_tc_token_different_bucket() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        // Go back one full bucket
-        let old_ts = now - TC_TOKEN_BUCKET_DURATION;
-        // This could be same or different bucket depending on timing,
-        // but going back 2 buckets definitely crosses
-        let very_old_ts = now - TC_TOKEN_BUCKET_DURATION * 2;
-        assert!(should_send_new_tc_token(Some(very_old_ts)));
-        // Old timestamp by 1 bucket may or may not cross depending on alignment,
-        // but with 2 buckets back it's guaranteed
-        let _ = old_ts; // suppress unused
+        let now = 3 * TC_TOKEN_BUCKET_DURATION + 100;
+        let old_ts = 1 * TC_TOKEN_BUCKET_DURATION + 50;
+        assert!(should_send_new_tc_token_at(Some(old_ts), now));
+    }
+
+    #[test]
+    fn test_should_send_new_tc_token_clock_backward_no_reissue() {
+        // If clock goes backwards, should NOT trigger re-issuance (> not !=)
+        let future_ts = 5 * TC_TOKEN_BUCKET_DURATION + 100;
+        let now = 3 * TC_TOKEN_BUCKET_DURATION + 100;
+        assert!(!should_send_new_tc_token_at(Some(future_ts), now));
     }
 
     #[test]
     fn test_is_tc_token_expired() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = 10 * TC_TOKEN_BUCKET_DURATION;
 
         // Recent token should not be expired
-        assert!(!is_tc_token_expired(now - 100));
+        assert!(!is_tc_token_expired_at(now - 100, now));
 
         // Token older than total window should be expired
-        assert!(is_tc_token_expired(now - TC_TOKEN_TOTAL_DURATION - 1));
+        assert!(is_tc_token_expired_at(
+            now - TC_TOKEN_TOTAL_DURATION - 1,
+            now
+        ));
 
         // Token at exact boundary
-        assert!(is_tc_token_expired(now - TC_TOKEN_TOTAL_DURATION));
+        assert!(is_tc_token_expired_at(now - TC_TOKEN_TOTAL_DURATION, now));
     }
 
     #[test]
     fn test_tc_token_expiration_cutoff() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now();
         let cutoff = tc_token_expiration_cutoff();
-        // Cutoff should be approximately now - total_duration
         let expected = now - TC_TOKEN_TOTAL_DURATION;
         assert!((cutoff - expected).abs() <= 1);
     }
@@ -382,6 +380,29 @@ mod tests {
     }
 
     #[test]
+    fn test_issue_privacy_tokens_spec_parse_skips_empty_token() {
+        let spec = IssuePrivacyTokensSpec {
+            jids: vec!["100000000000001@lid".parse().unwrap()],
+            timestamp: 1707000000,
+        };
+
+        // Token node without binary content should be skipped
+        let response = NodeBuilder::new("iq")
+            .attr("type", "result")
+            .children([NodeBuilder::new("tokens")
+                .children([NodeBuilder::new("token")
+                    .attr("jid", "100000000000001@lid")
+                    .attr("t", "1707000000")
+                    .attr("type", "trusted_contact")
+                    .build()])
+                .build()])
+            .build();
+
+        let result = spec.parse_response(&response).unwrap();
+        assert!(result.tokens.is_empty());
+    }
+
+    #[test]
     fn test_parse_privacy_token_notification() {
         let notification = NodeBuilder::new("notification")
             .attr("type", "privacy_token")
@@ -424,6 +445,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_privacy_token_notification_skips_empty_content() {
+        let notification = NodeBuilder::new("notification")
+            .children([NodeBuilder::new("tokens")
+                .children([NodeBuilder::new("token")
+                    .attr("type", "trusted_contact")
+                    .attr("t", "1707000000")
+                    .build()])
+                .build()])
+            .build();
+
+        let tokens = parse_privacy_token_notification(&notification).unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
     fn test_build_tc_token_node() {
         let node = build_tc_token_node(&[0x01, 0x02, 0x03]);
         assert_eq!(node.tag, "tctoken");
@@ -447,10 +483,20 @@ mod tests {
             timestamp: 1707000000,
         };
 
-        // Response without tokens node
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
         let result = spec.parse_response(&response).unwrap();
         assert!(result.tokens.is_empty());
+    }
+
+    #[test]
+    fn test_issue_privacy_tokens_spec_new_from_slice() {
+        let jid1: Jid = "100000000000001@lid".parse().unwrap();
+        let jid2: Jid = "100000000000002@lid".parse().unwrap();
+        let jids = [jid1.clone(), jid2.clone()];
+        let spec = IssuePrivacyTokensSpec::new(&jids);
+        assert_eq!(spec.jids.len(), 2);
+        assert_eq!(spec.jids[0], jid1);
+        assert_eq!(spec.jids[1], jid2);
     }
 }

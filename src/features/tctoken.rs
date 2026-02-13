@@ -37,7 +37,7 @@ impl<'a> TcToken<'a> {
             return Ok(Vec::new());
         }
 
-        let spec = IssuePrivacyTokensSpec::new(jids.to_vec());
+        let spec = IssuePrivacyTokensSpec::new(jids);
         let response = self.client.execute(spec).await?;
         let backend = self.client.persistence_manager.backend();
         let now = std::time::SystemTime::now()
