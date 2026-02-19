@@ -1,12 +1,14 @@
 use crate::store::Device;
 use async_trait::async_trait;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
     PreKeyRecord, PreKeyStore, ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
     SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
+use wacore::libsignal::protocol::{SenderKeyRecord, SenderKeyStore};
 
 use wacore::libsignal::store::record_helpers as wacore_record;
 use wacore::libsignal::store::sender_key_name::SenderKeyName;
@@ -53,6 +55,207 @@ impl SignalProtocolStoreAdapter {
     }
 }
 
+#[derive(Default)]
+struct BatchWriteCache {
+    sessions: HashMap<ProtocolAddress, Option<SessionRecord>>,
+    dirty_sessions: HashSet<ProtocolAddress>,
+    identities: HashMap<ProtocolAddress, Option<IdentityKey>>,
+    dirty_identities: HashSet<ProtocolAddress>,
+    sender_keys: HashMap<SenderKeyName, Option<SenderKeyRecord>>,
+    dirty_sender_keys: HashSet<SenderKeyName>,
+}
+
+#[derive(Clone)]
+pub struct CachedSessionAdapter {
+    inner: SessionAdapter,
+    cache: Arc<Mutex<BatchWriteCache>>,
+}
+
+impl CachedSessionAdapter {
+    fn new(inner: SessionAdapter, cache: Arc<Mutex<BatchWriteCache>>) -> Self {
+        Self { inner, cache }
+    }
+
+    async fn flush(&mut self) -> Result<(), SignalProtocolError> {
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_sessions
+                .iter()
+                .filter_map(|address| {
+                    cache
+                        .sessions
+                        .get(address)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|record| (address.clone(), record.clone()))
+                })
+                .collect()
+        };
+
+        for (address, record) in pending_writes {
+            SessionStore::store_session(&mut self.inner, &address, &record).await?;
+            self.cache.lock().await.dirty_sessions.remove(&address);
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_session(
+        &mut self,
+        address: &ProtocolAddress,
+    ) -> Result<(), SignalProtocolError> {
+        let addr_str = address.to_string();
+        let device = self.inner.0.device.write().await;
+        device
+            .backend
+            .delete_session(&addr_str)
+            .await
+            .map_err(|e| SignalProtocolError::InvalidState("delete_session", e.to_string()))?;
+        drop(device);
+        self.invalidate(address).await;
+        Ok(())
+    }
+
+    async fn invalidate(&mut self, address: &ProtocolAddress) {
+        let mut cache = self.cache.lock().await;
+        cache.sessions.remove(address);
+        cache.dirty_sessions.remove(address);
+    }
+}
+
+#[derive(Clone)]
+pub struct CachedIdentityAdapter {
+    inner: IdentityAdapter,
+    cache: Arc<Mutex<BatchWriteCache>>,
+}
+
+impl CachedIdentityAdapter {
+    fn new(inner: IdentityAdapter, cache: Arc<Mutex<BatchWriteCache>>) -> Self {
+        Self { inner, cache }
+    }
+
+    async fn flush(&mut self) -> Result<(), SignalProtocolError> {
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_identities
+                .iter()
+                .filter_map(|address| {
+                    cache
+                        .identities
+                        .get(address)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|identity| (address.clone(), *identity))
+                })
+                .collect()
+        };
+
+        for (address, identity) in pending_writes {
+            IdentityKeyStore::save_identity(&mut self.inner, &address, &identity).await?;
+            self.cache.lock().await.dirty_identities.remove(&address);
+        }
+
+        Ok(())
+    }
+
+    async fn invalidate(&mut self, address: &ProtocolAddress) {
+        let mut cache = self.cache.lock().await;
+        cache.identities.remove(address);
+        cache.dirty_identities.remove(address);
+    }
+}
+
+#[derive(Clone)]
+pub struct CachedSenderKeyAdapter {
+    inner: SenderKeyAdapter,
+    cache: Arc<Mutex<BatchWriteCache>>,
+}
+
+impl CachedSenderKeyAdapter {
+    fn new(inner: SenderKeyAdapter, cache: Arc<Mutex<BatchWriteCache>>) -> Self {
+        Self { inner, cache }
+    }
+
+    async fn flush(&mut self) -> Result<(), SignalProtocolError> {
+        let pending_writes: Vec<_> = {
+            let cache = self.cache.lock().await;
+            cache
+                .dirty_sender_keys
+                .iter()
+                .filter_map(|name| {
+                    cache
+                        .sender_keys
+                        .get(name)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|record| (name.clone(), record.clone()))
+                })
+                .collect()
+        };
+
+        for (sender_key_name, record) in pending_writes {
+            SenderKeyStore::store_sender_key(&mut self.inner, &sender_key_name, &record).await?;
+            self.cache
+                .lock()
+                .await
+                .dirty_sender_keys
+                .remove(&sender_key_name);
+        }
+
+        Ok(())
+    }
+
+    async fn invalidate(&mut self, sender_key_name: &SenderKeyName) {
+        let mut cache = self.cache.lock().await;
+        cache.sender_keys.remove(sender_key_name);
+        cache.dirty_sender_keys.remove(sender_key_name);
+    }
+}
+
+pub struct BatchedSignalProtocolStoreAdapter {
+    pub session_store: CachedSessionAdapter,
+    pub identity_store: CachedIdentityAdapter,
+    pub pre_key_store: PreKeyAdapter,
+    pub signed_pre_key_store: SignedPreKeyAdapter,
+    pub sender_key_store: CachedSenderKeyAdapter,
+}
+
+impl BatchedSignalProtocolStoreAdapter {
+    pub fn new(device: Arc<RwLock<Device>>) -> Self {
+        let base = SignalProtocolStoreAdapter::new(device);
+        let cache = Arc::new(Mutex::new(BatchWriteCache::default()));
+        Self {
+            session_store: CachedSessionAdapter::new(base.session_store, Arc::clone(&cache)),
+            identity_store: CachedIdentityAdapter::new(base.identity_store, Arc::clone(&cache)),
+            pre_key_store: base.pre_key_store,
+            signed_pre_key_store: base.signed_pre_key_store,
+            sender_key_store: CachedSenderKeyAdapter::new(base.sender_key_store, cache),
+        }
+    }
+
+    pub async fn flush(&mut self) -> Result<(), SignalProtocolError> {
+        // Preserve original operation order: identity first, then session.
+        self.identity_store.flush().await?;
+        self.session_store.flush().await?;
+        self.sender_key_store.flush().await?;
+        Ok(())
+    }
+
+    pub async fn delete_session(
+        &mut self,
+        address: &ProtocolAddress,
+    ) -> Result<(), SignalProtocolError> {
+        self.session_store.delete_session(address).await
+    }
+
+    pub async fn invalidate_identity(&mut self, address: &ProtocolAddress) {
+        self.identity_store.invalidate(address).await;
+    }
+
+    pub async fn invalidate_sender_key(&mut self, sender_key_name: &SenderKeyName) {
+        self.sender_key_store.invalidate(sender_key_name).await;
+    }
+}
+
 #[async_trait]
 impl SessionStore for SessionAdapter {
     async fn load_session(
@@ -81,50 +284,6 @@ impl SessionStore for SessionAdapter {
         let addr_str = address.to_string();
 
         let device = self.0.device.read().await;
-        let existing_session = device
-            .backend
-            .get_session(&addr_str)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|data| SessionRecord::deserialize(&data).ok());
-
-        if let (Some(existing), Some(new_state)) = (&existing_session, record.session_state()) {
-            if let Some(existing_state) = existing.session_state() {
-                let old_base_key = existing_state.alice_base_key();
-                let new_base_key = new_state.alice_base_key();
-
-                if old_base_key != new_base_key {
-                    let backtrace = std::backtrace::Backtrace::force_capture();
-                    log::warn!(
-                        target: "signal_session_store",
-                        "⚠️ SESSION BASE KEY CHANGED for {}!\n\
-                         Old base_key: {}\n\
-                         New base_key: {}\n\
-                         Old version: {:?}, New version: {:?}\n\
-                         Old prev_sessions: {}, New prev_sessions: {}\n\
-                         This will cause MAC verification failures on future messages!\n\
-                         Backtrace:\n{}",
-                        addr_str,
-                        hex::encode(old_base_key),
-                        hex::encode(new_base_key),
-                        existing_state.session_version(),
-                        new_state.session_version(),
-                        existing.previous_session_count(),
-                        record.previous_session_count(),
-                        backtrace
-                    );
-                }
-            }
-        } else if let (None, Some(state)) = (&existing_session, record.session_state()) {
-            log::debug!(
-                target: "signal_session_store",
-                "Creating new session for {}: base_key={}",
-                addr_str,
-                hex::encode(&state.alice_base_key()[..8.min(state.alice_base_key().len())])
-            );
-        }
-
         let record_bytes = record.serialize()?;
         device
             .backend
@@ -159,18 +318,10 @@ impl IdentityKeyStore for IdentityAdapter {
         address: &ProtocolAddress,
         identity: &IdentityKey,
     ) -> Result<IdentityChange, SignalProtocolError> {
-        let existing_identity = self.get_identity(address).await?;
-
         let mut device = self.0.device.write().await;
         IdentityKeyStore::save_identity(&mut *device, address, identity)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))?;
-
-        match existing_identity {
-            None => Ok(IdentityChange::NewOrUnchanged),
-            Some(existing) if &existing == identity => Ok(IdentityChange::NewOrUnchanged),
-            Some(_) => Ok(IdentityChange::ReplacedExisting),
-        }
+            .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))
     }
 
     async fn is_trusted_identity(
@@ -193,6 +344,99 @@ impl IdentityKeyStore for IdentityAdapter {
         IdentityKeyStore::get_identity(&*device, address)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))
+    }
+}
+
+#[async_trait]
+impl SessionStore for CachedSessionAdapter {
+    async fn load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
+        {
+            let cache = self.cache.lock().await;
+            if let Some(cached) = cache.sessions.get(address) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let loaded = SessionStore::load_session(&self.inner, address).await?;
+        let mut cache = self.cache.lock().await;
+        let cached = cache
+            .sessions
+            .entry(address.clone())
+            .or_insert_with(|| loaded.clone());
+        Ok(cached.clone())
+    }
+
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<(), SignalProtocolError> {
+        let mut cache = self.cache.lock().await;
+        cache.sessions.insert(address.clone(), Some(record.clone()));
+        cache.dirty_sessions.insert(address.clone());
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl IdentityKeyStore for CachedIdentityAdapter {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
+        IdentityKeyStore::get_identity_key_pair(&self.inner).await
+    }
+
+    async fn get_local_registration_id(&self) -> Result<u32, SignalProtocolError> {
+        IdentityKeyStore::get_local_registration_id(&self.inner).await
+    }
+
+    async fn save_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<IdentityChange, SignalProtocolError> {
+        let existing = self.get_identity(address).await?;
+        let changed = existing.is_some_and(|current| current != *identity);
+        if existing.is_none() || changed {
+            let mut cache = self.cache.lock().await;
+            cache.identities.insert(address.clone(), Some(*identity));
+            cache.dirty_identities.insert(address.clone());
+        }
+        Ok(IdentityChange::from_changed(changed))
+    }
+
+    async fn is_trusted_identity(
+        &self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+        _direction: Direction,
+    ) -> Result<bool, SignalProtocolError> {
+        let existing = self.get_identity(address).await?;
+        Ok(match existing {
+            None => true,
+            Some(stored) => stored == *identity,
+        })
+    }
+
+    async fn get_identity(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<IdentityKey>, SignalProtocolError> {
+        {
+            let cache = self.cache.lock().await;
+            if let Some(cached) = cache.identities.get(address) {
+                return Ok(*cached);
+            }
+        }
+
+        let loaded = IdentityKeyStore::get_identity(&self.inner, address).await?;
+        let mut cache = self.cache.lock().await;
+        let cached = cache
+            .identities
+            .entry(address.clone())
+            .or_insert_with(|| loaded);
+        Ok(*cached)
     }
 }
 
@@ -272,5 +516,41 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
         let mut device = self.0.device.write().await;
         wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender_key_name)
             .await
+    }
+}
+
+#[async_trait]
+impl SenderKeyStore for CachedSenderKeyAdapter {
+    async fn store_sender_key(
+        &mut self,
+        sender_key_name: &SenderKeyName,
+        record: &SenderKeyRecord,
+    ) -> wacore::libsignal::protocol::error::Result<()> {
+        let mut cache = self.cache.lock().await;
+        cache
+            .sender_keys
+            .insert(sender_key_name.clone(), Some(record.clone()));
+        cache.dirty_sender_keys.insert(sender_key_name.clone());
+        Ok(())
+    }
+
+    async fn load_sender_key(
+        &mut self,
+        sender_key_name: &SenderKeyName,
+    ) -> wacore::libsignal::protocol::error::Result<Option<SenderKeyRecord>> {
+        {
+            let cache = self.cache.lock().await;
+            if let Some(cached) = cache.sender_keys.get(sender_key_name) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let loaded = SenderKeyStore::load_sender_key(&mut self.inner, sender_key_name).await?;
+        let mut cache = self.cache.lock().await;
+        let cached = cache
+            .sender_keys
+            .entry(sender_key_name.clone())
+            .or_insert_with(|| loaded.clone());
+        Ok(cached.clone())
     }
 }

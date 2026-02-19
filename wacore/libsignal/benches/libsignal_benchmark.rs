@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use iai_callgrind::{
@@ -17,18 +18,48 @@ use wacore_libsignal::protocol::{
 };
 use wacore_libsignal::store::sender_key_name::SenderKeyName;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchmarkStoreMode {
+    InMemory,
+    BackendSerialized,
+}
+
+fn benchmark_store_mode() -> BenchmarkStoreMode {
+    static MODE: OnceLock<BenchmarkStoreMode> = OnceLock::new();
+    // Toggle with `WACORE_LIBSIGNAL_BENCH_MODE=backend` to include
+    // serialize/deserialize overhead on each store access.
+    *MODE.get_or_init(|| match std::env::var("WACORE_LIBSIGNAL_BENCH_MODE") {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if matches!(
+                normalized.as_str(),
+                "backend" | "serialized" | "backend-serialized"
+            ) {
+                BenchmarkStoreMode::BackendSerialized
+            } else {
+                BenchmarkStoreMode::InMemory
+            }
+        }
+        Err(_) => BenchmarkStoreMode::InMemory,
+    })
+}
+
 struct InMemoryIdentityKeyStore {
+    mode: BenchmarkStoreMode,
     identity_key_pair: IdentityKeyPair,
     registration_id: u32,
     identities: HashMap<ProtocolAddress, IdentityKey>,
+    serialized_identities: HashMap<ProtocolAddress, [u8; 33]>,
 }
 
 impl InMemoryIdentityKeyStore {
     fn new(identity_key_pair: IdentityKeyPair, registration_id: u32) -> Self {
         Self {
+            mode: benchmark_store_mode(),
             identity_key_pair,
             registration_id,
             identities: HashMap::new(),
+            serialized_identities: HashMap::new(),
         }
     }
 }
@@ -51,10 +82,20 @@ impl IdentityKeyStore for InMemoryIdentityKeyStore {
         identity: &IdentityKey,
     ) -> wacore_libsignal::protocol::error::Result<IdentityChange> {
         let changed = self
-            .identities
-            .get(address)
-            .is_some_and(|existing| existing != identity);
-        self.identities.insert(address.clone(), *identity);
+            .get_identity(address)
+            .await?
+            .is_some_and(|existing| existing != *identity);
+
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.identities.insert(address.clone(), *identity);
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_identities
+                    .insert(address.clone(), identity.serialize());
+            }
+        }
+
         Ok(IdentityChange::from_changed(changed))
     }
 
@@ -71,18 +112,29 @@ impl IdentityKeyStore for InMemoryIdentityKeyStore {
         &self,
         address: &ProtocolAddress,
     ) -> wacore_libsignal::protocol::error::Result<Option<IdentityKey>> {
-        Ok(self.identities.get(address).cloned())
+        match self.mode {
+            BenchmarkStoreMode::InMemory => Ok(self.identities.get(address).cloned()),
+            BenchmarkStoreMode::BackendSerialized => self
+                .serialized_identities
+                .get(address)
+                .map(|bytes| IdentityKey::try_from(bytes.as_slice()))
+                .transpose(),
+        }
     }
 }
 
 struct InMemoryPreKeyStore {
+    mode: BenchmarkStoreMode,
     prekeys: HashMap<PreKeyId, PreKeyRecord>,
+    serialized_prekeys: HashMap<PreKeyId, Vec<u8>>,
 }
 
 impl InMemoryPreKeyStore {
     fn new() -> Self {
         Self {
+            mode: benchmark_store_mode(),
             prekeys: HashMap::new(),
+            serialized_prekeys: HashMap::new(),
         }
     }
 }
@@ -93,10 +145,18 @@ impl PreKeyStore for InMemoryPreKeyStore {
         &self,
         prekey_id: PreKeyId,
     ) -> wacore_libsignal::protocol::error::Result<PreKeyRecord> {
-        self.prekeys
-            .get(&prekey_id)
-            .cloned()
-            .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidPreKeyId)
+        match self.mode {
+            BenchmarkStoreMode::InMemory => self
+                .prekeys
+                .get(&prekey_id)
+                .cloned()
+                .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidPreKeyId),
+            BenchmarkStoreMode::BackendSerialized => self
+                .serialized_prekeys
+                .get(&prekey_id)
+                .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidPreKeyId)
+                .and_then(|bytes| PreKeyRecord::deserialize(bytes)),
+        }
     }
 
     async fn save_pre_key(
@@ -104,7 +164,15 @@ impl PreKeyStore for InMemoryPreKeyStore {
         prekey_id: PreKeyId,
         record: &PreKeyRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.prekeys.insert(prekey_id, record.clone());
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.prekeys.insert(prekey_id, record.clone());
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_prekeys
+                    .insert(prekey_id, record.serialize()?);
+            }
+        }
         Ok(())
     }
 
@@ -112,19 +180,30 @@ impl PreKeyStore for InMemoryPreKeyStore {
         &mut self,
         prekey_id: PreKeyId,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.prekeys.remove(&prekey_id);
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.prekeys.remove(&prekey_id);
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_prekeys.remove(&prekey_id);
+            }
+        }
         Ok(())
     }
 }
 
 struct InMemorySignedPreKeyStore {
+    mode: BenchmarkStoreMode,
     signed_prekeys: HashMap<SignedPreKeyId, SignedPreKeyRecord>,
+    serialized_signed_prekeys: HashMap<SignedPreKeyId, Vec<u8>>,
 }
 
 impl InMemorySignedPreKeyStore {
     fn new() -> Self {
         Self {
+            mode: benchmark_store_mode(),
             signed_prekeys: HashMap::new(),
+            serialized_signed_prekeys: HashMap::new(),
         }
     }
 }
@@ -135,10 +214,18 @@ impl SignedPreKeyStore for InMemorySignedPreKeyStore {
         &self,
         signed_prekey_id: SignedPreKeyId,
     ) -> wacore_libsignal::protocol::error::Result<SignedPreKeyRecord> {
-        self.signed_prekeys
-            .get(&signed_prekey_id)
-            .cloned()
-            .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidSignedPreKeyId)
+        match self.mode {
+            BenchmarkStoreMode::InMemory => self
+                .signed_prekeys
+                .get(&signed_prekey_id)
+                .cloned()
+                .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidSignedPreKeyId),
+            BenchmarkStoreMode::BackendSerialized => self
+                .serialized_signed_prekeys
+                .get(&signed_prekey_id)
+                .ok_or(wacore_libsignal::protocol::SignalProtocolError::InvalidSignedPreKeyId)
+                .and_then(|bytes| SignedPreKeyRecord::deserialize(bytes)),
+        }
     }
 
     async fn save_signed_pre_key(
@@ -146,19 +233,31 @@ impl SignedPreKeyStore for InMemorySignedPreKeyStore {
         signed_prekey_id: SignedPreKeyId,
         record: &SignedPreKeyRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.signed_prekeys.insert(signed_prekey_id, record.clone());
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.signed_prekeys.insert(signed_prekey_id, record.clone());
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_signed_prekeys
+                    .insert(signed_prekey_id, record.serialize()?);
+            }
+        }
         Ok(())
     }
 }
 
 struct InMemorySessionStore {
+    mode: BenchmarkStoreMode,
     sessions: HashMap<ProtocolAddress, SessionRecord>,
+    serialized_sessions: HashMap<ProtocolAddress, Vec<u8>>,
 }
 
 impl InMemorySessionStore {
     fn new() -> Self {
         Self {
+            mode: benchmark_store_mode(),
             sessions: HashMap::new(),
+            serialized_sessions: HashMap::new(),
         }
     }
 }
@@ -169,7 +268,14 @@ impl SessionStore for InMemorySessionStore {
         &self,
         address: &ProtocolAddress,
     ) -> wacore_libsignal::protocol::error::Result<Option<SessionRecord>> {
-        Ok(self.sessions.get(address).cloned())
+        match self.mode {
+            BenchmarkStoreMode::InMemory => Ok(self.sessions.get(address).cloned()),
+            BenchmarkStoreMode::BackendSerialized => self
+                .serialized_sessions
+                .get(address)
+                .map(|bytes| SessionRecord::deserialize(bytes))
+                .transpose(),
+        }
     }
 
     async fn store_session(
@@ -177,19 +283,31 @@ impl SessionStore for InMemorySessionStore {
         address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.sessions.insert(address.clone(), record.clone());
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.sessions.insert(address.clone(), record.clone());
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_sessions
+                    .insert(address.clone(), record.serialize()?);
+            }
+        }
         Ok(())
     }
 }
 
 struct InMemorySenderKeyStore {
+    mode: BenchmarkStoreMode,
     sender_keys: HashMap<SenderKeyName, SenderKeyRecord>,
+    serialized_sender_keys: HashMap<SenderKeyName, Vec<u8>>,
 }
 
 impl InMemorySenderKeyStore {
     fn new() -> Self {
         Self {
+            mode: benchmark_store_mode(),
             sender_keys: HashMap::new(),
+            serialized_sender_keys: HashMap::new(),
         }
     }
 }
@@ -201,8 +319,16 @@ impl SenderKeyStore for InMemorySenderKeyStore {
         sender_key_name: &SenderKeyName,
         record: &SenderKeyRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.sender_keys
-            .insert(sender_key_name.clone(), record.clone());
+        match self.mode {
+            BenchmarkStoreMode::InMemory => {
+                self.sender_keys
+                    .insert(sender_key_name.clone(), record.clone());
+            }
+            BenchmarkStoreMode::BackendSerialized => {
+                self.serialized_sender_keys
+                    .insert(sender_key_name.clone(), record.serialize()?);
+            }
+        }
         Ok(())
     }
 
@@ -210,7 +336,14 @@ impl SenderKeyStore for InMemorySenderKeyStore {
         &mut self,
         sender_key_name: &SenderKeyName,
     ) -> wacore_libsignal::protocol::error::Result<Option<SenderKeyRecord>> {
-        Ok(self.sender_keys.get(sender_key_name).cloned())
+        match self.mode {
+            BenchmarkStoreMode::InMemory => Ok(self.sender_keys.get(sender_key_name).cloned()),
+            BenchmarkStoreMode::BackendSerialized => self
+                .serialized_sender_keys
+                .get(sender_key_name)
+                .map(|bytes| SenderKeyRecord::deserialize(bytes))
+                .transpose(),
+        }
     }
 }
 

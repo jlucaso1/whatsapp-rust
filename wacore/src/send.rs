@@ -1,7 +1,7 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
     CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
+    SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet, group_encrypt,
     message_encrypt, process_prekey_bundle,
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
@@ -12,85 +12,13 @@ use crate::reporting_token::{
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
-use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand::{Rng, TryRngCore as _};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::{Attrs, Node};
-use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
-
-pub async fn encrypt_group_message<S, R>(
-    sender_key_store: &mut S,
-    group_jid: &Jid,
-    sender_jid: &Jid,
-    plaintext: &[u8],
-    csprng: &mut R,
-) -> Result<SenderKeyMessage>
-where
-    S: SenderKeyStore + ?Sized,
-    R: Rng + CryptoRng,
-{
-    let sender_address = sender_jid.to_protocol_address();
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
-    log::debug!(
-        "Attempting to load sender key for group {} sender {}",
-        sender_key_name.group_id(),
-        sender_key_name.sender_id()
-    );
-
-    let mut record = sender_key_store
-        .load_sender_key(&sender_key_name)
-        .await?
-        .ok_or_else(|| {
-            SignalProtocolError::NoSenderKeyState(format!(
-                "no sender key record for group {} sender {}",
-                sender_key_name.group_id(),
-                sender_key_name.sender_id()
-            ))
-        })?;
-
-    let sender_key_state = record
-        .sender_key_state_mut()
-        .map_err(|e| anyhow!("Invalid SenderKey session: {:?}", e))?;
-
-    let sender_chain_key = sender_key_state
-        .sender_chain_key()
-        .ok_or_else(|| anyhow!("Invalid SenderKey session: missing chain key"))?;
-
-    let message_keys = sender_chain_key.sender_message_key();
-
-    let mut ciphertext = Vec::new();
-    aes_256_cbc_encrypt_into(
-        plaintext,
-        message_keys.cipher_key(),
-        message_keys.iv(),
-        &mut ciphertext,
-    )
-    .map_err(|_| anyhow!("AES encryption failed"))?;
-
-    let signing_key = sender_key_state
-        .signing_key_private()
-        .map_err(|e| anyhow!("Invalid SenderKey session: missing signing key: {:?}", e))?;
-
-    let skm = SenderKeyMessage::new(
-        SENDERKEY_MESSAGE_CURRENT_VERSION,
-        sender_key_state.chain_id(),
-        message_keys.iteration(),
-        ciphertext.into_boxed_slice(),
-        csprng,
-        &signing_key,
-    )?;
-
-    sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
-
-    sender_key_store
-        .store_sender_key(&sender_key_name, &record)
-        .await?;
-
-    Ok(skm)
-}
 
 pub struct SignalStores<'a, S, I, P, SP> {
     pub sender_key_store: &'a mut (dyn crate::libsignal::protocol::SenderKeyStore + Send + Sync),
@@ -98,6 +26,37 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub identity_store: &'a mut I,
     pub prekey_store: &'a mut P,
     pub signed_prekey_store: &'a SP,
+}
+
+fn build_participant_enc_node(
+    device_jid: &Jid,
+    encrypted_payload: CiphertextMessage,
+    enc_extra_attrs: &Attrs,
+) -> Option<(Node, bool)> {
+    let (enc_type, serialized_bytes, includes_prekey_message) = match encrypted_payload {
+        CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec(), true),
+        CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec(), false),
+        _ => return None,
+    };
+
+    let mut enc_attrs = Attrs::new();
+    enc_attrs.insert("v".to_string(), "2".to_string());
+    enc_attrs.insert("type".to_string(), enc_type.to_string());
+    for (k, v) in enc_extra_attrs.iter() {
+        enc_attrs.insert(k.clone(), v.clone());
+    }
+
+    let enc_node = NodeBuilder::new("enc")
+        .attrs(enc_attrs)
+        .bytes(serialized_bytes)
+        .build();
+
+    let participant_node = NodeBuilder::new("to")
+        .attr("jid", device_jid.to_string())
+        .children([enc_node])
+        .build();
+
+    Some((participant_node, includes_prekey_message))
 }
 
 async fn encrypt_for_devices<'a, S, I, P, SP>(
@@ -113,67 +72,19 @@ where
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 {
-    // Build a map of device JIDs to their effective encryption JIDs.
-    // For phone number JIDs, check if we have an existing session under the corresponding LID.
-    // This handles the case where a session was established via a message with sender_lid,
-    // and now we're sending a reply using the phone number address.
+    let mut participant_nodes = Vec::new();
+    let mut includes_prekey_message = false;
     let mut jid_to_encryption_jid: std::collections::HashMap<Jid, Jid> =
         std::collections::HashMap::new();
     let mut jids_needing_prekeys = Vec::new();
+    let mut prekey_set = HashSet::new();
 
+    // Build a deterministic PN->LID preferred mapping up-front, then attempt
+    // encryption directly. This avoids an extra pre-encrypt session load.
     for device_jid in devices {
-        // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
-        // creating signal addresses. We do the same: check LID session FIRST.
-        // This prevents using stale PN sessions when a newer LID session exists.
-        if device_jid.is_pn()
-            && let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await
-        {
-            // Construct the LID JID with the same device ID
-            let lid_jid = Jid::lid_device(lid_user, device_jid.device);
-            let lid_address = lid_jid.to_protocol_address();
-
-            if stores
-                .session_store
-                .load_session(&lid_address)
-                .await?
-                .is_some()
-            {
-                // Found existing session under LID address - use it!
-                log::debug!(
-                    "Using LID session {} for PN {} (LID-first lookup)",
-                    lid_jid,
-                    device_jid
-                );
-                jid_to_encryption_jid.insert(device_jid.clone(), lid_jid);
-                continue;
-            }
-        }
-
-        // Fall back to direct address lookup (for LID JIDs or PN without LID mapping)
-        let signal_address = device_jid.to_protocol_address();
-        if stores
-            .session_store
-            .load_session(&signal_address)
-            .await?
-            .is_some()
-        {
-            // Session exists under direct address, use it
-            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
-            continue;
-        }
-
-        // No session found - need to fetch prekeys and create session.
-        // Keep device_jid for prekey fetch (server returns bundles keyed by this),
-        // but normalize to LID for the actual session creation.
         let encryption_jid = if device_jid.is_pn() {
             if let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await {
-                let lid_jid = Jid::lid_device(lid_user, device_jid.device);
-                log::debug!(
-                    "Will create LID session {} for PN {} (no existing session)",
-                    lid_jid,
-                    device_jid
-                );
-                lid_jid
+                Jid::lid_device(lid_user, device_jid.device)
             } else {
                 device_jid.clone()
             }
@@ -181,8 +92,85 @@ where
             device_jid.clone()
         };
         jid_to_encryption_jid.insert(device_jid.clone(), encryption_jid);
-        // Use original device_jid for prekey fetch (HashMap key match)
-        jids_needing_prekeys.push(device_jid.clone());
+    }
+
+    // First pass: try encrypting with current mapping; collect only SessionNotFound
+    // devices for pre-key fetch and session creation.
+    for device_jid in devices {
+        let encryption_jid = jid_to_encryption_jid
+            .get(device_jid)
+            .unwrap_or(device_jid)
+            .clone();
+        let signal_address = encryption_jid.to_protocol_address();
+
+        match message_encrypt(
+            plaintext_to_encrypt,
+            &signal_address,
+            stores.session_store,
+            stores.identity_store,
+        )
+        .await
+        {
+            Ok(encrypted_payload) => {
+                if let Some((participant_node, includes_prekey)) =
+                    build_participant_enc_node(device_jid, encrypted_payload, enc_extra_attrs)
+                {
+                    includes_prekey_message |= includes_prekey;
+                    participant_nodes.push(participant_node);
+                }
+            }
+            Err(SignalProtocolError::SessionNotFound(_)) if encryption_jid != *device_jid => {
+                // LID-first fallback: if LID session is missing, try the direct PN address
+                // before fetching pre-keys.
+                let fallback_address = device_jid.to_protocol_address();
+                match message_encrypt(
+                    plaintext_to_encrypt,
+                    &fallback_address,
+                    stores.session_store,
+                    stores.identity_store,
+                )
+                .await
+                {
+                    Ok(encrypted_payload) => {
+                        jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+                        if let Some((participant_node, includes_prekey)) =
+                            build_participant_enc_node(
+                                device_jid,
+                                encrypted_payload,
+                                enc_extra_attrs,
+                            )
+                        {
+                            includes_prekey_message |= includes_prekey;
+                            participant_nodes.push(participant_node);
+                        }
+                    }
+                    Err(SignalProtocolError::SessionNotFound(_)) => {
+                        if prekey_set.insert(device_jid.clone()) {
+                            jids_needing_prekeys.push(device_jid.clone());
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to encrypt message for device {} (direct fallback): {}. Skipping this device.",
+                            &fallback_address,
+                            e
+                        );
+                    }
+                }
+            }
+            Err(SignalProtocolError::SessionNotFound(_)) => {
+                if prekey_set.insert(device_jid.clone()) {
+                    jids_needing_prekeys.push(device_jid.clone());
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to encrypt message for device {}: {}. Skipping this device.",
+                    &signal_address,
+                    e
+                );
+            }
+        }
     }
 
     if !jids_needing_prekeys.is_empty() {
@@ -195,21 +183,18 @@ where
             .await?;
 
         for device_jid in &jids_needing_prekeys {
-            // Use the LID-normalized encryption JID for session creation
+            // Keep LID-preferred session establishment when available.
             let mut encryption_jid = jid_to_encryption_jid
                 .get(device_jid)
                 .unwrap_or(device_jid)
                 .clone();
 
-            // Normalize agent to 0 for LID JIDs to match how pre-key bundles are stored.
-            // The JID parsing logic in `prekeys.rs` forces agent=0 for LID, so we must match that here.
+            // LID bundles are keyed with agent=0.
             if encryption_jid.is_lid() {
                 encryption_jid.agent = 0;
             }
 
             let signal_address = encryption_jid.to_protocol_address();
-            // Fix: Use the normalized device_jid to lookup the bundle
-            // Use centralized normalization logic to avoid mismatches
             let lookup_jid = device_jid.normalize_for_prekey_bundle();
             match prekey_bundles.get(&lookup_jid) {
                 Some(bundle) => {
@@ -223,20 +208,13 @@ where
                     )
                     .await
                     {
-                        Ok(_) => {
-                            // Session established successfully
-                        }
+                        Ok(_) => {}
                         Err(SignalProtocolError::UntrustedIdentity(ref addr)) => {
-                            // The stored identity doesn't match the server's identity.
-                            // This typically happens when a user reinstalls WhatsApp.
-                            // We trust the server's identity and update our local store,
-                            // then retry establishing the session.
                             log::info!(
                                 "Untrusted identity for device {}. Updating identity and retrying session establishment.",
                                 addr
                             );
 
-                            // Get the new identity from the prekey bundle and save it
                             let new_identity = match bundle.identity_key() {
                                 Ok(key) => key,
                                 Err(e) => {
@@ -249,7 +227,6 @@ where
                                 }
                             };
 
-                            // Save the new identity (this replaces the old one)
                             if let Err(e) = stores
                                 .identity_store
                                 .save_identity(&signal_address, new_identity)
@@ -263,12 +240,6 @@ where
                                 continue;
                             }
 
-                            log::debug!(
-                                "Identity updated for {}. Retrying session establishment.",
-                                addr
-                            );
-
-                            // Retry processing the prekey bundle with the updated identity
                             match process_prekey_bundle(
                                 &signal_address,
                                 stores.session_store,
@@ -296,7 +267,6 @@ where
                             }
                         }
                         Err(e) => {
-                            // Propagate other unexpected errors
                             return Err(anyhow::anyhow!(
                                 "Failed to process pre-key bundle for {}: {:?}",
                                 signal_address,
@@ -313,62 +283,68 @@ where
                 }
             }
         }
-    }
 
-    let mut participant_nodes = Vec::new();
-    let mut includes_prekey_message = false;
-
-    for device_jid in devices {
-        // Use the effective encryption JID (may be LID if we found an existing LID session)
-        let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
-        let signal_address = encryption_jid.to_protocol_address();
-
-        // Try to encrypt for this device. If it fails (e.g., no session established),
-        // log a warning and skip this device instead of failing the entire operation.
-        match message_encrypt(
-            plaintext_to_encrypt,
-            &signal_address,
-            stores.session_store,
-            stores.identity_store,
-        )
-        .await
-        {
-            Ok(encrypted_payload) => {
-                let (enc_type, serialized_bytes) = match encrypted_payload {
-                    CiphertextMessage::PreKeySignalMessage(msg) => {
-                        includes_prekey_message = true;
-                        ("pkmsg", msg.serialized().to_vec())
+        // Second pass: retry encryption only for devices that needed pre-keys.
+        for device_jid in &jids_needing_prekeys {
+            let encryption_jid = jid_to_encryption_jid
+                .get(device_jid)
+                .unwrap_or(device_jid)
+                .clone();
+            let signal_address = encryption_jid.to_protocol_address();
+            match message_encrypt(
+                plaintext_to_encrypt,
+                &signal_address,
+                stores.session_store,
+                stores.identity_store,
+            )
+            .await
+            {
+                Ok(encrypted_payload) => {
+                    if let Some((participant_node, includes_prekey)) =
+                        build_participant_enc_node(device_jid, encrypted_payload, enc_extra_attrs)
+                    {
+                        includes_prekey_message |= includes_prekey;
+                        participant_nodes.push(participant_node);
                     }
-                    CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-                    _ => continue,
-                };
-
-                let mut enc_attrs = Attrs::new();
-                enc_attrs.insert("v".to_string(), "2".to_string());
-                enc_attrs.insert("type".to_string(), enc_type.to_string());
-                for (k, v) in enc_extra_attrs.iter() {
-                    enc_attrs.insert(k.clone(), v.clone());
                 }
-
-                let enc_node = NodeBuilder::new("enc")
-                    .attrs(enc_attrs)
-                    .bytes(serialized_bytes)
-                    .build();
-                // Use the original device_jid for the `to` attribute (what the server expects),
-                // but we encrypted using the encryption_jid's session
-                participant_nodes.push(
-                    NodeBuilder::new("to")
-                        .attr("jid", device_jid.to_string())
-                        .children([enc_node])
-                        .build(),
-                );
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to encrypt message for device {}: {}. Skipping this device.",
-                    &signal_address,
-                    e
-                );
+                Err(SignalProtocolError::SessionNotFound(_)) if encryption_jid != *device_jid => {
+                    let fallback_address = device_jid.to_protocol_address();
+                    match message_encrypt(
+                        plaintext_to_encrypt,
+                        &fallback_address,
+                        stores.session_store,
+                        stores.identity_store,
+                    )
+                    .await
+                    {
+                        Ok(encrypted_payload) => {
+                            if let Some((participant_node, includes_prekey)) =
+                                build_participant_enc_node(
+                                    device_jid,
+                                    encrypted_payload,
+                                    enc_extra_attrs,
+                                )
+                            {
+                                includes_prekey_message |= includes_prekey;
+                                participant_nodes.push(participant_node);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to encrypt message for device {} after pre-key setup: {}. Skipping this device.",
+                                &fallback_address,
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to encrypt message for device {} after pre-key setup: {}. Skipping this device.",
+                        &signal_address,
+                        e
+                    );
+                }
             }
         }
     }
@@ -774,10 +750,11 @@ pub async fn prepare_group_stanza<
     }
 
     let plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
-    let skmsg = encrypt_group_message(
+    let sender_address = own_sending_jid.to_protocol_address();
+    let sender_key_name = SenderKeyName::new(to_jid.to_string(), sender_address.to_string());
+    let skmsg = group_encrypt(
         stores.sender_key_store,
-        &to_jid,
-        &own_sending_jid,
+        &sender_key_name,
         &plaintext,
         &mut rand::rngs::OsRng.unwrap_err(),
     )

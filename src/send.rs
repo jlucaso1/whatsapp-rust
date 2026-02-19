@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::store::signal_adapter::SignalProtocolStoreAdapter;
+use crate::store::signal_adapter::BatchedSignalProtocolStoreAdapter;
 use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
@@ -174,17 +174,32 @@ impl Client {
             let _session_guard = session_mutex.lock().await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
-
-            wacore::send::prepare_peer_stanza(
-                &mut store_adapter.session_store,
-                &mut store_adapter.identity_store,
-                to,
-                encryption_jid,
-                message,
-                request_id,
-            )
-            .await?
+            let message_for_encrypt = message.clone();
+            let to_for_encrypt = to.clone();
+            let encryption_jid_for_encrypt = encryption_jid.clone();
+            // Peer encryption is a single-session operation. With the batched
+            // cache, store ops resolve from memory so the work is CPU-bound.
+            let (mut store_adapter, stanza_result) = tokio::task::spawn_blocking(move || {
+                let runtime = tokio::runtime::Handle::current();
+                let mut store_adapter = BatchedSignalProtocolStoreAdapter::new(device_store_arc);
+                let stanza_result = runtime.block_on(async {
+                    wacore::send::prepare_peer_stanza(
+                        &mut store_adapter.session_store,
+                        &mut store_adapter.identity_store,
+                        to_for_encrypt,
+                        encryption_jid_for_encrypt,
+                        &message_for_encrypt,
+                        request_id,
+                    )
+                    .await
+                });
+                (store_adapter, stanza_result)
+            })
+            .await
+            .map_err(|e| anyhow!("spawn_blocking failed during peer encryption: {e}"))?;
+            let stanza = stanza_result?;
+            store_adapter.flush().await?;
+            stanza
         } else if to.is_group() {
             // Group messages: No client-level lock needed.
             // Each participant device is encrypted separately with its own per-device lock
@@ -239,7 +254,8 @@ impl Client {
                 force_key_distribution || !key_exists
             };
 
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+            let mut store_adapter =
+                BatchedSignalProtocolStoreAdapter::new(device_store_arc.clone());
 
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
@@ -332,7 +348,7 @@ impl Client {
             let is_full_distribution = force_skdm || skdm_target_devices.is_none();
             let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
 
-            match wacore::send::prepare_group_stanza(
+            let stanza = match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
                 &mut group_info,
@@ -393,7 +409,7 @@ impl Client {
                         }
 
                         let mut store_adapter_retry =
-                            SignalProtocolStoreAdapter::new(device_store_arc.clone());
+                            BatchedSignalProtocolStoreAdapter::new(device_store_arc.clone());
                         let mut stores_retry = wacore::send::SignalStores {
                             session_store: &mut store_adapter_retry.session_store,
                             identity_store: &mut store_adapter_retry.identity_store,
@@ -402,7 +418,7 @@ impl Client {
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
-                        wacore::send::prepare_group_stanza(
+                        let stanza = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
                             &mut group_info,
@@ -417,12 +433,21 @@ impl Client {
                             edit.clone(),
                             extra_stanza_nodes.clone(),
                         )
-                        .await?
+                        .await?;
+                        store_adapter_retry.flush().await?;
+                        stanza
                     } else {
+                        if let Err(flush_err) = store_adapter.flush().await {
+                            log::warn!(
+                                "Failed to flush cached Signal stores after group prepare error: {flush_err}"
+                            );
+                        }
                         return Err(e);
                     }
                 }
-            }
+            };
+            store_adapter.flush().await?;
+            stanza
         } else {
             // Direct message: Acquire lock only during encryption
 
@@ -464,28 +489,49 @@ impl Client {
             let _session_guard = session_mutex.lock().await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
+            let client = self
+                .shared()
+                .ok_or_else(|| anyhow!("client is shutting down"))?;
+            let to_for_encrypt = to.clone();
+            let own_jid_for_encrypt = own_jid.clone();
+            let account_info_for_encrypt = account_info.clone();
+            let message_for_encrypt = message.clone();
+            let edit_for_encrypt = edit.clone();
+            let extra_nodes_for_encrypt = extra_stanza_nodes.clone();
 
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
-            };
-
-            wacore::send::prepare_dm_stanza(
-                &mut stores,
-                self,
-                &own_jid,
-                account_info.as_ref(),
-                to,
-                message,
-                request_id,
-                edit,
-                extra_stanza_nodes,
-            )
-            .await?
+            // DM encryption involves multiple devices. With the batched cache,
+            // store ops resolve from memory so the work is CPU-bound.
+            let (mut store_adapter, stanza_result) = tokio::task::spawn_blocking(move || {
+                let runtime = tokio::runtime::Handle::current();
+                let mut store_adapter = BatchedSignalProtocolStoreAdapter::new(device_store_arc);
+                let mut stores = wacore::send::SignalStores {
+                    session_store: &mut store_adapter.session_store,
+                    identity_store: &mut store_adapter.identity_store,
+                    prekey_store: &mut store_adapter.pre_key_store,
+                    signed_prekey_store: &store_adapter.signed_pre_key_store,
+                    sender_key_store: &mut store_adapter.sender_key_store,
+                };
+                let stanza_result = runtime.block_on(async {
+                    wacore::send::prepare_dm_stanza(
+                        &mut stores,
+                        client.as_ref(),
+                        &own_jid_for_encrypt,
+                        account_info_for_encrypt.as_ref(),
+                        to_for_encrypt,
+                        &message_for_encrypt,
+                        request_id,
+                        edit_for_encrypt,
+                        extra_nodes_for_encrypt,
+                    )
+                    .await
+                });
+                (store_adapter, stanza_result)
+            })
+            .await
+            .map_err(|e| anyhow!("spawn_blocking failed during dm encryption: {e}"))?;
+            let stanza = stanza_result?;
+            store_adapter.flush().await?;
+            stanza
         };
 
         self.send_node(stanza_to_send).await.map_err(|e| e.into())
