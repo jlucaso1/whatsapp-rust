@@ -45,7 +45,7 @@ iai-callgrind = "0.16"
 log = "0.4"
 prost = { version = "0.14.1", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.1", default-features = false }
-rand = "0.9"
+rand = "0.10"
 rand_core = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde-big-array = "0.5"
