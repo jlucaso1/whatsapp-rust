@@ -7,8 +7,7 @@
 //!
 //! Run with: cargo run --example polls --features sqlite-storage
 
-use wacore_binary::jid::Jid;
-use whatsapp_rust::{Client, PollOptions, PollType};
+use whatsapp_rust::PollOptions;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

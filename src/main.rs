@@ -460,10 +460,8 @@ async fn handle_poll_command(ctx: &MessageContext, text: &str) {
             {
                 Ok(result) => {
                     info!("✅ Poll created successfully! ID: {}", result.message_id);
-                    info!(
-                        "Encryption key (keep for vote decryption): {:?}",
-                        hex::encode(result.enc_key)
-                    );
+                    #[cfg(debug_assertions)]
+                    log::debug!("Poll encryption key: {}", hex::encode(result.enc_key));
                 }
                 Err(e) => {
                     error!("Failed to create poll: {}", e);
@@ -567,7 +565,8 @@ async fn handle_quiz_command(ctx: &MessageContext, text: &str) {
             {
                 Ok(result) => {
                     info!("✅ Quiz created successfully! ID: {}", result.message_id);
-                    info!("Encryption key: {:?}", hex::encode(result.enc_key));
+                    #[cfg(debug_assertions)]
+                    log::debug!("Quiz encryption key: {}", hex::encode(result.enc_key));
                 }
                 Err(e) => {
                     error!("Failed to create quiz: {}", e);
@@ -591,6 +590,13 @@ async fn handle_quiz_command(ctx: &MessageContext, text: &str) {
     }
 }
 
+/// Handles incoming poll votes.
+///
+/// Note: This only logs vote metadata. Full vote decryption requires the original
+/// poll's encryption key, which must be stored when the poll is created. To decrypt:
+/// 1. Retrieve the encryption key for the poll (from your storage)
+/// 2. Use `poll_update.vote.enc_iv` and `poll_update.vote.enc_payload`
+/// 3. Call the appropriate decryption function with the key
 async fn handle_poll_vote(ctx: &MessageContext) {
     if let Some(poll_update) = &ctx.message.poll_update_message {
         info!("📊 Received poll vote from {}", ctx.info.source.sender);

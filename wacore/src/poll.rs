@@ -60,14 +60,11 @@ pub fn decrypt_poll_option(encrypted_payload: &[u8], iv: &[u8], enc_key: &[u8]) 
 /// Compute the SHA-256 hash of an encrypted poll option for identification.
 ///
 /// The hash is computed over the concatenation of IV and encrypted payload.
-pub fn compute_poll_option_hash(
-    encrypted_payload: &[u8],
-    iv: &[u8; POLL_ENC_IV_SIZE],
-) -> Result<Vec<u8>> {
+pub fn compute_poll_option_hash(encrypted_payload: &[u8], iv: &[u8; POLL_ENC_IV_SIZE]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(iv);
     hasher.update(encrypted_payload);
-    Ok(hasher.finalize().to_vec())
+    hasher.finalize().to_vec()
 }
 
 /// Encrypt poll vote selections.
@@ -147,7 +144,7 @@ mod tests {
         let option_name = "Option 1";
 
         let (encrypted, iv) = encrypt_poll_option(option_name, &enc_key).unwrap();
-        let hash = compute_poll_option_hash(&encrypted, &iv).unwrap();
+        let hash = compute_poll_option_hash(&encrypted, &iv);
 
         // SHA-256 produces 32 bytes
         assert_eq!(hash.len(), 32);

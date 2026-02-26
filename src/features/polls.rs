@@ -169,7 +169,7 @@ impl<'a> Polls<'a> {
         let mut encrypted_options = Vec::new();
         for option_name in &options.options {
             let (encrypted_payload, iv) = encrypt_poll_option(option_name, &enc_key)?;
-            let option_hash = compute_poll_option_hash(&encrypted_payload, &iv)?;
+            let option_hash = compute_poll_option_hash(&encrypted_payload, &iv);
 
             encrypted_options.push(wa::message::poll_creation_message::Option {
                 option_name: Some(option_name.clone()),
@@ -257,11 +257,15 @@ impl<'a> Polls<'a> {
         // Encrypt the vote
         let (encrypted_vote, vote_iv) = encrypt_poll_vote(encrypted_option_hashes, enc_key)?;
 
+        // Determine if this is our own poll
+        let my_jid = self.client.get_pn().await;
+        let from_me = my_jid.as_ref() == Some(poll_sender_jid);
+
         // Build poll update message
         let poll_update = wa::message::PollUpdateMessage {
             poll_creation_message_key: Some(wa::MessageKey {
                 remote_jid: Some(poll_chat_jid.to_string()),
-                from_me: Some(false),
+                from_me: Some(from_me),
                 id: Some(poll_message_id.to_string()),
                 participant: Some(poll_sender_jid.to_string()),
             }),
