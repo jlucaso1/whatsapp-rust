@@ -21,6 +21,7 @@ pub mod messages;
 pub mod net;
 pub mod pair;
 pub mod pair_code;
+pub mod poll;
 pub mod prekeys;
 pub mod proto_helpers;
 pub mod reporting_token;

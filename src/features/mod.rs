@@ -3,6 +3,7 @@ mod chatstate;
 mod contacts;
 mod groups;
 mod mex;
+mod polls;
 mod presence;
 mod tctoken;
 
@@ -19,6 +20,8 @@ pub use groups::{
 };
 
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
+
+pub use polls::{PollCreationResult, PollOptions, PollType, PollVote, Polls};
 
 pub use presence::{Presence, PresenceStatus};
 

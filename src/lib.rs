@@ -43,7 +43,8 @@ pub use features::{
     GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
     GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode, MemberLinkMode,
     MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse,
-    ParticipantChangeResponse, Presence, PresenceStatus, ProfilePicture, TcToken, UserInfo,
+    ParticipantChangeResponse, PollCreationResult, PollOptions, PollType, PollVote, Polls,
+    Presence, PresenceStatus, ProfilePicture, TcToken, UserInfo,
 };
 
 pub mod bot;

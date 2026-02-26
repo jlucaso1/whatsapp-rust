@@ -86,6 +86,7 @@ hex = { workspace = true }
 log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"] }
 prost = { workspace = true }
+qrcode = "0.14"
 rand = { workspace = true }
 rand_core = { workspace = true }
 scopeguard = "1.2"
