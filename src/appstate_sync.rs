@@ -142,19 +142,38 @@ impl AppStateProcessor {
             // Download external snapshot
             if pl.snapshot.is_none()
                 && let Some(ext) = &pl.snapshot_ref
-                && let Ok(data) = download(ext)
-                && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
             {
-                pl.snapshot = Some(snapshot);
+                match download(ext) {
+                    Ok(data) => match wa::SyncdSnapshot::decode(data.as_slice()) {
+                        Ok(snapshot) => pl.snapshot = Some(snapshot),
+                        Err(e) => {
+                            log::warn!(target: "AppState", "Failed to decode external snapshot for {:?}: {e}", pl.name);
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(target: "AppState", "Failed to download external snapshot for {:?}: {e}", pl.name);
+                    }
+                }
             }
 
             // Download external mutations for each patch
             for patch in &mut pl.patches {
-                if let Some(ext) = &patch.external_mutations
-                    && let Ok(data) = download(ext)
-                    && let Ok(ext_mutations) = wa::SyncdMutations::decode(data.as_slice())
-                {
-                    patch.mutations = ext_mutations.mutations;
+                if let Some(ext) = &patch.external_mutations {
+                    match download(ext) {
+                        Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                            Ok(ext_mutations) => {
+                                patch.mutations = ext_mutations.mutations;
+                            }
+                            Err(e) => {
+                                let v = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                                log::warn!(target: "AppState", "Failed to decode external mutations for {:?} v{}: {e}", pl.name, v);
+                            }
+                        },
+                        Err(e) => {
+                            let v = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                            log::warn!(target: "AppState", "Failed to download external mutations for {:?} v{}: {e}", pl.name, v);
+                        }
+                    }
                 }
             }
 

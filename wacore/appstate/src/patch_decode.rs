@@ -88,10 +88,14 @@ pub fn parse_patch_list(node: &Node) -> Result<PatchList> {
 
 /// Parse all `<collection>` children from a `<sync>` response into PatchLists.
 /// Used for batched multi-collection IQ responses.
+/// Tolerates both `<iq><sync>...</sync></iq>` and bare `<sync>...</sync>` roots.
 pub fn parse_patch_lists(node: &Node) -> Result<Vec<PatchList>> {
-    let sync_node = node
-        .get_optional_child("sync")
-        .ok_or_else(|| anyhow!("missing sync node in response"))?;
+    let sync_node = if node.tag == "sync" {
+        node
+    } else {
+        node.get_optional_child("sync")
+            .ok_or_else(|| anyhow!("missing sync node in response"))?
+    };
 
     let Some(children) = sync_node.children() else {
         return Ok(Vec::new());
@@ -166,14 +170,20 @@ fn parse_collection_error(
         return None;
     }
 
-    let error_node = collection.get_optional_child("error")?;
-    let mut error_attrs = error_node.attrs();
-    let code_str = error_attrs.optional_string("code").unwrap_or("0");
-    let text = error_attrs
-        .optional_string("text")
-        .unwrap_or("")
-        .to_string();
-    let code: u16 = code_str.parse().unwrap_or(0);
+    // Parse error details from child node, or fall back to a default retryable
+    // error if the <error> child is missing/malformed.
+    let (code, text) = if let Some(error_node) = collection.get_optional_child("error") {
+        let mut error_attrs = error_node.attrs();
+        let code_str = error_attrs.optional_string("code").unwrap_or("0");
+        let text = error_attrs
+            .optional_string("text")
+            .unwrap_or("")
+            .to_string();
+        let code: u16 = code_str.parse().unwrap_or(0);
+        (code, text)
+    } else {
+        (0u16, "missing <error> child".to_string())
+    };
 
     Some(match code {
         409 => CollectionSyncError::Conflict {

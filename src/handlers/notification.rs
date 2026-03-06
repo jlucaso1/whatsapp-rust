@@ -81,7 +81,20 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 
             if !collections.is_empty() {
                 let client_clone = client.clone();
+                let generation = client
+                    .connection_generation
+                    .load(std::sync::atomic::Ordering::SeqCst);
                 tokio::spawn(async move {
+                    // Check if connection was replaced before starting sync
+                    if client_clone
+                        .connection_generation
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                        != generation
+                    {
+                        log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed");
+                        return;
+                    }
+
                     // Filter by version comparison before syncing.
                     // Matches WA Web's markCollectionsForSync version comparison filter.
                     let backend = client_clone.persistence_manager.backend();
