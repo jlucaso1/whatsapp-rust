@@ -1180,21 +1180,6 @@ impl Client {
                 return;
             }
 
-            // Send presence if we have a pushname (like WhatsApp Web's sendPresenceAvailable).
-            // If pushname is empty, we'll send presence after app state sync provides it.
-            let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
-            if !device_snapshot.push_name.is_empty() {
-                if let Err(e) = client_clone.presence().set_available().await {
-                    warn!("Failed to send initial presence: {e:?}");
-                } else {
-                    debug!("Initial presence sent successfully.");
-                }
-            } else {
-                debug!("Deferring presence until pushname is available from app state sync");
-            }
-
-            check_generation!();
-
             // Background initialization queries (can run in parallel, non-blocking)
             let bg_client = client_clone.clone();
             let bg_generation = task_generation;
@@ -1241,16 +1226,15 @@ impl Client {
                 }
             });
 
-            client_clone
-                .core
-                .event_bus
-                .dispatch(&Event::Connected(crate::types::events::Connected));
-            client_clone.connected_notifier.notify_waiters();
-
             check_generation!();
 
             let flag_set = client_clone.needs_initial_full_sync.load(Ordering::Relaxed);
-            if flag_set || needs_pushname_from_sync {
+            let needs_initial_sync = flag_set || needs_pushname_from_sync;
+
+            if needs_initial_sync {
+                // === Fresh pairing path ===
+                // Like WhatsApp Web's syncCriticalData(): await critical collections before
+                // dispatching Connected, so blocklist/privacy settings are applied first.
                 debug!(
                     target: "Client/AppState",
                     "Starting Initial App State Sync (flag_set={flag_set}, needs_pushname={needs_pushname_from_sync})"
@@ -1274,19 +1258,48 @@ impl Client {
                     check_generation!();
                 }
 
+                // Await critical collections (CriticalBlock + CriticalUnblockLow) before
+                // dispatching Connected. This ensures pushname, blocklist, and privacy
+                // settings are applied before bot code starts processing.
+                let critical_names = [WAPatchName::CriticalBlock, WAPatchName::CriticalUnblockLow];
+                for name in critical_names {
+                    check_generation!();
+                    if let Err(e) = client_clone.fetch_app_state_with_retry(name).await {
+                        warn!("Failed to sync critical app state {:?}: {e}", name);
+                    }
+                }
+
+                check_generation!();
+
+                // Now that critical data is synced, send presence and dispatch Connected.
+                let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
+                if !device_snapshot.push_name.is_empty() {
+                    if let Err(e) = client_clone.presence().set_available().await {
+                        warn!("Failed to send initial presence: {e:?}");
+                    } else {
+                        debug!("Initial presence sent successfully (after critical sync).");
+                    }
+                } else {
+                    debug!("Push name still empty after critical sync — skipping presence");
+                }
+
+                client_clone
+                    .core
+                    .event_bus
+                    .dispatch(&Event::Connected(crate::types::events::Connected));
+                client_clone.connected_notifier.notify_waiters();
+
+                // Spawn remaining non-critical collections in background
                 let sync_client = client_clone.clone();
                 let sync_generation = task_generation;
                 tokio::spawn(async move {
-                    let names = [
-                        WAPatchName::CriticalBlock,
-                        WAPatchName::CriticalUnblockLow,
+                    let non_critical = [
                         WAPatchName::RegularLow,
                         WAPatchName::RegularHigh,
                         WAPatchName::Regular,
                     ];
 
-                    for name in names {
-                        // Check generation before each sync to avoid racing with new connections
+                    for name in non_critical {
                         if sync_client.connection_generation.load(Ordering::SeqCst)
                             != sync_generation
                         {
@@ -1304,6 +1317,23 @@ impl Client {
                         .store(false, Ordering::Relaxed);
                     debug!(target: "Client/AppState", "Initial App State Sync Completed.");
                 });
+            } else {
+                // === Reconnection path ===
+                // Pushname is already known, send presence and Connected immediately.
+                let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
+                if !device_snapshot.push_name.is_empty() {
+                    if let Err(e) = client_clone.presence().set_available().await {
+                        warn!("Failed to send initial presence: {e:?}");
+                    } else {
+                        debug!("Initial presence sent successfully.");
+                    }
+                }
+
+                client_clone
+                    .core
+                    .event_bus
+                    .dispatch(&Event::Connected(crate::types::events::Connected));
+                client_clone.connected_notifier.notify_waiters();
             }
         });
     }
