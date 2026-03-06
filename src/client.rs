@@ -1997,10 +1997,15 @@ impl Client {
             ..Default::default()
         };
 
+        // Use a new stanza ID instead of reusing the original message ID.
+        // The original message ID is already embedded in protocolMessage.key.id
+        // inside the encrypted payload. Reusing it as the outer stanza ID causes
+        // the server to deduplicate against the original message and silently
+        // drop the edit.
         self.send_message_impl(
             to,
             &edit_container_message,
-            Some(original_id.clone()),
+            None,
             false,
             false,
             Some(crate::types::message::EditAttribute::MessageEdit),
