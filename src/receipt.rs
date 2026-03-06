@@ -92,7 +92,8 @@ impl Client {
         attrs.insert("id".to_string(), info.id.clone());
         // The 'to' attribute is always the JID from which the message originated (the chat JID for groups).
         attrs.insert("to".to_string(), info.source.chat.to_string());
-        attrs.insert("type".to_string(), "delivery".to_string());
+        // WhatsApp Web omits the type attribute for delivery receipts (DROP_ATTR).
+        // The absence of type IS the delivery signal. Only read/played/etc. get explicit type.
 
         // For group messages, the 'participant' attribute is required to identify the sender.
         if info.source.is_group {
