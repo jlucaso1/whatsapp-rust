@@ -1469,8 +1469,6 @@ impl Client {
 
         while !pending.is_empty() && iteration < MAX_ITERATIONS {
             iteration += 1;
-            let is_first = iteration == 1;
-
             debug!(
                 target: "Client/AppState",
                 "Batched sync iteration {}/{}: {:?}",
@@ -1479,11 +1477,15 @@ impl Client {
 
             let backend = self.persistence_manager.backend();
 
-            // Build multi-collection IQ
+            // Build multi-collection IQ, tracking which collections need a snapshot
             let mut collection_nodes = Vec::with_capacity(pending.len());
+            let mut was_snapshot = std::collections::HashSet::new();
             for &name in &pending {
                 let state = backend.get_version(name.as_str()).await?;
                 let want_snapshot = state.version == 0;
+                if want_snapshot {
+                    was_snapshot.insert(name);
+                }
                 let mut builder = NodeBuilder::new("collection")
                     .attr("name", name.as_str())
                     .attr(
@@ -1628,8 +1630,10 @@ impl Client {
                     }
                 }
 
-                // Dispatch mutations
-                let full_sync = is_first;
+                // full_sync is true only when this collection had a snapshot
+                // (version was 0 before sync). This prevents server_sync-triggered
+                // incremental syncs from being incorrectly marked as full syncs.
+                let full_sync = was_snapshot.contains(&name);
                 for m in mutations {
                     self.dispatch_app_state_mutation(&m, full_sync).await;
                 }
