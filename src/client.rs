@@ -1375,9 +1375,9 @@ impl Client {
         }
 
         let mut has_more = true;
-        let want_snapshot = full_sync;
+        let mut want_snapshot = full_sync;
 
-        if has_more {
+        while has_more {
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
 
             let mut collection_builder = NodeBuilder::new("collection")
@@ -1512,7 +1512,9 @@ impl Client {
 
             state = new_state;
             has_more = list.has_more_patches;
-            debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more}", name);
+            // After the first batch, never request a snapshot again — only incremental patches.
+            want_snapshot = false;
+            debug!(target: "Client/AppState", "After processing batch name={:?} has_more={has_more} new_version={}", name, state.version);
         }
 
         backend.set_version(name.as_str(), state.clone()).await?;
