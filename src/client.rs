@@ -1271,18 +1271,10 @@ impl Client {
 
                 check_generation!();
 
-                // Now that critical data is synced, send presence and dispatch Connected.
-                let device_snapshot = client_clone.persistence_manager.get_device_snapshot().await;
-                if !device_snapshot.push_name.is_empty() {
-                    if let Err(e) = client_clone.presence().set_available().await {
-                        warn!("Failed to send initial presence: {e:?}");
-                    } else {
-                        debug!("Initial presence sent successfully (after critical sync).");
-                    }
-                } else {
-                    debug!("Push name still empty after critical sync — skipping presence");
-                }
-
+                // Dispatch Connected after critical sync completes.
+                // Presence is NOT sent here — WhatsApp Web sends presence from the
+                // setting_pushName mutation handler (WAWebPushNameSync), not from
+                // criticalSyncDone. Our setting_pushName handler already does this.
                 client_clone
                     .core
                     .event_bus
