@@ -52,21 +52,72 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         }
         "server_sync" => {
             // Server sync notifications inform us of app state changes from other devices.
-            // For bot use case, we don't need to sync these (pins, mutes, archives, etc.).
-            // Just acknowledge without syncing.
+            // Matches WhatsApp Web's handleServerSyncNotification which calls
+            // markCollectionsForSync() with the parsed collection names.
+            use std::str::FromStr;
+            use wacore::appstate::patch_decode::WAPatchName;
+
+            let mut collections = Vec::new();
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name = collection_node
+                    let name_str = collection_node
                         .attrs()
                         .optional_string("name")
                         .unwrap_or("<unknown>");
-                    let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
+                    let server_version =
+                        collection_node.attrs().optional_u64("version").unwrap_or(0);
                     debug!(
                         target: "Client/AppState",
-                        "Received server_sync for collection '{}' version {} (not syncing)",
-                        name, version
+                        "Received server_sync for collection '{}' version {}",
+                        name_str, server_version
                     );
+                    if let Ok(patch_name) = WAPatchName::from_str(name_str)
+                        && !matches!(patch_name, WAPatchName::Unknown)
+                    {
+                        collections.push((patch_name, server_version));
+                    }
                 }
+            }
+
+            if !collections.is_empty() {
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    // Filter by version comparison before syncing.
+                    // Matches WA Web's markCollectionsForSync version comparison filter.
+                    let backend = client_clone.persistence_manager.backend();
+                    let mut to_sync = Vec::new();
+                    for (name, server_version) in collections {
+                        if server_version > 0 {
+                            match backend.get_version(name.as_str()).await {
+                                Ok(state) if state.version >= server_version => {
+                                    debug!(
+                                        target: "Client/AppState",
+                                        "Skipping server_sync for {:?}: local version {} >= server version {}",
+                                        name, state.version, server_version
+                                    );
+                                    continue;
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!(
+                                        target: "Client/AppState",
+                                        "Failed to get local version for {:?}: {e}, syncing anyway", name
+                                    );
+                                }
+                            }
+                        }
+                        to_sync.push(name);
+                    }
+
+                    if !to_sync.is_empty()
+                        && let Err(e) = client_clone.sync_collections_batched(to_sync).await
+                    {
+                        warn!(
+                            target: "Client/AppState",
+                            "Failed to batch sync app state from server_sync: {e}"
+                        );
+                    }
+                });
             }
         }
         "account_sync" => {
