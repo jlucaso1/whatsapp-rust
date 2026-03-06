@@ -1321,6 +1321,10 @@ impl Client {
                     }
                 }
 
+                // Re-check generation after awaits to avoid dispatching Connected
+                // for an outdated connection that was replaced mid-await.
+                check_generation!();
+
                 client_clone
                     .core
                     .event_bus
