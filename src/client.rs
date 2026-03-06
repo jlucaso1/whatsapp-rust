@@ -1376,8 +1376,17 @@ impl Client {
 
         let mut has_more = true;
         let mut want_snapshot = full_sync;
+        // Safety cap to prevent infinite loops if the server keeps returning
+        // has_more_patches=true without advancing the version (WA Web uses 500).
+        const MAX_PAGINATION_ITERATIONS: u32 = 500;
+        let mut iteration = 0u32;
 
         while has_more {
+            iteration += 1;
+            if iteration > MAX_PAGINATION_ITERATIONS {
+                warn!(target: "Client/AppState", "App state sync for {:?} exceeded {} iterations, aborting", name, MAX_PAGINATION_ITERATIONS);
+                break;
+            }
             debug!(target: "Client/AppState", "Fetching app state patch batch: name={:?} want_snapshot={want_snapshot} version={} full_sync={} has_more_previous={}", name, state.version, full_sync, has_more);
 
             let mut collection_builder = NodeBuilder::new("collection")
