@@ -2286,10 +2286,22 @@ impl Client {
         new_content: wa::Message,
     ) -> Result<String, anyhow::Error> {
         let original_id = original_id.into();
-        let own_jid = self
-            .get_pn()
-            .await
-            .ok_or_else(|| anyhow!("Not logged in"))?;
+
+        // WhatsApp Web uses getMeUserLidOrJidForChat(chat, EditMessage) which
+        // returns LID for LID-addressing groups and PN otherwise.
+        let participant = if to.is_group() {
+            Some(
+                self.get_own_jid_for_group(&to)
+                    .await?
+                    .to_non_ad()
+                    .to_string(),
+            )
+        } else {
+            if self.get_pn().await.is_none() {
+                return Err(anyhow!("Not logged in"));
+            }
+            None
+        };
 
         let edit_container_message = wa::Message {
             edited_message: Some(Box::new(wa::message::FutureProofMessage {
@@ -2299,11 +2311,7 @@ impl Client {
                             remote_jid: Some(to.to_string()),
                             from_me: Some(true),
                             id: Some(original_id.clone()),
-                            participant: if to.is_group() {
-                                Some(own_jid.to_non_ad().to_string())
-                            } else {
-                                None
-                            },
+                            participant,
                         }),
                         r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
                         edited_message: Some(Box::new(new_content)),
@@ -2428,6 +2436,35 @@ impl Client {
     pub async fn get_lid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.lid.clone()
+    }
+
+    /// Resolve our own JID for a group, respecting its addressing mode.
+    ///
+    /// Returns LID for LID-addressing groups, PN otherwise.
+    /// Matches WhatsApp Web's `getMeUserLidOrJidForChat`.
+    pub(crate) async fn get_own_jid_for_group(
+        &self,
+        group_jid: &Jid,
+    ) -> Result<Jid, anyhow::Error> {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_pn = device_snapshot
+            .pn
+            .clone()
+            .ok_or_else(|| anyhow!("Not logged in"))?;
+
+        let addressing_mode = self
+            .groups()
+            .query_info(group_jid)
+            .await
+            .map(|info| info.addressing_mode)
+            .unwrap_or(crate::types::message::AddressingMode::Pn);
+
+        Ok(match addressing_mode {
+            crate::types::message::AddressingMode::Lid => {
+                device_snapshot.lid.clone().unwrap_or(own_pn)
+            }
+            crate::types::message::AddressingMode::Pn => own_pn,
+        })
     }
 
     /// Creates a normalized StanzaKey by resolving PN to LID JIDs.

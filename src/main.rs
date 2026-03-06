@@ -165,7 +165,7 @@ fn main() {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
                                             text: Some(PONG_TEXT.to_string()),
-                                            context_info: Some(Box::new(context_info.clone())),
+                                            context_info: Some(Box::new(context_info)),
                                             ..Default::default()
                                         },
                                     )),
@@ -188,6 +188,9 @@ fn main() {
                                     duration_str, &sent_msg_id
                                 );
 
+                                // WhatsApp Web does NOT resend quote context on edits.
+                                // The edit only carries new content — no stanza_id,
+                                // participant, or quoted_message.
                                 let updated_content = wa::Message {
                                     extended_text_message: Some(Box::new(
                                         wa::message::ExtendedTextMessage {
@@ -195,7 +198,6 @@ fn main() {
                                                 "{}\n`{}`",
                                                 PONG_TEXT, duration_str
                                             )),
-                                            context_info: Some(Box::new(context_info)),
                                             ..Default::default()
                                         },
                                     )),
