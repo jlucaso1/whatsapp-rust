@@ -169,6 +169,9 @@ pub struct Client {
 
     pub(crate) app_state_processor: OnceCell<AppStateProcessor>,
     pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// Tracks collections currently being synced to prevent duplicate sync tasks.
+    /// Matches WA Web's in-flight tracking set in WAWebSyncdCollectionsStateMachine.
+    pub(crate) app_state_syncing: Arc<Mutex<HashSet<WAPatchName>>>,
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
 
@@ -346,6 +349,7 @@ impl Client {
 
             app_state_processor: OnceCell::new(),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
+            app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             offline_sync_notifier: Arc::new(Notify::new()),
@@ -1258,15 +1262,16 @@ impl Client {
                     check_generation!();
                 }
 
-                // Await critical collections (CriticalBlock + CriticalUnblockLow) before
-                // dispatching Connected. This ensures pushname, blocklist, and privacy
-                // settings are applied before bot code starts processing.
-                let critical_names = [WAPatchName::CriticalBlock, WAPatchName::CriticalUnblockLow];
-                for name in critical_names {
-                    check_generation!();
-                    if let Err(e) = client_clone.fetch_app_state_with_retry(name).await {
-                        warn!("Failed to sync critical app state {:?}: {e}", name);
-                    }
+                // Await critical collections via batched IQ before dispatching Connected.
+                check_generation!();
+                if let Err(e) = client_clone
+                    .sync_collections_batched(vec![
+                        WAPatchName::CriticalBlock,
+                        WAPatchName::CriticalUnblockLow,
+                    ])
+                    .await
+                {
+                    warn!("Failed to sync critical app state: {e}");
                 }
 
                 check_generation!();
@@ -1285,23 +1290,20 @@ impl Client {
                 let sync_client = client_clone.clone();
                 let sync_generation = task_generation;
                 tokio::spawn(async move {
-                    let non_critical = [
-                        WAPatchName::RegularLow,
-                        WAPatchName::RegularHigh,
-                        WAPatchName::Regular,
-                    ];
+                    if sync_client.connection_generation.load(Ordering::SeqCst) != sync_generation {
+                        debug!("App state sync cancelled: connection generation changed");
+                        return;
+                    }
 
-                    for name in non_critical {
-                        if sync_client.connection_generation.load(Ordering::SeqCst)
-                            != sync_generation
-                        {
-                            debug!("App state sync cancelled: connection generation changed");
-                            return;
-                        }
-
-                        if let Err(e) = sync_client.fetch_app_state_with_retry(name).await {
-                            warn!("Failed to full sync app state {:?}: {e}", name);
-                        }
+                    if let Err(e) = sync_client
+                        .sync_collections_batched(vec![
+                            WAPatchName::RegularLow,
+                            WAPatchName::RegularHigh,
+                            WAPatchName::Regular,
+                        ])
+                        .await
+                    {
+                        warn!("Failed to batch sync non-critical app state: {e}");
                     }
 
                     sync_client
@@ -1351,11 +1353,36 @@ impl Client {
         false
     }
 
-    async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
+    #[allow(dead_code)] // Used by per-collection callers (e.g., critical sync gating)
+    pub(crate) async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
+        // In-flight dedup: skip if this collection is already being synced.
+        // Matches WA Web's WAWebSyncdCollectionsStateMachine which tracks in-flight syncs
+        // and queues new requests to a pending set.
+        {
+            let mut syncing = self.app_state_syncing.lock().await;
+            if !syncing.insert(name) {
+                debug!(target: "Client/AppState", "Skipping sync for {:?}: already in flight", name);
+                return Ok(());
+            }
+        }
+
+        let result = self.fetch_app_state_with_retry_inner(name).await;
+
+        // Always remove from in-flight set when done
+        self.app_state_syncing.lock().await.remove(&name);
+
+        result
+    }
+
+    #[allow(dead_code)]
+    async fn fetch_app_state_with_retry_inner(&self, name: WAPatchName) -> anyhow::Result<()> {
         let mut attempt = 0u32;
         loop {
             attempt += 1;
-            let res = self.process_app_state_sync_task(name, true).await;
+            // full_sync=false lets process_app_state_sync_task auto-detect:
+            // version 0 → snapshot (full sync), version > 0 → incremental patches.
+            // Matches WA Web which only requests snapshot when version is undefined.
+            let res = self.process_app_state_sync_task(name, false).await;
             match res {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -1385,6 +1412,257 @@ impl Client {
                 }
             }
         }
+    }
+
+    /// Sync multiple collections in a single IQ request, re-fetching those with `has_more_patches`.
+    /// Matches WA Web's `serverSync()` outer loop (`3JJWKHeu5-P.js:54278-54305`).
+    /// Max 5 iterations (WA Web's `C=5` constant).
+    pub(crate) async fn sync_collections_batched(
+        &self,
+        collections: Vec<WAPatchName>,
+    ) -> anyhow::Result<()> {
+        if collections.is_empty() {
+            return Ok(());
+        }
+
+        // In-flight dedup: filter out collections already being synced
+        let pending = {
+            let mut syncing = self.app_state_syncing.lock().await;
+            let mut filtered = Vec::with_capacity(collections.len());
+            for name in collections {
+                if syncing.insert(name) {
+                    filtered.push(name);
+                } else {
+                    debug!(target: "Client/AppState", "Skipping {:?} in batch: already in flight", name);
+                }
+            }
+            filtered
+        };
+
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        // Track all collections for cleanup
+        let all_collections: Vec<WAPatchName> = pending.clone();
+
+        let result = self.sync_collections_batched_inner(pending).await;
+
+        // Always clean up in-flight set
+        {
+            let mut syncing = self.app_state_syncing.lock().await;
+            for name in &all_collections {
+                syncing.remove(name);
+            }
+        }
+
+        result
+    }
+
+    async fn sync_collections_batched_inner(
+        &self,
+        mut pending: Vec<WAPatchName>,
+    ) -> anyhow::Result<()> {
+        use wacore::appstate::patch_decode::CollectionSyncError;
+        const MAX_ITERATIONS: usize = 5;
+        let mut iteration = 0;
+
+        while !pending.is_empty() && iteration < MAX_ITERATIONS {
+            iteration += 1;
+            let is_first = iteration == 1;
+
+            debug!(
+                target: "Client/AppState",
+                "Batched sync iteration {}/{}: {:?}",
+                iteration, MAX_ITERATIONS, pending
+            );
+
+            let backend = self.persistence_manager.backend();
+
+            // Build multi-collection IQ
+            let mut collection_nodes = Vec::with_capacity(pending.len());
+            for &name in &pending {
+                let state = backend.get_version(name.as_str()).await?;
+                let want_snapshot = state.version == 0;
+                let mut builder = NodeBuilder::new("collection")
+                    .attr("name", name.as_str())
+                    .attr(
+                        "return_snapshot",
+                        if want_snapshot { "true" } else { "false" },
+                    );
+                if !want_snapshot {
+                    builder = builder.attr("version", state.version.to_string());
+                }
+                collection_nodes.push(builder.build());
+            }
+
+            let sync_node = NodeBuilder::new("sync").children(collection_nodes).build();
+            let iq = crate::request::InfoQuery {
+                namespace: "w:sync:app:state",
+                query_type: crate::request::InfoQueryType::Set,
+                to: server_jid(),
+                target: None,
+                id: None,
+                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                timeout: None,
+            };
+
+            let resp = self.send_iq(iq).await?;
+
+            // Pre-download all external blobs for all collections in the response
+            let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
+                std::collections::HashMap::new();
+
+            if let Ok(patch_lists) = wacore::appstate::patch_decode::parse_patch_lists(&resp) {
+                for pl in &patch_lists {
+                    // Download external snapshot
+                    if let Some(ext) = &pl.snapshot_ref
+                        && let Some(path) = &ext.direct_path
+                    {
+                        match self.download(ext).await {
+                            Ok(bytes) => {
+                                pre_downloaded.insert(path.clone(), bytes);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to download external snapshot for {:?}: {e}",
+                                    pl.name
+                                );
+                            }
+                        }
+                    }
+
+                    // Download external mutations
+                    for patch in &pl.patches {
+                        if let Some(ext) = &patch.external_mutations
+                            && let Some(path) = &ext.direct_path
+                        {
+                            match self.download(ext).await {
+                                Ok(bytes) => {
+                                    pre_downloaded.insert(path.clone(), bytes);
+                                }
+                                Err(e) => {
+                                    let v =
+                                        patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                                    warn!(
+                                        "Failed to download external mutations for patch v{}: {e}",
+                                        v
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let download = |ext: &wa::ExternalBlobReference| -> anyhow::Result<Vec<u8>> {
+                if let Some(path) = &ext.direct_path {
+                    if let Some(bytes) = pre_downloaded.get(path) {
+                        Ok(bytes.clone())
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "external blob not pre-downloaded: {}",
+                            path
+                        ))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("external blob has no directPath"))
+                }
+            };
+
+            // Parse and process all collections from the response
+            let proc = self.get_app_state_processor().await;
+            let results = proc.decode_multi_patch_list(&resp, &download, true).await?;
+
+            let mut needs_refetch = Vec::new();
+
+            for (mutations, new_state, list) in results {
+                let name = list.name;
+
+                // Handle per-collection errors
+                if let Some(ref err) = list.error {
+                    match err {
+                        CollectionSyncError::Conflict { has_more } => {
+                            warn!(target: "Client/AppState", "Collection {:?} conflict (has_more={}), will refetch", name, has_more);
+                            needs_refetch.push(name);
+                            continue;
+                        }
+                        CollectionSyncError::Fatal { code, text } => {
+                            warn!(target: "Client/AppState", "Collection {:?} fatal error {}: {}", name, code, text);
+                            continue;
+                        }
+                        CollectionSyncError::Retry { code, text } => {
+                            warn!(target: "Client/AppState", "Collection {:?} retryable error {}: {}, will refetch", name, code, text);
+                            needs_refetch.push(name);
+                            continue;
+                        }
+                    }
+                }
+
+                // Handle missing keys
+                let missing = match proc.get_missing_key_ids(&list).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("Failed to get missing key IDs for {:?}: {}", name, e);
+                        Vec::new()
+                    }
+                };
+                if !missing.is_empty() {
+                    let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
+                    let mut guard = self.app_state_key_requests.lock().await;
+                    let now = std::time::Instant::now();
+                    for key_id in missing {
+                        let hex_id = hex::encode(&key_id);
+                        let should = guard
+                            .get(&hex_id)
+                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                            .unwrap_or(true);
+                        if should {
+                            guard.insert(hex_id, now);
+                            to_request.push(key_id);
+                        }
+                    }
+                    drop(guard);
+                    if !to_request.is_empty() {
+                        self.request_app_state_keys(&to_request).await;
+                    }
+                }
+
+                // Dispatch mutations
+                let full_sync = is_first;
+                for m in mutations {
+                    self.dispatch_app_state_mutation(&m, full_sync).await;
+                }
+
+                // Save version
+                backend
+                    .set_version(name.as_str(), new_state.clone())
+                    .await?;
+
+                // Check if this collection needs more patches
+                if list.has_more_patches {
+                    needs_refetch.push(name);
+                }
+
+                debug!(
+                    target: "Client/AppState",
+                    "Batched sync: {:?} done (version={}, has_more={})",
+                    name, new_state.version, list.has_more_patches
+                );
+            }
+
+            pending = needs_refetch;
+        }
+
+        if !pending.is_empty() {
+            warn!(
+                target: "Client/AppState",
+                "Batched sync: max iterations ({}) reached for {:?}",
+                MAX_ITERATIONS, pending
+            );
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn process_app_state_sync_task(

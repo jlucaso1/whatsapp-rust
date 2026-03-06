@@ -7,7 +7,7 @@ use prost::Message;
 use tokio::sync::Mutex;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::keys::ExpandedAppStateKeys;
-use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list};
+use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list, parse_patch_lists};
 use wacore::appstate::{
     collect_key_ids_from_patch_list, expand_app_state_keys, process_patch, process_snapshot,
 };
@@ -115,6 +115,54 @@ impl AppStateProcessor {
         }
 
         self.process_patch_list(pl, validate_macs).await
+    }
+
+    /// Decode a multi-collection IQ response into per-collection results.
+    /// Each collection is parsed and processed independently.
+    pub async fn decode_multi_patch_list<FDownload>(
+        &self,
+        stanza_root: &Node,
+        download: &FDownload,
+        validate_macs: bool,
+    ) -> Result<Vec<(Vec<Mutation>, HashState, PatchList)>>
+    where
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
+        let patch_lists = parse_patch_lists(stanza_root)?;
+        let mut results = Vec::with_capacity(patch_lists.len());
+
+        for mut pl in patch_lists {
+            // Skip collections with errors — caller handles them via pl.error
+            if pl.error.is_some() {
+                let state = self.backend.get_version(pl.name.as_str()).await?;
+                results.push((Vec::new(), state, pl));
+                continue;
+            }
+
+            // Download external snapshot
+            if pl.snapshot.is_none()
+                && let Some(ext) = &pl.snapshot_ref
+                && let Ok(data) = download(ext)
+                && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+            {
+                pl.snapshot = Some(snapshot);
+            }
+
+            // Download external mutations for each patch
+            for patch in &mut pl.patches {
+                if let Some(ext) = &patch.external_mutations
+                    && let Ok(data) = download(ext)
+                    && let Ok(ext_mutations) = wa::SyncdMutations::decode(data.as_slice())
+                {
+                    patch.mutations = ext_mutations.mutations;
+                }
+            }
+
+            let (mutations, state, pl) = self.process_patch_list(pl, validate_macs).await?;
+            results.push((mutations, state, pl));
+        }
+
+        Ok(results)
     }
 
     pub async fn process_patch_list(
@@ -676,6 +724,7 @@ mod tests {
             }],
             snapshot: None,
             snapshot_ref: None,
+            error: None,
         };
 
         let result = processor.process_patch_list(patch_list, false).await;
