@@ -784,9 +784,12 @@ impl Client {
                     }
                     debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
-            } else if self.offline_sync_metrics.active.load(Ordering::Acquire) {
-                // Handle end marker: <ib> without offline_preview while sync is active
-                // This can happen when server sends fewer messages than advertised
+            } else if self.offline_sync_metrics.active.load(Ordering::Acquire)
+                && node.get_optional_child("offline").is_some()
+            {
+                // Handle end marker: <ib><offline count="N"/> signals sync completion
+                // Only <ib> with an <offline> child is a real end marker.
+                // Other <ib> children (thread_metadata, edge_routing, dirty) are NOT end markers.
                 let processed = self
                     .offline_sync_metrics
                     .processed_messages
@@ -3714,5 +3717,171 @@ mod tests {
         );
 
         info!("✅ test_unified_session_protocol_node passed");
+    }
+
+    /// Helper to create a test client for offline sync tests
+    async fn create_offline_sync_test_client() -> Arc<Client> {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+        client
+    }
+
+    #[tokio::test]
+    async fn test_ib_thread_metadata_does_not_end_sync() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("thread_metadata")
+                .children([NodeBuilder::new("item").build()])
+                .build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert!(
+            client.offline_sync_metrics.active.load(Ordering::Acquire),
+            "<ib><thread_metadata> should NOT end offline sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ib_edge_routing_does_not_end_sync() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("edge_routing")
+                .children([NodeBuilder::new("routing_info")
+                    .bytes(vec![1, 2, 3])
+                    .build()])
+                .build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert!(
+            client.offline_sync_metrics.active.load(Ordering::Acquire),
+            "<ib><edge_routing> should NOT end offline sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ib_dirty_does_not_end_sync() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("dirty")
+                .attr("type", "groups")
+                .attr("timestamp", "1234")
+                .build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert!(
+            client.offline_sync_metrics.active.load(Ordering::Acquire),
+            "<ib><dirty> should NOT end offline sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ib_offline_child_ends_sync() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+        client
+            .offline_sync_metrics
+            .total_messages
+            .store(301, Ordering::Release);
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("offline").attr("count", "301").build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert!(
+            !client.offline_sync_metrics.active.load(Ordering::Acquire),
+            "<ib><offline count='301'/> should end offline sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ib_offline_preview_starts_sync() {
+        let client = create_offline_sync_test_client().await;
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("offline_preview")
+                .attr("count", "301")
+                .attr("message", "168")
+                .attr("notification", "62")
+                .attr("receipt", "68")
+                .attr("appdata", "0")
+                .build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert!(
+            client.offline_sync_metrics.active.load(Ordering::Acquire),
+            "offline_preview with count>0 should activate sync"
+        );
+        assert_eq!(
+            client
+                .offline_sync_metrics
+                .total_messages
+                .load(Ordering::Acquire),
+            301
+        );
+    }
+
+    #[tokio::test]
+    async fn test_offline_message_increments_processed() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+        client
+            .offline_sync_metrics
+            .total_messages
+            .store(100, Ordering::Release);
+
+        let node = NodeBuilder::new("message")
+            .attr("offline", "1")
+            .attr("from", "5551234567@s.whatsapp.net")
+            .attr("id", "TEST123")
+            .attr("t", "1772884671")
+            .attr("type", "text")
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert_eq!(
+            client
+                .offline_sync_metrics
+                .processed_messages
+                .load(Ordering::Acquire),
+            1,
+            "offline message should increment processed count"
+        );
     }
 }

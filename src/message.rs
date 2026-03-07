@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
-use crate::types::message::MessageInfo;
+use crate::types::message::{EditAttribute, MessageInfo};
 use chrono::DateTime;
 use log::{debug, warn};
 use prost::Message as ProtoMessage;
@@ -139,8 +139,13 @@ impl Client {
     /// 2. Spawning a retry receipt to request re-encryption
     ///
     /// Returns `true` to be assigned to `dispatched_undecryptable` flag.
-    fn handle_decrypt_failure(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) -> bool {
-        self.dispatch_undecryptable_event(info, crate::types::events::DecryptFailMode::Show);
+    fn handle_decrypt_failure(
+        self: &Arc<Self>,
+        info: &MessageInfo,
+        reason: RetryReason,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
+    ) -> bool {
+        self.dispatch_undecryptable_event(info, decrypt_fail_mode);
         self.spawn_retry_receipt(info, reason);
         true
     }
@@ -417,8 +422,24 @@ impl Client {
 
         let mut session_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
         let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
+        let mut max_sender_retry_count: u8 = 0;
+        let mut has_hide_fail = false;
 
         for &enc_node in &all_enc_nodes {
+            // Parse sender retry count (WA Web: e.maybeAttrInt("count") ?? 0)
+            // Clamp to MAX_DECRYPT_RETRIES to prevent u64→u8 truncation on unexpected values.
+            let sender_count = enc_node
+                .attrs()
+                .optional_u64("count")
+                .map(|c| c.min(MAX_DECRYPT_RETRIES as u64) as u8)
+                .unwrap_or(0);
+            max_sender_retry_count = max_sender_retry_count.max(sender_count);
+
+            // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
+            if enc_node.attrs().optional_string("decrypt-fail") == Some("hide") {
+                has_hide_fail = true;
+            }
+
             let enc_type = match enc_node.attrs().optional_string("type") {
                 Some(t) => t.to_string(),
                 None => {
@@ -452,6 +473,46 @@ impl Client {
             }
         }
 
+        // Determine decrypt fail mode from enc nodes (WA Web: hideFail)
+        let decrypt_fail_mode = if has_hide_fail {
+            crate::types::events::DecryptFailMode::Hide
+        } else {
+            crate::types::events::DecryptFailMode::Show
+        };
+
+        // Pre-seed retry cache with sender's retry count to avoid redundant retries.
+        // Uses max(existing, incoming) so redeliveries with higher counts update the cache,
+        // but lower counts don't reset our local counter.
+        if max_sender_retry_count > 0 {
+            use moka::ops::compute::Op;
+
+            let cache_key = self
+                .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+                .await;
+            self.message_retry_counts
+                .entry_by_ref(&cache_key)
+                .and_compute_with(|maybe_entry| {
+                    let op = match maybe_entry {
+                        Some(entry) => {
+                            let existing = entry.into_value();
+                            if max_sender_retry_count > existing {
+                                Op::Put(max_sender_retry_count)
+                            } else {
+                                Op::Nop
+                            }
+                        }
+                        None => Op::Put(max_sender_retry_count),
+                    };
+                    std::future::ready(op)
+                })
+                .await;
+            log::debug!(
+                "[msg:{}] Sender retry count {} pre-seeded into cache",
+                info.id,
+                max_sender_retry_count
+            );
+        }
+
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
@@ -468,7 +529,12 @@ impl Client {
             session_dispatched_undecryptable,
         ) = if !is_group_sender && !session_enc_nodes.is_empty() {
             self.clone()
-                .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
+                .process_session_enc_batch(
+                    &session_enc_nodes,
+                    &info,
+                    &sender_encryption_jid,
+                    decrypt_fail_mode,
+                )
                 .await
         } else {
             if is_group_sender && !session_enc_nodes.is_empty() {
@@ -509,6 +575,7 @@ impl Client {
                         &group_content_enc_nodes,
                         &info,
                         &sender_encryption_jid,
+                        decrypt_fail_mode,
                     )
                     .await
                 {
@@ -591,10 +658,7 @@ impl Client {
                     // Still dispatch an UndecryptableMessage event so the user knows
                     // But only if we haven't already dispatched one in process_session_enc_batch
                     if !session_dispatched_undecryptable {
-                        self.dispatch_undecryptable_event(
-                            &info,
-                            crate::types::events::DecryptFailMode::Show,
-                        );
+                        self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
                     }
 
                     // Do NOT send a delivery receipt for undecryptable messages.
@@ -618,7 +682,7 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.dispatch_undecryptable_event(&info, crate::types::events::DecryptFailMode::Show);
+            self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
             // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
@@ -628,6 +692,7 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         sender_encryption_jid: &Jid,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> (bool, bool, bool) {
         // Returns (any_success, any_duplicate, dispatched_undecryptable)
         use wacore::libsignal::protocol::CiphertextMessage;
@@ -872,8 +937,11 @@ impl Client {
                                     );
 
                                     // Send retry receipt so the sender fetches our new prekey bundle
-                                    dispatched_undecryptable = self
-                                        .handle_decrypt_failure(info, RetryReason::InvalidKeyId);
+                                    dispatched_undecryptable = self.handle_decrypt_failure(
+                                        info,
+                                        RetryReason::InvalidKeyId,
+                                        decrypt_fail_mode,
+                                    );
                                 } else {
                                     log::error!(
                                         "[msg:{}] Decryption failed even after clearing untrusted identity for {}: {:?}",
@@ -883,8 +951,11 @@ impl Client {
                                     );
                                     // Send retry receipt so the sender resends with a PreKeySignalMessage
                                     // to establish a new session with the new identity
-                                    dispatched_undecryptable =
-                                        self.handle_decrypt_failure(info, RetryReason::InvalidKey);
+                                    dispatched_undecryptable = self.handle_decrypt_failure(
+                                        info,
+                                        RetryReason::InvalidKey,
+                                        decrypt_fail_mode,
+                                    );
                                 }
                             }
                         }
@@ -897,8 +968,11 @@ impl Client {
                             info.id, enc_type, info.source.sender
                         );
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::NoSession);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::NoSession,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
                         // InvalidMessage typically means MAC verification failed or session is out of sync.
@@ -933,8 +1007,11 @@ impl Client {
                         drop(device_guard);
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::InvalidMessage);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::InvalidMessage,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
                         // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
@@ -959,8 +1036,11 @@ impl Client {
                         );
 
                         // Send retry receipt with fresh prekeys
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::InvalidKeyId);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::InvalidKeyId,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else {
                         // For other unexpected errors, just log them
@@ -984,6 +1064,7 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
+        _decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> Result<bool, DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(false);
@@ -1312,6 +1393,10 @@ impl Client {
             timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0)
                 .unwrap_or_else(chrono::Utc::now),
             category,
+            edit: attrs
+                .optional_string("edit")
+                .map(|s| EditAttribute::from(s.to_string()))
+                .unwrap_or_default(),
             ..Default::default()
         })
     }
@@ -1641,7 +1726,12 @@ mod tests {
 
         // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         assert!(
@@ -2520,7 +2610,12 @@ mod tests {
         // Call process_session_enc_batch
         // This should handle any errors gracefully without panicking
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!(
@@ -2595,7 +2690,12 @@ mod tests {
         // Process the batch
         // Should handle all errors gracefully without stopping at first error
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_node_refs, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_node_refs,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!("Test: Batch processing completed - success: {}", success);
@@ -2655,7 +2755,12 @@ mod tests {
         // Process the message
         // Should handle errors gracefully in group context
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_phone)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_phone,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!("Test: Group message processed - success: {}", success);
@@ -4354,5 +4459,278 @@ mod tests {
             protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
             ..Default::default()
         }));
+    }
+
+    #[tokio::test]
+    async fn test_parse_edit_attribute_sender_revoke() {
+        let client = create_test_client_for_retry_with_id("edit_sender_revoke").await;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("id", "TEST123")
+            .attr("participant", "5551234567@lid")
+            .attr("t", "1772895198")
+            .attr("type", "text")
+            .attr("edit", "7")
+            .build();
+
+        let info = client
+            .parse_message_info(&node)
+            .await
+            .expect("parse_message_info should succeed");
+
+        assert_eq!(
+            info.edit,
+            EditAttribute::SenderRevoke,
+            "edit='7' should parse as SenderRevoke"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_edit_attribute_admin_revoke() {
+        let client = create_test_client_for_retry_with_id("edit_admin_revoke").await;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "120363999999999999@g.us")
+            .attr("id", "TEST456")
+            .attr("participant", "5551234567@lid")
+            .attr("t", "1772895198")
+            .attr("type", "text")
+            .attr("edit", "8")
+            .build();
+
+        let info = client
+            .parse_message_info(&node)
+            .await
+            .expect("parse_message_info should succeed");
+
+        assert_eq!(
+            info.edit,
+            EditAttribute::AdminRevoke,
+            "edit='8' should parse as AdminRevoke"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_edit_attribute_message_edit() {
+        let client = create_test_client_for_retry_with_id("edit_message_edit").await;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "5551234567@s.whatsapp.net")
+            .attr("id", "TEST789")
+            .attr("t", "1772895198")
+            .attr("type", "text")
+            .attr("edit", "1")
+            .build();
+
+        let info = client
+            .parse_message_info(&node)
+            .await
+            .expect("parse_message_info should succeed");
+
+        assert_eq!(
+            info.edit,
+            EditAttribute::MessageEdit,
+            "edit='1' should parse as MessageEdit"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_edit_attribute_missing() {
+        let client = create_test_client_for_retry_with_id("edit_missing").await;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "5551234567@s.whatsapp.net")
+            .attr("id", "TESTABC")
+            .attr("t", "1772895198")
+            .attr("type", "text")
+            .build();
+
+        let info = client
+            .parse_message_info(&node)
+            .await
+            .expect("parse_message_info should succeed");
+
+        assert_eq!(
+            info.edit,
+            EditAttribute::Empty,
+            "missing edit attr should default to Empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_revoked_message_still_retries() {
+        let client = create_test_client_for_retry_with_id("revoke_retry").await;
+
+        let mut info = create_test_message_info(
+            "status@broadcast",
+            "REVOKE_MSG1",
+            "5551234567@s.whatsapp.net",
+        );
+        info.edit = EditAttribute::SenderRevoke;
+
+        // WA Web retries revoked messages the same as any other — the revoke
+        // protocol message contains the target ID needed to process the deletion
+        client.spawn_retry_receipt(&info, RetryReason::NoSession);
+
+        // Wait for the spawned task to execute
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let cache_key = client
+            .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+            .await;
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(1),
+            "revoked message should still have retry count 1 (WA Web retries all messages)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enc_count_preseeds_retry_cache() {
+        let client = create_test_client_for_retry_with_id("enc_preseed").await;
+
+        let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
+        let msg_id = "ENC_COUNT_MSG1";
+
+        // Pre-seed via the same logic used in handle_incoming_message
+        let max_sender_retry_count: u8 = 3;
+        let cache_key = client
+            .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+            .await;
+        client
+            .message_retry_counts
+            .entry_by_ref(&cache_key)
+            .or_insert(max_sender_retry_count)
+            .await;
+
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(3),
+            "cache should be pre-seeded with sender retry count"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enc_no_count_cache_empty() {
+        let client = create_test_client_for_retry_with_id("enc_no_count").await;
+
+        let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
+        let msg_id = "ENC_NO_COUNT_MSG1";
+
+        // When max_sender_retry_count is 0, no pre-seeding occurs
+        let max_sender_retry_count: u8 = 0;
+        if max_sender_retry_count > 0 {
+            let cache_key = client
+                .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+                .await;
+            client
+                .message_retry_counts
+                .entry_by_ref(&cache_key)
+                .or_insert(max_sender_retry_count)
+                .await;
+        }
+
+        let cache_key = client
+            .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+            .await;
+        assert!(
+            client.message_retry_counts.get(&cache_key).await.is_none(),
+            "cache should be empty when no count attribute"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enc_count_does_not_overwrite_higher() {
+        use moka::ops::compute::Op;
+
+        let client = create_test_client_for_retry_with_id("enc_no_overwrite").await;
+
+        let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
+        let msg_id = "ENC_NOOVERWRITE_MSG1";
+
+        let cache_key = client
+            .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+            .await;
+
+        // Pre-insert a higher value
+        client
+            .message_retry_counts
+            .insert(cache_key.clone(), 4)
+            .await;
+
+        // and_compute_with(max) should NOT overwrite with a lower value
+        let max_sender_retry_count: u8 = 2;
+        client
+            .message_retry_counts
+            .entry_by_ref(&cache_key)
+            .and_compute_with(|maybe_entry| {
+                let op = match maybe_entry {
+                    Some(entry) => {
+                        let existing = entry.into_value();
+                        if max_sender_retry_count > existing {
+                            Op::Put(max_sender_retry_count)
+                        } else {
+                            Op::Nop
+                        }
+                    }
+                    None => Op::Put(max_sender_retry_count),
+                };
+                std::future::ready(op)
+            })
+            .await;
+
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(4),
+            "should not overwrite existing higher value"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enc_count_updates_when_sender_higher() {
+        use moka::ops::compute::Op;
+
+        let client = create_test_client_for_retry_with_id("enc_update_higher").await;
+
+        let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
+        let msg_id = "ENC_UPDATE_MSG1";
+
+        let cache_key = client
+            .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+            .await;
+
+        // Pre-insert a lower value
+        client
+            .message_retry_counts
+            .insert(cache_key.clone(), 1)
+            .await;
+
+        // and_compute_with(max) SHOULD update with a higher value
+        let max_sender_retry_count: u8 = 3;
+        client
+            .message_retry_counts
+            .entry_by_ref(&cache_key)
+            .and_compute_with(|maybe_entry| {
+                let op = match maybe_entry {
+                    Some(entry) => {
+                        let existing = entry.into_value();
+                        if max_sender_retry_count > existing {
+                            Op::Put(max_sender_retry_count)
+                        } else {
+                            Op::Nop
+                        }
+                    }
+                    None => Op::Put(max_sender_retry_count),
+                };
+                std::future::ready(op)
+            })
+            .await;
+
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(3),
+            "should update to higher sender count"
+        );
     }
 }

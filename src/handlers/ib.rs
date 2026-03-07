@@ -49,7 +49,14 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                 let client_clone = client.clone();
 
+                // WA Web gates `groups` and `newsletter_metadata` dirty types behind
+                // offlineDeliveryEnd — only process them after offline sync completes.
+                // `account_sync` and `syncd_app_state` run immediately.
+                // See WAWebHandleDirtyBits in 5Yec01dI04o.js:50765-50782.
                 tokio::spawn(async move {
+                    if dirty_type == "groups" || dirty_type == "newsletter_metadata" {
+                        client_clone.wait_for_offline_delivery_end().await;
+                    }
                     if let Err(e) = client_clone
                         .clean_dirty_bits(&dirty_type, timestamp.as_deref())
                         .await
