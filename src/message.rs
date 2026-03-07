@@ -217,19 +217,6 @@ impl Client {
     /// * `info` - The message info for the failed message
     /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
     fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
-        // Skip retries for revoked messages — the content has been deleted by the sender/admin
-        if matches!(
-            info.edit,
-            EditAttribute::SenderRevoke | EditAttribute::AdminRevoke
-        ) {
-            log::debug!(
-                "[msg:{}] Skipping retry for revoked message (edit={:?})",
-                info.id,
-                info.edit
-            );
-            return;
-        }
-
         let client = Arc::clone(self);
         let info = info.clone();
 
@@ -4492,8 +4479,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_revoked_message_skips_retry() {
-        let client = create_test_client_for_retry_with_id("revoke_skip").await;
+    async fn test_revoked_message_still_retries() {
+        let client = create_test_client_for_retry_with_id("revoke_retry").await;
 
         let mut info = create_test_message_info(
             "status@broadcast",
@@ -4502,31 +4489,8 @@ mod tests {
         );
         info.edit = EditAttribute::SenderRevoke;
 
-        // spawn_retry_receipt should return immediately without touching the cache
-        client.spawn_retry_receipt(&info, RetryReason::NoSession);
-
-        // Give a moment for any async work (there shouldn't be any)
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        let cache_key = client
-            .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
-            .await;
-        assert!(
-            client.message_retry_counts.get(&cache_key).await.is_none(),
-            "revoked message should NOT have a retry cache entry"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_normal_message_still_retries() {
-        let client = create_test_client_for_retry_with_id("normal_retry").await;
-
-        let info = create_test_message_info(
-            "5559876543@s.whatsapp.net",
-            "NORMAL_MSG1",
-            "5559876543@s.whatsapp.net",
-        );
-
+        // WA Web retries revoked messages the same as any other — the revoke
+        // protocol message contains the target ID needed to process the deletion
         client.spawn_retry_receipt(&info, RetryReason::NoSession);
 
         // Wait for the spawned task to execute
@@ -4538,7 +4502,7 @@ mod tests {
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,
             Some(1),
-            "normal message should have retry count 1"
+            "revoked message should still have retry count 1 (WA Web retries all messages)"
         );
     }
 
