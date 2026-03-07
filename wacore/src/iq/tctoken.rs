@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn test_should_send_new_tc_token_different_bucket() {
         let now = 3 * TC_TOKEN_BUCKET_DURATION + 100;
-        let old_ts = 1 * TC_TOKEN_BUCKET_DURATION + 50;
+        let old_ts = TC_TOKEN_BUCKET_DURATION + 50;
         assert!(should_send_new_tc_token_at(Some(old_ts), now));
     }
 
