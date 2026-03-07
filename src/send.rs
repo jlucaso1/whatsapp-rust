@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
+use wacore::types::message::AddressingMode;
 use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
@@ -27,6 +28,10 @@ pub enum RevokeType {
 }
 
 impl Client {
+    /// Send an end-to-end encrypted message to a user or group.
+    ///
+    /// Returns the message ID on success. For status/story updates use
+    /// [`Client::status()`] instead.
     pub async fn send_message(
         &self,
         to: Jid,
@@ -55,6 +60,404 @@ impl Client {
         )
         .await?;
         Ok(request_id)
+    }
+
+    /// Send a status/story update to the given recipients using sender key encryption.
+    ///
+    /// This builds a `GroupInfo` from the provided recipients (always PN addressing mode),
+    /// then reuses the group encryption pipeline with `to = status@broadcast`.
+    pub(crate) async fn send_status_message(
+        &self,
+        message: wa::Message,
+        recipients: Vec<Jid>,
+        options: crate::features::status::StatusSendOptions,
+    ) -> Result<String, anyhow::Error> {
+        use wacore::client::context::GroupInfo;
+        use wacore_binary::builder::NodeBuilder;
+
+        if recipients.is_empty() {
+            return Err(anyhow!("Cannot send status with no recipients"));
+        }
+
+        let to = Jid::status_broadcast();
+        let request_id = self.generate_message_id().await;
+
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_jid = device_snapshot
+            .pn
+            .clone()
+            .ok_or_else(|| anyhow!("Not logged in"))?;
+        // Status always uses PN addressing, so own_lid is only needed as a
+        // fallback parameter for prepare_group_stanza (unused in PN mode).
+        let own_lid = device_snapshot
+            .lid
+            .clone()
+            .unwrap_or_else(|| own_jid.clone());
+        let account_info = device_snapshot.account.clone();
+
+        // Status always uses PN addressing. Resolve any LID recipients to their
+        // phone numbers so we don't end up with duplicate PN+LID entries for the
+        // same user (which causes server error 400).
+        // Reject non-user JIDs (groups, broadcasts, etc.) to prevent invalid
+        // <participants> entries that cause server errors.
+        let mut resolved_recipients = Vec::with_capacity(recipients.len());
+        for jid in recipients {
+            if jid.is_group() || jid.is_status_broadcast() || jid.is_broadcast_list() {
+                return Err(anyhow!(
+                    "Invalid status recipient {}: must be a user JID, not a group/broadcast",
+                    jid
+                ));
+            }
+            if jid.is_lid() {
+                if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
+                    resolved_recipients
+                        .push(Jid::new(&pn, wacore_binary::jid::DEFAULT_USER_SERVER));
+                } else {
+                    return Err(anyhow!(
+                        "No PN mapping for LID {}. Ensure the recipient has been \
+                         contacted previously.",
+                        jid
+                    ));
+                }
+            } else {
+                resolved_recipients.push(jid);
+            }
+        }
+
+        if resolved_recipients.is_empty() {
+            return Err(anyhow!("No valid PN recipients after LID resolution"));
+        }
+
+        // Deduplicate by user (in case both LID and PN were provided for the same user)
+        let mut seen_users = std::collections::HashSet::new();
+        resolved_recipients.retain(|jid| seen_users.insert(jid.user.clone()));
+
+        let mut group_info = GroupInfo::new(resolved_recipients, AddressingMode::Pn);
+
+        // Ensure we're in the participant list
+        let own_base = own_jid.to_non_ad();
+        if !group_info
+            .participants
+            .iter()
+            .any(|p| p.is_same_user_as(&own_base))
+        {
+            group_info.participants.push(own_base);
+        }
+
+        self.add_recent_message(to.clone(), request_id.clone(), &message)
+            .await;
+
+        let device_store_arc = self.persistence_manager.get_device_arc().await;
+
+        let force_skdm = {
+            use wacore::libsignal::protocol::SenderKeyStore;
+            use wacore::libsignal::store::sender_key_name::SenderKeyName;
+            let mut device_guard = device_store_arc.write().await;
+            let sender_address = own_jid.to_protocol_address();
+            let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
+
+            let key_exists = device_guard
+                .load_sender_key(&sender_key_name)
+                .await?
+                .is_some();
+
+            !key_exists
+        };
+
+        let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+        let mut stores = wacore::send::SignalStores {
+            session_store: &mut store_adapter.session_store,
+            identity_store: &mut store_adapter.identity_store,
+            prekey_store: &mut store_adapter.pre_key_store,
+            signed_prekey_store: &store_adapter.signed_pre_key_store,
+            sender_key_store: &mut store_adapter.sender_key_store,
+        };
+
+        let marked_for_fresh_skdm = self
+            .consume_forget_marks(&to.to_string())
+            .await
+            .unwrap_or_default();
+
+        let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
+            None
+        } else {
+            let known_recipients = self
+                .persistence_manager
+                .get_skdm_recipients(&to.to_string())
+                .await
+                .unwrap_or_default();
+
+            if known_recipients.is_empty() {
+                None
+            } else {
+                let jids_to_resolve: Vec<Jid> = group_info
+                    .participants
+                    .iter()
+                    .map(|jid| jid.to_non_ad())
+                    .collect();
+
+                match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+                    Ok(all_devices) => {
+                        let known_set: std::collections::HashSet<DeviceKey<'_>> =
+                            known_recipients.iter().map(|j| j.device_key()).collect();
+                        let new_devices: Vec<Jid> = all_devices
+                            .into_iter()
+                            .filter(|device| !known_set.contains(&device.device_key()))
+                            .collect();
+                        if new_devices.is_empty() {
+                            Some(vec![])
+                        } else {
+                            Some(new_devices)
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to resolve devices for status SKDM check: {:?}", e);
+                        None
+                    }
+                }
+            }
+        };
+
+        let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
+            match skdm_target_devices {
+                None => None,
+                Some(mut devices) => {
+                    for marked_jid_str in &marked_for_fresh_skdm {
+                        if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
+                            && !devices.iter().any(|d| d.device_eq(&marked_jid))
+                        {
+                            devices.push(marked_jid);
+                        }
+                    }
+                    Some(devices)
+                }
+            }
+        } else {
+            skdm_target_devices
+        };
+
+        let is_full_distribution = force_skdm || skdm_target_devices.is_none();
+        let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
+
+        // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
+        // Revoke messages omit this node.
+        let is_revoke = message.protocol_message.as_ref().is_some_and(|pm| {
+            pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32)
+        });
+        let extra_stanza_nodes = if is_revoke {
+            vec![]
+        } else {
+            vec![
+                NodeBuilder::new("meta")
+                    .attr("status_setting", options.privacy.as_str())
+                    .build(),
+            ]
+        };
+
+        let stanza = match wacore::send::prepare_group_stanza(
+            &mut stores,
+            self,
+            &mut group_info,
+            &own_jid,
+            &own_lid,
+            account_info.as_ref(),
+            to.clone(),
+            &message,
+            request_id.clone(),
+            force_skdm,
+            skdm_target_devices,
+            None,
+            extra_stanza_nodes.clone(),
+        )
+        .await
+        {
+            Ok(stanza) => {
+                if !devices_receiving_skdm.is_empty() {
+                    if let Err(e) = self
+                        .persistence_manager
+                        .add_skdm_recipients(&to.to_string(), &devices_receiving_skdm)
+                        .await
+                    {
+                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
+                    }
+                } else if is_full_distribution {
+                    let jids_to_resolve: Vec<Jid> = group_info
+                        .participants
+                        .iter()
+                        .map(|jid| jid.to_non_ad())
+                        .collect();
+
+                    if let Ok(all_devices) =
+                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
+                        && let Err(e) = self
+                            .persistence_manager
+                            .add_skdm_recipients(&to.to_string(), &all_devices)
+                            .await
+                    {
+                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
+                    }
+                }
+                stanza
+            }
+            Err(e) => {
+                if let Some(SignalProtocolError::NoSenderKeyState(_)) =
+                    e.downcast_ref::<SignalProtocolError>()
+                {
+                    log::warn!("No sender key for status broadcast, forcing distribution.");
+
+                    if let Err(e) = self
+                        .persistence_manager
+                        .clear_skdm_recipients(&to.to_string())
+                        .await
+                    {
+                        log::warn!("Failed to clear status SKDM recipients: {:?}", e);
+                    }
+
+                    let mut store_adapter_retry =
+                        SignalProtocolStoreAdapter::new(device_store_arc.clone());
+                    let mut stores_retry = wacore::send::SignalStores {
+                        session_store: &mut store_adapter_retry.session_store,
+                        identity_store: &mut store_adapter_retry.identity_store,
+                        prekey_store: &mut store_adapter_retry.pre_key_store,
+                        signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
+                        sender_key_store: &mut store_adapter_retry.sender_key_store,
+                    };
+
+                    let retry_stanza = wacore::send::prepare_group_stanza(
+                        &mut stores_retry,
+                        self,
+                        &mut group_info,
+                        &own_jid,
+                        &own_lid,
+                        account_info.as_ref(),
+                        to.clone(),
+                        &message,
+                        request_id.clone(),
+                        true,
+                        None,
+                        None,
+                        extra_stanza_nodes,
+                    )
+                    .await?;
+
+                    // Re-populate SKDM recipients after successful full distribution
+                    let jids_to_resolve: Vec<Jid> = group_info
+                        .participants
+                        .iter()
+                        .map(|jid| jid.to_non_ad())
+                        .collect();
+                    if let Ok(all_devices) =
+                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
+                        && let Err(e) = self
+                            .persistence_manager
+                            .add_skdm_recipients(&to.to_string(), &all_devices)
+                            .await
+                    {
+                        log::warn!(
+                            "Failed to update status SKDM recipients after retry: {:?}",
+                            e
+                        );
+                    }
+
+                    retry_stanza
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
+        // For status broadcasts, the server doesn't know the recipient list
+        // (unlike groups where the server has the member list). We must always
+        // include a <participants> node so the server knows who to deliver to.
+        // If prepare_group_stanza already added one (SKDM distribution), we
+        // extend it with bare <to> entries for devices that already have the
+        // sender key. If there's no <participants> node yet, we create one.
+        let stanza = self.ensure_status_participants(stanza, &group_info).await?;
+
+        self.send_node(stanza).await?;
+        Ok(request_id)
+    }
+
+    /// Ensure the status stanza has a <participants> node listing all recipient
+    /// user JIDs. WhatsApp Web's `participantList` uses bare USER JIDs (not
+    /// device JIDs) — `<to jid="user@s.whatsapp.net"/>` — to tell the server
+    /// which users should receive the skmsg. The SKDM distribution list
+    /// (already in <participants>) uses device JIDs with <enc> children.
+    async fn ensure_status_participants(
+        &self,
+        mut stanza: wacore_binary::Node,
+        group_info: &wacore::client::context::GroupInfo,
+    ) -> Result<wacore_binary::Node, anyhow::Error> {
+        use wacore_binary::builder::NodeBuilder;
+        use wacore_binary::node::NodeContent;
+
+        // Build bare <to jid="USER_JID"/> entries for each participant.
+        // WhatsApp Web uses USER_JID (not DEVICE_JID) for the participantList.
+        let bare_to_nodes: Vec<wacore_binary::Node> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                NodeBuilder::new("to")
+                    .attr("jid", jid.to_non_ad().to_string())
+                    .build()
+            })
+            .collect();
+
+        // Check if <participants> already exists in the stanza children
+        let children = match &mut stanza.content {
+            Some(NodeContent::Nodes(nodes)) => nodes,
+            _ => {
+                stanza.content = Some(NodeContent::Nodes(vec![]));
+                match &mut stanza.content {
+                    Some(NodeContent::Nodes(nodes)) => nodes,
+                    _ => unreachable!(),
+                }
+            }
+        };
+
+        if let Some(participants_node) = children.iter_mut().find(|n| n.tag == "participants") {
+            // <participants> already exists (from SKDM distribution).
+            // Add bare <to> user JID entries for users whose devices are NOT
+            // already represented by SKDM device-level entries.
+            let existing_users: std::collections::HashSet<String> = participants_node
+                .children()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|n| {
+                    n.attrs
+                        .get("jid")
+                        .and_then(|v| v.to_string().parse::<Jid>().ok().map(|j| j.user.clone()))
+                })
+                .collect();
+
+            let new_to_nodes: Vec<wacore_binary::Node> = bare_to_nodes
+                .into_iter()
+                .filter(|n| {
+                    n.attrs
+                        .get("jid")
+                        .and_then(|v| v.to_string().parse::<Jid>().ok())
+                        .map(|j| !existing_users.contains(&j.user))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            if !new_to_nodes.is_empty() {
+                match &mut participants_node.content {
+                    Some(NodeContent::Nodes(nodes)) => nodes.extend(new_to_nodes),
+                    _ => {
+                        participants_node.content = Some(NodeContent::Nodes(new_to_nodes));
+                    }
+                }
+            }
+        } else {
+            // No <participants> node — create one with bare <to> entries.
+            let participants_node = NodeBuilder::new("participants")
+                .children(bare_to_nodes)
+                .build();
+            children.insert(0, participants_node);
+        }
+
+        Ok(stanza)
     }
 
     /// Delete a message for everyone in the chat (revoke).
@@ -153,6 +556,13 @@ impl Client {
         edit: Option<crate::types::message::EditAttribute>,
         extra_stanza_nodes: Vec<Node>,
     ) -> Result<(), anyhow::Error> {
+        // Status broadcasts must go through send_status_message() which provides recipients
+        if to.is_status_broadcast() {
+            return Err(anyhow!(
+                "Use send_status_message() or client.status() API for status@broadcast"
+            ));
+        }
+
         // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
             Some(id) => id,
@@ -402,7 +812,8 @@ impl Client {
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
-                        wacore::send::prepare_group_stanza(
+                        let to_str = to.to_string();
+                        let retry_stanza = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
                             &mut group_info,
@@ -417,7 +828,25 @@ impl Client {
                             edit.clone(),
                             extra_stanza_nodes.clone(),
                         )
-                        .await?
+                        .await?;
+
+                        // Re-populate SKDM recipients after successful full distribution
+                        let jids_to_resolve: Vec<Jid> = group_info
+                            .participants
+                            .iter()
+                            .map(|jid| jid.to_non_ad())
+                            .collect();
+                        if let Ok(all_devices) =
+                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
+                            && let Err(e) = self
+                                .persistence_manager
+                                .add_skdm_recipients(&to_str, &all_devices)
+                                .await
+                        {
+                            log::warn!("Failed to update SKDM recipients after retry: {:?}", e);
+                        }
+
+                        retry_stanza
                     } else {
                         return Err(e);
                     }
