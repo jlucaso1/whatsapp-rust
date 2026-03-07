@@ -2,6 +2,10 @@
 
 A high-performance, async Rust library for the WhatsApp Web API. Inspired by [whatsmeow](https://github.com/tulir/whatsmeow) (Go) and [Baileys](https://github.com/WhiskeySockets/Baileys) (TypeScript).
 
+[Docs](https://whatsapp-rust.jlucaso.com)
+[llms.txt](https://whatsapp-rust.jlucaso.com/llms.txt)
+[llms-full.txt](https://whatsapp-rust.jlucaso.com/llms-full.txt)
+
 ## Features
 
 ### Authentication
