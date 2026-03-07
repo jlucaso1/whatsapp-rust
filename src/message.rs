@@ -427,7 +427,12 @@ impl Client {
 
         for &enc_node in &all_enc_nodes {
             // Parse sender retry count (WA Web: e.maybeAttrInt("count") ?? 0)
-            let sender_count = enc_node.attrs().optional_u64("count").unwrap_or(0) as u8;
+            // Clamp to MAX_DECRYPT_RETRIES to prevent u64→u8 truncation on unexpected values.
+            let sender_count = enc_node
+                .attrs()
+                .optional_u64("count")
+                .map(|c| c.min(MAX_DECRYPT_RETRIES as u64) as u8)
+                .unwrap_or(0);
             max_sender_retry_count = max_sender_retry_count.max(sender_count);
 
             // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
@@ -475,14 +480,31 @@ impl Client {
             crate::types::events::DecryptFailMode::Show
         };
 
-        // Pre-seed retry cache with sender's retry count to avoid redundant retries
+        // Pre-seed retry cache with sender's retry count to avoid redundant retries.
+        // Uses max(existing, incoming) so redeliveries with higher counts update the cache,
+        // but lower counts don't reset our local counter.
         if max_sender_retry_count > 0 {
+            use moka::ops::compute::Op;
+
             let cache_key = self
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
                 .await;
             self.message_retry_counts
                 .entry_by_ref(&cache_key)
-                .or_insert(max_sender_retry_count)
+                .and_compute_with(|maybe_entry| {
+                    let op = match maybe_entry {
+                        Some(entry) => {
+                            let existing = entry.into_value();
+                            if max_sender_retry_count > existing {
+                                Op::Put(max_sender_retry_count)
+                            } else {
+                                Op::Nop
+                            }
+                        }
+                        None => Op::Put(max_sender_retry_count),
+                    };
+                    std::future::ready(op)
+                })
                 .await;
             log::debug!(
                 "[msg:{}] Sender retry count {} pre-seeded into cache",
@@ -4620,6 +4642,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_enc_count_does_not_overwrite_higher() {
+        use moka::ops::compute::Op;
+
         let client = create_test_client_for_retry_with_id("enc_no_overwrite").await;
 
         let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
@@ -4635,17 +4659,78 @@ mod tests {
             .insert(cache_key.clone(), 4)
             .await;
 
-        // or_insert should NOT overwrite the existing higher value
+        // and_compute_with(max) should NOT overwrite with a lower value
+        let max_sender_retry_count: u8 = 2;
         client
             .message_retry_counts
             .entry_by_ref(&cache_key)
-            .or_insert(2_u8)
+            .and_compute_with(|maybe_entry| {
+                let op = match maybe_entry {
+                    Some(entry) => {
+                        let existing = entry.into_value();
+                        if max_sender_retry_count > existing {
+                            Op::Put(max_sender_retry_count)
+                        } else {
+                            Op::Nop
+                        }
+                    }
+                    None => Op::Put(max_sender_retry_count),
+                };
+                std::future::ready(op)
+            })
             .await;
 
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,
             Some(4),
-            "or_insert should not overwrite existing higher value"
+            "should not overwrite existing higher value"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enc_count_updates_when_sender_higher() {
+        use moka::ops::compute::Op;
+
+        let client = create_test_client_for_retry_with_id("enc_update_higher").await;
+
+        let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
+        let msg_id = "ENC_UPDATE_MSG1";
+
+        let cache_key = client
+            .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
+            .await;
+
+        // Pre-insert a lower value
+        client
+            .message_retry_counts
+            .insert(cache_key.clone(), 1)
+            .await;
+
+        // and_compute_with(max) SHOULD update with a higher value
+        let max_sender_retry_count: u8 = 3;
+        client
+            .message_retry_counts
+            .entry_by_ref(&cache_key)
+            .and_compute_with(|maybe_entry| {
+                let op = match maybe_entry {
+                    Some(entry) => {
+                        let existing = entry.into_value();
+                        if max_sender_retry_count > existing {
+                            Op::Put(max_sender_retry_count)
+                        } else {
+                            Op::Nop
+                        }
+                    }
+                    None => Op::Put(max_sender_retry_count),
+                };
+                std::future::ready(op)
+            })
+            .await;
+
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(3),
+            "should update to higher sender count"
         );
     }
 }
