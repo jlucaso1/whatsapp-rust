@@ -139,8 +139,13 @@ impl Client {
     /// 2. Spawning a retry receipt to request re-encryption
     ///
     /// Returns `true` to be assigned to `dispatched_undecryptable` flag.
-    fn handle_decrypt_failure(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) -> bool {
-        self.dispatch_undecryptable_event(info, crate::types::events::DecryptFailMode::Show);
+    fn handle_decrypt_failure(
+        self: &Arc<Self>,
+        info: &MessageInfo,
+        reason: RetryReason,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
+    ) -> bool {
+        self.dispatch_undecryptable_event(info, decrypt_fail_mode);
         self.spawn_retry_receipt(info, reason);
         true
     }
@@ -418,11 +423,17 @@ impl Client {
         let mut session_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
         let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
         let mut max_sender_retry_count: u8 = 0;
+        let mut has_hide_fail = false;
 
         for &enc_node in &all_enc_nodes {
             // Parse sender retry count (WA Web: e.maybeAttrInt("count") ?? 0)
             let sender_count = enc_node.attrs().optional_u64("count").unwrap_or(0) as u8;
             max_sender_retry_count = max_sender_retry_count.max(sender_count);
+
+            // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
+            if enc_node.attrs().optional_string("decrypt-fail") == Some("hide") {
+                has_hide_fail = true;
+            }
 
             let enc_type = match enc_node.attrs().optional_string("type") {
                 Some(t) => t.to_string(),
@@ -457,6 +468,13 @@ impl Client {
             }
         }
 
+        // Determine decrypt fail mode from enc nodes (WA Web: hideFail)
+        let decrypt_fail_mode = if has_hide_fail {
+            crate::types::events::DecryptFailMode::Hide
+        } else {
+            crate::types::events::DecryptFailMode::Show
+        };
+
         // Pre-seed retry cache with sender's retry count to avoid redundant retries
         if max_sender_retry_count > 0 {
             let cache_key = self
@@ -489,7 +507,12 @@ impl Client {
             session_dispatched_undecryptable,
         ) = if !is_group_sender && !session_enc_nodes.is_empty() {
             self.clone()
-                .process_session_enc_batch(&session_enc_nodes, &info, &sender_encryption_jid)
+                .process_session_enc_batch(
+                    &session_enc_nodes,
+                    &info,
+                    &sender_encryption_jid,
+                    decrypt_fail_mode,
+                )
                 .await
         } else {
             if is_group_sender && !session_enc_nodes.is_empty() {
@@ -530,6 +553,7 @@ impl Client {
                         &group_content_enc_nodes,
                         &info,
                         &sender_encryption_jid,
+                        decrypt_fail_mode,
                     )
                     .await
                 {
@@ -612,10 +636,7 @@ impl Client {
                     // Still dispatch an UndecryptableMessage event so the user knows
                     // But only if we haven't already dispatched one in process_session_enc_batch
                     if !session_dispatched_undecryptable {
-                        self.dispatch_undecryptable_event(
-                            &info,
-                            crate::types::events::DecryptFailMode::Show,
-                        );
+                        self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
                     }
 
                     // Do NOT send a delivery receipt for undecryptable messages.
@@ -639,7 +660,7 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.dispatch_undecryptable_event(&info, crate::types::events::DecryptFailMode::Show);
+            self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
             // Do NOT send delivery receipt - transport ack is sufficient
         }
     }
@@ -649,6 +670,7 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         sender_encryption_jid: &Jid,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> (bool, bool, bool) {
         // Returns (any_success, any_duplicate, dispatched_undecryptable)
         use wacore::libsignal::protocol::CiphertextMessage;
@@ -893,8 +915,11 @@ impl Client {
                                     );
 
                                     // Send retry receipt so the sender fetches our new prekey bundle
-                                    dispatched_undecryptable = self
-                                        .handle_decrypt_failure(info, RetryReason::InvalidKeyId);
+                                    dispatched_undecryptable = self.handle_decrypt_failure(
+                                        info,
+                                        RetryReason::InvalidKeyId,
+                                        decrypt_fail_mode,
+                                    );
                                 } else {
                                     log::error!(
                                         "[msg:{}] Decryption failed even after clearing untrusted identity for {}: {:?}",
@@ -904,8 +929,11 @@ impl Client {
                                     );
                                     // Send retry receipt so the sender resends with a PreKeySignalMessage
                                     // to establish a new session with the new identity
-                                    dispatched_undecryptable =
-                                        self.handle_decrypt_failure(info, RetryReason::InvalidKey);
+                                    dispatched_undecryptable = self.handle_decrypt_failure(
+                                        info,
+                                        RetryReason::InvalidKey,
+                                        decrypt_fail_mode,
+                                    );
                                 }
                             }
                         }
@@ -918,8 +946,11 @@ impl Client {
                             info.id, enc_type, info.source.sender
                         );
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::NoSession);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::NoSession,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
                         // InvalidMessage typically means MAC verification failed or session is out of sync.
@@ -954,8 +985,11 @@ impl Client {
                         drop(device_guard);
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::InvalidMessage);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::InvalidMessage,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
                         // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
@@ -980,8 +1014,11 @@ impl Client {
                         );
 
                         // Send retry receipt with fresh prekeys
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, RetryReason::InvalidKeyId);
+                        dispatched_undecryptable = self.handle_decrypt_failure(
+                            info,
+                            RetryReason::InvalidKeyId,
+                            decrypt_fail_mode,
+                        );
                         continue;
                     } else {
                         // For other unexpected errors, just log them
@@ -1005,6 +1042,7 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
+        _decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> Result<bool, DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(false);
@@ -1666,7 +1704,12 @@ mod tests {
 
         // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         assert!(
@@ -2545,7 +2588,12 @@ mod tests {
         // Call process_session_enc_batch
         // This should handle any errors gracefully without panicking
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!(
@@ -2620,7 +2668,12 @@ mod tests {
         // Process the batch
         // Should handle all errors gracefully without stopping at first error
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_node_refs, &info, &sender_jid)
+            .process_session_enc_batch(
+                &enc_node_refs,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!("Test: Batch processing completed - success: {}", success);
@@ -2680,7 +2733,12 @@ mod tests {
         // Process the message
         // Should handle errors gracefully in group context
         let (success, _had_duplicates, _dispatched) = client
-            .process_session_enc_batch(&enc_nodes, &info, &sender_phone)
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_phone,
+                crate::types::events::DecryptFailMode::Show,
+            )
             .await;
 
         log::info!("Test: Group message processed - success: {}", success);
