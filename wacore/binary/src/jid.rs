@@ -350,6 +350,7 @@ impl Jid {
         }
     }
 
+    /// Create a group JID (g.us).
     pub fn group(id: impl Into<String>) -> Self {
         Self {
             user: id.into(),

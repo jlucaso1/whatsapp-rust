@@ -98,17 +98,26 @@ impl Client {
         // Status always uses PN addressing. Resolve any LID recipients to their
         // phone numbers so we don't end up with duplicate PN+LID entries for the
         // same user (which causes server error 400).
+        // Reject non-user JIDs (groups, broadcasts, etc.) to prevent invalid
+        // <participants> entries that cause server errors.
         let mut resolved_recipients = Vec::with_capacity(recipients.len());
         for jid in recipients {
+            if jid.is_group() || jid.is_status_broadcast() || jid.is_broadcast_list() {
+                return Err(anyhow!(
+                    "Invalid status recipient {}: must be a user JID, not a group/broadcast",
+                    jid
+                ));
+            }
             if jid.is_lid() {
                 if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
                     resolved_recipients
                         .push(Jid::new(&pn, wacore_binary::jid::DEFAULT_USER_SERVER));
                 } else {
-                    log::warn!(
-                        "No PN mapping for LID {}, skipping from status recipients",
+                    return Err(anyhow!(
+                        "No PN mapping for LID {}. Ensure the recipient has been \
+                         contacted previously.",
                         jid
-                    );
+                    ));
                 }
             } else {
                 resolved_recipients.push(jid);
