@@ -339,7 +339,17 @@ impl Jid {
         }
     }
 
-    /// Create a group JID (g.us)
+    /// Creates the `status@broadcast` JID used for status/story updates.
+    pub fn status_broadcast() -> Self {
+        Self {
+            user: STATUS_BROADCAST_USER.to_string(),
+            server: BROADCAST_SERVER.to_string(),
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        }
+    }
+
     pub fn group(id: impl Into<String>) -> Self {
         Self {
             user: id.into(),
@@ -1135,6 +1145,52 @@ mod tests {
         assert_eq!(jid.device, 33);
         assert!(jid.is_lid());
         assert!(jid.is_ad());
+    }
+
+    #[test]
+    fn test_status_broadcast_jid() {
+        let jid = Jid::status_broadcast();
+        assert_eq!(jid.user, STATUS_BROADCAST_USER);
+        assert_eq!(jid.server, BROADCAST_SERVER);
+        assert_eq!(jid.device, 0);
+        assert!(jid.is_status_broadcast());
+        assert!(!jid.is_group());
+        assert!(!jid.is_broadcast_list());
+        assert_eq!(jid.to_string(), "status@broadcast");
+
+        // Parsing round-trip
+        let parsed: Jid = "status@broadcast".parse().expect("should parse");
+        assert!(parsed.is_status_broadcast());
+        assert_eq!(parsed.user, "status");
+        assert_eq!(parsed.server, "broadcast");
+
+        // Regular broadcast list should NOT be status broadcast
+        let broadcast_list = Jid::new("12345", BROADCAST_SERVER);
+        assert!(broadcast_list.is_broadcast_list());
+        assert!(!broadcast_list.is_status_broadcast());
+    }
+
+    #[test]
+    fn test_jid_to_non_ad_preserves_user_server() {
+        // Verify to_non_ad strips device but keeps user/server
+        let device_jid = Jid::pn_device("1234567890", 33);
+        let non_ad = device_jid.to_non_ad();
+        assert_eq!(non_ad.user, "1234567890");
+        assert_eq!(non_ad.server, DEFAULT_USER_SERVER);
+        assert_eq!(non_ad.device, 0);
+        assert!(!non_ad.is_ad());
+
+        // LID variant
+        let lid_device = Jid::lid_device("100000012345678", 25);
+        let lid_non_ad = lid_device.to_non_ad();
+        assert_eq!(lid_non_ad.user, "100000012345678");
+        assert_eq!(lid_non_ad.server, HIDDEN_USER_SERVER);
+        assert_eq!(lid_non_ad.device, 0);
+
+        // status@broadcast stays the same
+        let status = Jid::status_broadcast();
+        let status_non_ad = status.to_non_ad();
+        assert_eq!(status_non_ad.to_string(), "status@broadcast");
     }
 
     #[test]

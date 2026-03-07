@@ -88,15 +88,27 @@ impl Client {
             return Ok(());
         }
 
+        let is_group_or_status =
+            receipt.source.chat.is_group() || receipt.source.chat.is_status_broadcast();
+
+        // For groups/status broadcasts, the actual participant is in the
+        // `participant` attribute of the receipt node, NOT receipt.source.sender
+        // (which may be the group/broadcast JID for non-group servers).
+        let participant_str = if is_group_or_status {
+            node.attrs()
+                .optional_string("participant")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| receipt.source.sender.to_string())
+        } else {
+            receipt.source.sender.to_string()
+        };
+
         // Deduplicate retry receipts to prevent processing the same retry multiple times.
-        // For groups: key is (chat, msg_id, sender) since each participant retries independently.
+        // For groups/status: key includes participant since each device retries independently.
         // For DMs: key is (chat, msg_id) since there's only one sender.
         // Uses atomic entry API to avoid race conditions between check and insert.
-        let dedupe_key = if receipt.source.chat.is_group() {
-            format!(
-                "{}:{}:{}",
-                receipt.source.chat, message_id, receipt.source.sender
-            )
+        let dedupe_key = if is_group_or_status {
+            format!("{}:{}:{}", receipt.source.chat, message_id, participant_str)
         } else {
             format!("{}:{}", receipt.source.chat, message_id)
         };
@@ -144,7 +156,11 @@ impl Client {
             }
         };
 
-        let participant_jid = receipt.source.sender.clone();
+        // Reuse the participant string extracted earlier (same source: node's
+        // `participant` attribute for groups/status, receipt.source.sender for DMs).
+        let participant_jid = participant_str
+            .parse::<wacore_binary::jid::Jid>()
+            .unwrap_or_else(|_| receipt.source.sender.clone());
 
         // Device existence check (matches WhatsApp Web's WAWebApiDeviceList.hasDevice).
         // This prevents processing retry receipts from unknown/stale devices.
@@ -168,9 +184,6 @@ impl Client {
         // Process the key bundle from the retry receipt to establish a fresh session.
         // The requester includes their new prekeys so we can encrypt to them.
         // This is only done for DMs; group messages and status broadcasts use sender keys instead.
-        let is_group_or_status =
-            receipt.source.chat.is_group() || receipt.source.chat.is_status_broadcast();
-
         if !is_group_or_status {
             // Try to process key bundle if present
             let key_bundle_result = self
@@ -324,6 +337,26 @@ impl Client {
             } else {
                 info!("Deleted session for {signal_address} due to retry receipt");
             }
+        }
+
+        // Status broadcasts cannot be resent through send_message_impl (it requires
+        // the full recipient list via send_status_message). The participant has already
+        // been marked for fresh SKDM above, so the next status send will include them.
+        // Re-add the message to cache so subsequent retries from other devices can
+        // still find it (take_recent_message consumed it above).
+        if receipt.source.chat.is_status_broadcast() {
+            self.add_recent_message(
+                receipt.source.chat.clone(),
+                message_id.clone(),
+                &original_msg,
+            )
+            .await;
+            info!(
+                "Status broadcast retry for {} — participant marked for fresh SKDM, \
+                 will be included in next status send",
+                message_id
+            );
+            return Ok(());
         }
 
         info!(
@@ -1389,5 +1422,156 @@ mod tests {
         // - Before: retry#1 (no keys) → sender can't establish session → retry#2 (keys) → device removed
         // - After: retry#1 (keys) → sender can establish session immediately → device removed before response
         // The optimization gives the sender one fewer round-trip to respond.
+    }
+
+    /// Test that participant extraction from receipt nodes works correctly
+    /// for status broadcasts. The `participant` attribute contains the actual
+    /// retrying device, while `receipt.source.sender` may be `status@broadcast`.
+    #[test]
+    fn status_broadcast_participant_extraction() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Simulate a retry receipt for a status broadcast with participant attribute
+        let node = NodeBuilder::new("receipt")
+            .attr("from", "status@broadcast")
+            .attr("id", "3EB06D00CAB92340790621")
+            .attr("participant", "236395184570386@lid")
+            .attr("type", "retry")
+            .build();
+
+        let is_group_or_status = true;
+        let fallback_sender: Jid = "status@broadcast".parse().unwrap();
+
+        let participant_str = if is_group_or_status {
+            node.attrs()
+                .optional_string("participant")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| fallback_sender.to_string())
+        } else {
+            fallback_sender.to_string()
+        };
+
+        // Should extract the actual participant, not status@broadcast
+        assert_eq!(participant_str, "236395184570386@lid");
+
+        let participant_jid: Jid = participant_str.parse().unwrap();
+        assert!(participant_jid.is_lid());
+        assert_eq!(participant_jid.user, "236395184570386");
+        assert!(!participant_jid.is_status_broadcast());
+    }
+
+    /// Test fallback when participant attribute is missing from status receipt.
+    #[test]
+    fn status_broadcast_participant_extraction_fallback() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Receipt without participant attribute (edge case)
+        let node = NodeBuilder::new("receipt")
+            .attr("from", "status@broadcast")
+            .attr("id", "MSG001")
+            .attr("type", "retry")
+            .build();
+
+        let fallback_sender: Jid = "status@broadcast".parse().unwrap();
+
+        let participant_str = node
+            .attrs()
+            .optional_string("participant")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| fallback_sender.to_string());
+
+        // Falls back to sender (status@broadcast) — not ideal but won't crash
+        assert_eq!(participant_str, "status@broadcast");
+    }
+
+    /// Test that dedupe keys are correctly differentiated per-participant
+    /// for status broadcast retries.
+    #[test]
+    fn status_broadcast_dedupe_key_per_participant() {
+        let chat = "status@broadcast";
+        let msg_id = "3EB06D00CAB92340790621";
+
+        let key_a = format!("{}:{}:{}", chat, msg_id, "236395184570386@lid");
+        let key_b = format!("{}:{}:{}", chat, msg_id, "559985213786@s.whatsapp.net");
+
+        assert_ne!(
+            key_a, key_b,
+            "Different participants should have different dedupe keys"
+        );
+
+        let key_a2 = format!("{}:{}:{}", chat, msg_id, "236395184570386@lid");
+        assert_eq!(
+            key_a, key_a2,
+            "Same participant should have same dedupe key"
+        );
+    }
+
+    /// Test that the recent message cache supports re-addition after take.
+    /// This is critical for status broadcasts where we take the message,
+    /// mark the participant for fresh SKDM, then re-add so other devices
+    /// can also retry.
+    #[tokio::test]
+    async fn recent_message_cache_readd_after_take() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let chat = Jid::status_broadcast();
+        let msg_id = "STATUS_MSG_001".to_string();
+        let msg = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                text: Some("status text".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        // Add message to cache
+        client
+            .add_recent_message(chat.clone(), msg_id.clone(), &msg)
+            .await;
+
+        // First device takes the message
+        let taken = client
+            .take_recent_message(chat.clone(), msg_id.clone())
+            .await;
+        assert!(taken.is_some(), "First take should succeed");
+
+        // Re-add for subsequent retries (simulating the status broadcast fix)
+        let taken_msg = taken.unwrap();
+        client
+            .add_recent_message(chat.clone(), msg_id.clone(), &taken_msg)
+            .await;
+
+        // Second device should also be able to take the message
+        let taken2 = client
+            .take_recent_message(chat.clone(), msg_id.clone())
+            .await;
+        assert!(
+            taken2.is_some(),
+            "Second take should succeed after re-add (status broadcast multi-device retry)"
+        );
+        assert_eq!(
+            taken2
+                .unwrap()
+                .extended_text_message
+                .as_ref()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("status text")
+        );
     }
 }
