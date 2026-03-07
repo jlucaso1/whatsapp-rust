@@ -1,7 +1,7 @@
 
 [package]
 name = "whatsapp-rust"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
@@ -55,13 +55,13 @@ thiserror = "2.0.17"
 tokio = { version = "1.48.0", default-features = false }
 
 # Internal workspace crates
-wacore = { path = "./wacore", version = "0.2.0" }
-wacore-appstate = { path = "./wacore/appstate", version = "0.2.0" }
-wacore-binary = { path = "./wacore/binary", version = "0.2.0" }
-wacore-derive = { path = "./wacore/derive", version = "0.2.0" }
-wacore-libsignal = { path = "./wacore/libsignal", version = "0.2.0" }
-wacore-noise = { path = "./wacore/noise", version = "0.2.0" }
-waproto = { path = "./waproto", version = "0.2.0" }
+wacore = { path = "./wacore", version = "0.3.0" }
+wacore-appstate = { path = "./wacore/appstate", version = "0.3.0" }
+wacore-binary = { path = "./wacore/binary", version = "0.3.0" }
+wacore-derive = { path = "./wacore/derive", version = "0.3.0" }
+wacore-libsignal = { path = "./wacore/libsignal", version = "0.3.0" }
+wacore-noise = { path = "./wacore/noise", version = "0.3.0" }
+waproto = { path = "./waproto", version = "0.3.0" }
 
 [features]
 debug-snapshots = []
@@ -96,9 +96,9 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
-whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
-whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
-whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
+whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.3.0", optional = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.3.0", optional = true }
+whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.3.0", optional = true }
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4"] }
