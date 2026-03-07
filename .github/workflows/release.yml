@@ -37,7 +37,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --all --verbose
@@ -60,7 +60,7 @@ jobs:
           tool: protoc@${{ env.PROTOC_VERSION }}
 
       - name: Install cargo-release
-        run: cargo install cargo-release --locked
+        run: cargo install cargo-release --locked --version 0.25.20
 
       - uses: Swatinem/rust-cache@v2
 
@@ -75,6 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Extract version
         id: version
@@ -85,8 +87,13 @@ jobs:
 
       - name: Create tag
         run: |
-          git tag "${{ steps.version.outputs.tag }}" || true
-          git push origin "${{ steps.version.outputs.tag }}" || true
+          TAG="${{ steps.version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin, skipping."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
       - name: Create GitHub Release
         env:
