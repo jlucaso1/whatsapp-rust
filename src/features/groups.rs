@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
     AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteLinkIq, GroupCreateIq,
-    GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
-    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupDescriptionIq, SetGroupSubjectIq,
+    GroupInfoResponse, GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
+    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq, SetGroupDescriptionIq,
+    SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq, SetGroupSubjectIq,
     normalize_participants,
 };
 use wacore::types::message::AddressingMode;
@@ -21,6 +22,32 @@ pub struct GroupMetadata {
     pub subject: String,
     pub participants: Vec<GroupParticipant>,
     pub addressing_mode: AddressingMode,
+    /// Group creator JID.
+    pub creator: Option<Jid>,
+    /// Group creation timestamp (Unix seconds).
+    pub creation_time: Option<u64>,
+    /// Subject modification timestamp (Unix seconds).
+    pub subject_time: Option<u64>,
+    /// Subject owner JID.
+    pub subject_owner: Option<Jid>,
+    /// Group description body text.
+    pub description: Option<String>,
+    /// Description ID (for conflict detection when updating).
+    pub description_id: Option<String>,
+    /// Whether the group is locked (only admins can edit group info).
+    pub is_locked: bool,
+    /// Whether announcement mode is enabled (only admins can send messages).
+    pub is_announcement: bool,
+    /// Ephemeral message expiration in seconds (0 = disabled).
+    pub ephemeral_expiration: u32,
+    /// Whether membership approval is required to join.
+    pub membership_approval: bool,
+    /// Who can add members to the group.
+    pub member_add_mode: Option<MemberAddMode>,
+    /// Who can use invite links.
+    pub member_link_mode: Option<MemberLinkMode>,
+    /// Total participant count.
+    pub size: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +63,30 @@ impl From<GroupParticipantResponse> for GroupParticipant {
             jid: p.jid,
             phone_number: p.phone_number,
             is_admin: p.participant_type.is_admin(),
+        }
+    }
+}
+
+impl GroupMetadata {
+    fn from_response(group: GroupInfoResponse) -> Self {
+        Self {
+            id: group.id,
+            subject: group.subject.into_string(),
+            participants: group.participants.into_iter().map(Into::into).collect(),
+            addressing_mode: group.addressing_mode,
+            creator: group.creator,
+            creation_time: group.creation_time,
+            subject_time: group.subject_time,
+            subject_owner: group.subject_owner,
+            description: group.description,
+            description_id: group.description_id,
+            is_locked: group.is_locked,
+            is_announcement: group.is_announcement,
+            ephemeral_expiration: group.ephemeral_expiration,
+            membership_approval: group.membership_approval,
+            member_add_mode: group.member_add_mode,
+            member_link_mode: group.member_link_mode,
+            size: group.size,
         }
     }
 }
@@ -99,12 +150,7 @@ impl<'a> Groups<'a> {
             .into_iter()
             .map(|group| {
                 let key = group.id.to_string();
-                let metadata = GroupMetadata {
-                    id: group.id,
-                    subject: group.subject.into_string(),
-                    participants: group.participants.into_iter().map(Into::into).collect(),
-                    addressing_mode: group.addressing_mode,
-                };
+                let metadata = GroupMetadata::from_response(group);
                 (key, metadata)
             })
             .collect();
@@ -114,13 +160,7 @@ impl<'a> Groups<'a> {
 
     pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
         let group = self.client.execute(GroupQueryIq::new(jid)).await?;
-
-        Ok(GroupMetadata {
-            id: group.id,
-            subject: group.subject.into_string(),
-            participants: group.participants.into_iter().map(Into::into).collect(),
-            addressing_mode: group.addressing_mode,
-        })
+        Ok(GroupMetadata::from_response(group))
     }
 
     pub async fn create_group(
@@ -177,7 +217,9 @@ impl<'a> Groups<'a> {
     }
 
     pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error> {
-        Ok(self.client.execute(LeaveGroupIq::new(jid)).await?)
+        self.client.execute(LeaveGroupIq::new(jid)).await?;
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(())
     }
 
     pub async fn add_participants(
@@ -185,10 +227,12 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(AddParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn remove_participants(
@@ -196,10 +240,12 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn promote_participants(
@@ -228,6 +274,50 @@ impl<'a> Groups<'a> {
         Ok(self
             .client
             .execute(GetGroupInviteLinkIq::new(jid, reset))
+            .await?)
+    }
+
+    /// Lock the group so only admins can change group info.
+    pub async fn set_locked(&self, jid: &Jid, locked: bool) -> Result<(), anyhow::Error> {
+        let spec = if locked {
+            SetGroupLockedIq::lock(jid)
+        } else {
+            SetGroupLockedIq::unlock(jid)
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set announcement mode. When enabled, only admins can send messages.
+    pub async fn set_announce(&self, jid: &Jid, announce: bool) -> Result<(), anyhow::Error> {
+        let spec = if announce {
+            SetGroupAnnouncementIq::announce(jid)
+        } else {
+            SetGroupAnnouncementIq::unannounce(jid)
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set ephemeral (disappearing) messages timer on the group.
+    ///
+    /// Common values: 86400 (24h), 604800 (7d), 7776000 (90d).
+    /// Pass 0 to disable.
+    pub async fn set_ephemeral(&self, jid: &Jid, expiration: u32) -> Result<(), anyhow::Error> {
+        let spec = match std::num::NonZeroU32::new(expiration) {
+            Some(exp) => SetGroupEphemeralIq::enable(jid, exp),
+            None => SetGroupEphemeralIq::disable(jid),
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set membership approval mode. When on, new members must be approved by an admin.
+    pub async fn set_membership_approval(
+        &self,
+        jid: &Jid,
+        mode: MembershipApprovalMode,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupMembershipApprovalIq::new(jid, mode))
             .await?)
     }
 }
@@ -260,6 +350,19 @@ mod tests {
                 is_admin: true,
             }],
             addressing_mode: AddressingMode::Pn,
+            creator: None,
+            creation_time: None,
+            subject_time: None,
+            subject_owner: None,
+            description: None,
+            description_id: None,
+            is_locked: false,
+            is_announcement: false,
+            ephemeral_expiration: 0,
+            membership_approval: false,
+            member_add_mode: None,
+            member_link_mode: None,
+            size: None,
         };
 
         assert_eq!(metadata.subject, "Test Group");

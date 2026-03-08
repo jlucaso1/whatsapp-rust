@@ -168,6 +168,11 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Matches WhatsApp Web's WAWebHandlePrivacyTokenNotification.
             handle_privacy_token_notification(client, node).await;
         }
+        "w:gp2" => {
+            // Cache invalidation for these notifications is handled inside
+            // handle_group_participant_notification() and currently only applies to add/remove.
+            handle_group_participant_notification(client, node).await;
+        }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
@@ -567,6 +572,57 @@ async fn handle_business_notification(client: &Arc<Client>, node: &Node) {
     }
 
     client.core.event_bus.dispatch(&event);
+}
+
+/// Handle w:gp2 group participant change notifications.
+///
+/// These are sent when participants are added, removed, promoted, or demoted
+/// in a group — either by us on another device or by another group admin.
+/// Invalidates the group cache so the next message send uses the updated
+/// participant list.
+async fn handle_group_participant_notification(client: &Arc<Client>, node: &Node) {
+    let group_jid = match node.attrs().optional_jid("from") {
+        Some(jid) => jid,
+        None => {
+            warn!(target: "Client/Group", "w:gp2 notification missing 'from' attribute");
+            return;
+        }
+    };
+
+    // Determine the action type from children (add, remove, promote, demote)
+    let action = node
+        .children()
+        .and_then(|children| {
+            children
+                .iter()
+                .find(|c| matches!(c.tag.as_str(), "add" | "remove" | "promote" | "demote"))
+                .map(|c| c.tag.as_str())
+        })
+        .unwrap_or("unknown");
+
+    debug!(
+        target: "Client/Group",
+        "Group participant notification: group={}, action={}",
+        group_jid, action
+    );
+
+    // Invalidate group cache for add/remove (participant list changed).
+    // Promote/demote don't change the participant list stored in GroupInfo,
+    // so no cache invalidation is needed for those.
+    if matches!(action, "add" | "remove") {
+        client.get_group_cache().await.invalidate(&group_jid).await;
+        debug!(
+            target: "Client/Group",
+            "Invalidated group cache for {} after {} notification",
+            group_jid, action
+        );
+    }
+
+    // Dispatch generic notification event for application-level handling
+    client
+        .core
+        .event_bus
+        .dispatch(&Event::Notification(node.clone()));
 }
 
 #[cfg(test)]
