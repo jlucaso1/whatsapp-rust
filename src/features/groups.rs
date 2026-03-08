@@ -185,10 +185,13 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(AddParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        // Invalidate cached group info so next send picks up new participants
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn remove_participants(
@@ -196,10 +199,13 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        // Invalidate cached group info so next send reflects removed participants
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn promote_participants(
