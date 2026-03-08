@@ -169,8 +169,8 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             handle_privacy_token_notification(client, node).await;
         }
         "w:gp2" => {
-            // Group participant change notifications (add, remove, promote, demote).
-            // Invalidate the group cache so the next send picks up the updated participant list.
+            // Cache invalidation for these notifications is handled inside
+            // handle_group_participant_notification() and currently only applies to add/remove.
             handle_group_participant_notification(client, node).await;
         }
         _ => {

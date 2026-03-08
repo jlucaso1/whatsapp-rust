@@ -7,6 +7,53 @@ use whatsapp_rust::features::{
 };
 use whatsapp_rust::waproto::whatsapp as wa;
 
+/// Wait for a group message with specific text on a specific group.
+async fn wait_for_group_message(
+    client: &mut TestClient,
+    group_jid: &Jid,
+    expected_text: &str,
+    timeout_secs: u64,
+) -> anyhow::Result<Event> {
+    let gid = group_jid.clone();
+    let text = expected_text.to_string();
+    client
+        .wait_for_event(timeout_secs, move |e| {
+            matches!(
+                e,
+                Event::Message(msg, info)
+                if info.source.chat == gid
+                    && msg.conversation.as_deref() == Some(text.as_str())
+            )
+        })
+        .await
+}
+
+/// Wait for a w:gp2 notification on the given client.
+async fn wait_for_group_notification(
+    client: &mut TestClient,
+    timeout_secs: u64,
+) -> anyhow::Result<Event> {
+    client
+        .wait_for_event(timeout_secs, |e| {
+            matches!(e, Event::Notification(node) if node.attrs().optional_string("type") == Some("w:gp2"))
+        })
+        .await
+}
+
+/// Assert that waiting for an event correctly times out (not some other error).
+fn assert_timeout_error(result: Result<Event, anyhow::Error>, context: &str) {
+    match result {
+        Ok(event) => panic!("{context}, but got event: {event:?}"),
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("Timed out"),
+                "{context}: expected timeout error, got: {msg}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -66,9 +113,7 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     info!("A sent group message: {msg_id}");
 
     // Step 3: Client B should receive the group message
-    let event = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event = wait_for_group_message(&mut client_b, &group_jid, text_1, 30).await?;
     if let Event::Message(msg, msg_info) = event {
         info!("B received group message from {:?}", msg_info.source);
         assert_eq!(
@@ -105,8 +150,9 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
         "Add participant should succeed with status 200"
     );
 
-    // Give a moment for notifications to propagate to all clients
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for w:gp2 add notification to propagate to B (invalidates B's cache)
+    wait_for_group_notification(&mut client_b, 10).await?;
+    info!("B received w:gp2 notification for add");
 
     // Step 5: Client A sends a message after adding C
     let text_2 = "Welcome C to the group!";
@@ -123,9 +169,7 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     info!("A sent second group message: {msg_id_2}");
 
     // Step 6: Both B and C should receive the second message
-    let event_b = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_2, 30).await?;
     if let Event::Message(msg, _) = event_b {
         assert_eq!(
             msg.conversation.as_deref(),
@@ -136,9 +180,7 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
         panic!("Expected Message event for B, got: {:?}", event_b);
     }
 
-    let event_c = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_2, 30).await?;
     if let Event::Message(msg, msg_info) = event_c {
         info!("C received group message from {:?}", msg_info.source);
         assert_eq!(
@@ -172,9 +214,7 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
         .await?;
     info!("B sent group message");
 
-    let event_a = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_3, 30).await?;
     if let Event::Message(msg, _) = event_a {
         assert_eq!(
             msg.conversation.as_deref(),
@@ -185,9 +225,7 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
         panic!("Expected Message event for A, got: {:?}", event_a);
     }
 
-    let event_c2 = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_3, 30).await?;
     if let Event::Message(msg, _) = event_c2 {
         assert_eq!(
             msg.conversation.as_deref(),
@@ -260,18 +298,14 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
         )
         .await?;
 
-    let event_b = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_before, 30).await?;
     if let Event::Message(msg, _) = event_b {
         assert_eq!(msg.conversation.as_deref(), Some(text_before));
     } else {
         panic!("Expected Message event for B, got: {:?}", event_b);
     }
 
-    let event_c = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_before, 30).await?;
     if let Event::Message(msg, _) = event_c {
         assert_eq!(msg.conversation.as_deref(), Some(text_before));
     } else {
@@ -297,8 +331,9 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
         "Remove participant should succeed with status 200"
     );
 
-    // Wait for notifications to propagate
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for w:gp2 remove notification to propagate to C
+    wait_for_group_notification(&mut client_c, 10).await?;
+    info!("C received w:gp2 notification for remove");
 
     // Step 4: A sends a message after removing B — only C should receive it
     let text_after = "After B was removed";
@@ -314,9 +349,7 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
         .await?;
 
     // C should receive the message
-    let event_c2 = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_after, 30).await?;
     if let Event::Message(msg, msg_info) = event_c2 {
         assert_eq!(msg.conversation.as_deref(), Some(text_after));
         assert!(msg_info.source.is_group);
@@ -329,9 +362,9 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
     let b_result = client_b
         .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
         .await;
-    assert!(
-        b_result.is_err(),
-        "B should NOT receive messages after being removed from the group"
+    assert_timeout_error(
+        b_result,
+        "B should NOT receive messages after being removed from the group",
     );
 
     // Step 5: C sends a message — A should receive it, B should NOT
@@ -347,9 +380,7 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
         )
         .await?;
 
-    let event_a = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_c, 30).await?;
     if let Event::Message(msg, _) = event_a {
         assert_eq!(msg.conversation.as_deref(), Some(text_c));
     } else {
@@ -359,9 +390,9 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
     let b_result2 = client_b
         .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
         .await;
-    assert!(
-        b_result2.is_err(),
-        "B should NOT receive messages sent by C after being removed"
+    assert_timeout_error(
+        b_result2,
+        "B should NOT receive messages sent by C after being removed",
     );
 
     // Cleanup
@@ -521,9 +552,7 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     info!("B sent first message (caching group info)");
 
     // A receives it
-    let event_a = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_1, 30).await?;
     if let Event::Message(msg, _) = event_a {
         assert_eq!(msg.conversation.as_deref(), Some(text_1));
     } else {
@@ -540,6 +569,10 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     info!("A added C to group");
 
     // Wait for the w:gp2 add notification to propagate to B (invalidates B's cache)
+    // We need B to receive the notification, not just any client
+    // B is not mut here, so we use a small sleep as fallback since B doesn't need
+    // to wait_for_event (it's the sender in step 4). The add_participants call
+    // already invalidated A's cache. The notification to B happens server-side.
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Step 4: B sends another message — C should receive it
@@ -558,9 +591,7 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     info!("B sent second message");
 
     // C should receive the message
-    let event_c = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_2, 30).await?;
     if let Event::Message(msg, msg_info) = event_c {
         assert_eq!(
             msg.conversation.as_deref(),
@@ -574,9 +605,7 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     }
 
     // A should also receive it
-    let event_a2 = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_a2 = wait_for_group_message(&mut client_a, &group_jid, text_2, 30).await?;
     if let Event::Message(msg, _) = event_a2 {
         assert_eq!(msg.conversation.as_deref(), Some(text_2));
     } else {
@@ -618,20 +647,47 @@ async fn test_group_settings() -> anyhow::Result<()> {
         .gid;
     info!("Group created: {group_jid}");
 
-    // Test locked/unlocked
+    // Verify initial state
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(!metadata.is_locked, "Group should not be locked initially");
+    assert!(
+        !metadata.is_announcement,
+        "Announcement should be off initially"
+    );
+    assert_eq!(
+        metadata.ephemeral_expiration, 0,
+        "Ephemeral should be disabled initially"
+    );
+    assert!(
+        !metadata.membership_approval,
+        "Membership approval should be off initially"
+    );
+    info!("Verified initial settings");
+
+    // Test locked
     client_a
         .client
         .groups()
         .set_locked(&group_jid, true)
         .await?;
-    info!("Group locked");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        metadata.is_locked,
+        "Group should be locked after set_locked(true)"
+    );
+    info!("Group locked - verified");
 
     client_a
         .client
         .groups()
         .set_locked(&group_jid, false)
         .await?;
-    info!("Group unlocked");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        !metadata.is_locked,
+        "Group should be unlocked after set_locked(false)"
+    );
+    info!("Group unlocked - verified");
 
     // Test announcement mode
     client_a
@@ -639,14 +695,24 @@ async fn test_group_settings() -> anyhow::Result<()> {
         .groups()
         .set_announce(&group_jid, true)
         .await?;
-    info!("Announcement mode enabled");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        metadata.is_announcement,
+        "Announcement should be on after set_announce(true)"
+    );
+    info!("Announcement mode enabled - verified");
 
     client_a
         .client
         .groups()
         .set_announce(&group_jid, false)
         .await?;
-    info!("Announcement mode disabled");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        !metadata.is_announcement,
+        "Announcement should be off after set_announce(false)"
+    );
+    info!("Announcement mode disabled - verified");
 
     // Test ephemeral messages
     client_a
@@ -654,21 +720,36 @@ async fn test_group_settings() -> anyhow::Result<()> {
         .groups()
         .set_ephemeral(&group_jid, 86400)
         .await?;
-    info!("Ephemeral set to 24h");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert_eq!(
+        metadata.ephemeral_expiration, 86400,
+        "Ephemeral should be 24h after set_ephemeral(86400)"
+    );
+    info!("Ephemeral set to 24h - verified");
 
     client_a
         .client
         .groups()
         .set_ephemeral(&group_jid, 604800)
         .await?;
-    info!("Ephemeral set to 7d");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert_eq!(
+        metadata.ephemeral_expiration, 604800,
+        "Ephemeral should be 7d after set_ephemeral(604800)"
+    );
+    info!("Ephemeral set to 7d - verified");
 
     client_a
         .client
         .groups()
         .set_ephemeral(&group_jid, 0)
         .await?;
-    info!("Ephemeral disabled");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert_eq!(
+        metadata.ephemeral_expiration, 0,
+        "Ephemeral should be disabled after set_ephemeral(0)"
+    );
+    info!("Ephemeral disabled - verified");
 
     // Test membership approval mode
     client_a
@@ -676,14 +757,24 @@ async fn test_group_settings() -> anyhow::Result<()> {
         .groups()
         .set_membership_approval(&group_jid, MembershipApprovalMode::On)
         .await?;
-    info!("Membership approval enabled");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        metadata.membership_approval,
+        "Membership approval should be on"
+    );
+    info!("Membership approval enabled - verified");
 
     client_a
         .client
         .groups()
         .set_membership_approval(&group_jid, MembershipApprovalMode::Off)
         .await?;
-    info!("Membership approval disabled");
+    let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
+    assert!(
+        !metadata.membership_approval,
+        "Membership approval should be off"
+    );
+    info!("Membership approval disabled - verified");
 
     // Cleanup
     client_a.disconnect().await;
@@ -746,18 +837,14 @@ async fn test_group_leave() -> anyhow::Result<()> {
         )
         .await?;
 
-    let event_b = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_before, 30).await?;
     if let Event::Message(msg, _) = event_b {
         assert_eq!(msg.conversation.as_deref(), Some(text_before));
     } else {
         panic!("Expected Message event for B, got: {:?}", event_b);
     }
 
-    let event_c = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_before, 30).await?;
     if let Event::Message(msg, _) = event_c {
         assert_eq!(msg.conversation.as_deref(), Some(text_before));
     } else {
@@ -770,8 +857,9 @@ async fn test_group_leave() -> anyhow::Result<()> {
     client_b.client.groups().leave(&group_jid).await?;
     info!("B left the group");
 
-    // Wait for notifications to propagate
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for w:gp2 remove notification to propagate to A
+    wait_for_group_notification(&mut client_a, 10).await?;
+    info!("A received w:gp2 notification for B's leave");
 
     // Step 4: A sends a message after B left — only C should receive it
     let text_after = "After B left";
@@ -787,9 +875,7 @@ async fn test_group_leave() -> anyhow::Result<()> {
         .await?;
 
     // C should receive the message
-    let event_c2 = client_c
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_after, 30).await?;
     if let Event::Message(msg, msg_info) = event_c2 {
         assert_eq!(msg.conversation.as_deref(), Some(text_after));
         assert!(msg_info.source.is_group);
@@ -802,9 +888,9 @@ async fn test_group_leave() -> anyhow::Result<()> {
     let b_result = client_b
         .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
         .await;
-    assert!(
-        b_result.is_err(),
-        "B should NOT receive messages after leaving the group"
+    assert_timeout_error(
+        b_result,
+        "B should NOT receive messages after leaving the group",
     );
 
     // Step 5: C sends a message — A should receive it, B should NOT
@@ -820,9 +906,7 @@ async fn test_group_leave() -> anyhow::Result<()> {
         )
         .await?;
 
-    let event_a = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
-        .await?;
+    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_c, 30).await?;
     if let Event::Message(msg, _) = event_a {
         assert_eq!(msg.conversation.as_deref(), Some(text_c));
     } else {
@@ -832,9 +916,9 @@ async fn test_group_leave() -> anyhow::Result<()> {
     let b_result2 = client_b
         .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
         .await;
-    assert!(
-        b_result2.is_err(),
-        "B should NOT receive messages sent by C after leaving"
+    assert_timeout_error(
+        b_result2,
+        "B should NOT receive messages sent by C after leaving",
     );
 
     // Cleanup
