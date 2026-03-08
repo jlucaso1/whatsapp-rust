@@ -32,7 +32,6 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 prost = { workspace = true }
 protobuf = { version = "3", default-features = false }
 rand = { workspace = true }
-rand_core = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
