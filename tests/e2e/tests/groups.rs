@@ -691,3 +691,156 @@ async fn test_group_settings() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_group_leave() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Connect three clients
+    let mut client_a = TestClient::connect("e2e_grp_leave_a").await?;
+    let mut client_b = TestClient::connect("e2e_grp_leave_b").await?;
+    let mut client_c = TestClient::connect("e2e_grp_leave_c").await?;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("Client B should have a JID")
+        .to_non_ad();
+    let jid_c = client_c
+        .client
+        .get_pn()
+        .await
+        .expect("Client C should have a JID")
+        .to_non_ad();
+
+    info!("B={jid_b}, C={jid_c}");
+
+    // Step 1: A creates a group with B and C
+    let create_result = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "Leave Test Group".to_string(),
+            participants: vec![
+                GroupParticipantOptions::new(jid_b.clone()),
+                GroupParticipantOptions::new(jid_c.clone()),
+            ],
+            ..Default::default()
+        })
+        .await?;
+
+    let group_jid = create_result.gid;
+    info!("Group created: {group_jid}");
+
+    // Step 2: A sends a message — both B and C should receive it
+    let text_before = "Before B leaves";
+    client_a
+        .client
+        .send_message(
+            group_jid.clone(),
+            wa::Message {
+                conversation: Some(text_before.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let event_b = client_b
+        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .await?;
+    if let Event::Message(msg, _) = event_b {
+        assert_eq!(msg.conversation.as_deref(), Some(text_before));
+    } else {
+        panic!("Expected Message event for B, got: {:?}", event_b);
+    }
+
+    let event_c = client_c
+        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .await?;
+    if let Event::Message(msg, _) = event_c {
+        assert_eq!(msg.conversation.as_deref(), Some(text_before));
+    } else {
+        panic!("Expected Message event for C, got: {:?}", event_c);
+    }
+
+    info!("Both B and C received the pre-leave message");
+
+    // Step 3: B leaves the group
+    client_b.client.groups().leave(&group_jid).await?;
+    info!("B left the group");
+
+    // Wait for notifications to propagate
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Step 4: A sends a message after B left — only C should receive it
+    let text_after = "After B left";
+    client_a
+        .client
+        .send_message(
+            group_jid.clone(),
+            wa::Message {
+                conversation: Some(text_after.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    // C should receive the message
+    let event_c2 = client_c
+        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .await?;
+    if let Event::Message(msg, msg_info) = event_c2 {
+        assert_eq!(msg.conversation.as_deref(), Some(text_after));
+        assert!(msg_info.source.is_group);
+        assert_eq!(msg_info.source.chat, group_jid);
+    } else {
+        panic!("Expected Message event for C, got: {:?}", event_c2);
+    }
+
+    // B should NOT receive the message — expect timeout
+    let b_result = client_b
+        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
+        .await;
+    assert!(
+        b_result.is_err(),
+        "B should NOT receive messages after leaving the group"
+    );
+
+    // Step 5: C sends a message — A should receive it, B should NOT
+    let text_c = "C says hello after B left";
+    client_c
+        .client
+        .send_message(
+            group_jid.clone(),
+            wa::Message {
+                conversation: Some(text_c.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let event_a = client_a
+        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .await?;
+    if let Event::Message(msg, _) = event_a {
+        assert_eq!(msg.conversation.as_deref(), Some(text_c));
+    } else {
+        panic!("Expected Message event for A, got: {:?}", event_a);
+    }
+
+    let b_result2 = client_b
+        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
+        .await;
+    assert!(
+        b_result2.is_err(),
+        "B should NOT receive messages sent by C after leaving"
+    );
+
+    // Cleanup
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    client_c.disconnect().await;
+
+    Ok(())
+}

@@ -178,7 +178,9 @@ impl<'a> Groups<'a> {
     }
 
     pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error> {
-        Ok(self.client.execute(LeaveGroupIq::new(jid)).await?)
+        self.client.execute(LeaveGroupIq::new(jid)).await?;
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(())
     }
 
     pub async fn add_participants(
