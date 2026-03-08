@@ -172,6 +172,9 @@ pub trait AppSyncStore: Send + Sync {
 
     /// Delete mutation MACs by their index MACs.
     async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()>;
+
+    /// Get the most recently stored app state sync key ID.
+    async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>>;
 }
 
 /// WhatsApp Web protocol alignment storage.

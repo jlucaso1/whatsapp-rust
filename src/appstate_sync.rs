@@ -20,7 +20,7 @@ pub use wacore::appstate::Mutation;
 
 #[derive(Clone)]
 pub struct AppStateProcessor {
-    backend: Arc<dyn Backend>,
+    pub(crate) backend: Arc<dyn Backend>,
     key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
 }
 
@@ -32,7 +32,7 @@ impl AppStateProcessor {
         }
     }
 
-    async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
+    pub(crate) async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
         use base64::Engine;
         use base64::engine::general_purpose::STANDARD_NO_PAD;
         let id_b64 = STANDARD_NO_PAD.encode(key_id);
@@ -352,6 +352,86 @@ impl AppStateProcessor {
         Ok((new_mutations, state, pl))
     }
 
+    /// Build and encode a SyncdPatch for sending mutations to the server.
+    ///
+    /// Takes a list of pre-encoded mutations (from `encode_record`) and produces
+    /// the protobuf-encoded patch bytes ready for inclusion in an IQ stanza.
+    ///
+    /// # Returns
+    /// A tuple of (patch_bytes, updated_hash_state).
+    /// Encode mutations into a SyncdPatch protobuf blob.
+    ///
+    /// Returns `(patch_bytes, new_version)`. Does NOT persist state — the caller
+    /// must only persist after the server acknowledges the patch.
+    pub async fn build_patch(
+        &self,
+        collection_name: &str,
+        mutations: Vec<(wa::SyncdMutation, Vec<u8>)>, // (mutation, value_mac)
+    ) -> Result<(Vec<u8>, u64)> {
+        use wacore::appstate::hash::generate_patch_mac;
+
+        // Get active key
+        let key_id = self
+            .backend
+            .get_latest_sync_key_id()
+            .await?
+            .ok_or_else(|| anyhow!("No app state sync key available"))?;
+        let keys = self.get_app_state_key(&key_id).await?;
+
+        // Get current hash state
+        let mut state = self.backend.get_version(collection_name).await?;
+
+        // Collect the SyncdMutation list
+        let syncd_mutations: Vec<wa::SyncdMutation> =
+            mutations.iter().map(|(m, _)| m.clone()).collect();
+
+        // Pre-fetch previous value MACs for all index MACs in the mutations
+        let mut db_prev: std::collections::HashMap<Vec<u8>, Vec<u8>> =
+            std::collections::HashMap::new();
+        for (m, _) in &mutations {
+            if let Some(rec) = &m.record
+                && let Some(ind) = &rec.index
+                && let Some(index_mac) = &ind.blob
+                && let Some(mac) = self
+                    .backend
+                    .get_mutation_mac(collection_name, index_mac)
+                    .await?
+            {
+                db_prev.insert(index_mac.clone(), mac);
+            }
+        }
+
+        // Update hash state
+        let (_, hash_result) = state.update_hash(&syncd_mutations, |index_mac, _| {
+            Ok(db_prev.get(index_mac).cloned())
+        });
+        hash_result?;
+
+        state.version += 1;
+
+        // Generate snapshot MAC
+        let snapshot_mac = state.generate_snapshot_mac(collection_name, &keys.snapshot_mac);
+
+        // Build the patch — matching whatsmeow: no Version or DeviceIndex fields
+        let mut patch = wa::SyncdPatch {
+            snapshot_mac: Some(snapshot_mac),
+            key_id: Some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            mutations: syncd_mutations,
+            ..Default::default()
+        };
+
+        // Generate and set patch MAC
+        let patch_mac = generate_patch_mac(&patch, collection_name, &keys.patch_mac, state.version);
+        patch.patch_mac = Some(patch_mac);
+
+        // Encode to protobuf
+        let patch_bytes = patch.encode_to_vec();
+
+        Ok((patch_bytes, state.version))
+    }
+
     pub async fn get_missing_key_ids(&self, pl: &PatchList) -> Result<Vec<Vec<u8>>> {
         let key_ids = collect_key_ids_from_patch_list(pl.snapshot.as_ref(), &pl.patches);
         let mut missing = Vec::new();
@@ -524,6 +604,10 @@ mod tests {
         }
         async fn delete_mutation_macs(&self, _: &str, _: &[Vec<u8>]) -> StoreResult<()> {
             Ok(())
+        }
+        async fn get_latest_sync_key_id(&self) -> StoreResult<Option<Vec<u8>>> {
+            let keys = self.keys.lock().await;
+            Ok(keys.keys().last().cloned())
         }
     }
 

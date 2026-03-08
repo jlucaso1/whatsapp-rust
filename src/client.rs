@@ -1928,6 +1928,48 @@ impl Client {
         }
     }
 
+    /// Send an app state patch to the server for a given collection.
+    ///
+    /// Builds the IQ stanza and sends it. Returns the updated hash state.
+    pub(crate) async fn send_app_state_patch(
+        &self,
+        collection_name: &str,
+        mutations: Vec<(wa::SyncdMutation, Vec<u8>)>,
+    ) -> Result<()> {
+        let proc = self.get_app_state_processor().await;
+        let state = proc.backend.get_version(collection_name).await?;
+        let (patch_bytes, _new_version) = proc.build_patch(collection_name, mutations).await?;
+
+        let collection_node = NodeBuilder::new("collection")
+            .attr("name", collection_name)
+            .attr("version", state.version.to_string())
+            .attr("return_snapshot", "false")
+            .children([NodeBuilder::new("patch").bytes(patch_bytes).build()])
+            .build();
+        let sync_node = NodeBuilder::new("sync").children([collection_node]).build();
+        let iq = crate::request::InfoQuery {
+            namespace: "w:sync:app:state",
+            query_type: crate::request::InfoQueryType::Set,
+            to: server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+            timeout: None,
+        };
+
+        self.send_iq(iq).await?;
+
+        // Re-sync to get the latest state from the server after our patch was accepted.
+        // This matches whatsmeow's behavior: fetchAppState after successful send.
+        if let Ok(patch_name) = collection_name.parse::<WAPatchName>()
+            && let Err(e) = self.fetch_app_state_with_retry(patch_name).await
+        {
+            log::warn!("Failed to re-sync {collection_name} after patch send: {e}");
+        }
+
+        Ok(())
+    }
+
     async fn dispatch_app_state_mutation(
         &self,
         m: &crate::appstate_sync::Mutation,

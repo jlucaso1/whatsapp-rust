@@ -116,7 +116,8 @@ mod tests {
     }
 
     #[test]
-    fn test_mex_response_with_non_fatal_errors() {
+    fn test_mex_response_with_error_code_is_fatal() {
+        // WhatsApp Web treats any error with error_code as fatal
         let json_str = r#"{
             "data": null,
             "errors": [
@@ -135,13 +136,10 @@ mod tests {
         let response: MexResponse = serde_json::from_str(json_str).unwrap();
         assert!(!response.has_data());
         assert!(response.has_errors());
-        assert!(response.fatal_error().is_none());
 
-        let errors = response.errors.as_ref().unwrap();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].message, "User not found");
-        assert_eq!(errors[0].error_code(), Some(404));
-        assert!(!errors[0].is_fatal());
+        let fatal = response.fatal_error();
+        assert!(fatal.is_some());
+        assert_eq!(fatal.unwrap().error_code(), Some(404));
     }
 
     #[test]
@@ -170,7 +168,7 @@ mod tests {
         let fatal = fatal.unwrap();
         assert_eq!(fatal.message, "Fatal server error");
         assert_eq!(fatal.error_code(), Some(500));
-        assert!(fatal.is_fatal());
+        assert!(fatal.is_summary());
     }
 
     #[test]
