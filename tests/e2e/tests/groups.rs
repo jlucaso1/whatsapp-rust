@@ -2,7 +2,9 @@ use e2e_tests::TestClient;
 use log::info;
 use wacore::types::events::Event;
 use whatsapp_rust::Jid;
-use whatsapp_rust::features::{GroupCreateOptions, GroupParticipantOptions};
+use whatsapp_rust::features::{
+    GroupCreateOptions, GroupParticipantOptions, MembershipApprovalMode,
+};
 use whatsapp_rust::waproto::whatsapp as wa;
 
 #[tokio::test]
@@ -585,6 +587,107 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_group_settings() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_grp_settings_a").await?;
+    let client_b = TestClient::connect("e2e_grp_settings_b").await?;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("Client B JID")
+        .to_non_ad();
+
+    // Create group
+    let group_jid = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "Settings Test Group".to_string(),
+            participants: vec![GroupParticipantOptions::new(jid_b.clone())],
+            ..Default::default()
+        })
+        .await?
+        .gid;
+    info!("Group created: {group_jid}");
+
+    // Test locked/unlocked
+    client_a
+        .client
+        .groups()
+        .set_locked(&group_jid, true)
+        .await?;
+    info!("Group locked");
+
+    client_a
+        .client
+        .groups()
+        .set_locked(&group_jid, false)
+        .await?;
+    info!("Group unlocked");
+
+    // Test announcement mode
+    client_a
+        .client
+        .groups()
+        .set_announce(&group_jid, true)
+        .await?;
+    info!("Announcement mode enabled");
+
+    client_a
+        .client
+        .groups()
+        .set_announce(&group_jid, false)
+        .await?;
+    info!("Announcement mode disabled");
+
+    // Test ephemeral messages
+    client_a
+        .client
+        .groups()
+        .set_ephemeral(&group_jid, 86400)
+        .await?;
+    info!("Ephemeral set to 24h");
+
+    client_a
+        .client
+        .groups()
+        .set_ephemeral(&group_jid, 604800)
+        .await?;
+    info!("Ephemeral set to 7d");
+
+    client_a
+        .client
+        .groups()
+        .set_ephemeral(&group_jid, 0)
+        .await?;
+    info!("Ephemeral disabled");
+
+    // Test membership approval mode
+    client_a
+        .client
+        .groups()
+        .set_membership_approval(&group_jid, MembershipApprovalMode::On)
+        .await?;
+    info!("Membership approval enabled");
+
+    client_a
+        .client
+        .groups()
+        .set_membership_approval(&group_jid, MembershipApprovalMode::Off)
+        .await?;
+    info!("Membership approval disabled");
+
+    // Cleanup
+    client_a.disconnect().await;
+    client_b.disconnect().await;
 
     Ok(())
 }
