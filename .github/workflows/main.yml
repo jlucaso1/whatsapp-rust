@@ -57,6 +57,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build project
-        run: cargo build --all-targets --verbose
+        run: cargo build --workspace --exclude e2e-tests --all-targets --verbose
       - name: Run tests
-        run: cargo test --all --verbose -- --no-capture
+        run: cargo test --workspace --exclude e2e-tests --verbose -- --no-capture

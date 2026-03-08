@@ -1,0 +1,72 @@
+//! Handler for incoming `<presence>` stanzas.
+
+use super::traits::StanzaHandler;
+use crate::client::Client;
+use async_trait::async_trait;
+use log::debug;
+use std::sync::Arc;
+use wacore::types::events::{Event, PresenceUpdate};
+use wacore_binary::node::Node;
+
+/// Handler for `<presence>` stanzas.
+///
+/// Parses incoming presence updates and dispatches `Event::Presence` via the event bus.
+#[derive(Default)]
+pub struct PresenceHandler;
+
+#[async_trait]
+impl StanzaHandler for PresenceHandler {
+    fn tag(&self) -> &'static str {
+        "presence"
+    }
+
+    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+        let from = match node.attrs.get("from").map(|v| v.to_string()) {
+            Some(f) => f,
+            None => {
+                debug!(target: "PresenceHandler", "Presence stanza missing 'from' attribute");
+                return true;
+            }
+        };
+
+        let from_jid = match from.parse() {
+            Ok(jid) => jid,
+            Err(e) => {
+                debug!(target: "PresenceHandler", "Failed to parse presence 'from' JID: {}", e);
+                return true;
+            }
+        };
+
+        let presence_type = node
+            .attrs
+            .get("type")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
+        let unavailable = presence_type == "unavailable";
+
+        // Parse last_seen from 'last' attribute if present
+        let last_seen = node
+            .attrs
+            .get("last")
+            .and_then(|v| v.to_string().parse::<i64>().ok())
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+
+        debug!(
+            target: "PresenceHandler",
+            "Received presence from {}: type={}, unavailable={}",
+            from, presence_type, unavailable
+        );
+
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::Presence(PresenceUpdate {
+                from: from_jid,
+                unavailable,
+                last_seen,
+            }));
+
+        true
+    }
+}

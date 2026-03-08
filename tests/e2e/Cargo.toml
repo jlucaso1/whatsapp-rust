@@ -1,0 +1,19 @@
+[package]
+name = "e2e-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+uuid = { version = "1.0", features = ["v4"] }
+wacore = { path = "../../wacore" }
+whatsapp-rust = { path = "../..", features = ["danger-skip-tls-verify"] }
+whatsapp-rust-sqlite-storage = { path = "../../storages/sqlite-storage" }
+whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", features = ["danger-skip-tls-verify"] }
+whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client" }
+
+[dev-dependencies]
+env_logger = { version = "0.11", default-features = false }
+log = { workspace = true }

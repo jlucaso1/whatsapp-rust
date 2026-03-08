@@ -456,7 +456,7 @@ impl Client {
 
         // Register unimplemented handlers
         router.register(Arc::new(UnimplementedHandler::for_call()));
-        router.register(Arc::new(UnimplementedHandler::for_presence()));
+        router.register(Arc::new(crate::handlers::presence::PresenceHandler));
 
         router
     }
@@ -483,9 +483,47 @@ impl Client {
         &self,
         stanza: wacore::iq::chatstate::ChatstateStanza,
     ) {
-        let event = ChatStateEvent::from_stanza(stanza);
+        use wacore::iq::chatstate::{ChatstateSource, ReceivedChatState};
+        use wacore::types::events::ChatPresenceUpdate;
+        use wacore::types::message::MessageSource;
+        use wacore::types::presence::{ChatPresence, ChatPresenceMedia};
 
-        // Invoke handlers asynchronously
+        // Dispatch via event bus
+        let (chat, sender, is_group) = match &stanza.source {
+            ChatstateSource::User { from } => (from.clone(), from.clone(), false),
+            ChatstateSource::Group { from, participant } => {
+                (from.clone(), participant.clone(), true)
+            }
+        };
+
+        let (state, media) = match stanza.state {
+            ReceivedChatState::Typing => (ChatPresence::Composing, ChatPresenceMedia::Text),
+            ReceivedChatState::RecordingAudio => {
+                (ChatPresence::Composing, ChatPresenceMedia::Audio)
+            }
+            ReceivedChatState::Idle => (ChatPresence::Paused, ChatPresenceMedia::Text),
+        };
+
+        self.core
+            .event_bus
+            .dispatch(&Event::ChatPresence(ChatPresenceUpdate {
+                source: MessageSource {
+                    chat,
+                    sender,
+                    is_from_me: false,
+                    is_group,
+                    addressing_mode: None,
+                    sender_alt: None,
+                    recipient_alt: None,
+                    broadcast_list_owner: None,
+                    recipient: None,
+                },
+                state,
+                media,
+            }));
+
+        // Invoke legacy callback handlers
+        let event = ChatStateEvent::from_stanza(stanza);
         let handlers = self.chatstate_handlers.read().await.clone();
         for handler in handlers {
             let event_clone = event.clone();
