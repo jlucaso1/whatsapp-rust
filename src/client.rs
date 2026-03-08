@@ -1626,8 +1626,16 @@ impl Client {
                 if let Some(ref err) = list.error {
                     match err {
                         CollectionSyncError::Conflict { has_more } => {
-                            warn!(target: "Client/AppState", "Collection {:?} conflict (has_more={}), will refetch", name, has_more);
-                            needs_refetch.push(name);
+                            if *has_more {
+                                // ConflictHasMore: server has more patches, must refetch.
+                                warn!(target: "Client/AppState", "Collection {:?} conflict (has_more=true), will refetch", name);
+                                needs_refetch.push(name);
+                            } else {
+                                // Conflict without has_more: WA Web treats this as success
+                                // when there are no pending mutations to push (which is
+                                // always the case for us since we don't push app state).
+                                debug!(target: "Client/AppState", "Collection {:?} conflict (has_more=false), treating as success (no pending mutations)", name);
+                            }
                             continue;
                         }
                         CollectionSyncError::Fatal { code, text } => {
