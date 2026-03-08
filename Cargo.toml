@@ -24,6 +24,19 @@ members = [
     "wacore/noise",
     "waproto",
 ]
+default-members = [
+    ".",
+    "http_clients/ureq-client",
+    "storages/sqlite-storage",
+    "transports/tokio-transport",
+    "wacore",
+    "wacore/appstate",
+    "wacore/binary",
+    "wacore/derive",
+    "wacore/libsignal",
+    "wacore/noise",
+    "waproto",
+]
 
 [workspace.dependencies]
 # Shared dependencies

@@ -11,12 +11,6 @@ async fn test_send_text_message() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_msg_a").await?;
     let mut client_b = TestClient::connect("e2e_msg_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
     let jid_b = client_b
         .client
         .get_pn()
@@ -24,7 +18,7 @@ async fn test_send_text_message() -> anyhow::Result<()> {
         .expect("Client B should have a JID")
         .to_non_ad();
 
-    info!("Client A JID: {jid_a}, Client B JID: {jid_b}");
+    info!("Client B JID: {jid_b}");
 
     // Client A sends a text message to Client B
     let text = "Hello from client A!";
@@ -102,6 +96,8 @@ async fn test_send_text_message_bidirectional() -> anyhow::Result<()> {
         .await?;
     if let Event::Message(msg, _) = event {
         assert_eq!(msg.conversation.as_deref(), Some(text_a));
+    } else {
+        panic!("Expected Message event, got: {:?}", event);
     }
 
     // B -> A
@@ -122,6 +118,8 @@ async fn test_send_text_message_bidirectional() -> anyhow::Result<()> {
         .await?;
     if let Event::Message(msg, _) = event {
         assert_eq!(msg.conversation.as_deref(), Some(text_b));
+    } else {
+        panic!("Expected Message event, got: {:?}", event);
     }
 
     client_a.disconnect().await;

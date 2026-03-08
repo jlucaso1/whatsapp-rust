@@ -50,6 +50,9 @@ async fn test_connect_and_pair() -> anyhow::Result<()> {
                 Ok(Event::PairSuccess(ps)) => {
                     info!("Received PairSuccess: {:?}", ps);
                     got_pair_success = true;
+                    if got_connected {
+                        break;
+                    }
                 }
                 Ok(Event::Connected(_)) => {
                     info!("Received Connected event");

@@ -53,7 +53,7 @@ impl TestClient {
     pub async fn connect(prefix: &str) -> anyhow::Result<Self> {
         let store = create_test_store(prefix).await?;
         let backend = Arc::new(store) as Arc<dyn Backend>;
-        let transport_factory = TokioWebSocketTransportFactory::new().with_url(&mock_server_url());
+        let transport_factory = TokioWebSocketTransportFactory::new().with_url(mock_server_url());
         let (event_handler, mut event_rx) = ChannelEventHandler::new();
 
         let mut bot = Bot::builder()
@@ -72,7 +72,7 @@ impl TestClient {
         let mut got_pair = false;
         let mut got_connected = false;
 
-        tokio::time::timeout(timeout, async {
+        let wait_result = tokio::time::timeout(timeout, async {
             loop {
                 match event_rx.recv().await {
                     Ok(Event::PairSuccess(_)) => {
@@ -88,12 +88,30 @@ impl TestClient {
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => panic!("Event channel error during connect: {e}"),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Event channel error during connect: {e}"));
+                    }
                 }
             }
+            Ok(())
         })
-        .await
-        .map_err(|_| anyhow::anyhow!("Timed out waiting for PairSuccess + Connected"))?;
+        .await;
+
+        match wait_result {
+            Err(_) => {
+                client.disconnect().await;
+                run_handle.abort();
+                return Err(anyhow::anyhow!(
+                    "Timed out waiting for PairSuccess + Connected"
+                ));
+            }
+            Ok(Err(e)) => {
+                client.disconnect().await;
+                run_handle.abort();
+                return Err(e);
+            }
+            Ok(Ok(())) => {}
+        }
 
         assert!(got_pair, "Should have received PairSuccess");
         assert!(got_connected, "Should have received Connected");

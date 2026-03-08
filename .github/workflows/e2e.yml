@@ -40,8 +40,14 @@ jobs:
       - name: Wait for mock server
         run: |
           for i in $(seq 1 30); do
-            curl -k https://localhost:8080/ && break || sleep 1
+            if curl -sk https://localhost:8080/ > /dev/null 2>&1; then
+              echo "Mock server is ready"
+              exit 0
+            fi
+            sleep 1
           done
+          echo "Mock server failed to become ready"
+          exit 1
       - name: Run E2E tests
         env:
           MOCK_SERVER_URL: "wss://127.0.0.1:8080/ws/chat"
