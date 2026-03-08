@@ -4,7 +4,8 @@ use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
     AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteLinkIq, GroupCreateIq,
     GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
-    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupDescriptionIq, SetGroupSubjectIq,
+    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq, SetGroupDescriptionIq,
+    SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq, SetGroupSubjectIq,
     normalize_participants,
 };
 use wacore::types::message::AddressingMode;
@@ -177,7 +178,9 @@ impl<'a> Groups<'a> {
     }
 
     pub async fn leave(&self, jid: &Jid) -> Result<(), anyhow::Error> {
-        Ok(self.client.execute(LeaveGroupIq::new(jid)).await?)
+        self.client.execute(LeaveGroupIq::new(jid)).await?;
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(())
     }
 
     pub async fn add_participants(
@@ -185,10 +188,13 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(AddParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        // Invalidate cached group info so next send picks up new participants
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn remove_participants(
@@ -196,10 +202,13 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        Ok(self
+        let result = self
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
-            .await?)
+            .await?;
+        // Invalidate cached group info so next send reflects removed participants
+        self.client.get_group_cache().await.invalidate(jid).await;
+        Ok(result)
     }
 
     pub async fn promote_participants(
@@ -228,6 +237,51 @@ impl<'a> Groups<'a> {
         Ok(self
             .client
             .execute(GetGroupInviteLinkIq::new(jid, reset))
+            .await?)
+    }
+
+    /// Lock the group so only admins can change group info.
+    pub async fn set_locked(&self, jid: &Jid, locked: bool) -> Result<(), anyhow::Error> {
+        let spec = if locked {
+            SetGroupLockedIq::lock(jid)
+        } else {
+            SetGroupLockedIq::unlock(jid)
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set announcement mode. When enabled, only admins can send messages.
+    pub async fn set_announce(&self, jid: &Jid, announce: bool) -> Result<(), anyhow::Error> {
+        let spec = if announce {
+            SetGroupAnnouncementIq::announce(jid)
+        } else {
+            SetGroupAnnouncementIq::not_announce(jid)
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set ephemeral (disappearing) messages timer on the group.
+    ///
+    /// Common values: 86400 (24h), 604800 (7d), 7776000 (90d).
+    /// Pass 0 to disable.
+    pub async fn set_ephemeral(&self, jid: &Jid, expiration: u32) -> Result<(), anyhow::Error> {
+        let spec = if expiration > 0 {
+            SetGroupEphemeralIq::enable(jid, expiration)
+        } else {
+            SetGroupEphemeralIq::disable(jid)
+        };
+        Ok(self.client.execute(spec).await?)
+    }
+
+    /// Set membership approval mode. When on, new members must be approved by an admin.
+    pub async fn set_membership_approval(
+        &self,
+        jid: &Jid,
+        mode: MembershipApprovalMode,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupMembershipApprovalIq::new(jid, mode))
             .await?)
     }
 }

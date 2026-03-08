@@ -1050,6 +1050,221 @@ impl IqSpec for GetGroupInviteLinkIq {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Group property setters (SetProperty RPC)
+// ---------------------------------------------------------------------------
+
+/// IQ specification for locking a group (only admins can change group info).
+///
+/// Wire format:
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <locked/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetGroupLockedIq {
+    pub group_jid: Jid,
+    pub locked: bool,
+}
+
+impl SetGroupLockedIq {
+    pub fn lock(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            locked: true,
+        }
+    }
+
+    pub fn unlock(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            locked: false,
+        }
+    }
+}
+
+impl IqSpec for SetGroupLockedIq {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let tag = if self.locked { "locked" } else { "unlocked" };
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![NodeBuilder::new(tag).build()])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+        Ok(())
+    }
+}
+
+/// IQ specification for setting announcement mode (only admins can send messages).
+///
+/// Wire format:
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <announcement/>
+///   <!-- or -->
+///   <not_announcement/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetGroupAnnouncementIq {
+    pub group_jid: Jid,
+    pub announce: bool,
+}
+
+impl SetGroupAnnouncementIq {
+    pub fn announce(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            announce: true,
+        }
+    }
+
+    pub fn not_announce(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            announce: false,
+        }
+    }
+}
+
+impl IqSpec for SetGroupAnnouncementIq {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let tag = if self.announce {
+            "announcement"
+        } else {
+            "not_announcement"
+        };
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![NodeBuilder::new(tag).build()])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+        Ok(())
+    }
+}
+
+/// IQ specification for setting ephemeral (disappearing) messages on a group.
+///
+/// Wire format:
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <ephemeral expiration="86400"/>
+///   <!-- or to disable: -->
+///   <not_ephemeral/>
+/// </iq>
+/// ```
+///
+/// Common expiration values (seconds):
+/// - 86400 (24 hours)
+/// - 604800 (7 days)
+/// - 7776000 (90 days)
+/// - 0 or `not_ephemeral` to disable
+#[derive(Debug, Clone)]
+pub struct SetGroupEphemeralIq {
+    pub group_jid: Jid,
+    /// Expiration in seconds, or 0 / None to disable.
+    pub expiration: Option<u32>,
+}
+
+impl SetGroupEphemeralIq {
+    /// Enable ephemeral messages with the given expiration in seconds.
+    pub fn enable(group_jid: &Jid, expiration: u32) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            expiration: Some(expiration),
+        }
+    }
+
+    /// Disable ephemeral messages.
+    pub fn disable(group_jid: &Jid) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            expiration: None,
+        }
+    }
+}
+
+impl IqSpec for SetGroupEphemeralIq {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let node = match self.expiration {
+            Some(exp) if exp > 0 => NodeBuilder::new("ephemeral")
+                .attr("expiration", exp.to_string())
+                .build(),
+            _ => NodeBuilder::new("not_ephemeral").build(),
+        };
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![node])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+        Ok(())
+    }
+}
+
+/// IQ specification for setting the membership approval mode on a group.
+///
+/// When enabled, new members must be approved by an admin before joining.
+///
+/// Wire format:
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <membership_approval_mode>
+///     <group_join state="on"/>
+///   </membership_approval_mode>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetGroupMembershipApprovalIq {
+    pub group_jid: Jid,
+    pub mode: MembershipApprovalMode,
+}
+
+impl SetGroupMembershipApprovalIq {
+    pub fn new(group_jid: &Jid, mode: MembershipApprovalMode) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            mode,
+        }
+    }
+}
+
+impl IqSpec for SetGroupMembershipApprovalIq {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let node = NodeBuilder::new("membership_approval_mode")
+            .children([NodeBuilder::new("group_join")
+                .attr("state", self.mode.as_str())
+                .build()])
+            .build();
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![node])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1293,5 +1508,89 @@ mod tests {
         let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
         assert_eq!(result.jid.user, "1234567890");
         assert_eq!(result.status, Some("200".to_string()));
+    }
+
+    #[test]
+    fn test_set_group_locked_iq() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+
+        let lock = SetGroupLockedIq::lock(&group);
+        let iq = lock.build_iq();
+        assert_eq!(iq.query_type, InfoQueryType::Set);
+        assert_eq!(iq.to, group);
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "locked");
+        } else {
+            panic!("expected nodes content");
+        }
+
+        let unlock = SetGroupLockedIq::unlock(&group);
+        let iq = unlock.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "unlocked");
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_set_group_announcement_iq() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+
+        let announce = SetGroupAnnouncementIq::announce(&group);
+        let iq = announce.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "announcement");
+        } else {
+            panic!("expected nodes content");
+        }
+
+        let not_announce = SetGroupAnnouncementIq::not_announce(&group);
+        let iq = not_announce.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "not_announcement");
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_set_group_ephemeral_iq() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+
+        let enable = SetGroupEphemeralIq::enable(&group, 86400);
+        let iq = enable.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "ephemeral");
+            assert_eq!(
+                nodes[0].attrs().optional_string("expiration"),
+                Some("86400")
+            );
+        } else {
+            panic!("expected nodes content");
+        }
+
+        let disable = SetGroupEphemeralIq::disable(&group);
+        let iq = disable.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "not_ephemeral");
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_set_group_membership_approval_iq() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+
+        let spec = SetGroupMembershipApprovalIq::new(&group, MembershipApprovalMode::On);
+        let iq = spec.build_iq();
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            assert_eq!(nodes[0].tag, "membership_approval_mode");
+            let join = nodes[0].get_children_by_tag("group_join").next().unwrap();
+            assert_eq!(join.attrs().optional_string("state"), Some("on"));
+        } else {
+            panic!("expected nodes content");
+        }
     }
 }
