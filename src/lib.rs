@@ -7,7 +7,7 @@ pub mod http;
 pub mod types;
 
 pub mod client;
-pub use client::Client;
+pub use client::{Client, NodeFilter};
 pub mod download;
 pub mod handlers;
 pub use handlers::chatstate::ChatStateEvent;
