@@ -39,12 +39,12 @@ pub mod usync;
 
 pub mod features;
 pub use features::{
-    Blocking, BlocklistEntry, ChatStateType, Chatstate, ContactInfo, Contacts, CreateGroupResult,
-    GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
-    GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode, MemberLinkMode,
-    MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse,
-    ParticipantChangeResponse, Presence, PresenceStatus, Profile, ProfilePicture, Status,
-    StatusPrivacySetting, StatusSendOptions, TcToken, UserInfo,
+    Blocking, BlocklistEntry, ChatActions, ChatStateType, Chatstate, ContactInfo, Contacts,
+    CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,
+    GroupParticipantOptions, GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode,
+    MemberLinkMode, MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest,
+    MexResponse, ParticipantChangeResponse, Presence, PresenceStatus, Profile, ProfilePicture,
+    Status, StatusPrivacySetting, StatusSendOptions, TcToken, UserInfo,
 };
 
 pub mod bot;

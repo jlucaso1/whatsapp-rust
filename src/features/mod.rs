@@ -1,4 +1,5 @@
 mod blocking;
+pub(crate) mod chat_actions;
 mod chatstate;
 mod contacts;
 mod groups;
@@ -9,6 +10,8 @@ pub(crate) mod status;
 mod tctoken;
 
 pub use blocking::{Blocking, BlocklistEntry};
+
+pub use chat_actions::ChatActions;
 
 pub use chatstate::{ChatStateType, Chatstate};
 

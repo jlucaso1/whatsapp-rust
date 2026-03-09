@@ -2044,130 +2044,55 @@ impl Client {
         m: &crate::appstate_sync::Mutation,
         full_sync: bool,
     ) {
-        use wacore::types::events::{
-            ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate,
-        };
+        use wacore::types::events::Event;
+
         if m.operation != wa::syncd_mutation::SyncdOperation::Set {
             return;
         }
         if m.index.is_empty() {
             return;
         }
-        let kind = &m.index[0];
-        let ts = m
-            .action_value
-            .as_ref()
-            .and_then(|v| v.timestamp)
-            .unwrap_or(0);
-        let time = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
-        let jid = if m.index.len() > 1 {
-            m.index[1].parse().unwrap_or_default()
-        } else {
-            Jid::default()
-        };
-        match kind.as_str() {
-            "setting_pushName" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.push_name_setting
-                    && let Some(new_name) = &act.name
-                {
-                    let new_name = new_name.clone();
-                    let bus = self.core.event_bus.clone();
 
-                    let snapshot = self.persistence_manager.get_device_snapshot().await;
-                    let old = snapshot.push_name.clone();
-                    if old != new_name {
-                        debug!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
-                        self.persistence_manager
-                            .process_command(DeviceCommand::SetPushName(new_name.clone()))
-                            .await;
-                        bus.dispatch(&Event::SelfPushNameUpdated(
-                            crate::types::events::SelfPushNameUpdated {
-                                from_server: true,
-                                old_name: old.clone(),
-                                new_name: new_name.clone(),
-                            },
-                        ));
+        // Delegate chat-related mutations (mute, pin, archive, star, contact, etc.)
+        if crate::features::chat_actions::dispatch_chat_mutation(&self.core.event_bus, m, full_sync)
+        {
+            return;
+        }
 
-                        // WhatsApp Web sends presence immediately when receiving pushname from
-                        if old.is_empty() && !new_name.is_empty() {
-                            debug!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
-                            if let Err(e) = self.presence().set_available().await {
-                                warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
-                            }
-                        }
-                    } else {
-                        debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
+        // Handle client-internal mutations that need persistence/presence access
+        if m.index[0] == "setting_pushName"
+            && let Some(val) = &m.action_value
+            && let Some(act) = &val.push_name_setting
+            && let Some(new_name) = &act.name
+        {
+            let new_name = new_name.clone();
+            let bus = self.core.event_bus.clone();
+
+            let snapshot = self.persistence_manager.get_device_snapshot().await;
+            let old = snapshot.push_name.clone();
+            if old != new_name {
+                debug!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetPushName(new_name.clone()))
+                    .await;
+                bus.dispatch(&Event::SelfPushNameUpdated(
+                    crate::types::events::SelfPushNameUpdated {
+                        from_server: true,
+                        old_name: old.clone(),
+                        new_name: new_name.clone(),
+                    },
+                ));
+
+                // WhatsApp Web sends presence immediately when receiving pushname
+                if old.is_empty() && !new_name.is_empty() {
+                    debug!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
+                    if let Err(e) = self.presence().set_available().await {
+                        warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
                     }
                 }
+            } else {
+                debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
             }
-            "mute" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.mute_action
-                {
-                    self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate {
-                        jid,
-                        timestamp: time,
-                        action: Box::new(*act),
-                        from_full_sync: full_sync,
-                    }));
-                }
-            }
-            "pin" | "pin_v1" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.pin_action
-                {
-                    self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate {
-                        jid,
-                        timestamp: time,
-                        action: Box::new(*act),
-                        from_full_sync: full_sync,
-                    }));
-                }
-            }
-            "archive" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.archive_chat_action
-                {
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::ArchiveUpdate(ArchiveUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        }));
-                }
-            }
-            "contact" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.contact_action
-                {
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::ContactUpdate(ContactUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        }));
-                }
-            }
-            "mark_chat_as_read" | "markChatAsRead" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.mark_chat_as_read_action
-                {
-                    self.core.event_bus.dispatch(&Event::MarkChatAsReadUpdate(
-                        MarkChatAsReadUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        },
-                    ));
-                }
-            }
-            _ => {}
         }
     }
 
