@@ -361,8 +361,9 @@ impl AppStateProcessor {
     /// A tuple of (patch_bytes, updated_hash_state).
     /// Encode mutations into a SyncdPatch protobuf blob.
     ///
-    /// Returns `(patch_bytes, new_version)`. Does NOT persist state — the caller
-    /// must only persist after the server acknowledges the patch.
+    /// Returns `(patch_bytes, base_version)` where `base_version` is the collection
+    /// version before the patch (for the IQ `version` attribute). Does NOT persist
+    /// state — the caller must only persist after the server acknowledges the patch.
     pub async fn build_patch(
         &self,
         collection_name: &str,
@@ -378,8 +379,9 @@ impl AppStateProcessor {
             .ok_or_else(|| anyhow!("No app state sync key available"))?;
         let keys = self.get_app_state_key(&key_id).await?;
 
-        // Get current hash state
+        // Get current hash state — save base version for the caller
         let mut state = self.backend.get_version(collection_name).await?;
+        let base_version = state.version;
 
         // Collect the SyncdMutation list
         let syncd_mutations: Vec<wa::SyncdMutation> =
@@ -429,7 +431,7 @@ impl AppStateProcessor {
         // Encode to protobuf
         let patch_bytes = patch.encode_to_vec();
 
-        Ok((patch_bytes, state.version))
+        Ok((patch_bytes, base_version))
     }
 
     pub async fn get_missing_key_ids(&self, pl: &PatchList) -> Result<Vec<Vec<u8>>> {
@@ -500,6 +502,7 @@ mod tests {
         versions: Arc<Mutex<HashMap<String, HashState>>>,
         macs: MockMacMap,
         keys: Arc<Mutex<HashMap<Vec<u8>, AppStateSyncKey>>>,
+        latest_key_id: Arc<Mutex<Option<Vec<u8>>>>,
     }
 
     // Implement SignalStore - Signal protocol cryptographic operations
@@ -563,6 +566,7 @@ mod tests {
         }
         async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> StoreResult<()> {
             self.keys.lock().await.insert(key_id.to_vec(), key);
+            *self.latest_key_id.lock().await = Some(key_id.to_vec());
             Ok(())
         }
         async fn get_version(&self, name: &str) -> StoreResult<HashState> {
@@ -606,8 +610,7 @@ mod tests {
             Ok(())
         }
         async fn get_latest_sync_key_id(&self) -> StoreResult<Option<Vec<u8>>> {
-            let keys = self.keys.lock().await;
-            Ok(keys.keys().last().cloned())
+            Ok(self.latest_key_id.lock().await.clone())
         }
     }
 

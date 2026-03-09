@@ -1937,12 +1937,11 @@ impl Client {
         mutations: Vec<(wa::SyncdMutation, Vec<u8>)>,
     ) -> Result<()> {
         let proc = self.get_app_state_processor().await;
-        let state = proc.backend.get_version(collection_name).await?;
-        let (patch_bytes, _new_version) = proc.build_patch(collection_name, mutations).await?;
+        let (patch_bytes, base_version) = proc.build_patch(collection_name, mutations).await?;
 
         let collection_node = NodeBuilder::new("collection")
             .attr("name", collection_name)
-            .attr("version", state.version.to_string())
+            .attr("version", base_version.to_string())
             .attr("return_snapshot", "false")
             .children([NodeBuilder::new("patch").bytes(patch_bytes).build()])
             .build();

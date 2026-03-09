@@ -31,11 +31,11 @@ async fn test_set_status_text() -> anyhow::Result<()> {
 async fn test_set_push_name() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client = TestClient::connect("e2e_push_name").await?;
+    let mut client = TestClient::connect("e2e_push_name").await?;
 
     // Wait for initial app state sync to complete so sync keys are available.
     // The push name mutation requires encryption keys from the critical_block sync.
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    client.wait_for_app_state_sync().await?;
 
     let old_name = client.client.get_push_name().await;
     info!("Current push name: '{}'", old_name);
@@ -154,10 +154,10 @@ async fn test_set_status_text_empty() -> anyhow::Result<()> {
 async fn test_set_push_name_special_characters() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client = TestClient::connect("e2e_push_special").await?;
+    let mut client = TestClient::connect("e2e_push_special").await?;
 
     // Wait for initial app state sync to complete so sync keys are available.
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    client.wait_for_app_state_sync().await?;
 
     // Emoji
     let name_emoji = "Bot 🤖🦀";
@@ -194,10 +194,10 @@ async fn test_set_push_name_special_characters() -> anyhow::Result<()> {
 async fn test_set_push_name_long() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client = TestClient::connect("e2e_push_long").await?;
+    let mut client = TestClient::connect("e2e_push_long").await?;
 
     // Wait for initial app state sync to complete so sync keys are available.
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    client.wait_for_app_state_sync().await?;
 
     // WhatsApp allows up to 25 characters for push names
     let long_name = "A".repeat(25);
@@ -215,10 +215,10 @@ async fn test_set_push_name_long() -> anyhow::Result<()> {
 async fn test_set_push_name_whitespace_only() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client = TestClient::connect("e2e_push_whitespace").await?;
+    let mut client = TestClient::connect("e2e_push_whitespace").await?;
 
     // Wait for initial app state sync to complete so sync keys are available.
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    client.wait_for_app_state_sync().await?;
 
     // Whitespace-only push name currently succeeds because we only check for empty string.
     // NOTE: This behavior may need to be revisited — WhatsApp clients may reject or trim
@@ -245,10 +245,10 @@ async fn test_set_push_name_whitespace_only() -> anyhow::Result<()> {
 async fn test_set_push_name_persists_across_operations() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client = TestClient::connect("e2e_push_persist").await?;
+    let mut client = TestClient::connect("e2e_push_persist").await?;
 
     // Wait for initial app state sync to complete so sync keys are available.
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    client.wait_for_app_state_sync().await?;
 
     // Set push name
     let push_name = "PersistBot";

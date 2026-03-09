@@ -29,7 +29,7 @@ pub struct ChannelEventHandler {
 
 impl ChannelEventHandler {
     pub fn new() -> (Arc<Self>, tokio::sync::broadcast::Receiver<Event>) {
-        let (tx, rx) = tokio::sync::broadcast::channel(100);
+        let (tx, rx) = tokio::sync::broadcast::channel(1000);
         (Arc::new(Self { tx }), rx)
     }
 }
@@ -88,6 +88,13 @@ impl TestClient {
                         }
                     }
                     Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        eprintln!(
+                            "WARN: Event channel lagged during connect, {} messages dropped",
+                            n
+                        );
+                        continue;
+                    }
                     Err(e) => {
                         return Err(anyhow::anyhow!("Event channel error during connect: {e}"));
                     }
@@ -138,12 +145,36 @@ impl TestClient {
                 match self.event_rx.recv().await {
                     Ok(event) if predicate(&event) => return Ok(event),
                     Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        eprintln!("WARN: Event channel lagged, {} messages dropped", n);
+                        // Continue receiving — the event may still arrive
+                        continue;
+                    }
                     Err(e) => return Err(anyhow::anyhow!("Event channel error: {e}")),
                 }
             }
         })
         .await
         .map_err(|_| anyhow::anyhow!("Timed out waiting for event"))?
+    }
+
+    /// Wait for initial app state sync to complete (keys become available).
+    ///
+    /// The `SelfPushNameUpdated` event fires during critical_block sync, which
+    /// completes before `Connected` is dispatched. Since `connect()` waits for
+    /// `Connected`, the push name is already set when this method is called.
+    /// We verify this by checking the push name state directly.
+    pub async fn wait_for_app_state_sync(&mut self) -> anyhow::Result<()> {
+        // Push name is set during critical_block sync, which completes before
+        // Connected (which connect() already waited for). Check state directly.
+        let push_name = self.client.get_push_name().await;
+        if !push_name.is_empty() {
+            return Ok(());
+        }
+        // Fallback: wait for the event if push name isn't set yet
+        self.wait_for_event(10, |e| matches!(e, Event::SelfPushNameUpdated(_)))
+            .await?;
+        Ok(())
     }
 
     /// Disconnect and abort the run handle.
