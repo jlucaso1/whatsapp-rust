@@ -877,6 +877,30 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn get_latest_app_state_sync_key_id_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
+        let pool = self.pool.clone();
+        let res: Option<Vec<u8>> =
+            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = app_state_keys::table
+                    .select(app_state_keys::key_id)
+                    .filter(app_state_keys::device_id.eq(device_id))
+                    .order(app_state_keys::key_id.desc())
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(res)
+    }
+
     pub async fn get_app_state_version_for_device(
         &self,
         name: &str,
@@ -1311,6 +1335,11 @@ impl AppSyncStore for SqliteStore {
 
     async fn delete_mutation_macs(&self, name: &str, index_macs: &[Vec<u8>]) -> Result<()> {
         self.delete_app_state_mutation_macs_for_device(name, index_macs, self.device_id)
+            .await
+    }
+
+    async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>> {
+        self.get_latest_app_state_sync_key_id_for_device(self.device_id)
             .await
     }
 }

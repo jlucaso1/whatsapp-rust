@@ -107,9 +107,6 @@ async fn test_reconnect_after_disconnect() -> anyhow::Result<()> {
     client.disconnect().await;
     tc.run_handle.abort();
 
-    // Give a moment for cleanup
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
     // Reconnect using the same persisted store — should not need re-pairing.
     // We need a new Bot with the same backend. Since TestClient consumed the store,
     // we verify the client was logged in before disconnecting.

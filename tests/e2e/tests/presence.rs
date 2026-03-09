@@ -55,6 +55,10 @@ async fn test_presence_available() -> anyhow::Result<()> {
     // Client B subscribes to Client A's presence
     client_b.client.presence().subscribe(&jid_a).await?;
 
+    // Small delay to ensure the subscribe stanza is processed by the server
+    // before A sends its availability (both are fire-and-forget with no ack).
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
     // Client A sets available
     client_a.client.presence().set_available().await?;
     info!("Client A set presence to available");

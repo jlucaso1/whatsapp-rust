@@ -49,4 +49,8 @@ pub struct MessageStanza {
     /// Optional addressing mode (e.g., "lid")
     #[attr(name = "addressing_mode", optional)]
     pub addressing_mode: Option<String>,
+
+    /// Optional push name of sender (server-injected on forwarded messages)
+    #[attr(name = "notify", optional)]
+    pub notify: Option<String>,
 }

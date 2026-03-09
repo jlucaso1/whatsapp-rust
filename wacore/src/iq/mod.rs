@@ -10,6 +10,7 @@ pub mod node;
 pub mod passive;
 pub mod prekeys;
 pub mod privacy;
+pub mod profile;
 pub mod props;
 pub mod spam_report;
 pub mod spec;

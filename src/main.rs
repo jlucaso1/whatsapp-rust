@@ -125,6 +125,68 @@ fn main() {
                                 handle_media_ping(&ctx, media_ping_request).await;
                             }
 
+                            if let Some(text) = ctx.message.text_content() {
+                                // Profile commands (temporary for testing)
+                                if let Some(new_name) = text.strip_prefix("!setname ") {
+                                    let new_name = new_name.trim();
+                                    if !new_name.is_empty() {
+                                        info!("Setting push name to: {}", new_name);
+                                        match ctx.client.profile().set_push_name(new_name).await {
+                                            Ok(()) => {
+                                                info!("Push name set successfully");
+                                                let _ = ctx
+                                                    .send_message(wa::Message {
+                                                        conversation: Some(format!(
+                                                            "✅ Name set to: {}",
+                                                            new_name
+                                                        )),
+                                                        ..Default::default()
+                                                    })
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to set push name: {}", e);
+                                                let _ = ctx
+                                                    .send_message(wa::Message {
+                                                        conversation: Some(format!(
+                                                            "❌ Failed: {}",
+                                                            e
+                                                        )),
+                                                        ..Default::default()
+                                                    })
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                } else if let Some(new_status) = text.strip_prefix("!setstatus ") {
+                                    let new_status = new_status.trim();
+                                    info!("Setting status text to: {}", new_status);
+                                    match ctx.client.profile().set_status_text(new_status).await {
+                                        Ok(()) => {
+                                            info!("Status text set successfully");
+                                            let _ = ctx
+                                                .send_message(wa::Message {
+                                                    conversation: Some(format!(
+                                                        "✅ Status set to: {}",
+                                                        new_status
+                                                    )),
+                                                    ..Default::default()
+                                                })
+                                                .await;
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to set status text: {}", e);
+                                            let _ = ctx
+                                                .send_message(wa::Message {
+                                                    conversation: Some(format!("❌ Failed: {}", e)),
+                                                    ..Default::default()
+                                                })
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+
                             if let Some(text) = ctx.message.text_content()
                                 && text == PING_TRIGGER
                             {

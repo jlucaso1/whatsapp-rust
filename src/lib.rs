@@ -43,7 +43,7 @@ pub use features::{
     GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
     GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode, MemberLinkMode,
     MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse,
-    ParticipantChangeResponse, Presence, PresenceStatus, ProfilePicture, Status,
+    ParticipantChangeResponse, Presence, PresenceStatus, Profile, ProfilePicture, Status,
     StatusPrivacySetting, StatusSendOptions, TcToken, UserInfo,
 };
 
