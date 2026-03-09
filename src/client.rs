@@ -33,6 +33,62 @@ use wacore_binary::jid::Jid;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
+/// Filter for matching incoming stanzas (nodes) by tag and attributes.
+///
+/// Used with [`Client::wait_for_node`] to wait for specific stanzas.
+/// Zero-cost when no waiters are active (single atomic load per node).
+///
+/// # Example
+/// ```ignore
+/// // Wait for a w:gp2 notification from a specific group
+/// let waiter = client.wait_for_node(
+///     NodeFilter::tag("notification")
+///         .attr("type", "w:gp2")
+///         .attr("from", "group@g.us"),
+/// );
+/// // ... trigger the action ...
+/// let node = waiter.await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct NodeFilter {
+    tag: String,
+    attrs: Vec<(String, String)>,
+}
+
+impl NodeFilter {
+    /// Create a filter matching nodes with the given tag.
+    pub fn tag(tag: impl Into<String>) -> Self {
+        Self {
+            tag: tag.into(),
+            attrs: Vec::new(),
+        }
+    }
+
+    /// Add an attribute constraint. All attributes must match.
+    pub fn attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.attrs.push((key.into(), value.into()));
+        self
+    }
+
+    /// Shorthand for `.attr("from", jid.to_string())`.
+    pub fn from_jid(self, jid: &Jid) -> Self {
+        self.attr("from", jid.to_string())
+    }
+
+    fn matches(&self, node: &Node) -> bool {
+        node.tag == self.tag
+            && self
+                .attrs
+                .iter()
+                .all(|(k, v)| node.attrs.get(k.as_str()).is_some_and(|attr| *attr == *v))
+    }
+}
+
+struct NodeWaiter {
+    filter: NodeFilter,
+    tx: tokio::sync::oneshot::Sender<Arc<Node>>,
+}
+
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
 use tokio::time::{Duration, sleep};
@@ -106,6 +162,13 @@ pub struct Client {
 
     pub(crate) response_waiters:
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<wacore_binary::Node>>>>,
+
+    /// Generic node waiters for waiting on specific stanzas by tag/attributes.
+    /// Uses std::sync::Mutex (not tokio) since the critical section is trivial.
+    /// Guarded by `node_waiter_count` for zero-cost when no waiters are active.
+    node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
+    node_waiter_count: AtomicUsize,
+
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
 
@@ -277,6 +340,8 @@ impl Client {
             noise_socket: Arc::new(Mutex::new(None)),
 
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
+            node_waiters: std::sync::Mutex::new(Vec::new()),
+            node_waiter_count: AtomicUsize::new(0),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             unified_session: crate::unified_session::UnifiedSessionManager::new(),
@@ -899,6 +964,11 @@ impl Client {
             }
             self.shutdown_notifier.notify_waiters();
             return;
+        }
+
+        // Check generic node waiters (zero-cost when none registered)
+        if self.node_waiter_count.load(Ordering::Relaxed) > 0 {
+            self.resolve_node_waiters(&node);
         }
 
         if node.tag.as_str() == "iq"
@@ -2288,6 +2358,58 @@ impl Client {
 
     pub fn is_logged_in(&self) -> bool {
         self.is_logged_in.load(Ordering::Relaxed)
+    }
+
+    /// Register a waiter for an incoming node matching the given filter.
+    ///
+    /// Returns a receiver that resolves when a matching node arrives.
+    /// The waiter starts buffering immediately, so register it **before**
+    /// performing the action that triggers the expected node.
+    ///
+    /// When multiple waiters match the same node, each matching waiter
+    /// receives a clone of the node (broadcast within a single resolve pass).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let waiter = client.wait_for_node(
+    ///     NodeFilter::tag("notification").attr("type", "w:gp2"),
+    /// );
+    /// client.groups().add_participants(&group_jid, &[jid_c]).await?;
+    /// let node = waiter.await.expect("notification arrived");
+    /// ```
+    pub fn wait_for_node(&self, filter: NodeFilter) -> tokio::sync::oneshot::Receiver<Arc<Node>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.node_waiter_count.fetch_add(1, Ordering::Release);
+        let mut waiters = self
+            .node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        waiters.push(NodeWaiter { filter, tx });
+        rx
+    }
+
+    /// Check pending node waiters against an incoming node.
+    /// Only called when `node_waiter_count > 0`.
+    fn resolve_node_waiters(&self, node: &Arc<Node>) {
+        let mut waiters = self
+            .node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut i = 0;
+        while i < waiters.len() {
+            if waiters[i].tx.is_closed() {
+                // Receiver dropped — clean up
+                waiters.swap_remove(i);
+                self.node_waiter_count.fetch_sub(1, Ordering::Release);
+            } else if waiters[i].filter.matches(node) {
+                // Match found — remove and send
+                let w = waiters.swap_remove(i);
+                self.node_waiter_count.fetch_sub(1, Ordering::Release);
+                let _ = w.tx.send(Arc::clone(node));
+            } else {
+                i += 1;
+            }
+        }
     }
 
     pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::node::Node) {

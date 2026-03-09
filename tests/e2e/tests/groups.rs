@@ -2,6 +2,7 @@ use e2e_tests::TestClient;
 use log::info;
 use wacore::types::events::Event;
 use whatsapp_rust::Jid;
+use whatsapp_rust::NodeFilter;
 use whatsapp_rust::features::{
     GroupCreateOptions, GroupParticipantOptions, MembershipApprovalMode,
 };
@@ -559,6 +560,11 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
         panic!("Expected Message event for A");
     }
 
+    // Register a node waiter on B BEFORE the add, so no w:gp2 notification is missed.
+    let notification_waiter = client_b
+        .client
+        .wait_for_node(NodeFilter::tag("notification").attr("type", "w:gp2"));
+
     // Step 3: A adds C to the group
     let add_result = client_a
         .client
@@ -568,12 +574,13 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     assert_eq!(add_result[0].status.as_deref(), Some("200"));
     info!("A added C to group");
 
-    // Wait for the w:gp2 add notification to propagate to B (invalidates B's cache)
-    // We need B to receive the notification, not just any client
-    // B is not mut here, so we use a small sleep as fallback since B doesn't need
-    // to wait_for_event (it's the sender in step 4). The add_participants call
-    // already invalidated A's cache. The notification to B happens server-side.
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for B to receive the w:gp2 add notification (invalidates B's sender key cache)
+    let _notification =
+        tokio::time::timeout(tokio::time::Duration::from_secs(10), notification_waiter)
+            .await
+            .map_err(|_| anyhow::anyhow!("Timed out waiting for w:gp2 notification on B"))?
+            .map_err(|_| anyhow::anyhow!("Notification waiter channel closed"))?;
+    info!("B received w:gp2 notification for add");
 
     // Step 4: B sends another message — C should receive it
     // This proves B's group cache was invalidated by the add notification
