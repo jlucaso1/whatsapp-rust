@@ -2366,6 +2366,9 @@ impl Client {
     /// The waiter starts buffering immediately, so register it **before**
     /// performing the action that triggers the expected node.
     ///
+    /// When multiple waiters match the same node, each matching waiter
+    /// receives a clone of the node (broadcast within a single resolve pass).
+    ///
     /// # Example
     /// ```ignore
     /// let waiter = client.wait_for_node(
@@ -2377,10 +2380,11 @@ impl Client {
     pub fn wait_for_node(&self, filter: NodeFilter) -> tokio::sync::oneshot::Receiver<Arc<Node>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.node_waiter_count.fetch_add(1, Ordering::Release);
-        self.node_waiters
+        let mut waiters = self
+            .node_waiters
             .lock()
-            .expect("node_waiters lock poisoned")
-            .push(NodeWaiter { filter, tx });
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        waiters.push(NodeWaiter { filter, tx });
         rx
     }
 
@@ -2390,7 +2394,7 @@ impl Client {
         let mut waiters = self
             .node_waiters
             .lock()
-            .expect("node_waiters lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut i = 0;
         while i < waiters.len() {
             if waiters[i].tx.is_closed() {
