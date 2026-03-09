@@ -12,7 +12,7 @@ wacore = { path = "../../wacore" }
 whatsapp-rust = { path = "../..", features = ["danger-skip-tls-verify"] }
 whatsapp-rust-sqlite-storage = { path = "../../storages/sqlite-storage" }
 whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", features = ["danger-skip-tls-verify"] }
-whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client" }
+whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client", features = ["danger-skip-tls-verify"] }
 
 [dev-dependencies]
 env_logger = { version = "0.11", default-features = false }

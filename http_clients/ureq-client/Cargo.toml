@@ -7,6 +7,11 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Ureq-based HTTP client implementation for whatsapp-rust"
 
+[features]
+default = []
+# Skip TLS certificate verification (for testing with mock servers)
+danger-skip-tls-verify = []
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
