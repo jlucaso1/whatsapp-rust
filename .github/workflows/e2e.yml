@@ -3,7 +3,7 @@ name: E2E Tests
 on:
   push:
     branches: [main]
-  pull_request:
+  pull_request_target:
     branches: [main]
 
 permissions:
@@ -28,6 +28,8 @@ jobs:
         options: --log-driver none
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-01-30
