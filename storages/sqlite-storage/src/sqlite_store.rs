@@ -1126,29 +1126,62 @@ impl SignalStore for SqliteStore {
 
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(prekeys::table)
-                .values((
-                    prekeys::id.eq(id as i32),
-                    prekeys::key.eq(&record),
-                    prekeys::uploaded.eq(uploaded),
-                    prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((prekeys::id, prekeys::device_id))
-                .do_update()
-                .set((prekeys::key.eq(&record), prekeys::uploaded.eq(uploaded)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::insert_into(prekeys::table)
+                    .values((
+                        prekeys::id.eq(id as i32),
+                        prekeys::key.eq(&record_clone),
+                        prekeys::uploaded.eq(uploaded),
+                        prekeys::device_id.eq(device_id),
+                    ))
+                    .on_conflict((prekeys::id, prekeys::device_id))
+                    .do_update()
+                    .set((
+                        prekeys::key.eq(&record_clone),
+                        prekeys::uploaded.eq(uploaded),
+                    ))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(StoreError::Database(ref msg)))
+                    if msg.contains("database table is locked") && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1173,49 +1206,108 @@ impl SignalStore for SqliteStore {
 
     async fn remove_prekey(&self, id: u32) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                prekeys::table
-                    .filter(prekeys::id.eq(id as i32))
-                    .filter(prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::delete(
+                    prekeys::table
+                        .filter(prekeys::id.eq(id as i32))
+                        .filter(prekeys::device_id.eq(device_id)),
+                )
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(StoreError::Database(ref msg)))
+                    if msg.contains("database table is locked") && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(signed_prekeys::table)
-                .values((
-                    signed_prekeys::id.eq(id as i32),
-                    signed_prekeys::record.eq(&record),
-                    signed_prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
-                .do_update()
-                .set(signed_prekeys::record.eq(&record))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::insert_into(signed_prekeys::table)
+                    .values((
+                        signed_prekeys::id.eq(id as i32),
+                        signed_prekeys::record.eq(&record_clone),
+                        signed_prekeys::device_id.eq(device_id),
+                    ))
+                    .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
+                    .do_update()
+                    .set(signed_prekeys::record.eq(&record_clone))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(StoreError::Database(ref msg)))
+                    if msg.contains("database table is locked") && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn load_signed_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1261,23 +1353,52 @@ impl SignalStore for SqliteStore {
 
     async fn remove_signed_prekey(&self, id: u32) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                signed_prekeys::table
-                    .filter(signed_prekeys::id.eq(id as i32))
-                    .filter(signed_prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                diesel::delete(
+                    signed_prekeys::table
+                        .filter(signed_prekeys::id.eq(id as i32))
+                        .filter(signed_prekeys::device_id.eq(device_id)),
+                )
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(())
+            })
+            .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(StoreError::Database(ref msg)))
+                    if msg.contains("database table is locked") && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {

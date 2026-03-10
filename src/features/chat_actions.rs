@@ -24,7 +24,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::types::events::{
     ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
 };
-use wacore_binary::jid::Jid;
+use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 /// Mute end timestamp value for indefinite mute (matches WhatsApp Web's `-1` sentinel).
@@ -213,13 +213,13 @@ impl<'a> ChatActions<'a> {
     /// The timestamp must be in the future. Use [`mute_chat`](Self::mute_chat)
     /// for indefinite muting.
     pub async fn mute_chat_until(&self, jid: &Jid, mute_end_timestamp_ms: i64) -> Result<()> {
-        if mute_end_timestamp_ms != MUTE_INDEFINITE && mute_end_timestamp_ms < 0 {
+        if mute_end_timestamp_ms <= 0 {
             anyhow::bail!(
-                "Invalid mute_end_timestamp_ms: negative values are not allowed (use mute_chat() for indefinite)"
+                "mute_end_timestamp_ms must be a positive future timestamp (use mute_chat() for indefinite)"
             );
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        if mute_end_timestamp_ms > 0 && mute_end_timestamp_ms <= now_ms {
+        if mute_end_timestamp_ms <= now_ms {
             anyhow::bail!(
                 "mute_end_timestamp_ms is in the past ({mute_end_timestamp_ms} <= {now_ms})"
             );
@@ -335,6 +335,11 @@ impl<'a> ChatActions<'a> {
         from_me: bool,
         starred: bool,
     ) -> Result<()> {
+        if chat_jid.is_group() && !from_me && participant_jid.is_none() {
+            anyhow::bail!(
+                "participant_jid is required when starring a group message not sent by us"
+            );
+        }
         // WhatsApp Web star index order: ["star", chatJid, messageId, fromMe, participant]
         // participant = sender JID for group messages from others, "0" otherwise.
         // See WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey + extractParticipantForSync

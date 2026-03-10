@@ -302,6 +302,20 @@ pub struct Client {
 }
 
 impl Client {
+    fn should_downgrade_sync_error(&self, err: &anyhow::Error) -> bool {
+        if self.is_shutting_down() {
+            return true;
+        }
+
+        matches!(
+            err.downcast_ref::<crate::request::IqError>(),
+            Some(
+                crate::request::IqError::NotConnected
+                    | crate::request::IqError::InternalChannelClosed
+            )
+        )
+    }
+
     /// Enable or disable skipping of history sync notifications at runtime.
     ///
     /// When enabled, the client will acknowledge incoming history sync
@@ -1405,7 +1419,11 @@ impl Client {
                     ])
                     .await
                 {
-                    warn!("Failed to sync critical app state: {e}");
+                    if client_clone.should_downgrade_sync_error(&e) {
+                        debug!("Skipping critical app state sync during shutdown: {e}");
+                    } else {
+                        warn!("Failed to sync critical app state: {e}");
+                    }
                 }
 
                 check_generation!();
@@ -1437,7 +1455,11 @@ impl Client {
                         ])
                         .await
                     {
-                        warn!("Failed to batch sync non-critical app state: {e}");
+                        if sync_client.should_downgrade_sync_error(&e) {
+                            debug!("Skipping non-critical app state sync during shutdown: {e}");
+                        } else {
+                            warn!("Failed to batch sync non-critical app state: {e}");
+                        }
                     }
 
                     sync_client
