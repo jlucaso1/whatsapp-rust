@@ -43,7 +43,7 @@ pub enum ReceiptType {
 impl From<String> for ReceiptType {
     fn from(s: String) -> Self {
         match s.as_str() {
-            "" => Self::Delivered,
+            "" | "delivery" => Self::Delivered,
             "sender" => Self::Sender,
             "retry" => Self::Retry,
             "read" => Self::Read,
@@ -56,5 +56,19 @@ impl From<String> for ReceiptType {
             "hist_sync" => Self::HistorySync,
             _ => Self::Other(s),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReceiptType;
+
+    #[test]
+    fn receipt_type_maps_delivery_string_to_delivered() {
+        assert_eq!(ReceiptType::from("".to_string()), ReceiptType::Delivered);
+        assert_eq!(
+            ReceiptType::from("delivery".to_string()),
+            ReceiptType::Delivered
+        );
     }
 }

@@ -134,6 +134,21 @@ impl Client {
             return Ok(());
         }
 
+        // Persist the freshly generated prekeys before uploading them so they are
+        // already available for local decryption if the server starts sending
+        // pkmsg traffic immediately after accepting the upload.
+        for (id, record) in &keys_to_upload {
+            use prost::Message;
+            let record_bytes = record.encode_to_vec();
+            if let Err(e) = backend.store_prekey(*id, &record_bytes, false).await {
+                log::warn!(
+                    "Failed to pre-store prekey id {} before upload: {:?}",
+                    id,
+                    e
+                );
+            }
+        }
+
         // Step 3: Build upload request using type-safe IqSpec
         let pre_key_pairs: Vec<(u32, PublicKey)> = key_pairs_to_upload
             .iter()
@@ -152,7 +167,7 @@ impl Client {
         // Step 4: Send IQ to upload pre-keys
         self.execute(spec).await?;
 
-        // Step 5: Store the new pre-keys using existing backend interface
+        // Step 5: Mark the uploaded prekeys as server-synced using the existing backend interface
         for (id, record) in keys_to_upload {
             // Mark as uploaded since the IQ was successful
             use prost::Message;
