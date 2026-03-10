@@ -753,6 +753,25 @@ impl Client {
         self.cleanup_connection_state().await;
     }
 
+    /// Drop the current connection and trigger the auto-reconnect loop.
+    ///
+    /// Unlike [`disconnect`], this does **not** stop the run loop. The client
+    /// will reconnect automatically using the same persisted identity/store,
+    /// just as it would after a network interruption. Use
+    /// [`wait_for_connected`] to wait for the new connection to be ready.
+    ///
+    /// This is useful for:
+    /// - Handling network changes (e.g., Wi-Fi → cellular)
+    /// - Forcing a fresh server session
+    /// - Testing offline message delivery
+    pub async fn reconnect(self: &Arc<Self>) {
+        info!("Reconnecting: dropping transport for auto-reconnect.");
+        self.auto_reconnect_errors.store(0, Ordering::Relaxed);
+        if let Some(transport) = self.transport.lock().await.as_ref() {
+            transport.disconnect().await;
+        }
+    }
+
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
         *self.transport.lock().await = None;
