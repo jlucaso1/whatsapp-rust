@@ -489,10 +489,23 @@ impl Client {
             identity_key.into(),
         )?;
 
+        // Acquire per-sender session lock to prevent race with concurrent message decryption.
+        // This matches the session_locks pattern used in process_session_enc_batch.
+        let signal_addr_str = signal_address.to_string();
+        let session_mutex = self
+            .session_locks
+            .get_with(signal_addr_str.clone(), async {
+                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+            })
+            .await;
+        let _session_guard = session_mutex.lock().await;
+
         let device_store = self.persistence_manager.get_device_arc().await;
 
-        let mut adapter =
-            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+            device_store,
+            self.signal_cache.clone(),
+        );
 
         process_prekey_bundle(
             &signal_address,
@@ -503,6 +516,9 @@ impl Client {
             UsePQRatchet::No,
         )
         .await?;
+
+        // Flush after session establishment
+        self.flush_signal_cache().await?;
 
         info!(
             "Processed key bundle from retry receipt for {}",

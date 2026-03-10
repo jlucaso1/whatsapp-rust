@@ -123,8 +123,10 @@ impl Client {
         let prekey_bundles = self.fetch_pre_keys(jids, Some("identity")).await?;
 
         let device_store = self.persistence_manager.get_device_arc().await;
-        let mut adapter =
-            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+            device_store,
+            self.signal_cache.clone(),
+        );
 
         let mut success_count = 0;
         let mut missing_count = 0;
@@ -133,6 +135,17 @@ impl Client {
         for jid in jids {
             if let Some(bundle) = prekey_bundles.get(&jid.normalize_for_prekey_bundle()) {
                 let signal_addr = jid.to_protocol_address();
+
+                // Acquire per-sender session lock to prevent race with concurrent message decryption.
+                let signal_addr_str = signal_addr.to_string();
+                let session_mutex = self
+                    .session_locks
+                    .get_with(signal_addr_str.clone(), async {
+                        std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    })
+                    .await;
+                let _session_guard = session_mutex.lock().await;
+
                 match process_prekey_bundle(
                     &signal_addr,
                     &mut adapter.session_store,
@@ -170,6 +183,11 @@ impl Client {
                 failed_count,
                 jids.len()
             );
+        }
+
+        // Flush after all sessions established
+        if success_count > 0 {
+            self.flush_signal_cache().await?;
         }
 
         Ok(success_count)

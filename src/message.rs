@@ -513,6 +513,15 @@ impl Client {
             );
         }
 
+        // Acquire global processing permit. During offline sync (1 permit), this serializes
+        // ALL message processing globally, matching WA Web's allChatQueue pattern.
+        // After offline sync completes, permits are increased for parallel processing.
+        let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
+        let _global_permit = semaphore
+            .acquire_owned()
+            .await
+            .expect("message processing semaphore closed");
+
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
             session_enc_nodes.len()
@@ -685,6 +694,14 @@ impl Client {
             self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
             // Do NOT send delivery receipt - transport ack is sufficient
         }
+
+        // Flush cached Signal state to DB (matches WA Web's flushBufferToDiskIfNotMemOnlyMode)
+        if let Err(e) = self.flush_signal_cache().await {
+            log::error!(
+                "Failed to flush signal cache after message {}: {e:?}",
+                info.id
+            );
+        }
     }
 
     async fn process_session_enc_batch(
@@ -714,8 +731,10 @@ impl Client {
             .await;
         let _session_guard = session_mutex.lock().await;
 
-        let mut adapter =
-            SignalProtocolStoreAdapter::new(self.persistence_manager.get_device_arc().await);
+        let mut adapter = SignalProtocolStoreAdapter::new(
+            self.persistence_manager.get_device_arc().await,
+            self.signal_cache.clone(),
+        );
         let rng = rand::rngs::OsRng;
         let mut any_success = false;
         let mut any_duplicate = false;

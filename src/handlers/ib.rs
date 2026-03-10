@@ -129,6 +129,15 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 client.offline_sync_completed.store(true, Ordering::Relaxed);
                 client.offline_sync_notifier.notify_waiters();
 
+                // Allow parallel message processing now that offline sync is done.
+                // During offline sync, permits=1 serialized all message processing.
+                // Add 63 more permits for concurrent processing (1 + 63 = 64).
+                client
+                    .message_processing_semaphore
+                    .lock()
+                    .unwrap()
+                    .add_permits(63);
+
                 // NOTE: Session with primary phone (device 0) is established on login
                 // BEFORE offline messages arrive (see client.rs post-login task).
                 // This ensures PDO can send immediately when decryption fails.

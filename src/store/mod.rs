@@ -3,6 +3,7 @@ pub mod error;
 pub mod persistence_manager;
 pub mod signal;
 pub mod signal_adapter;
+pub mod signal_cache;
 pub mod traits;
 
 // Re-export from the sqlite-storage crate when the feature is enabled

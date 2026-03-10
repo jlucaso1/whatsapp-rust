@@ -1,4 +1,5 @@
 use crate::store::Device;
+use crate::store::signal_cache::SignalStoreCache;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,6 +18,7 @@ use wacore::libsignal::store::{
 #[derive(Clone)]
 struct SharedDevice {
     device: Arc<RwLock<Device>>,
+    cache: Arc<SignalStoreCache>,
 }
 
 #[derive(Clone)]
@@ -41,8 +43,8 @@ pub struct SignalProtocolStoreAdapter {
 }
 
 impl SignalProtocolStoreAdapter {
-    pub fn new(device: Arc<RwLock<Device>>) -> Self {
-        let shared = SharedDevice { device };
+    pub fn new(device: Arc<RwLock<Device>>, cache: Arc<SignalStoreCache>) -> Self {
+        let shared = SharedDevice { device, cache };
         Self {
             session_store: SessionAdapter(shared.clone()),
             identity_store: IdentityAdapter(shared.clone()),
@@ -62,9 +64,10 @@ impl SessionStore for SessionAdapter {
         let addr_str = address.to_string();
 
         let device = self.0.device.read().await;
-        match device
-            .backend
-            .get_session(&addr_str)
+        match self
+            .0
+            .cache
+            .get_session(&addr_str, &*device.backend)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
         {
@@ -79,15 +82,20 @@ impl SessionStore for SessionAdapter {
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
         let addr_str = address.to_string();
+        let record_bytes = record.serialize()?;
 
+        // Check for base key changes using cache (not DB) for logging
         let device = self.0.device.read().await;
-        let existing_session = device
-            .backend
-            .get_session(&addr_str)
+        let existing_data = self
+            .0
+            .cache
+            .get_session(&addr_str, &*device.backend)
             .await
             .ok()
-            .flatten()
-            .and_then(|data| SessionRecord::deserialize(&data).ok());
+            .flatten();
+        drop(device);
+
+        let existing_session = existing_data.and_then(|d| SessionRecord::deserialize(&d).ok());
 
         if let (Some(existing), Some(new_state)) = (&existing_session, record.session_state()) {
             if let Some(existing_state) = existing.session_state() {
@@ -125,12 +133,8 @@ impl SessionStore for SessionAdapter {
             );
         }
 
-        let record_bytes = record.serialize()?;
-        device
-            .backend
-            .put_session(&addr_str, &record_bytes)
-            .await
-            .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?;
+        // Write to cache only (deferred flush to DB)
+        self.0.cache.put_session(&addr_str, &record_bytes).await;
 
         Ok(())
     }
@@ -161,6 +165,14 @@ impl IdentityKeyStore for IdentityAdapter {
     ) -> Result<IdentityChange, SignalProtocolError> {
         let existing_identity = self.get_identity(address).await?;
 
+        // Write identity to cache (deferred flush to DB)
+        let addr_str = address.to_string();
+        self.0
+            .cache
+            .put_identity(&addr_str, identity.serialize().as_ref())
+            .await;
+
+        // Also update the Device's in-memory identity store for is_trusted_identity checks
         let mut device = self.0.device.write().await;
         IdentityKeyStore::save_identity(&mut *device, address, identity)
             .await
@@ -189,10 +201,18 @@ impl IdentityKeyStore for IdentityAdapter {
         &self,
         address: &ProtocolAddress,
     ) -> Result<Option<IdentityKey>, SignalProtocolError> {
+        let addr_str = address.to_string();
         let device = self.0.device.read().await;
-        IdentityKeyStore::get_identity(&*device, address)
+        match self
+            .0
+            .cache
+            .get_identity(&addr_str, &*device.backend)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))
+            .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))?
+        {
+            Some(data) => Ok(Some(IdentityKey::decode(&data)?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -254,13 +274,14 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
         sender_key_name: &SenderKeyName,
         record: &wacore::libsignal::protocol::SenderKeyRecord,
     ) -> wacore::libsignal::protocol::error::Result<()> {
-        let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::store_sender_key(
-            &mut *device,
-            sender_key_name,
-            record,
-        )
-        .await
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
+        let data = record.serialize()?;
+        self.0.cache.put_sender_key(&key, &data).await;
+        Ok(())
     }
 
     async fn load_sender_key(
@@ -269,8 +290,27 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     ) -> wacore::libsignal::protocol::error::Result<
         Option<wacore::libsignal::protocol::SenderKeyRecord>,
     > {
-        let mut device = self.0.device.write().await;
-        wacore::libsignal::protocol::SenderKeyStore::load_sender_key(&mut *device, sender_key_name)
+        let key = format!(
+            "{}:{}",
+            sender_key_name.group_id(),
+            sender_key_name.sender_id()
+        );
+        let device = self.0.device.read().await;
+        match self
+            .0
+            .cache
+            .get_sender_key(&key, &*device.backend)
             .await
+            .map_err(|e| {
+                wacore::libsignal::protocol::SignalProtocolError::InvalidState(
+                    "backend",
+                    e.to_string(),
+                )
+            })? {
+            Some(data) => Ok(Some(
+                wacore::libsignal::protocol::SenderKeyRecord::deserialize(&data)?,
+            )),
+            None => Ok(None),
+        }
     }
 }
