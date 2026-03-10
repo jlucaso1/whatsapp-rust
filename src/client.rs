@@ -311,6 +311,10 @@ impl Client {
         self.skip_history_sync.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.expected_disconnect.load(Ordering::Relaxed) || !self.is_running.load(Ordering::Relaxed)
+    }
+
     pub async fn new(
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
@@ -1803,6 +1807,11 @@ impl Client {
         name: WAPatchName,
         full_sync: bool,
     ) -> anyhow::Result<()> {
+        if self.is_shutting_down() {
+            debug!(target: "Client/AppState", "Skipping app state sync task {:?}: client is shutting down", name);
+            return Ok(());
+        }
+
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
@@ -1819,6 +1828,10 @@ impl Client {
         let mut iteration = 0u32;
 
         while has_more {
+            if self.is_shutting_down() {
+                debug!(target: "Client/AppState", "Stopping app state sync task {:?}: shutdown detected", name);
+                break;
+            }
             iteration += 1;
             if iteration > MAX_PAGINATION_ITERATIONS {
                 warn!(target: "Client/AppState", "App state sync for {:?} exceeded {} iterations, aborting", name, MAX_PAGINATION_ITERATIONS);
@@ -1849,6 +1862,10 @@ impl Client {
             };
 
             let resp = self.send_iq(iq).await?;
+            if self.is_shutting_down() {
+                debug!(target: "Client/AppState", "Discarding app state sync response for {:?}: shutdown detected", name);
+                break;
+            }
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
             let _decode_start = std::time::Instant::now();

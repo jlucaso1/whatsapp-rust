@@ -12,6 +12,15 @@ impl Client {
         message_id: String,
         notification: HistorySyncNotification,
     ) {
+        if self.is_shutting_down() {
+            log::debug!(
+                "Dropping history sync {} during shutdown (Type: {:?})",
+                message_id,
+                notification.sync_type()
+            );
+            return;
+        }
+
         if self.skip_history_sync_enabled() {
             log::debug!(
                 "Skipping history sync for message {} (Type: {:?})",
@@ -37,7 +46,11 @@ impl Client {
             notification: Box::new(notification),
         };
         if let Err(e) = self.major_sync_task_sender.send(task).await {
-            log::error!("Failed to enqueue history sync task: {e}");
+            if self.is_shutting_down() {
+                log::debug!("Dropping history sync task during shutdown: {e}");
+            } else {
+                log::error!("Failed to enqueue history sync task: {e}");
+            }
         }
     }
 
@@ -50,6 +63,11 @@ impl Client {
         message_id: String,
         mut notification: HistorySyncNotification,
     ) {
+        if self.is_shutting_down() {
+            log::debug!("Aborting history sync {} before processing", message_id);
+            return;
+        }
+
         log::info!(
             "Processing history sync for message {} (Size: {}, Type: {:?})",
             message_id,
@@ -63,6 +81,14 @@ impl Client {
         )
         .await;
 
+        if self.is_shutting_down() {
+            log::debug!(
+                "Aborting history sync {} after receipt during shutdown",
+                message_id
+            );
+            return;
+        }
+
         // Use take() to avoid cloning large payloads - moves ownership instead
         let compressed_data = if let Some(inline_payload) =
             notification.initial_hist_bootstrap_inline_payload.take()
@@ -74,6 +100,10 @@ impl Client {
             inline_payload
         } else {
             log::info!("Downloading external history sync blob...");
+            if self.is_shutting_down() {
+                log::debug!("Aborting history sync {} before blob download", message_id);
+                return;
+            }
             match self.download(&notification).await {
                 Ok(data) => {
                     log::info!("Successfully downloaded history sync blob.");
@@ -121,6 +151,13 @@ impl Client {
             // Receive and dispatch lazy conversations as they come in
             let mut conv_count = 0usize;
             while let Some(raw_bytes) = rx.recv().await {
+                if self.is_shutting_down() {
+                    log::debug!(
+                        "Stopping history sync {} event dispatch during shutdown",
+                        message_id
+                    );
+                    break;
+                }
                 conv_count += 1;
                 if conv_count.is_multiple_of(25) {
                     log::info!("History sync progress: {conv_count} conversations processed...");
@@ -146,6 +183,14 @@ impl Client {
             })
             .await
         };
+
+        if self.is_shutting_down() {
+            log::debug!(
+                "Aborting history sync {} after parse during shutdown",
+                message_id
+            );
+            return;
+        }
 
         match parse_result {
             Ok(Ok(sync_result)) => {
