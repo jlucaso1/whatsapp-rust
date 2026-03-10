@@ -41,11 +41,13 @@ impl Client {
         }
 
         // Enqueue a MajorSyncTask for the dedicated sync worker to consume.
+        self.begin_history_sync_task();
         let task = crate::sync_task::MajorSyncTask::HistorySync {
             message_id,
             notification: Box::new(notification),
         };
         if let Err(e) = self.major_sync_task_sender.send(task).await {
+            self.finish_history_sync_task();
             if self.is_shutting_down() {
                 log::debug!("Dropping history sync task during shutdown: {e}");
             } else {

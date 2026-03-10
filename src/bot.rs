@@ -140,6 +140,7 @@ impl Bot {
                             worker_client
                                 .process_history_sync_task(message_id, *notification)
                                 .await;
+                            worker_client.finish_history_sync_task();
                         }
                         crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
                             if let Err(e) = worker_client

@@ -243,6 +243,10 @@ pub struct Client {
     pub(crate) offline_sync_notifier: Arc<Notify>,
     /// Flag indicating offline sync has completed (received ib offline stanza).
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
+    /// Number of history sync tasks currently queued or running.
+    pub(crate) history_sync_tasks_in_flight: Arc<AtomicUsize>,
+    /// Notifier triggered when history sync work becomes idle.
+    pub(crate) history_sync_idle_notifier: Arc<Notify>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
     /// Metrics for tracking the effectiveness of local re-queue optimization
@@ -423,6 +427,8 @@ impl Client {
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             offline_sync_notifier: Arc::new(Notify::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
+            history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
+            history_sync_idle_notifier: Arc::new(Notify::new()),
             socket_ready_notifier: Arc::new(Notify::new()),
             connected_notifier: Arc::new(Notify::new()),
             major_sync_task_sender: tx,
@@ -726,6 +732,9 @@ impl Client {
         self.retried_group_messages.invalidate_all();
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.history_sync_tasks_in_flight
+            .store(0, Ordering::Relaxed);
+        self.history_sync_idle_notifier.notify_waiters();
         // Drain all pending IQ waiters so they fail fast with InternalChannelClosed
         // instead of hanging until the 75s timeout.
         let waiters: Vec<_> = self.response_waiters.lock().await.drain().collect();
