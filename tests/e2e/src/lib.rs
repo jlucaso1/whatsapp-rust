@@ -123,12 +123,17 @@ impl TestClient {
         assert!(got_pair, "Should have received PairSuccess");
         assert!(got_connected, "Should have received Connected");
 
-        client
+        if let Err(e) = client
             .wait_for_startup_sync(tokio::time::Duration::from_secs(15))
             .await
-            .map_err(|e| {
-                anyhow::anyhow!("Timed out waiting for startup sync to become idle: {e}")
-            })?;
+        {
+            client.disconnect().await;
+            run_handle.abort();
+            let _ = run_handle.await;
+            return Err(anyhow::anyhow!(
+                "Timed out waiting for startup sync to become idle: {e}"
+            ));
+        }
 
         Ok(Self {
             client,

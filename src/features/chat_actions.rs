@@ -46,6 +46,23 @@ pub(crate) fn dispatch_chat_mutation(
     }
 
     let kind = &m.index[0];
+
+    // Only handle known chat mutation types. Return false for unknown kinds
+    // so other handlers (e.g. setting_pushName) can process them.
+    if !matches!(
+        kind.as_str(),
+        "mute"
+            | "pin"
+            | "pin_v1"
+            | "archive"
+            | "star"
+            | "contact"
+            | "mark_chat_as_read"
+            | "markChatAsRead"
+    ) {
+        return false;
+    }
+
     let ts = m
         .action_value
         .as_ref()
@@ -53,9 +70,20 @@ pub(crate) fn dispatch_chat_mutation(
         .unwrap_or(0);
     let time = DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
     let jid: Jid = if m.index.len() > 1 {
-        m.index[1].parse().unwrap_or_default()
+        match m.index[1].parse() {
+            Ok(j) => j,
+            Err(_) => {
+                log::warn!(
+                    "Skipping chat mutation '{}': malformed JID '{}'",
+                    kind,
+                    m.index[1]
+                );
+                return true; // consumed but not dispatched
+            }
+        }
     } else {
-        Jid::default()
+        log::warn!("Skipping chat mutation '{}': missing JID in index", kind);
+        return true;
     };
 
     match kind.as_str() {
@@ -105,13 +133,31 @@ pub(crate) fn dispatch_chat_mutation(
                 && let Some(act) = &val.star_action
                 && m.index.len() >= 5
             {
-                let chat_jid: Jid = m.index[1].parse().unwrap_or_default();
+                let chat_jid: Jid = match m.index[1].parse() {
+                    Ok(j) => j,
+                    Err(_) => {
+                        log::warn!(
+                            "Skipping star mutation: malformed chat JID '{}'",
+                            m.index[1]
+                        );
+                        return true;
+                    }
+                };
                 let message_id = m.index[2].clone();
                 let from_me = m.index[3] == "1";
                 // Participant is the actual sender for group messages from others.
                 // "0" means self-authored or 1-on-1 → None.
                 let participant_jid: Option<Jid> = if m.index[4] != "0" {
-                    m.index[4].parse().ok()
+                    match m.index[4].parse() {
+                        Ok(j) => Some(j),
+                        Err(_) => {
+                            log::warn!(
+                                "Skipping star mutation: malformed participant JID '{}'",
+                                m.index[4]
+                            );
+                            return true;
+                        }
+                    }
                 } else {
                     None
                 };
