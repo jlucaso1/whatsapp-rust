@@ -213,7 +213,7 @@ async fn test_star_message() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut client_a = TestClient::connect("e2e_star_a").await?;
-    let mut client_b = TestClient::connect("e2e_star_b").await?;
+    let client_b = TestClient::connect("e2e_star_b").await?;
 
     let jid_a = client_a
         .client
@@ -230,7 +230,7 @@ async fn test_star_message() -> anyhow::Result<()> {
 
     client_a.wait_for_app_state_sync().await?;
 
-    // A sends a message to B
+    // A sends a message to B (we only need the msg_id for starring)
     let msg = wa::Message {
         conversation: Some("Star this message!".to_string()),
         ..Default::default()
@@ -238,14 +238,9 @@ async fn test_star_message() -> anyhow::Result<()> {
     let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
     info!("A sent message {msg_id} to B");
 
-    // B receives the message
-    client_b
-        .wait_for_event(30, |e| {
-            matches!(e, wacore::types::events::Event::Message(_, _))
-        })
-        .await?;
-
     // A stars the message (from_me=true since A sent it)
+    // Starring is an app state mutation — it only needs the message ID,
+    // not confirmation that B received the message.
     client_a
         .client
         .chat_actions()
