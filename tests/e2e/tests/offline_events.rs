@@ -294,24 +294,9 @@ async fn test_offline_group_notification() -> anyhow::Result<()> {
     let mut client_c = TestClient::connect("e2e_off_grp_notif_c").await?;
     let client_d = TestClient::connect("e2e_off_grp_notif_d").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("C JID")
-        .to_non_ad();
-    let jid_d = client_d
-        .client
-        .get_pn()
-        .await
-        .expect("D JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
+    let jid_c = client_c.client.get_pn().await.expect("C JID").to_non_ad();
+    let jid_d = client_d.client.get_pn().await.expect("D JID").to_non_ad();
 
     info!("B={jid_b}, C={jid_c}, D={jid_d}");
 
@@ -416,12 +401,7 @@ async fn test_bidirectional_offline_receipt() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_off_bidir_a").await?;
     let mut client_b = TestClient::connect("e2e_off_bidir_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
 
     info!("B={jid_b}");
 
@@ -436,10 +416,7 @@ async fn test_bidirectional_offline_receipt() -> anyhow::Result<()> {
         conversation: Some(text.to_string()),
         ..Default::default()
     };
-    let msg_id = client_a
-        .client
-        .send_message(jid_b.clone(), message)
-        .await?;
+    let msg_id = client_a.client.send_message(jid_b.clone(), message).await?;
     info!("A sent message to offline B: {msg_id}");
 
     // Step 3: A goes offline too
@@ -512,12 +489,7 @@ async fn test_offline_presence_coalescing() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_off_presence_a").await?;
     let mut client_b = TestClient::connect("e2e_off_presence_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("A JID")
-        .to_non_ad();
+    let jid_a = client_a.client.get_pn().await.expect("A JID").to_non_ad();
 
     info!("A={jid_a}");
 
@@ -595,24 +567,9 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
     let mut client_c = TestClient::connect("e2e_off_mixed_c").await?;
     let client_d = TestClient::connect("e2e_off_mixed_d").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("C JID")
-        .to_non_ad();
-    let jid_d = client_d
-        .client
-        .get_pn()
-        .await
-        .expect("D JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
+    let jid_c = client_c.client.get_pn().await.expect("C JID").to_non_ad();
+    let jid_d = client_d.client.get_pn().await.expect("D JID").to_non_ad();
 
     // Step 1: A creates group with B and C
     let group_jid = client_a
@@ -665,9 +622,10 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
 
     // B (online) receives it
     let _ev = client_b
-        .wait_for_event(10, |e| {
-            matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_1))
-        })
+        .wait_for_event(
+            10,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_1)),
+        )
         .await?;
 
     // Small delay to ensure server processes sequentially
@@ -781,12 +739,7 @@ async fn test_deferred_delivery_receipt_on_reconnect() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_off_def_rcpt_a").await?;
     let mut client_b = TestClient::connect("e2e_off_def_rcpt_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
 
     info!("B={jid_b}");
 
@@ -802,10 +755,7 @@ async fn test_deferred_delivery_receipt_on_reconnect() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let msg_id = client_a
-        .client
-        .send_message(jid_b.clone(), message)
-        .await?;
+    let msg_id = client_a.client.send_message(jid_b.clone(), message).await?;
     info!("A sent message to offline B: {msg_id}");
 
     // A should NOT get delivery receipt yet (only sender receipt)
@@ -881,12 +831,7 @@ async fn test_expired_chatstate_not_delivered() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_off_chatstate_a").await?;
     let mut client_b = TestClient::connect("e2e_off_chatstate_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
 
     info!("B={jid_b}");
 
@@ -943,12 +888,7 @@ async fn test_fresh_chatstate_delivered_on_reconnect() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_off_chatstate_fresh_a").await?;
     let mut client_b = TestClient::connect("e2e_off_chatstate_fresh_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
 
     info!("B={jid_b}");
 
@@ -999,18 +939,8 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
     let mut client_b = TestClient::connect("e2e_off_grp_msg_b").await?;
     let mut client_c = TestClient::connect("e2e_off_grp_msg_c").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("B JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("C JID")
-        .to_non_ad();
+    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
+    let jid_c = client_c.client.get_pn().await.expect("C JID").to_non_ad();
 
     // Create group
     let group_jid = client_a
@@ -1030,14 +960,10 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
 
     // Wait for both to get creation notifications
     let _n1 = client_b
-        .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(_))
-        })
+        .wait_for_event(10, |e| matches!(e, Event::Notification(_)))
         .await?;
     let _n2 = client_c
-        .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(_))
-        })
+        .wait_for_event(10, |e| matches!(e, Event::Notification(_)))
         .await?;
 
     // C goes offline
@@ -1061,17 +987,19 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
 
     // B (online) receives it
     let _ev = client_b
-        .wait_for_event(10, |e| {
-            matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text))
-        })
+        .wait_for_event(
+            10,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text)),
+        )
         .await?;
     info!("B received group message (online)");
 
     // C should receive it after reconnecting
     let event = client_c
-        .wait_for_event(30, |e| {
-            matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text))
-        })
+        .wait_for_event(
+            30,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text)),
+        )
         .await?;
 
     if let Event::Message(msg, info) = event {
