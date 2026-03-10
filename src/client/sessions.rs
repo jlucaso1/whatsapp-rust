@@ -73,7 +73,6 @@ impl Client {
     /// Ensure E2E sessions exist for the given device JIDs.
     /// Waits for offline delivery, resolves LID mappings, then batches prekey fetches.
     pub(crate) async fn ensure_e2e_sessions(&self, device_jids: Vec<Jid>) -> Result<()> {
-        use wacore::libsignal::store::SessionStore;
         use wacore::types::jid::JidExt;
 
         if device_jids.is_empty() {
@@ -90,7 +89,13 @@ impl Client {
             let device_guard = device_store.read().await;
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
-                match device_guard.contains_session(&signal_addr).await {
+                let addr_str = signal_addr.to_string();
+                // Check cache first (includes unflushed sessions), fall back to backend
+                match self
+                    .signal_cache
+                    .has_session(&addr_str, &*device_guard.backend)
+                    .await
+                {
                     Ok(true) => {}
                     Ok(false) => jids_needing_sessions.push(jid),
                     Err(e) => log::warn!("Failed to check session for {}: {}", jid, e),

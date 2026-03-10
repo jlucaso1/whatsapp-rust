@@ -173,10 +173,14 @@ impl SignalStoreCache {
         }
 
         for address in &identity_dirty {
-            if let Some(Some(data)) = identities.cache.get(address)
-                && let Ok(key) = <&[u8; 32]>::try_from(data.as_slice())
-            {
-                backend.put_identity(address, *key).await?;
+            if let Some(Some(data)) = identities.cache.get(address) {
+                let key: [u8; 32] = data.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Corrupted identity key for {address}: expected 32 bytes, got {}",
+                        data.len()
+                    )
+                })?;
+                backend.put_identity(address, key).await?;
             }
         }
         for address in &identity_deleted {

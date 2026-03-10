@@ -165,18 +165,20 @@ impl IdentityKeyStore for IdentityAdapter {
     ) -> Result<IdentityChange, SignalProtocolError> {
         let existing_identity = self.get_identity(address).await?;
 
-        // Write identity to cache (deferred flush to DB)
+        // Update the Device's in-memory identity store first (for is_trusted_identity checks).
+        // Cache is only marked dirty after Device accepts the identity.
+        let mut device = self.0.device.write().await;
+        IdentityKeyStore::save_identity(&mut *device, address, identity)
+            .await
+            .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))?;
+        drop(device);
+
+        // Device accepted — now write to cache (deferred flush to DB)
         let addr_str = address.to_string();
         self.0
             .cache
             .put_identity(&addr_str, identity.serialize().as_ref())
             .await;
-
-        // Also update the Device's in-memory identity store for is_trusted_identity checks
-        let mut device = self.0.device.write().await;
-        IdentityKeyStore::save_identity(&mut *device, address, identity)
-            .await
-            .map_err(|e| SignalProtocolError::InvalidState("save_identity", e.to_string()))?;
 
         match existing_identity {
             None => Ok(IdentityChange::NewOrUnchanged),

@@ -126,26 +126,32 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                 // Signal that offline sync is complete - post-login tasks are waiting for this.
                 // This mimics WhatsApp Web's offlineDeliveryEnd event.
-                client.offline_sync_completed.store(true, Ordering::Relaxed);
-                client.offline_sync_notifier.notify_waiters();
+                // Use compare_exchange to ensure we only run this once (add_permits is NOT idempotent).
+                if client
+                    .offline_sync_completed
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    client.offline_sync_notifier.notify_waiters();
 
-                // Allow parallel message processing now that offline sync is done.
-                // During offline sync, permits=1 serialized all message processing.
-                // Add 63 more permits for concurrent processing (1 + 63 = 64).
-                client
-                    .message_processing_semaphore
-                    .lock()
-                    .unwrap()
-                    .add_permits(63);
+                    // Allow parallel message processing now that offline sync is done.
+                    // During offline sync, permits=1 serialized all message processing.
+                    // Add 63 more permits for concurrent processing (1 + 63 = 64).
+                    client
+                        .message_processing_semaphore
+                        .lock()
+                        .expect("message_processing_semaphore poisoned")
+                        .add_permits(63);
 
-                // NOTE: Session with primary phone (device 0) is established on login
-                // BEFORE offline messages arrive (see client.rs post-login task).
-                // This ensures PDO can send immediately when decryption fails.
+                    // NOTE: Session with primary phone (device 0) is established on login
+                    // BEFORE offline messages arrive (see client.rs post-login task).
+                    // This ensures PDO can send immediately when decryption fails.
 
-                client
-                    .core
-                    .event_bus
-                    .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+                    client
+                        .core
+                        .event_bus
+                        .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+                }
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.

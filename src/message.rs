@@ -517,10 +517,16 @@ impl Client {
         // ALL message processing globally, matching WA Web's allChatQueue pattern.
         // After offline sync completes, permits are increased for parallel processing.
         let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
-        let _global_permit = semaphore
-            .acquire_owned()
-            .await
-            .expect("message processing semaphore closed");
+        let _global_permit = match semaphore.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                log::error!(
+                    "Message processing semaphore closed, dropping message {}",
+                    info.id
+                );
+                return;
+            }
+        };
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
