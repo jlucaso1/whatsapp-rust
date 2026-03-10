@@ -146,44 +146,55 @@ impl SignalStoreCache {
 
     /// Flush all dirty state to the backend in a single batch.
     /// Acquires all 3 mutexes to ensure consistency (matches WhatsApp Web's pattern).
+    ///
+    /// Dirty sets are only cleared after ALL writes succeed. If any write fails,
+    /// dirty tracking is preserved so the next flush retries everything.
+    /// This matches WA Web's `clearDirty()` which runs only after successful persist.
     pub async fn flush(&self, backend: &dyn SignalStore) -> Result<()> {
         let mut sessions = self.sessions.lock().await;
         let mut identities = self.identities.lock().await;
         let mut sender_keys = self.sender_keys.lock().await;
 
-        // Flush sessions
-        let dirty: Vec<_> = sessions.dirty.drain().collect();
-        for address in dirty {
-            if let Some(Some(data)) = sessions.cache.get(&address) {
-                backend.put_session(&address, data).await?;
+        // Snapshot dirty/deleted sets WITHOUT draining — preserve on failure
+        let session_dirty: Vec<_> = sessions.dirty.iter().cloned().collect();
+        let session_deleted: Vec<_> = sessions.deleted.iter().cloned().collect();
+        let identity_dirty: Vec<_> = identities.dirty.iter().cloned().collect();
+        let identity_deleted: Vec<_> = identities.deleted.iter().cloned().collect();
+        let sender_key_dirty: Vec<_> = sender_keys.dirty.iter().cloned().collect();
+
+        // Persist all dirty state
+        for address in &session_dirty {
+            if let Some(Some(data)) = sessions.cache.get(address) {
+                backend.put_session(address, data).await?;
             }
         }
-        let deleted: Vec<_> = sessions.deleted.drain().collect();
-        for address in deleted {
-            backend.delete_session(&address).await?;
+        for address in &session_deleted {
+            backend.delete_session(address).await?;
         }
 
-        // Flush identities
-        let dirty: Vec<_> = identities.dirty.drain().collect();
-        for address in dirty {
-            if let Some(Some(data)) = identities.cache.get(&address)
+        for address in &identity_dirty {
+            if let Some(Some(data)) = identities.cache.get(address)
                 && let Ok(key) = <&[u8; 32]>::try_from(data.as_slice())
             {
-                backend.put_identity(&address, *key).await?;
+                backend.put_identity(address, *key).await?;
             }
         }
-        let deleted: Vec<_> = identities.deleted.drain().collect();
-        for address in deleted {
-            backend.delete_identity(&address).await?;
+        for address in &identity_deleted {
+            backend.delete_identity(address).await?;
         }
 
-        // Flush sender keys
-        let dirty: Vec<_> = sender_keys.dirty.drain().collect();
-        for name in dirty {
-            if let Some(Some(data)) = sender_keys.cache.get(&name) {
-                backend.put_sender_key(&name, data).await?;
+        for name in &sender_key_dirty {
+            if let Some(Some(data)) = sender_keys.cache.get(name) {
+                backend.put_sender_key(name, data).await?;
             }
         }
+
+        // All writes succeeded — clear dirty sets (matches WA Web's clearDirty())
+        sessions.dirty.clear();
+        sessions.deleted.clear();
+        identities.dirty.clear();
+        identities.deleted.clear();
+        sender_keys.dirty.clear();
 
         Ok(())
     }
