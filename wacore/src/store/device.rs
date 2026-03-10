@@ -29,7 +29,7 @@ pub mod key_pair_serde {
     where
         D: Deserializer<'de>,
     {
-        let bytes: &[u8] = serde::Deserialize::deserialize(deserializer)?;
+        let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
         if bytes.len() != 64 {
             return Err(serde::de::Error::invalid_length(bytes.len(), &"64"));
         }
@@ -284,5 +284,25 @@ mod tests {
             assert!(device.registration_id >= 1);
             assert!(device.registration_id <= 2147483647);
         }
+    }
+
+    #[test]
+    fn test_device_serde_roundtrip() {
+        // Regression test: key_pair_serde::serialize uses serialize_bytes which
+        // produces a JSON integer array. deserialize must use Vec<u8> (not &[u8])
+        // to accept a sequence from serde_json; &[u8] would fail with
+        // "invalid type: sequence, expected a borrowed byte array".
+        let device = Device::new();
+        let json = serde_json::to_string(&device).expect("serialize should succeed");
+        let restored: Device = serde_json::from_str(&json).expect("deserialize should succeed");
+        assert_eq!(device.registration_id, restored.registration_id);
+        assert_eq!(
+            device.noise_key.public_key.public_key_bytes(),
+            restored.noise_key.public_key.public_key_bytes()
+        );
+        assert_eq!(
+            device.identity_key.public_key.public_key_bytes(),
+            restored.identity_key.public_key.public_key_bytes()
+        );
     }
 }
