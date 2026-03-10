@@ -174,10 +174,12 @@ impl IdentityKeyStore for IdentityAdapter {
         drop(device);
 
         // Device accepted — now write to cache (deferred flush to DB)
+        // Store raw 32-byte public key (not 33-byte serialized form with 0x05 prefix),
+        // matching what SignalStore::put_identity expects.
         let addr_str = address.to_string();
         self.0
             .cache
-            .put_identity(&addr_str, identity.serialize().as_ref())
+            .put_identity(&addr_str, identity.public_key().public_key_bytes())
             .await;
 
         match existing_identity {
@@ -212,8 +214,13 @@ impl IdentityKeyStore for IdentityAdapter {
             .await
             .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))?
         {
-            Some(data) => Ok(Some(IdentityKey::decode(&data)?)),
-            None => Ok(None),
+            Some(data) if !data.is_empty() => {
+                // Cache and backend store raw 32-byte DJB public key bytes
+                let public_key =
+                    wacore::libsignal::protocol::PublicKey::from_djb_public_key_bytes(&data)?;
+                Ok(Some(IdentityKey::new(public_key)))
+            }
+            _ => Ok(None),
         }
     }
 }
