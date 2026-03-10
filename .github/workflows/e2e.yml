@@ -54,4 +54,4 @@ jobs:
         env:
           MOCK_SERVER_URL: "wss://127.0.0.1:8080/ws/chat"
           RUST_LOG: info
-        run: cargo test -p e2e-tests -- --no-capture --test-threads=8
+        run: cargo test -p e2e-tests -- --no-capture --test-threads=4
