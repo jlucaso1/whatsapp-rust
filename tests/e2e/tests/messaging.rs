@@ -32,7 +32,10 @@ async fn test_send_text_message() -> anyhow::Result<()> {
 
     // Client B should receive the message
     let event = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .wait_for_event(
+            30,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text)),
+        )
         .await?;
 
     if let Event::Message(msg, info) = event {
@@ -92,7 +95,10 @@ async fn test_send_text_message_bidirectional() -> anyhow::Result<()> {
         .await?;
 
     let event = client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .wait_for_event(
+            30,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_a)),
+        )
         .await?;
     if let Event::Message(msg, _) = event {
         assert_eq!(msg.conversation.as_deref(), Some(text_a));
@@ -114,7 +120,10 @@ async fn test_send_text_message_bidirectional() -> anyhow::Result<()> {
         .await?;
 
     let event = client_a
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .wait_for_event(
+            30,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_b)),
+        )
         .await?;
     if let Event::Message(msg, _) = event {
         assert_eq!(msg.conversation.as_deref(), Some(text_b));
@@ -156,7 +165,9 @@ async fn test_message_revoke() -> anyhow::Result<()> {
 
     // Wait for B to receive it
     client_b
-        .wait_for_event(30, |e| matches!(e, Event::Message(_, _)))
+        .wait_for_event(30, |e| {
+            matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some("This will be revoked"))
+        })
         .await?;
 
     // Revoke the message

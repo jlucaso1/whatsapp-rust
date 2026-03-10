@@ -2,6 +2,7 @@ use crate::schema::*;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
 use diesel::upsert::excluded;
@@ -17,6 +18,38 @@ use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
+
+/// Internal error type that preserves the Diesel error for structured matching
+/// before converting to `StoreError`. Used in retry loops where we need to
+/// distinguish retriable SQLite lock errors from other failures.
+enum DieselOrStore {
+    Diesel(DieselError),
+    Store(StoreError),
+}
+
+impl From<DieselOrStore> for StoreError {
+    fn from(e: DieselOrStore) -> Self {
+        match e {
+            DieselOrStore::Diesel(e) => StoreError::Database(e.to_string()),
+            DieselOrStore::Store(e) => e,
+        }
+    }
+}
+
+/// Check if a Diesel error represents a retriable SQLite lock contention.
+///
+/// SQLite BUSY (error code 5) and LOCKED (error code 6) both map to
+/// `DatabaseError(Unknown, _)` in Diesel. We inspect the error message
+/// from `sqlite3_errmsg()` to distinguish them from other unknown errors.
+fn is_retriable_sqlite_error(error: &DieselError) -> bool {
+    match error {
+        DieselError::DatabaseError(DatabaseErrorKind::Unknown, info) => {
+            let msg = info.message();
+            msg.contains("locked") || msg.contains("busy")
+        }
+        _ => false,
+    }
+}
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -510,47 +543,43 @@ impl SqliteStore {
             let address_clone = address_owned.clone();
             let key_clone = key_vec.clone();
 
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(identities::table)
-                    .values((
-                        identities::address.eq(address_clone),
-                        identities::key.eq(&key_clone[..]),
-                        identities::device_id.eq(device_id),
-                    ))
-                    .on_conflict((identities::address, identities::device_id))
-                    .do_update()
-                    .set(identities::key.eq(&key_clone[..]))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(identities::table)
+                        .values((
+                            identities::address.eq(address_clone),
+                            identities::key.eq(&key_clone[..]),
+                            identities::device_id.eq(device_id),
+                        ))
+                        .on_conflict((identities::address, identities::device_id))
+                        .do_update()
+                        .set(identities::key.eq(&key_clone[..]))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
 
             drop(permit);
 
             match result {
                 Ok(Ok(())) => return Ok(()),
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Identity write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10 * 2u64.pow(attempt);
+                    warn!(
+                        "Identity write failed (attempt {}/{}): {e}. Retrying in {delay_ms}ms...",
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
                 }
+                Ok(Err(e)) => return Err(e.into()),
                 Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
             }
         }
@@ -660,49 +689,43 @@ impl SqliteStore {
             let address_clone = address_owned.clone();
             let session_clone = session_vec.clone();
 
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(sessions::table)
-                    .values((
-                        sessions::address.eq(address_clone),
-                        sessions::record.eq(&session_clone),
-                        sessions::device_id.eq(device_id),
-                    ))
-                    .on_conflict((sessions::address, sessions::device_id))
-                    .do_update()
-                    .set(sessions::record.eq(&session_clone))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(sessions::table)
+                        .values((
+                            sessions::address.eq(address_clone),
+                            sessions::record.eq(&session_clone),
+                            sessions::device_id.eq(device_id),
+                        ))
+                        .on_conflict((sessions::address, sessions::device_id))
+                        .do_update()
+                        .set(sessions::record.eq(&session_clone))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
 
             drop(permit);
 
             match result {
-                Ok(Ok(())) => {
-                    return Ok(());
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10 * 2u64.pow(attempt);
+                    warn!(
+                        "Session write failed (attempt {}/{}): {e}. Retrying in {delay_ms}ms...",
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
                 }
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Session write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
+                Ok(Err(e)) => return Err(e.into()),
                 Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
             }
         }
@@ -1126,29 +1149,63 @@ impl SignalStore for SqliteStore {
 
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(prekeys::table)
-                .values((
-                    prekeys::id.eq(id as i32),
-                    prekeys::key.eq(&record),
-                    prekeys::uploaded.eq(uploaded),
-                    prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((prekeys::id, prekeys::device_id))
-                .do_update()
-                .set((prekeys::key.eq(&record), prekeys::uploaded.eq(uploaded)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(prekeys::table)
+                        .values((
+                            prekeys::id.eq(id as i32),
+                            prekeys::key.eq(&record_clone),
+                            prekeys::uploaded.eq(uploaded),
+                            prekeys::device_id.eq(device_id),
+                        ))
+                        .on_conflict((prekeys::id, prekeys::device_id))
+                        .do_update()
+                        .set((
+                            prekeys::key.eq(&record_clone),
+                            prekeys::uploaded.eq(uploaded),
+                        ))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1173,49 +1230,110 @@ impl SignalStore for SqliteStore {
 
     async fn remove_prekey(&self, id: u32) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                prekeys::table
-                    .filter(prekeys::id.eq(id as i32))
-                    .filter(prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::delete(
+                        prekeys::table
+                            .filter(prekeys::id.eq(id as i32))
+                            .filter(prekeys::device_id.eq(device_id)),
+                    )
+                    .execute(&mut conn)
+                    .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(signed_prekeys::table)
-                .values((
-                    signed_prekeys::id.eq(id as i32),
-                    signed_prekeys::record.eq(&record),
-                    signed_prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
-                .do_update()
-                .set(signed_prekeys::record.eq(&record))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(signed_prekeys::table)
+                        .values((
+                            signed_prekeys::id.eq(id as i32),
+                            signed_prekeys::record.eq(&record_clone),
+                            signed_prekeys::device_id.eq(device_id),
+                        ))
+                        .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
+                        .do_update()
+                        .set(signed_prekeys::record.eq(&record_clone))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn load_signed_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1261,23 +1379,53 @@ impl SignalStore for SqliteStore {
 
     async fn remove_signed_prekey(&self, id: u32) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                signed_prekeys::table
-                    .filter(signed_prekeys::id.eq(id as i32))
-                    .filter(signed_prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::delete(
+                        signed_prekeys::table
+                            .filter(signed_prekeys::id.eq(id as i32))
+                            .filter(signed_prekeys::device_id.eq(device_id)),
+                    )
+                    .execute(&mut conn)
+                    .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {

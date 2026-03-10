@@ -1,6 +1,7 @@
 //! E2E Session management for Client.
 
 use anyhow::Result;
+use std::sync::atomic::Ordering;
 use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
@@ -22,6 +23,51 @@ impl Client {
             self.offline_sync_notifier.notified(),
         )
         .await;
+    }
+
+    pub(crate) fn begin_history_sync_task(&self) {
+        self.history_sync_tasks_in_flight
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn finish_history_sync_task(&self) {
+        let previous = self
+            .history_sync_tasks_in_flight
+            .fetch_sub(1, Ordering::Relaxed);
+        if previous <= 1 {
+            self.history_sync_tasks_in_flight
+                .store(0, Ordering::Relaxed);
+            self.history_sync_idle_notifier.notify_waiters();
+        }
+    }
+
+    pub async fn wait_for_startup_sync(&self, timeout: std::time::Duration) -> Result<()> {
+        use anyhow::anyhow;
+        use std::time::Instant;
+
+        let deadline = Instant::now() + timeout;
+
+        // Register the notified future *before* checking state to avoid missing
+        // a notify_waiters() that fires between the check and the await.
+        let offline_fut = self.offline_sync_notifier.notified();
+        if !self.offline_sync_completed.load(Ordering::Relaxed) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            tokio::time::timeout(remaining, offline_fut)
+                .await
+                .map_err(|_| anyhow!("Timeout waiting for offline sync completion"))?;
+        }
+
+        loop {
+            let history_fut = self.history_sync_idle_notifier.notified();
+            if self.history_sync_tasks_in_flight.load(Ordering::Relaxed) == 0 {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            tokio::time::timeout(remaining, history_fut)
+                .await
+                .map_err(|_| anyhow!("Timeout waiting for history sync tasks to become idle"))?;
+        }
     }
 
     /// Ensure E2E sessions exist for the given device JIDs.

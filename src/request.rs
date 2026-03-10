@@ -2,6 +2,7 @@ use crate::client::Client;
 use crate::socket::error::SocketError;
 use log::warn;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -125,6 +126,11 @@ impl Client {
     /// # }
     /// ```
     pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
+        // Fail fast if the client is shutting down
+        if !self.is_running.load(Ordering::Relaxed) {
+            return Err(IqError::NotConnected);
+        }
+
         let req_id = query
             .id
             .clone()
@@ -149,15 +155,28 @@ impl Client {
             };
         }
 
-        match timeout(query.timeout.unwrap_or(default_timeout), rx).await {
-            Ok(Ok(response_node)) => match *request_utils.parse_iq_response(&response_node) {
-                Ok(()) => Ok(response_node),
-                Err(e) => Err(e.into()),
-            },
-            Ok(Err(_)) => Err(IqError::InternalChannelClosed),
-            Err(_) => {
+        // Race the IQ response against shutdown so we fail fast on disconnect
+        // instead of waiting the full timeout.
+        let shutdown = self.shutdown_notifier.notified();
+        let iq_timeout = query.timeout.unwrap_or(default_timeout);
+
+        tokio::select! {
+            result = timeout(iq_timeout, rx) => {
+                match result {
+                    Ok(Ok(response_node)) => match *request_utils.parse_iq_response(&response_node) {
+                        Ok(()) => Ok(response_node),
+                        Err(e) => Err(e.into()),
+                    },
+                    Ok(Err(_)) => Err(IqError::InternalChannelClosed),
+                    Err(_) => {
+                        self.response_waiters.lock().await.remove(&req_id);
+                        Err(IqError::Timeout)
+                    }
+                }
+            }
+            _ = shutdown => {
                 self.response_waiters.lock().await.remove(&req_id);
-                Err(IqError::Timeout)
+                Err(IqError::NotConnected)
             }
         }
     }

@@ -58,12 +58,13 @@ async fn test_presence_available() -> anyhow::Result<()> {
         .client
         .wait_for_node(NodeFilter::tag("presence").attr("from", jid_a.to_string()));
 
-    // Client B subscribes to Client A's presence
-    client_b.client.presence().subscribe(&jid_a).await?;
-
-    // Client A sets available
+    // Client A sets available first — presence state is tracked by the server.
     client_a.client.presence().set_available().await?;
     info!("Client A set presence to available");
+
+    // When B subscribes, the server sends A's current presence immediately
+    // (no race condition since A's presence state is already recorded).
+    client_b.client.presence().subscribe(&jid_a).await?;
 
     // Wait for the presence node (buffered since before subscribe)
     let node = tokio::time::timeout(tokio::time::Duration::from_secs(15), presence_waiter)

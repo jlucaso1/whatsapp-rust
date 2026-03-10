@@ -125,9 +125,13 @@ impl Bot {
 
     pub async fn run(&mut self) -> Result<task::JoinHandle<()>> {
         if let Some(mut receiver) = self.sync_task_receiver.take() {
-            let worker_client = self.client.clone();
+            let worker_client = Arc::downgrade(&self.client);
             tokio::spawn(async move {
                 while let Some(task) = receiver.recv().await {
+                    let Some(worker_client) = worker_client.upgrade() else {
+                        break;
+                    };
+
                     match task {
                         crate::sync_task::MajorSyncTask::HistorySync {
                             message_id,
@@ -136,6 +140,7 @@ impl Bot {
                             worker_client
                                 .process_history_sync_task(message_id, *notification)
                                 .await;
+                            worker_client.finish_history_sync_task();
                         }
                         crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
                             if let Err(e) = worker_client

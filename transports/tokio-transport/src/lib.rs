@@ -118,14 +118,17 @@ type WsStream = SplitStream<RawWs>;
 pub struct TokioWebSocketTransport {
     ws_sink: Arc<Mutex<Option<WsSink>>>,
     is_connected: Arc<Mutex<bool>>,
+    /// Latched shutdown signal. `true` = shutdown requested.
+    read_shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl TokioWebSocketTransport {
     /// Create a new transport instance
-    fn new(sink: WsSink) -> Self {
+    fn new(sink: WsSink, read_shutdown: tokio::sync::watch::Sender<bool>) -> Self {
         Self {
             ws_sink: Arc::new(Mutex::new(Some(sink))),
             is_connected: Arc::new(Mutex::new(true)),
+            read_shutdown,
         }
     }
 }
@@ -148,20 +151,23 @@ impl Transport for TokioWebSocketTransport {
     }
 
     async fn disconnect(&self) {
-        let mut sink_guard = self.ws_sink.lock().await;
-        if let Some(mut sink) = sink_guard.take() {
-            if let Err(e) = sink.close().await {
-                error!("Error closing WebSocket: {}", e);
-            }
-            // After awaiting the close, set is_connected to false
+        let _ = self.read_shutdown.send(true);
+
+        {
             let mut is_connected_guard = self.is_connected.lock().await;
             *is_connected_guard = false;
-        } else {
-            // If no sink, still ensure is_connected is false
-            let mut is_connected_guard = self.is_connected.lock().await;
-            if *is_connected_guard {
-                *is_connected_guard = false;
-            }
+        }
+
+        let mut sink_guard = self.ws_sink.lock().await;
+        if let Some(mut sink) = sink_guard.take() {
+            // Send a WebSocket close frame with code 1000 (normal closure),
+            // matching WhatsApp Web's graceful shutdown behavior.
+            let _ = sink
+                .send(Message::close(
+                    Some(tokio_websockets::CloseCode::NORMAL_CLOSURE),
+                    "",
+                ))
+                .await;
         }
     }
 }
@@ -216,11 +222,13 @@ impl TransportFactory for TokioWebSocketTransportFactory {
         let (event_tx, event_rx) = async_channel::bounded(10000);
 
         // Create transport - just a simple byte pipe
-        let transport = Arc::new(TokioWebSocketTransport::new(sink));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let transport = Arc::new(TokioWebSocketTransport::new(sink, shutdown_tx));
 
         // Spawn read pump task
         let event_tx_clone = event_tx.clone();
-        tokio::task::spawn(read_pump(stream, event_tx_clone));
+        let is_connected = transport.is_connected.clone();
+        tokio::task::spawn(read_pump(stream, event_tx_clone, shutdown_rx, is_connected));
 
         // Send connected event
         let _ = event_tx.send(TransportEvent::Connected).await;
@@ -231,35 +239,61 @@ impl TransportFactory for TokioWebSocketTransportFactory {
 
 /// Reads from the WebSocket and forwards raw data to the event channel.
 /// No framing logic here - just passes bytes through.
-async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<TransportEvent>) {
+async fn read_pump(
+    mut stream: WsStream,
+    event_tx: async_channel::Sender<TransportEvent>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    is_connected: Arc<Mutex<bool>>,
+) {
     loop {
-        match stream.next().await {
-            Some(Ok(msg)) => {
-                if msg.is_binary() {
-                    let payload = msg.into_payload();
-                    debug!("<-- Received WebSocket data: {} bytes", payload.len());
-                    if event_tx
-                        .send(TransportEvent::DataReceived(Bytes::from(payload)))
-                        .await
-                        .is_err()
-                    {
-                        warn!("Event receiver dropped, closing read pump");
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => {
+                trace!("Read pump received shutdown signal");
+                break;
+            }
+            next = stream.next() => {
+                match next {
+                    Some(Ok(msg)) => {
+                        if msg.is_binary() {
+                            let payload = msg.into_payload();
+                            debug!("<-- Received WebSocket data: {} bytes", payload.len());
+                            // Use select to make the send abortable by shutdown
+                            tokio::select! {
+                                biased;
+                                _ = shutdown.changed() => {
+                                    trace!("Read pump shutdown during send");
+                                    break;
+                                }
+                                result = event_tx
+                                    .send(TransportEvent::DataReceived(Bytes::from(payload))) => {
+                                    if result.is_err() {
+                                        warn!("Event receiver dropped, closing read pump");
+                                        break;
+                                    }
+                                }
+                            }
+                        } else if msg.is_close() {
+                            trace!("Received close frame");
+                            break;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("Error reading from websocket: {e}");
                         break;
                     }
-                } else if msg.is_close() {
-                    trace!("Received close frame");
-                    break;
+                    None => {
+                        trace!("Websocket stream ended");
+                        break;
+                    }
                 }
             }
-            Some(Err(e)) => {
-                error!("Error reading from websocket: {e}");
-                break;
-            }
-            None => {
-                trace!("Websocket stream ended");
-                break;
-            }
         }
+    }
+
+    {
+        let mut is_connected_guard = is_connected.lock().await;
+        *is_connected_guard = false;
     }
 
     // Send disconnected event

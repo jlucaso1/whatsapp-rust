@@ -584,6 +584,7 @@ name = "e2e-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "env_logger",
  "log",
  "tokio",

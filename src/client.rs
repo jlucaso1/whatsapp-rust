@@ -243,6 +243,10 @@ pub struct Client {
     pub(crate) offline_sync_notifier: Arc<Notify>,
     /// Flag indicating offline sync has completed (received ib offline stanza).
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
+    /// Number of history sync tasks currently queued or running.
+    pub(crate) history_sync_tasks_in_flight: Arc<AtomicUsize>,
+    /// Notifier triggered when history sync work becomes idle.
+    pub(crate) history_sync_idle_notifier: Arc<Notify>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
     /// Metrics for tracking the effectiveness of local re-queue optimization
@@ -298,6 +302,20 @@ pub struct Client {
 }
 
 impl Client {
+    fn should_downgrade_sync_error(&self, err: &anyhow::Error) -> bool {
+        if self.is_shutting_down() {
+            return true;
+        }
+
+        matches!(
+            err.downcast_ref::<crate::request::IqError>(),
+            Some(
+                crate::request::IqError::NotConnected
+                    | crate::request::IqError::InternalChannelClosed
+            )
+        )
+    }
+
     /// Enable or disable skipping of history sync notifications at runtime.
     ///
     /// When enabled, the client will acknowledge incoming history sync
@@ -309,6 +327,10 @@ impl Client {
     /// Returns `true` if history sync notifications are currently being skipped.
     pub fn skip_history_sync_enabled(&self) -> bool {
         self.skip_history_sync.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.expected_disconnect.load(Ordering::Relaxed) || !self.is_running.load(Ordering::Relaxed)
     }
 
     pub async fn new(
@@ -419,6 +441,8 @@ impl Client {
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             offline_sync_notifier: Arc::new(Notify::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
+            history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
+            history_sync_idle_notifier: Arc::new(Notify::new()),
             socket_ready_notifier: Arc::new(Notify::new()),
             connected_notifier: Arc::new(Notify::new()),
             major_sync_task_sender: tx,
@@ -722,6 +746,19 @@ impl Client {
         self.retried_group_messages.invalidate_all();
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.history_sync_tasks_in_flight
+            .store(0, Ordering::Relaxed);
+        self.history_sync_idle_notifier.notify_waiters();
+        // Drain all pending IQ waiters so they fail fast with InternalChannelClosed
+        // instead of hanging until the 75s timeout.
+        let waiters: Vec<_> = self.response_waiters.lock().await.drain().collect();
+        if !waiters.is_empty() {
+            debug!(
+                "Dropping {} orphaned IQ response waiter(s) on disconnect",
+                waiters.len()
+            );
+        }
+        // Senders are dropped here, causing receivers to get RecvError → IqError::InternalChannelClosed
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
@@ -1382,7 +1419,11 @@ impl Client {
                     ])
                     .await
                 {
-                    warn!("Failed to sync critical app state: {e}");
+                    if client_clone.should_downgrade_sync_error(&e) {
+                        debug!("Skipping critical app state sync during shutdown: {e}");
+                    } else {
+                        warn!("Failed to sync critical app state: {e}");
+                    }
                 }
 
                 check_generation!();
@@ -1414,7 +1455,11 @@ impl Client {
                         ])
                         .await
                     {
-                        warn!("Failed to batch sync non-critical app state: {e}");
+                        if sync_client.should_downgrade_sync_error(&e) {
+                            debug!("Skipping non-critical app state sync during shutdown: {e}");
+                        } else {
+                            warn!("Failed to batch sync non-critical app state: {e}");
+                        }
                     }
 
                     sync_client
@@ -1793,6 +1838,11 @@ impl Client {
         name: WAPatchName,
         full_sync: bool,
     ) -> anyhow::Result<()> {
+        if self.is_shutting_down() {
+            debug!(target: "Client/AppState", "Skipping app state sync task {:?}: client is shutting down", name);
+            return Ok(());
+        }
+
         let backend = self.persistence_manager.backend();
         let mut full_sync = full_sync;
 
@@ -1809,6 +1859,10 @@ impl Client {
         let mut iteration = 0u32;
 
         while has_more {
+            if self.is_shutting_down() {
+                debug!(target: "Client/AppState", "Stopping app state sync task {:?}: shutdown detected", name);
+                break;
+            }
             iteration += 1;
             if iteration > MAX_PAGINATION_ITERATIONS {
                 warn!(target: "Client/AppState", "App state sync for {:?} exceeded {} iterations, aborting", name, MAX_PAGINATION_ITERATIONS);
@@ -1839,6 +1893,10 @@ impl Client {
             };
 
             let resp = self.send_iq(iq).await?;
+            if self.is_shutting_down() {
+                debug!(target: "Client/AppState", "Discarding app state sync response for {:?}: shutdown detected", name);
+                break;
+            }
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
             let _decode_start = std::time::Instant::now();
@@ -2044,130 +2102,55 @@ impl Client {
         m: &crate::appstate_sync::Mutation,
         full_sync: bool,
     ) {
-        use wacore::types::events::{
-            ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate,
-        };
+        use wacore::types::events::Event;
+
         if m.operation != wa::syncd_mutation::SyncdOperation::Set {
             return;
         }
         if m.index.is_empty() {
             return;
         }
-        let kind = &m.index[0];
-        let ts = m
-            .action_value
-            .as_ref()
-            .and_then(|v| v.timestamp)
-            .unwrap_or(0);
-        let time = chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
-        let jid = if m.index.len() > 1 {
-            m.index[1].parse().unwrap_or_default()
-        } else {
-            Jid::default()
-        };
-        match kind.as_str() {
-            "setting_pushName" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.push_name_setting
-                    && let Some(new_name) = &act.name
-                {
-                    let new_name = new_name.clone();
-                    let bus = self.core.event_bus.clone();
 
-                    let snapshot = self.persistence_manager.get_device_snapshot().await;
-                    let old = snapshot.push_name.clone();
-                    if old != new_name {
-                        debug!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
-                        self.persistence_manager
-                            .process_command(DeviceCommand::SetPushName(new_name.clone()))
-                            .await;
-                        bus.dispatch(&Event::SelfPushNameUpdated(
-                            crate::types::events::SelfPushNameUpdated {
-                                from_server: true,
-                                old_name: old.clone(),
-                                new_name: new_name.clone(),
-                            },
-                        ));
+        // Delegate chat-related mutations (mute, pin, archive, star, contact, etc.)
+        if crate::features::chat_actions::dispatch_chat_mutation(&self.core.event_bus, m, full_sync)
+        {
+            return;
+        }
 
-                        // WhatsApp Web sends presence immediately when receiving pushname from
-                        if old.is_empty() && !new_name.is_empty() {
-                            debug!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
-                            if let Err(e) = self.presence().set_available().await {
-                                warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
-                            }
-                        }
-                    } else {
-                        debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
+        // Handle client-internal mutations that need persistence/presence access
+        if m.index[0] == "setting_pushName"
+            && let Some(val) = &m.action_value
+            && let Some(act) = &val.push_name_setting
+            && let Some(new_name) = &act.name
+        {
+            let new_name = new_name.clone();
+            let bus = self.core.event_bus.clone();
+
+            let snapshot = self.persistence_manager.get_device_snapshot().await;
+            let old = snapshot.push_name.clone();
+            if old != new_name {
+                debug!(target: "Client/AppState", "Persisting push name from app state mutation: '{}' (old='{}')", new_name, old);
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetPushName(new_name.clone()))
+                    .await;
+                bus.dispatch(&Event::SelfPushNameUpdated(
+                    crate::types::events::SelfPushNameUpdated {
+                        from_server: true,
+                        old_name: old.clone(),
+                        new_name: new_name.clone(),
+                    },
+                ));
+
+                // WhatsApp Web sends presence immediately when receiving pushname
+                if old.is_empty() && !new_name.is_empty() {
+                    debug!(target: "Client/AppState", "Sending presence after receiving initial pushname from app state sync");
+                    if let Err(e) = self.presence().set_available().await {
+                        warn!(target: "Client/AppState", "Failed to send presence after pushname sync: {e:?}");
                     }
                 }
+            } else {
+                debug!(target: "Client/AppState", "Push name mutation received but name unchanged: '{}'", new_name);
             }
-            "mute" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.mute_action
-                {
-                    self.core.event_bus.dispatch(&Event::MuteUpdate(MuteUpdate {
-                        jid,
-                        timestamp: time,
-                        action: Box::new(*act),
-                        from_full_sync: full_sync,
-                    }));
-                }
-            }
-            "pin" | "pin_v1" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.pin_action
-                {
-                    self.core.event_bus.dispatch(&Event::PinUpdate(PinUpdate {
-                        jid,
-                        timestamp: time,
-                        action: Box::new(*act),
-                        from_full_sync: full_sync,
-                    }));
-                }
-            }
-            "archive" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.archive_chat_action
-                {
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::ArchiveUpdate(ArchiveUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        }));
-                }
-            }
-            "contact" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.contact_action
-                {
-                    self.core
-                        .event_bus
-                        .dispatch(&Event::ContactUpdate(ContactUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        }));
-                }
-            }
-            "mark_chat_as_read" | "markChatAsRead" => {
-                if let Some(val) = &m.action_value
-                    && let Some(act) = &val.mark_chat_as_read_action
-                {
-                    self.core.event_bus.dispatch(&Event::MarkChatAsReadUpdate(
-                        MarkChatAsReadUpdate {
-                            jid,
-                            timestamp: time,
-                            action: Box::new(act.clone()),
-                            from_full_sync: full_sync,
-                        },
-                    ));
-                }
-            }
-            _ => {}
         }
     }
 

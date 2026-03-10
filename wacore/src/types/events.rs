@@ -332,6 +332,7 @@ pub enum Event {
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
+    StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
 
     HistorySync(HistorySync),
@@ -645,6 +646,19 @@ pub struct ArchiveUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
+    pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StarUpdate {
+    pub chat_jid: Jid,
+    /// The participant who sent the message. `Some` for group messages from
+    /// others, `None` for self-authored or 1-on-1 messages (wire value `"0"`).
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::StarAction>,
     pub from_full_sync: bool,
 }
 
