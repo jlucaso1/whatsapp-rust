@@ -722,6 +722,16 @@ impl Client {
         self.retried_group_messages.invalidate_all();
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        // Drain all pending IQ waiters so they fail fast with InternalChannelClosed
+        // instead of hanging until the 75s timeout.
+        let waiters: Vec<_> = self.response_waiters.lock().await.drain().collect();
+        if !waiters.is_empty() {
+            debug!(
+                "Dropping {} orphaned IQ response waiter(s) on disconnect",
+                waiters.len()
+            );
+        }
+        // Senders are dropped here, causing receivers to get RecvError → IqError::InternalChannelClosed
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
