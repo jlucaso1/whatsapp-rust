@@ -160,11 +160,7 @@ async fn test_mute_chat_with_expiry() -> anyhow::Result<()> {
     client_a.wait_for_app_state_sync().await?;
 
     // Mute for 8 hours from now
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let mute_end = now_ms + (8 * 60 * 60 * 1000);
+    let mute_end = chrono::Utc::now().timestamp_millis() + (8 * 60 * 60 * 1000);
 
     client_a
         .client
@@ -215,12 +211,6 @@ async fn test_star_message() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_star_a").await?;
     let client_b = TestClient::connect("e2e_star_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("A should have JID")
-        .to_non_ad();
     let jid_b = client_b
         .client
         .get_pn()
@@ -244,7 +234,7 @@ async fn test_star_message() -> anyhow::Result<()> {
     client_a
         .client
         .chat_actions()
-        .star_message(&jid_b, &jid_a, &msg_id, true)
+        .star_message(&jid_b, None, &msg_id, true)
         .await?;
     info!("Successfully starred message {msg_id}");
 
@@ -260,12 +250,6 @@ async fn test_unstar_message() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_unstar_a").await?;
     let client_b = TestClient::connect("e2e_unstar_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("A should have JID")
-        .to_non_ad();
     let jid_b = client_b
         .client
         .get_pn()
@@ -287,14 +271,14 @@ async fn test_unstar_message() -> anyhow::Result<()> {
     client_a
         .client
         .chat_actions()
-        .star_message(&jid_b, &jid_a, &msg_id, true)
+        .star_message(&jid_b, None, &msg_id, true)
         .await?;
     info!("Starred message {msg_id}");
 
     client_a
         .client
         .chat_actions()
-        .unstar_message(&jid_b, &jid_a, &msg_id, true)
+        .unstar_message(&jid_b, None, &msg_id, true)
         .await?;
     info!("Successfully unstarred message {msg_id}");
 

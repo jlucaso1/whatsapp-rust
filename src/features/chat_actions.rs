@@ -24,7 +24,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::types::events::{
     ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
 };
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 /// Mute end timestamp value for indefinite mute (matches WhatsApp Web's `-1` sentinel).
@@ -108,11 +108,17 @@ pub(crate) fn dispatch_chat_mutation(
                 let chat_jid: Jid = m.index[1].parse().unwrap_or_default();
                 let message_id = m.index[2].clone();
                 let from_me = m.index[3] == "1";
-                let sender_jid: Jid = m.index[4].parse().unwrap_or_default();
+                // Participant is the actual sender for group messages from others.
+                // "0" means self-authored or 1-on-1 → None.
+                let participant_jid: Option<Jid> = if m.index[4] != "0" {
+                    m.index[4].parse().ok()
+                } else {
+                    None
+                };
 
                 event_bus.dispatch(&Event::StarUpdate(StarUpdate {
                     chat_jid,
-                    sender_jid,
+                    participant_jid,
                     message_id,
                     from_me,
                     timestamp: time,
@@ -203,7 +209,21 @@ impl<'a> ChatActions<'a> {
     }
 
     /// Mute a chat until a specific timestamp (Unix milliseconds).
+    ///
+    /// The timestamp must be in the future. Use [`mute_chat`](Self::mute_chat)
+    /// for indefinite muting.
     pub async fn mute_chat_until(&self, jid: &Jid, mute_end_timestamp_ms: i64) -> Result<()> {
+        if mute_end_timestamp_ms != MUTE_INDEFINITE && mute_end_timestamp_ms < 0 {
+            anyhow::bail!(
+                "Invalid mute_end_timestamp_ms: negative values are not allowed (use mute_chat() for indefinite)"
+            );
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if mute_end_timestamp_ms > 0 && mute_end_timestamp_ms <= now_ms {
+            anyhow::bail!(
+                "mute_end_timestamp_ms is in the past ({mute_end_timestamp_ms} <= {now_ms})"
+            );
+        }
         debug!("Muting chat {jid} until {mute_end_timestamp_ms}");
         self.send_mute_mutation(jid, true, mute_end_timestamp_ms)
             .await
@@ -220,20 +240,19 @@ impl<'a> ChatActions<'a> {
     /// Star a message.
     ///
     /// - `chat_jid`: The chat containing the message.
-    /// - `sender_jid`: The sender of the message. For group messages from
-    ///   others, pass the actual sender JID. For 1-on-1 or own messages,
-    ///   this is ignored (the protocol uses `"0"` as participant).
+    /// - `participant_jid`: For group messages from others, pass `Some(&sender_jid)`.
+    ///   For 1-on-1 or own messages, pass `None` (the protocol uses `"0"`).
     /// - `message_id`: The message ID to star.
     /// - `from_me`: Whether the message was sent by us.
     pub async fn star_message(
         &self,
         chat_jid: &Jid,
-        sender_jid: &Jid,
+        participant_jid: Option<&Jid>,
         message_id: &str,
         from_me: bool,
     ) -> Result<()> {
         debug!("Starring message {message_id} in {chat_jid}");
-        self.send_star_mutation(chat_jid, sender_jid, message_id, from_me, true)
+        self.send_star_mutation(chat_jid, participant_jid, message_id, from_me, true)
             .await
     }
 
@@ -243,12 +262,12 @@ impl<'a> ChatActions<'a> {
     pub async fn unstar_message(
         &self,
         chat_jid: &Jid,
-        sender_jid: &Jid,
+        participant_jid: Option<&Jid>,
         message_id: &str,
         from_me: bool,
     ) -> Result<()> {
         debug!("Unstarring message {message_id} in {chat_jid}");
-        self.send_star_mutation(chat_jid, sender_jid, message_id, from_me, false)
+        self.send_star_mutation(chat_jid, participant_jid, message_id, from_me, false)
             .await
     }
 
@@ -311,7 +330,7 @@ impl<'a> ChatActions<'a> {
     async fn send_star_mutation(
         &self,
         chat_jid: &Jid,
-        sender_jid: &Jid,
+        participant_jid: Option<&Jid>,
         message_id: &str,
         from_me: bool,
         starred: bool,
@@ -320,11 +339,9 @@ impl<'a> ChatActions<'a> {
         // participant = sender JID for group messages from others, "0" otherwise.
         // See WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey + extractParticipantForSync
         let from_me_str = if from_me { "1" } else { "0" };
-        let participant = if !from_me && chat_jid.is_group() {
-            sender_jid.to_string()
-        } else {
-            "0".to_string()
-        };
+        let participant = participant_jid
+            .map(|j| j.to_string())
+            .unwrap_or_else(|| "0".to_string());
         let index = serde_json::to_vec(&[
             "star",
             &chat_jid.to_string(),
