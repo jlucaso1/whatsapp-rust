@@ -3,6 +3,7 @@ use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec, ValueRef};
 use crate::token;
 use std::borrow::Cow;
+#[cfg(feature = "simd")]
 use std::simd::{Simd, prelude::*, u8x16};
 
 pub(crate) struct Decoder<'a> {
@@ -304,23 +305,27 @@ impl<'a> Decoder<'a> {
 
     #[inline]
     fn decode_packed_hex(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) {
-        const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
-        let lookup_table = Simd::from_array(HEX_LOOKUP);
-        let low_mask = Simd::splat(0x0F);
+        #[cfg(feature = "simd")]
+        let packed_data = {
+            const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
+            let lookup_table = Simd::from_array(HEX_LOOKUP);
+            let low_mask = Simd::splat(0x0F);
 
-        let (chunks, remainder) = packed_data.as_chunks::<16>();
-        for chunk in chunks {
-            let data = u8x16::from_array(*chunk);
-            let high_nibbles = (data >> 4) & low_mask;
-            let low_nibbles = data & low_mask;
-            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
-            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
-            let (lo, hi) = Simd::interleave(high_chars, low_chars);
-            unpacked_bytes.extend_from_slice(lo.as_array());
-            unpacked_bytes.extend_from_slice(hi.as_array());
-        }
+            let (chunks, remainder) = packed_data.as_chunks::<16>();
+            for chunk in chunks {
+                let data = u8x16::from_array(*chunk);
+                let high_nibbles = (data >> 4) & low_mask;
+                let low_nibbles = data & low_mask;
+                let high_chars = lookup_table.swizzle_dyn(high_nibbles);
+                let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+                let (lo, hi) = Simd::interleave(high_chars, low_chars);
+                unpacked_bytes.extend_from_slice(lo.as_array());
+                unpacked_bytes.extend_from_slice(hi.as_array());
+            }
+            remainder
+        };
 
-        for &byte in remainder {
+        for &byte in packed_data {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
             unpacked_bytes.push(Self::unpack_hex(high));
@@ -330,46 +335,50 @@ impl<'a> Decoder<'a> {
 
     #[inline]
     fn decode_packed_nibble(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) -> Result<()> {
-        const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
-        let lookup_table = Simd::from_array(NIBBLE_LOOKUP);
-        let low_mask = Simd::splat(0x0F);
-        let le11 = Simd::splat(11);
-        let f15 = Simd::splat(15);
+        #[cfg(feature = "simd")]
+        let packed_data = {
+            const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
+            let lookup_table = Simd::from_array(NIBBLE_LOOKUP);
+            let low_mask = Simd::splat(0x0F);
+            let le11 = Simd::splat(11);
+            let f15 = Simd::splat(15);
 
-        let (chunks, remainder) = packed_data.as_chunks::<16>();
-        for chunk in chunks {
-            let data = u8x16::from_array(*chunk);
+            let (chunks, remainder) = packed_data.as_chunks::<16>();
+            for chunk in chunks {
+                let data = u8x16::from_array(*chunk);
 
-            let high_nibbles = (data >> 4) & low_mask;
-            let low_nibbles = data & low_mask;
+                let high_nibbles = (data >> 4) & low_mask;
+                let low_nibbles = data & low_mask;
 
-            let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
-            let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
-            if !(hi_valid & lo_valid).all() {
-                // Validate first, then decode scalar as a conservative fallback.
-                for byte in *chunk {
-                    let high = (byte & 0xF0) >> 4;
-                    let low = byte & 0x0F;
-                    Self::unpack_nibble(high)?;
-                    Self::unpack_nibble(low)?;
+                let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
+                let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
+                if !(hi_valid & lo_valid).all() {
+                    // Validate first, then decode scalar as a conservative fallback.
+                    for byte in *chunk {
+                        let high = (byte & 0xF0) >> 4;
+                        let low = byte & 0x0F;
+                        Self::unpack_nibble(high)?;
+                        Self::unpack_nibble(low)?;
+                    }
+                    for byte in *chunk {
+                        let high = (byte & 0xF0) >> 4;
+                        let low = byte & 0x0F;
+                        unpacked_bytes.push(Self::unpack_nibble(high)?);
+                        unpacked_bytes.push(Self::unpack_nibble(low)?);
+                    }
+                    continue;
                 }
-                for byte in *chunk {
-                    let high = (byte & 0xF0) >> 4;
-                    let low = byte & 0x0F;
-                    unpacked_bytes.push(Self::unpack_nibble(high)?);
-                    unpacked_bytes.push(Self::unpack_nibble(low)?);
-                }
-                continue;
+
+                let high_chars = lookup_table.swizzle_dyn(high_nibbles);
+                let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+                let (lo, hi) = Simd::interleave(high_chars, low_chars);
+                unpacked_bytes.extend_from_slice(lo.as_array());
+                unpacked_bytes.extend_from_slice(hi.as_array());
             }
+            remainder
+        };
 
-            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
-            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
-            let (lo, hi) = Simd::interleave(high_chars, low_chars);
-            unpacked_bytes.extend_from_slice(lo.as_array());
-            unpacked_bytes.extend_from_slice(hi.as_array());
-        }
-
-        for &byte in remainder {
+        for &byte in packed_data {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
             unpacked_bytes.push(Self::unpack_nibble(high)?);
