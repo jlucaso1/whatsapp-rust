@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::socket::error::SocketError;
 use log::warn;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -125,6 +126,13 @@ impl Client {
     /// # }
     /// ```
     pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
+        // Fail fast if a disconnect is already in progress.  Background tasks spawned
+        // by handle_success may still be running after disconnect(); this prevents them
+        // from creating new waiters that would hang until the 75 s timeout.
+        if self.expected_disconnect.load(Ordering::Relaxed) {
+            return Err(IqError::NotConnected);
+        }
+
         let req_id = query
             .id
             .clone()
@@ -140,13 +148,24 @@ impl Client {
         let request_utils = self.get_request_utils();
         let node = request_utils.build_iq_node(&query, Some(req_id.clone()));
 
-        if let Err(e) = self.send_node(node).await {
-            self.response_waiters.lock().await.remove(&req_id);
-            return match e {
-                crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
-                crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
-                _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
-            };
+        // Timeout the send itself to avoid blocking indefinitely when the noise
+        // socket's internal channel is full (e.g. transport write is congested).
+        let send_result = timeout(Duration::from_secs(15), self.send_node(node)).await;
+        match send_result {
+            Ok(Ok(())) => {} // sent successfully
+            Ok(Err(e)) => {
+                self.response_waiters.lock().await.remove(&req_id);
+                return match e {
+                    crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
+                    crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
+                    _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
+                };
+            }
+            Err(_elapsed) => {
+                self.response_waiters.lock().await.remove(&req_id);
+                warn!(target: "Client/IQ", "send_node timed out for IQ {req_id}; connection may be congested");
+                return Err(IqError::Timeout);
+            }
         }
 
         match timeout(query.timeout.unwrap_or(default_timeout), rx).await {

@@ -706,6 +706,9 @@ impl Client {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
+        // Bump connection generation so spawned background tasks (from handle_success)
+        // detect the disconnect via check_generation!() and exit early.
+        self.connection_generation.fetch_add(1, Ordering::SeqCst);
         self.shutdown_notifier.notify_waiters();
 
         if let Some(transport) = self.transport.lock().await.as_ref() {
