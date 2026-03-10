@@ -73,7 +73,6 @@ impl Client {
     /// Ensure E2E sessions exist for the given device JIDs.
     /// Waits for offline delivery, resolves LID mappings, then batches prekey fetches.
     pub(crate) async fn ensure_e2e_sessions(&self, device_jids: Vec<Jid>) -> Result<()> {
-        use wacore::libsignal::store::SessionStore;
         use wacore::types::jid::JidExt;
 
         if device_jids.is_empty() {
@@ -90,7 +89,13 @@ impl Client {
             let device_guard = device_store.read().await;
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
-                match device_guard.contains_session(&signal_addr).await {
+                let addr_str = signal_addr.to_string();
+                // Check cache first (includes unflushed sessions), fall back to backend
+                match self
+                    .signal_cache
+                    .has_session(&addr_str, &*device_guard.backend)
+                    .await
+                {
                     Ok(true) => {}
                     Ok(false) => jids_needing_sessions.push(jid),
                     Err(e) => log::warn!("Failed to check session for {}: {}", jid, e),
@@ -123,8 +128,10 @@ impl Client {
         let prekey_bundles = self.fetch_pre_keys(jids, Some("identity")).await?;
 
         let device_store = self.persistence_manager.get_device_arc().await;
-        let mut adapter =
-            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+            device_store,
+            self.signal_cache.clone(),
+        );
 
         let mut success_count = 0;
         let mut missing_count = 0;
@@ -133,6 +140,17 @@ impl Client {
         for jid in jids {
             if let Some(bundle) = prekey_bundles.get(&jid.normalize_for_prekey_bundle()) {
                 let signal_addr = jid.to_protocol_address();
+
+                // Acquire per-sender session lock to prevent race with concurrent message decryption.
+                let signal_addr_str = signal_addr.to_string();
+                let session_mutex = self
+                    .session_locks
+                    .get_with(signal_addr_str.clone(), async {
+                        std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    })
+                    .await;
+                let _session_guard = session_mutex.lock().await;
+
                 match process_prekey_bundle(
                     &signal_addr,
                     &mut adapter.session_store,
@@ -170,6 +188,11 @@ impl Client {
                 failed_count,
                 jids.len()
             );
+        }
+
+        // Flush after all sessions established
+        if success_count > 0 {
+            self.flush_signal_cache().await?;
         }
 
         Ok(success_count)

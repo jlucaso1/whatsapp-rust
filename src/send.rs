@@ -150,21 +150,27 @@ impl Client {
         let device_store_arc = self.persistence_manager.get_device_arc().await;
 
         let force_skdm = {
-            use wacore::libsignal::protocol::SenderKeyStore;
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
-            let mut device_guard = device_store_arc.write().await;
             let sender_address = own_jid.to_protocol_address();
             let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
+            let cache_key = format!(
+                "{}:{}",
+                sender_key_name.group_id(),
+                sender_key_name.sender_id()
+            );
 
-            let key_exists = device_guard
-                .load_sender_key(&sender_key_name)
+            let device_guard = device_store_arc.read().await;
+            let key_exists = self
+                .signal_cache
+                .get_sender_key(&cache_key, &*device_guard.backend)
                 .await?
                 .is_some();
 
             !key_exists
         };
 
-        let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+        let mut store_adapter =
+            SignalProtocolStoreAdapter::new(device_store_arc.clone(), self.signal_cache.clone());
         let mut stores = wacore::send::SignalStores {
             session_store: &mut store_adapter.session_store,
             identity_store: &mut store_adapter.identity_store,
@@ -313,8 +319,10 @@ impl Client {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
                     }
 
-                    let mut store_adapter_retry =
-                        SignalProtocolStoreAdapter::new(device_store_arc.clone());
+                    let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
+                        device_store_arc.clone(),
+                        self.signal_cache.clone(),
+                    );
                     let mut stores_retry = wacore::send::SignalStores {
                         session_store: &mut store_adapter_retry.session_store,
                         identity_store: &mut store_adapter_retry.identity_store,
@@ -375,6 +383,12 @@ impl Client {
         let stanza = self.ensure_status_participants(stanza, &group_info).await?;
 
         self.send_node(stanza).await?;
+
+        // Flush cached Signal state to DB after encryption
+        if let Err(e) = self.flush_signal_cache().await {
+            log::error!("Failed to flush signal cache after send_status_message: {e:?}");
+        }
+
         Ok(request_id)
     }
 
@@ -584,7 +598,8 @@ impl Client {
             let _session_guard = session_mutex.lock().await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
+            let mut store_adapter =
+                SignalProtocolStoreAdapter::new(device_store_arc, self.signal_cache.clone());
 
             wacore::send::prepare_peer_stanza(
                 &mut store_adapter.session_store,
@@ -649,7 +664,10 @@ impl Client {
                 force_key_distribution || !key_exists
             };
 
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc.clone());
+            let mut store_adapter = SignalProtocolStoreAdapter::new(
+                device_store_arc.clone(),
+                self.signal_cache.clone(),
+            );
 
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
@@ -802,8 +820,10 @@ impl Client {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
                         }
 
-                        let mut store_adapter_retry =
-                            SignalProtocolStoreAdapter::new(device_store_arc.clone());
+                        let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
+                            device_store_arc.clone(),
+                            self.signal_cache.clone(),
+                        );
                         let mut stores_retry = wacore::send::SignalStores {
                             session_store: &mut store_adapter_retry.session_store,
                             identity_store: &mut store_adapter_retry.identity_store,
@@ -893,7 +913,8 @@ impl Client {
             let _session_guard = session_mutex.lock().await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = SignalProtocolStoreAdapter::new(device_store_arc);
+            let mut store_adapter =
+                SignalProtocolStoreAdapter::new(device_store_arc, self.signal_cache.clone());
 
             let mut stores = wacore::send::SignalStores {
                 session_store: &mut store_adapter.session_store,
@@ -917,7 +938,14 @@ impl Client {
             .await?
         };
 
-        self.send_node(stanza_to_send).await.map_err(|e| e.into())
+        let result = self.send_node(stanza_to_send).await.map_err(|e| e.into());
+
+        // Flush cached Signal state to DB after encryption
+        if let Err(e) = self.flush_signal_cache().await {
+            log::error!("Failed to flush signal cache after send_message_impl: {e:?}");
+        }
+
+        result
     }
 
     /// Look up and include a tctoken in outgoing 1:1 message stanza nodes.

@@ -174,6 +174,17 @@ pub struct Client {
 
     pub(crate) unified_session: crate::unified_session::UnifiedSessionManager,
 
+    /// In-memory cache for Signal protocol state (sessions, identities, sender keys).
+    /// Matches WhatsApp Web's SignalStoreCache pattern: crypto ops read/write this cache,
+    /// and DB writes are deferred to flush() after each message is processed.
+    pub(crate) signal_cache: Arc<crate::store::signal_cache::SignalStoreCache>,
+
+    /// Global semaphore that limits message processing concurrency.
+    /// During offline sync: permits=1 (sequential, like WA Web's allChatQueue)
+    /// After offline sync: permits=N (parallel per-chat processing)
+    /// Wrapped in std::sync::Mutex to allow replacing on reconnect.
+    pub(crate) message_processing_semaphore: std::sync::Mutex<Arc<tokio::sync::Semaphore>>,
+
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
@@ -368,6 +379,10 @@ impl Client {
             id_counter: Arc::new(AtomicU64::new(0)),
             unified_session: crate::unified_session::UnifiedSessionManager::new(),
 
+            signal_cache: Arc::new(crate::store::signal_cache::SignalStoreCache::new()),
+            message_processing_semaphore: std::sync::Mutex::new(Arc::new(
+                tokio::sync::Semaphore::new(1),
+            )),
             session_locks: Cache::builder()
                 .time_to_live(Duration::from_secs(300)) // 5 minute TTL
                 .max_capacity(10_000) // Limit to 10k concurrent sessions
@@ -744,6 +759,12 @@ impl Client {
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
         self.retried_group_messages.invalidate_all();
+        // Clear signal cache so stale state doesn't leak across connections
+        self.signal_cache.clear().await;
+        // Reset message processing semaphore to 1 permit (sequential mode for next offline sync).
+        // Old workers holding the previous semaphore Arc will finish normally.
+        *self.message_processing_semaphore.lock().unwrap() =
+            Arc::new(tokio::sync::Semaphore::new(1));
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
@@ -759,6 +780,17 @@ impl Client {
             );
         }
         // Senders are dropped here, causing receivers to get RecvError → IqError::InternalChannelClosed
+    }
+
+    /// Flush the in-memory signal cache to the database backend.
+    /// Called after each message is decrypted or after encryption operations.
+    pub(crate) async fn flush_signal_cache(&self) -> Result<(), anyhow::Error> {
+        let device = self.persistence_manager.get_device_arc().await;
+        let device_guard = device.read().await;
+        self.signal_cache
+            .flush(&*device_guard.backend)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to flush signal cache: {e}"))
     }
 
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
