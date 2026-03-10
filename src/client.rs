@@ -766,7 +766,10 @@ impl Client {
     /// - Testing offline message delivery
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
-        self.auto_reconnect_errors.store(0, Ordering::Relaxed);
+        // Create a deterministic offline window before the next reconnect
+        // attempt so reconnect-based e2e tests can reliably exercise
+        // queued-offline behavior before the run loop dials back in.
+        self.auto_reconnect_errors.store(2, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
