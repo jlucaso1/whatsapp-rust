@@ -60,3 +60,16 @@ jobs:
         run: cargo build --workspace --exclude e2e-tests --all-targets --verbose
       - name: Run tests
         run: cargo test --workspace --exclude e2e-tests --verbose -- --no-capture
+
+  test-stable:
+    name: Test Stable (no-simd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build wacore-binary (stable, no SIMD)
+        run: cargo build -p wacore-binary --no-default-features --verbose
+      - name: Test wacore-binary (stable, no SIMD)
+        run: cargo test -p wacore-binary --no-default-features --lib --verbose
