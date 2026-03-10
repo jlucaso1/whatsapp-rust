@@ -180,6 +180,19 @@ impl TestClient {
     /// Disconnect and abort the run handle.
     pub async fn disconnect(self) {
         self.client.disconnect().await;
-        self.run_handle.abort();
+        let mut run_handle = self.run_handle;
+
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), &mut run_handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) if e.is_cancelled() => {}
+            Ok(Err(e)) => {
+                eprintln!("WARN: client run task finished with error during disconnect: {e}");
+            }
+            Err(_) => {
+                eprintln!("WARN: timed out waiting for client run task shutdown; aborting");
+                run_handle.abort();
+                let _ = run_handle.await;
+            }
+        }
     }
 }
