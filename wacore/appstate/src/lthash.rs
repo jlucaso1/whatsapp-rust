@@ -73,19 +73,22 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
         input_remaining = input_rem;
     }
 
+    // Use native endianness to match the SIMD path (bytemuck::cast reinterprets bytes as
+    // native-endian u16). The actual endianness doesn't matter for LTHash correctness —
+    // what matters is that SIMD and scalar paths agree.
     for (base_pair, input_pair) in base_remaining
         .chunks_exact_mut(2)
         .zip(input_remaining.chunks_exact(2))
     {
-        let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
-        let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
+        let x = u16::from_ne_bytes([base_pair[0], base_pair[1]]);
+        let y = u16::from_ne_bytes([input_pair[0], input_pair[1]]);
 
         let result = if subtract {
             x.wrapping_sub(y)
         } else {
             x.wrapping_add(y)
         };
-        let bytes = result.to_le_bytes();
+        let bytes = result.to_ne_bytes();
         base_pair[0] = bytes[0];
         base_pair[1] = bytes[1];
     }
