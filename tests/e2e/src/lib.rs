@@ -189,6 +189,14 @@ impl TestClient {
         Ok(())
     }
 
+    /// Reconnect and wait for the Connected event (replaces sleep-based waiting).
+    pub async fn reconnect_and_wait(&mut self) -> anyhow::Result<()> {
+        self.client.reconnect().await;
+        self.wait_for_event(10, |e| matches!(e, Event::Connected(_)))
+            .await?;
+        Ok(())
+    }
+
     /// Disconnect and abort the run handle.
     pub async fn disconnect(self) {
         self.client.disconnect().await;
