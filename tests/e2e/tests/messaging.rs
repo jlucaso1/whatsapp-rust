@@ -1,5 +1,6 @@
 use e2e_tests::TestClient;
 use log::info;
+use std::time::Duration;
 use wacore::types::events::Event;
 use whatsapp_rust::waproto::whatsapp as wa;
 
@@ -204,5 +205,71 @@ async fn test_message_revoke() -> anyhow::Result<()> {
     client_a.disconnect().await;
     client_b.disconnect().await;
 
+    Ok(())
+}
+
+/// Verify that received messages include the sender's push name in MessageInfo.
+/// The mock server now populates the `notify` attribute with the sender's display name.
+#[tokio::test]
+async fn test_message_has_push_name() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut client_a = TestClient::connect("e2e_pushname_msg_a").await?;
+    let mut client_b = TestClient::connect("e2e_pushname_msg_b").await?;
+
+    // Wait for app state sync so push name mutations can be sent
+    client_a.wait_for_app_state_sync().await?;
+
+    // Set a known push name on Client A
+    let push_name = "SenderBot";
+    client_a.client.profile().set_push_name(push_name).await?;
+    info!("Client A set push name to '{push_name}'");
+
+    // Small delay for the push name to propagate to the mock server
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("Client B should have a JID")
+        .to_non_ad();
+
+    // Client A sends a message to Client B
+    let text = "Hello with push name!";
+    client_a
+        .client
+        .send_message(
+            jid_b.clone(),
+            wa::Message {
+                conversation: Some(text.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    // Client B should receive the message with the sender's push name
+    let event = client_b
+        .wait_for_event(
+            15,
+            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text)),
+        )
+        .await?;
+
+    if let Event::Message(_, info) = event {
+        info!(
+            "Client B received message with push_name: '{}'",
+            info.push_name
+        );
+        assert!(
+            !info.push_name.is_empty(),
+            "Received message should have a non-empty push_name from the sender"
+        );
+    } else {
+        panic!("Expected Message event");
+    }
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
     Ok(())
 }
