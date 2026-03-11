@@ -10,6 +10,7 @@ use wacore::stanza::devices::DeviceNotification;
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{
     BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
+    PictureUpdate,
 };
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
@@ -162,6 +163,10 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Handle business notification (WhatsApp Web: handleBusinessNotification)
             // Notifies about business account status changes: verified name, profile, removal
             handle_business_notification(client, node).await;
+        }
+        "picture" => {
+            // Handle profile picture change notifications (WhatsApp Web: WAWebHandleProfilePicNotification)
+            handle_picture_notification(client, node);
         }
         "privacy_token" => {
             // Handle incoming trusted contact privacy token notifications.
@@ -571,6 +576,95 @@ async fn handle_business_notification(client: &Arc<Client>, node: &Node) {
         _ => {}
     }
 
+    client.core.event_bus.dispatch(&event);
+}
+
+/// Handle profile picture change notifications.
+///
+/// Matches WhatsApp Web's `WAWebHandleProfilePicNotification`.
+///
+/// Structure:
+/// ```xml
+/// <notification type="picture" from="user@s.whatsapp.net" t="1234567890" id="...">
+///   <set jid="user@s.whatsapp.net" id="pic_id" author="author@s.whatsapp.net"/>
+/// </notification>
+/// ```
+///
+/// Or for removal (no child or `<delete>` child):
+/// ```xml
+/// <notification type="picture" from="user@s.whatsapp.net" t="1234567890" id="...">
+///   <delete jid="user@s.whatsapp.net"/>
+/// </notification>
+/// ```
+fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
+    let from = match node.attrs().optional_jid("from") {
+        Some(jid) => jid,
+        None => {
+            warn!(target: "Client/Picture", "picture notification missing 'from' attribute");
+            return;
+        }
+    };
+
+    let timestamp = node
+        .attrs()
+        .optional_u64("t")
+        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
+        .unwrap_or_else(chrono::Utc::now);
+
+    // Look for <set>, <delete>, or <request> child to determine the action.
+    // WhatsApp Web has two formats:
+    // - With `jid` attr: direct update for that JID
+    // - With `hash` attr (no `jid`): side contact, resolved via contact hash lookup
+    let (jid, author, removed, picture_id) = if let Some(set_node) = node.get_optional_child("set")
+    {
+        let jid = set_node.attrs().optional_jid("jid").unwrap_or_else(|| {
+            if set_node.attrs().optional_string("hash").is_some() {
+                debug!(
+                    target: "Client/Picture",
+                    "Hash-based picture notification (no jid), using from={}", from
+                );
+            }
+            from.clone()
+        });
+        let author = set_node.attrs().optional_jid("author");
+        let pic_id = set_node
+            .attrs()
+            .optional_string("id")
+            .map(|s| s.to_string());
+        (jid, author, false, pic_id)
+    } else if let Some(delete_node) = node.get_optional_child("delete") {
+        let jid = delete_node
+            .attrs()
+            .optional_jid("jid")
+            .unwrap_or_else(|| from.clone());
+        let author = delete_node.attrs().optional_jid("author");
+        (jid, author, true, None)
+    } else {
+        // Unknown child type (e.g., "request", "set_avatar") — log and skip
+        let child_tag = node
+            .children()
+            .and_then(|c| c.first().map(|n| n.tag.as_str()));
+        debug!(
+            target: "Client/Picture",
+            "Ignoring picture notification with child {:?} from {}", child_tag, from
+        );
+        return;
+    };
+
+    debug!(
+        target: "Client/Picture",
+        "Picture {}: jid={}, author={:?}, pic_id={:?}",
+        if removed { "removed" } else { "updated" },
+        jid, author, picture_id
+    );
+
+    let event = Event::PictureUpdate(PictureUpdate {
+        jid,
+        author,
+        timestamp,
+        removed,
+        picture_id,
+    });
     client.core.event_bus.dispatch(&event);
 }
 

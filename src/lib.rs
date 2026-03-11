@@ -44,7 +44,7 @@ pub use features::{
     GroupParticipantOptions, GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode,
     MemberLinkMode, MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest,
     MexResponse, ParticipantChangeResponse, Presence, PresenceStatus, Profile, ProfilePicture,
-    Status, StatusPrivacySetting, StatusSendOptions, TcToken, UserInfo,
+    SetProfilePictureResponse, Status, StatusPrivacySetting, StatusSendOptions, TcToken, UserInfo,
 };
 
 pub mod bot;
