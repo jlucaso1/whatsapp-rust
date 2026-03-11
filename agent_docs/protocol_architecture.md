@@ -115,7 +115,7 @@ Constants from WhatsApp Web A/B props:
 
 ## File Organization
 
-```
+```text
 wacore/src/iq/
 ├── mod.rs          # Re-exports
 ├── spec.rs         # IqSpec trait definition

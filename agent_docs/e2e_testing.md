@@ -19,7 +19,8 @@ tests/e2e/tests/
 ├── groups.rs            # Group CRUD, admin, settings
 ├── media.rs             # Upload, download, send media
 ├── messaging.rs         # Send/receive text messages
-├── offline_groups.rs    # Offline group notifications + chatstate TTL
+├── chatstate_ttl.rs     # Chatstate TTL expiry (35s sleep — own file for parallelism)
+├── offline_groups.rs    # Offline group notifications
 ├── offline_messages.rs  # Offline message queuing + delivery
 ├── offline_receipts.rs  # Offline receipt + presence delivery
 ├── presence.rs          # Typing indicators, availability

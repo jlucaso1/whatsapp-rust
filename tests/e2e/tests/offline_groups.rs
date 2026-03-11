@@ -1,7 +1,7 @@
-//! Tests for offline group event delivery and chatstate TTL.
+//! Tests for offline group event delivery.
 //!
 //! These tests verify that the mock server properly queues group notifications
-//! and chatstate events for offline clients.
+//! for offline clients. Chatstate TTL tests are in `chatstate_ttl.rs`.
 
 use e2e_tests::TestClient;
 use log::info;
@@ -369,113 +369,6 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
-
-    Ok(())
-}
-
-/// Test that typing indicators (chatstate) are NOT delivered when they expire.
-///
-/// Flow:
-/// 1. A and B connect, B goes offline
-/// 2. A sends typing indicator to B
-/// 3. Wait longer than the chatstate TTL (30s)
-/// 4. B reconnects — should NOT receive the stale typing indicator
-#[tokio::test]
-async fn test_expired_chatstate_not_delivered() -> anyhow::Result<()> {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    let client_a = TestClient::connect("e2e_off_chatstate_a").await?;
-    let mut client_b = TestClient::connect("e2e_off_chatstate_b").await?;
-
-    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
-
-    info!("B={jid_b}");
-
-    // Step 1: B goes offline
-    client_b.client.reconnect().await;
-    info!("B disconnected");
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Step 2: A sends typing indicator while B is offline
-    client_a.client.chatstate().send_composing(&jid_b).await?;
-    info!("A sent typing indicator to offline B");
-
-    // Step 3: Wait for chatstate TTL to expire (30s + buffer)
-    info!("Waiting 35s for chatstate TTL to expire...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(35)).await;
-
-    // Step 4: B reconnects — should NOT get the expired typing indicator
-    // B will reconnect automatically; wait for events
-    let result = client_b
-        .wait_for_event(10, |e| matches!(e, Event::ChatPresence(_)))
-        .await;
-
-    match result {
-        Err(_) => {
-            info!("Confirmed: expired chatstate was NOT delivered to B");
-        }
-        Ok(event) => {
-            // This might happen if the server doesn't implement TTL expiry yet
-            info!(
-                "WARNING: B received chatstate after TTL should have expired: {:?}",
-                event
-            );
-            // Don't fail — this reveals what needs fixing
-        }
-    }
-
-    client_a.disconnect().await;
-    client_b.disconnect().await;
-
-    Ok(())
-}
-
-/// Test that a fresh chatstate (within TTL) IS delivered on reconnect.
-///
-/// Flow:
-/// 1. B goes offline
-/// 2. A sends typing indicator to B
-/// 3. B reconnects quickly (within TTL)
-/// 4. B should receive the typing indicator
-#[tokio::test]
-async fn test_fresh_chatstate_delivered_on_reconnect() -> anyhow::Result<()> {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    let client_a = TestClient::connect("e2e_off_chatstate_fresh_a").await?;
-    let mut client_b = TestClient::connect("e2e_off_chatstate_fresh_b").await?;
-
-    let jid_b = client_b.client.get_pn().await.expect("B JID").to_non_ad();
-
-    info!("B={jid_b}");
-
-    // Step 1: B goes offline
-    client_b.client.reconnect().await;
-    info!("B disconnected");
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Step 2: A sends typing indicator
-    client_a.client.chatstate().send_composing(&jid_b).await?;
-    info!("A sent typing indicator to offline B");
-
-    // Step 3: B reconnects quickly (within 30s TTL) — should receive it
-    let result = client_b
-        .wait_for_event(30, |e| matches!(e, Event::ChatPresence(_)))
-        .await;
-
-    match result {
-        Ok(event) => {
-            info!("B received fresh chatstate: {:?}", event);
-        }
-        Err(e) => {
-            info!(
-                "B did not receive chatstate within timeout: {} (may need mock server fix)",
-                e
-            );
-        }
-    }
-
-    client_a.disconnect().await;
-    client_b.disconnect().await;
 
     Ok(())
 }

@@ -129,23 +129,17 @@ async fn test_bidirectional_offline_receipt() -> anyhow::Result<()> {
                     && receipt.r#type == ReceiptType::Delivered
             )
         })
-        .await;
+        .await
+        .expect("A should receive deferred delivery receipt after reconnect");
 
-    match receipt_event {
-        Ok(Event::Receipt(receipt)) => {
-            info!(
-                "A received deferred delivery receipt after reconnect: {:?}",
-                receipt.r#type
-            );
-            assert!(receipt.message_ids.contains(&msg_id));
-        }
-        Ok(_) => panic!("Expected Receipt event"),
-        Err(e) => {
-            info!(
-                "A did not receive deferred delivery receipt (may need mock server fix): {}",
-                e
-            );
-        }
+    if let Event::Receipt(receipt) = receipt_event {
+        info!(
+            "A received deferred delivery receipt after reconnect: {:?}",
+            receipt.r#type
+        );
+        assert!(receipt.message_ids.contains(&msg_id));
+    } else {
+        panic!("Expected Receipt event");
     }
 
     client_a.disconnect().await;
@@ -313,11 +307,12 @@ async fn test_offline_presence_coalescing() -> anyhow::Result<()> {
         .wait_for_event(3, |e| matches!(e, Event::Presence(_)))
         .await;
 
-    if second.is_err() {
-        info!("Confirmed: only one presence update received (coalesced)");
-    } else {
-        info!("Got second presence — coalescing may not be working, but test passes for now");
-    }
+    assert!(
+        second.is_err(),
+        "Expected no second presence due to coalescing, but got: {:?}",
+        second.unwrap()
+    );
+    info!("Confirmed: only one presence update received (coalesced)");
 
     client_a.disconnect().await;
     client_b.disconnect().await;

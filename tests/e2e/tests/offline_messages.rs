@@ -170,10 +170,10 @@ async fn test_message_delivery_when_online() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that multiple messages sent to an offline recipient are all queued
-/// (server accepts them without error).
+/// Test that the server accepts multiple messages for an offline recipient
+/// without error (sender-side acceptance only — does not verify delivery).
 #[tokio::test]
-async fn test_multiple_messages_queued_for_offline() -> anyhow::Result<()> {
+async fn test_server_accepts_messages_for_offline_recipient() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let client_a = TestClient::connect("e2e_offline_multi_a").await?;
