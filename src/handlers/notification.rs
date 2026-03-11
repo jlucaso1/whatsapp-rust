@@ -10,7 +10,7 @@ use wacore::stanza::devices::DeviceNotification;
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{
     BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
-    PictureUpdate,
+    PictureUpdate, UserAboutUpdate,
 };
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
@@ -172,6 +172,10 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // Handle incoming trusted contact privacy token notifications.
             // Matches WhatsApp Web's WAWebHandlePrivacyTokenNotification.
             handle_privacy_token_notification(client, node).await;
+        }
+        "status" => {
+            // Handle status/about text change notifications (WhatsApp Web: WAWebHandleAboutNotification)
+            handle_status_notification(client, node);
         }
         "w:gp2" => {
             // Cache invalidation for these notifications is handled inside
@@ -678,6 +682,59 @@ fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
         picture_id,
     });
     client.core.event_bus.dispatch(&event);
+}
+
+/// Handle status/about text change notifications.
+///
+/// Matches WhatsApp Web's `WAWebHandleAboutNotification`.
+///
+/// Structure:
+/// ```xml
+/// <notification type="status" from="user@s.whatsapp.net" t="1234567890" notify="PushName">
+///   <set>new status text</set>
+/// </notification>
+/// ```
+fn handle_status_notification(client: &Arc<Client>, node: &Node) {
+    let from = match node.attrs().optional_jid("from") {
+        Some(jid) => jid,
+        None => {
+            warn!(target: "Client/Status", "status notification missing 'from' attribute");
+            return;
+        }
+    };
+
+    let timestamp = node
+        .attrs()
+        .optional_u64("t")
+        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
+        .unwrap_or_else(chrono::Utc::now);
+
+    if let Some(set_node) = node.get_optional_child("set") {
+        let status_text = match &set_node.content {
+            Some(wacore_binary::node::NodeContent::String(s)) => s.clone(),
+            Some(wacore_binary::node::NodeContent::Bytes(b)) => {
+                String::from_utf8_lossy(b).into_owned()
+            }
+            _ => String::new(),
+        };
+
+        debug!(
+            target: "Client/Status",
+            "Status update from {} (length={})", from, status_text.len()
+        );
+
+        let event = Event::UserAboutUpdate(UserAboutUpdate {
+            jid: from,
+            status: status_text,
+            timestamp,
+        });
+        client.core.event_bus.dispatch(&event);
+    } else {
+        debug!(
+            target: "Client/Status",
+            "Status notification from {} without <set> child, ignoring", from
+        );
+    }
 }
 
 /// Handle w:gp2 group participant change notifications.

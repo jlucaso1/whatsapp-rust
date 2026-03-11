@@ -1,5 +1,6 @@
 use e2e_tests::TestClient;
 use log::info;
+use wacore::types::events::Event;
 
 #[tokio::test]
 async fn test_set_status_text() -> anyhow::Result<()> {
@@ -238,6 +239,54 @@ async fn test_set_push_name_whitespace_only() -> anyhow::Result<()> {
     info!("Whitespace-only push name set successfully");
 
     client.disconnect().await;
+    Ok(())
+}
+
+/// Verify that setting status text broadcasts a `UserAboutUpdate` notification
+/// to other connected clients. The mock server broadcasts `<notification type="status">`
+/// matching real WhatsApp server behavior (WAWebHandleAboutNotification).
+#[tokio::test]
+async fn test_status_text_notification_received() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_status_notif_a").await?;
+    let mut client_b = TestClient::connect("e2e_status_notif_b").await?;
+
+    let new_status = "Testing status notifications!";
+    info!("Client A setting status text to: {new_status}");
+    client_a
+        .client
+        .profile()
+        .set_status_text(new_status)
+        .await?;
+
+    let jid_a = client_a
+        .client
+        .get_pn()
+        .await
+        .expect("Client A should have a JID")
+        .to_non_ad();
+
+    // Client B should receive a UserAboutUpdate event from Client A
+    let event = client_b
+        .wait_for_event(
+            15,
+            |e| matches!(e, Event::UserAboutUpdate(u) if u.jid == jid_a && u.status == new_status),
+        )
+        .await?;
+
+    if let Event::UserAboutUpdate(update) = event {
+        info!(
+            "Client B received status update from {} (length={})",
+            update.jid,
+            update.status.len()
+        );
+    } else {
+        panic!("Expected UserAboutUpdate event");
+    }
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
     Ok(())
 }
 
