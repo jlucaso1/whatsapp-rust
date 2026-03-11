@@ -1,3 +1,4 @@
+use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
@@ -8,31 +9,14 @@ use wacore_binary::node::{Node, NodeContent};
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 
 /// Known dirty bit types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum DirtyType {
+    #[str = "account_sync"]
     AccountSync,
+    #[str = "groups"]
     Groups,
+    #[string_fallback]
     Other(String),
-}
-
-impl DirtyType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            DirtyType::AccountSync => "account_sync",
-            DirtyType::Groups => "groups",
-            DirtyType::Other(s) => s.as_str(),
-        }
-    }
-}
-
-impl From<&str> for DirtyType {
-    fn from(s: &str) -> Self {
-        match s {
-            "account_sync" => DirtyType::AccountSync,
-            "groups" => DirtyType::Groups,
-            other => DirtyType::Other(other.to_string()),
-        }
-    }
 }
 
 /// A dirty bit to clean.

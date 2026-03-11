@@ -13,6 +13,21 @@ pub trait ProtocolNode: Sized {
     fn try_from_node(node: &Node) -> Result<Self>;
 }
 
+/// Trait for parsing a string enum from a `&str`.
+///
+/// Automatically implemented by the `StringEnum` derive macro for both
+/// standard enums (fails on unknown) and fallback enums (captures unknown).
+pub trait ParseStringEnum: Sized {
+    fn parse_from_str(s: &str) -> Result<Self>;
+}
+
+/// Parse a string enum value from a `&str`.
+///
+/// Used by the `ProtocolNode` derive macro for `#[attr(string_enum)]` fields.
+pub fn parse_string_enum<T: ParseStringEnum>(s: &str) -> Result<T> {
+    T::parse_from_str(s)
+}
+
 /// Macro for defining simple protocol nodes with only attributes (no children).
 ///
 /// This macro generates a struct with the specified fields as attributes,

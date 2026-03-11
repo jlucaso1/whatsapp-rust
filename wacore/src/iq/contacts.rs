@@ -41,20 +41,12 @@ pub struct ProfilePicture {
 }
 
 /// Profile picture type (preview thumbnail or full-size).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum ProfilePictureType {
-    #[default]
+    #[str = "preview"]
     Preview,
+    #[str = "image"]
     Full,
-}
-
-impl ProfilePictureType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Preview => "preview",
-            Self::Full => "image",
-        }
-    }
 }
 
 /// Fetches the profile picture URL for a given JID.
