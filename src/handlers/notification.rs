@@ -640,15 +640,27 @@ fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
         let author = delete_node.attrs().optional_jid("author");
         (jid, author, true, None)
     } else {
-        // Unknown child type (e.g., "request", "set_avatar") — log and skip
-        let child_tag = node
-            .children()
-            .and_then(|c| c.first().map(|n| n.tag.as_str()));
-        debug!(
-            target: "Client/Picture",
-            "Ignoring picture notification with child {:?} from {}", child_tag, from
-        );
-        return;
+        // No <set> or <delete> child. Check if notification has no children at all,
+        // which WhatsApp uses as a deletion signal (bare notification).
+        let children = node.children().map(|c| c.len()).unwrap_or(0);
+        if children == 0 {
+            let jid = node
+                .attrs()
+                .optional_jid("jid")
+                .unwrap_or_else(|| from.clone());
+            let author = node.attrs().optional_jid("author");
+            (jid, author, true, None)
+        } else {
+            // Unknown child type (e.g., "request", "set_avatar") — log and skip
+            let child_tag = node
+                .children()
+                .and_then(|c| c.first().map(|n| n.tag.as_str()));
+            debug!(
+                target: "Client/Picture",
+                "Ignoring picture notification with child {:?} from {}", child_tag, from
+            );
+            return;
+        }
     };
 
     debug!(

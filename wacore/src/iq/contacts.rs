@@ -155,17 +155,17 @@ impl IqSpec for ProfilePictureSpec {
             return Err(anyhow!("Profile picture error {}: {}", code, text));
         }
 
-        let id = picture_node
-            .attrs()
-            .optional_string("id")
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow!("Picture response missing 'id' attribute"))?;
+        let id = match picture_node.attrs().optional_string("id") {
+            Some(s) => s.to_string(),
+            // Empty <picture/> with no attributes = cache hit (picture unchanged)
+            None => return Ok(None),
+        };
 
-        let url = picture_node
-            .attrs()
-            .optional_string("url")
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow!("Picture response missing 'url' attribute"))?;
+        let url = match picture_node.attrs().optional_string("url") {
+            Some(s) => s.to_string(),
+            // <picture id="..."/> with no url = cache hit variant
+            None => return Ok(None),
+        };
 
         let direct_path = picture_node
             .attrs()
@@ -289,13 +289,25 @@ impl IqSpec for SetProfilePictureSpec {
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
-        // For remove operations, the server may return an empty result
-        let id = response
-            .get_optional_child("picture")
-            .and_then(|p| p.attrs().optional_string("id").map(|s| s.to_string()))
-            .unwrap_or_default();
-
-        Ok(SetProfilePictureResponse { id })
+        if self.image_data.is_some() {
+            // Set operation: server must return <picture id="..."/>
+            let picture_node = response
+                .get_optional_child("picture")
+                .ok_or_else(|| anyhow!("Set picture response missing 'picture' child"))?;
+            let id = picture_node
+                .attrs()
+                .optional_string("id")
+                .map(|s| s.to_string())
+                .ok_or_else(|| anyhow!("Set picture response missing 'id' attribute"))?;
+            Ok(SetProfilePictureResponse { id })
+        } else {
+            // Remove operation: server may return an empty result
+            let id = response
+                .get_optional_child("picture")
+                .and_then(|p| p.attrs().optional_string("id").map(|s| s.to_string()))
+                .unwrap_or_default();
+            Ok(SetProfilePictureResponse { id })
+        }
     }
 }
 

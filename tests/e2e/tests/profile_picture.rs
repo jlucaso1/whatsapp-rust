@@ -43,16 +43,23 @@ async fn test_set_profile_picture() -> anyhow::Result<()> {
     info!("Profile picture retrieved: id={}, url={}", pic.id, pic.url);
 
     // Verify we receive a PictureUpdate event (self-notification from server)
+    let expected_jid = own_jid.to_non_ad();
     let event = client
-        .wait_for_event(10, |e| matches!(e, Event::PictureUpdate(_)))
+        .wait_for_event(
+            10,
+            |e| matches!(e, Event::PictureUpdate(u) if !u.removed && u.jid == expected_jid),
+        )
         .await?;
     if let Event::PictureUpdate(update) = event {
         info!(
             "Received PictureUpdate event: jid={}, author={:?}, removed={}, pic_id={:?}",
             update.jid, update.author, update.removed, update.picture_id
         );
-        assert!(!update.removed, "Should be a set, not a delete");
-        assert!(update.picture_id.is_some(), "Should have a picture ID");
+        assert_eq!(
+            update.picture_id.as_deref(),
+            Some(response.id.as_str()),
+            "Picture ID in event should match set response"
+        );
     }
 
     client.disconnect().await;
@@ -129,11 +136,19 @@ async fn test_remove_profile_picture() -> anyhow::Result<()> {
     info!("Profile picture removed successfully");
 
     // Verify we receive a PictureUpdate event with removed=true
+    let own_jid = client
+        .client
+        .get_pn()
+        .await
+        .expect("should have PN after pairing");
+    let expected_jid = own_jid.to_non_ad();
     let event = client
-        .wait_for_event(10, |e| matches!(e, Event::PictureUpdate(u) if u.removed))
+        .wait_for_event(
+            10,
+            |e| matches!(e, Event::PictureUpdate(u) if u.removed && u.jid == expected_jid),
+        )
         .await?;
     if let Event::PictureUpdate(update) = event {
-        assert!(update.removed, "Should be a delete");
         assert!(
             update.picture_id.is_none(),
             "Delete should have no picture ID"
@@ -142,11 +157,6 @@ async fn test_remove_profile_picture() -> anyhow::Result<()> {
     }
 
     // Verify the picture is gone
-    let own_jid = client
-        .client
-        .get_pn()
-        .await
-        .expect("should have PN after pairing");
     let pic = client
         .client
         .contacts()
