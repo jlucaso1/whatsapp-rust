@@ -775,6 +775,19 @@ impl Client {
         }
     }
 
+    /// Drop the current connection and reconnect immediately with no delay.
+    ///
+    /// Unlike [`reconnect`], which introduces a deliberate offline window,
+    /// this method sets the `expected_disconnect` flag so the run loop
+    /// skips the backoff delay and reconnects as fast as possible.
+    pub async fn reconnect_immediately(self: &Arc<Self>) {
+        info!("Reconnecting immediately (expected disconnect).");
+        self.expected_disconnect.store(true, Ordering::Relaxed);
+        if let Some(transport) = self.transport.lock().await.as_ref() {
+            transport.disconnect().await;
+        }
+    }
+
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
         *self.transport.lock().await = None;

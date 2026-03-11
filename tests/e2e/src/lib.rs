@@ -189,6 +189,23 @@ impl TestClient {
         Ok(())
     }
 
+    /// Reconnect and wait for the Connected event (replaces sleep-based waiting).
+    ///
+    /// Drains any stale Connected events from the broadcast channel before
+    /// triggering reconnect, so only the new Connected event is matched.
+    pub async fn reconnect_and_wait(&mut self) -> anyhow::Result<()> {
+        // Drain any buffered Connected events from prior connections
+        while let Ok(event) = self.event_rx.try_recv() {
+            if matches!(event, Event::Connected(_)) {
+                continue;
+            }
+        }
+        self.client.reconnect().await;
+        self.wait_for_event(10, |e| matches!(e, Event::Connected(_)))
+            .await?;
+        Ok(())
+    }
+
     /// Disconnect and abort the run handle.
     pub async fn disconnect(self) {
         self.client.disconnect().await;
