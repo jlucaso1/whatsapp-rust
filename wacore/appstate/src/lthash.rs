@@ -42,7 +42,11 @@ impl LTHash {
 
 fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool) {
     assert_eq!(base.len(), input.len(), "length mismatch");
-    assert!(base.len().is_multiple_of(2), "slice lengths must be even");
+    // Use `% 2` instead of `.is_multiple_of(2)` for stable Rust compatibility.
+    #[allow(clippy::manual_is_multiple_of)]
+    {
+        assert!(base.len() % 2 == 0, "slice lengths must be even");
+    }
 
     #[allow(unused_mut, unused_assignments)]
     let (mut base_remaining, mut input_remaining): (&mut [u8], &[u8]) = (base, input);

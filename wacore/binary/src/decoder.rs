@@ -312,6 +312,7 @@ impl<'a> Decoder<'a> {
             let low_mask = Simd::splat(0x0F);
 
             let (chunks, remainder) = packed_data.as_chunks::<16>();
+            unpacked_bytes.reserve(chunks.len() * 32);
             for chunk in chunks {
                 let data = u8x16::from_array(*chunk);
                 let high_nibbles = (data >> 4) & low_mask;
@@ -319,8 +320,14 @@ impl<'a> Decoder<'a> {
                 let high_chars = lookup_table.swizzle_dyn(high_nibbles);
                 let low_chars = lookup_table.swizzle_dyn(low_nibbles);
                 let (lo, hi) = Simd::interleave(high_chars, low_chars);
-                unpacked_bytes.extend_from_slice(lo.as_array());
-                unpacked_bytes.extend_from_slice(hi.as_array());
+                // SAFETY: we reserved enough capacity above, and lo/hi are 16 bytes each.
+                unsafe {
+                    let len = unpacked_bytes.len();
+                    let ptr = unpacked_bytes.as_mut_ptr().add(len);
+                    std::ptr::copy_nonoverlapping(lo.as_array().as_ptr(), ptr, 16);
+                    std::ptr::copy_nonoverlapping(hi.as_array().as_ptr(), ptr.add(16), 16);
+                    unpacked_bytes.set_len(len + 32);
+                }
             }
             remainder
         };
@@ -344,6 +351,7 @@ impl<'a> Decoder<'a> {
             let f15 = Simd::splat(15);
 
             let (chunks, remainder) = packed_data.as_chunks::<16>();
+            unpacked_bytes.reserve(chunks.len() * 32);
             for chunk in chunks {
                 let data = u8x16::from_array(*chunk);
 
@@ -372,8 +380,14 @@ impl<'a> Decoder<'a> {
                 let high_chars = lookup_table.swizzle_dyn(high_nibbles);
                 let low_chars = lookup_table.swizzle_dyn(low_nibbles);
                 let (lo, hi) = Simd::interleave(high_chars, low_chars);
-                unpacked_bytes.extend_from_slice(lo.as_array());
-                unpacked_bytes.extend_from_slice(hi.as_array());
+                // SAFETY: we reserved enough capacity above, and lo/hi are 16 bytes each.
+                unsafe {
+                    let len = unpacked_bytes.len();
+                    let ptr = unpacked_bytes.as_mut_ptr().add(len);
+                    std::ptr::copy_nonoverlapping(lo.as_array().as_ptr(), ptr, 16);
+                    std::ptr::copy_nonoverlapping(hi.as_array().as_ptr(), ptr.add(16), 16);
+                    unpacked_bytes.set_len(len + 32);
+                }
             }
             remainder
         };
