@@ -19,39 +19,14 @@ impl StanzaKey {
 }
 
 /// Addressing mode for a group (phone number vs LID).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crate::StringEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum AddressingMode {
-    #[default]
+    #[string_default]
+    #[str = "pn"]
     Pn,
+    #[str = "lid"]
     Lid,
-}
-
-impl AddressingMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AddressingMode::Pn => "pn",
-            AddressingMode::Lid => "lid",
-        }
-    }
-}
-
-impl std::fmt::Display for AddressingMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl TryFrom<&str> for AddressingMode {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "lid" => Ok(AddressingMode::Lid),
-            "pn" | "" => Ok(AddressingMode::Pn),
-            _ => Err(anyhow::anyhow!("unknown addressing_mode: {value}")),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -79,42 +54,38 @@ pub struct DeviceSentMeta {
     pub phash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, crate::StringEnum)]
 pub enum EditAttribute {
-    #[default]
+    #[string_default]
+    #[str = ""]
     Empty,
+    #[str = "1"]
     MessageEdit,
+    #[str = "2"]
     PinInChat,
+    #[str = "3"]
     AdminEdit,
+    #[str = "7"]
     SenderRevoke,
+    #[str = "8"]
     AdminRevoke,
+    #[string_fallback]
     Unknown(String),
 }
 
 impl From<String> for EditAttribute {
     fn from(s: String) -> Self {
-        match s.as_str() {
-            "" => Self::Empty,
-            "1" => Self::MessageEdit,
-            "2" => Self::PinInChat,
-            "3" => Self::AdminEdit,
-            "7" => Self::SenderRevoke,
-            "8" => Self::AdminRevoke,
-            _ => Self::Unknown(s),
-        }
+        Self::from(s.as_str())
     }
 }
 
 impl EditAttribute {
-    pub fn to_string_val(&self) -> &'static str {
+    /// Returns the wire-format string value for the edit attribute.
+    /// Unknown values map to empty string (same as Empty).
+    pub fn to_string_val(&self) -> &str {
         match self {
-            Self::Empty => "",
-            Self::MessageEdit => "1",
-            Self::PinInChat => "2",
-            Self::AdminEdit => "3",
-            Self::SenderRevoke => "7",
-            Self::AdminRevoke => "8",
             Self::Unknown(_) => "",
+            other => other.as_str(),
         }
     }
 }
