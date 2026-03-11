@@ -7,8 +7,11 @@ use crate::store::commands::DeviceCommand;
 use anyhow::Result;
 use log::{debug, warn};
 use std::sync::Arc;
+use wacore::iq::contacts::SetProfilePictureSpec;
 use wacore::iq::profile::SetStatusTextSpec;
 use wacore_binary::builder::NodeBuilder;
+
+pub use wacore::iq::contacts::SetProfilePictureResponse;
 
 /// Feature handle for profile operations.
 pub struct Profile<'a> {
@@ -81,6 +84,37 @@ impl<'a> Profile<'a> {
             .await;
 
         Ok(())
+    }
+
+    /// Set the user's own profile picture.
+    ///
+    /// Sends a JPEG image as the new profile picture. The image should already
+    /// be properly sized/cropped by the caller (WhatsApp typically uses 640x640).
+    ///
+    /// ## Wire Format
+    /// ```xml
+    /// <iq type="set" xmlns="w:profile:picture" to="s.whatsapp.net">
+    ///   <picture type="image">{jpeg bytes}</picture>
+    /// </iq>
+    /// ```
+    pub async fn set_profile_picture(
+        &self,
+        image_data: Vec<u8>,
+    ) -> Result<SetProfilePictureResponse> {
+        debug!("Setting profile picture (size={} bytes)", image_data.len());
+        Ok(self
+            .client
+            .execute(SetProfilePictureSpec::set_own(image_data))
+            .await?)
+    }
+
+    /// Remove the user's own profile picture.
+    pub async fn remove_profile_picture(&self) -> Result<SetProfilePictureResponse> {
+        debug!("Removing profile picture");
+        Ok(self
+            .client
+            .execute(SetProfilePictureSpec::remove_own())
+            .await?)
     }
 
     /// Build and send the `setting_pushName` app state mutation.

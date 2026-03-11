@@ -596,10 +596,18 @@ pub struct PresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
+    /// The JID whose picture changed (user or group).
     pub jid: Jid,
-    pub author: Jid,
+    /// The user who made the change. Present for group picture changes
+    /// (the admin who changed it). `None` for personal picture updates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<Jid>,
     pub timestamp: DateTime<Utc>,
-    pub photo_change: Option<wa::PhotoChange>,
+    /// Whether the picture was removed (true) or set/updated (false).
+    pub removed: bool,
+    /// The server-assigned picture ID (from `<set id="..."/>`). `None` for deletions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

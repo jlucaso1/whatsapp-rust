@@ -4,6 +4,7 @@
 //! Usync types are defined in `wacore::iq::usync`.
 
 use crate::client::Client;
+use crate::request::IqError;
 use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
@@ -78,7 +79,13 @@ impl<'a> Contacts<'a> {
             spec = spec.with_tc_token(token);
         }
 
-        Ok(self.client.execute(spec).await?)
+        match self.client.execute(spec).await {
+            Ok(pic) => Ok(pic),
+            // 404/401 = no profile picture (or not authorized to see it).
+            // WhatsApp server returns type="error" IQ for these cases.
+            Err(IqError::ServerError { code, .. }) if code == 404 || code == 401 => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub async fn get_user_info(&self, jids: &[Jid]) -> Result<HashMap<Jid, UserInfo>> {
@@ -134,6 +141,7 @@ mod tests {
             id: "123456789".to_string(),
             url: "https://example.com/pic.jpg".to_string(),
             direct_path: Some("/v/pic.jpg".to_string()),
+            hash: None,
         };
 
         assert_eq!(pic.id, "123456789");

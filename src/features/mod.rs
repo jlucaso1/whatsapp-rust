@@ -27,7 +27,7 @@ pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, Me
 
 pub use presence::{Presence, PresenceStatus};
 
-pub use profile::Profile;
+pub use profile::{Profile, SetProfilePictureResponse};
 
 pub use status::{Status, StatusPrivacySetting, StatusSendOptions};
 
