@@ -150,14 +150,14 @@ mod tests {
             assert_eq!(parsed.to_string_val(), string_val);
         }
 
-        // Unknown values should be preserved
+        // Unknown values should be preserved (round-trip the wire value)
         assert_eq!(
             EditAttribute::from("99".to_string()),
             EditAttribute::Unknown("99".to_string())
         );
         assert_eq!(
             EditAttribute::Unknown("anything".to_string()).to_string_val(),
-            ""
+            "anything"
         );
     }
 
