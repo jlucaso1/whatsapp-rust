@@ -81,12 +81,9 @@ impl From<String> for EditAttribute {
 
 impl EditAttribute {
     /// Returns the wire-format string value for the edit attribute.
-    /// Unknown values map to empty string (same as Empty).
+    /// Preserves the original wire value for Unknown variants.
     pub fn to_string_val(&self) -> &str {
-        match self {
-            Self::Unknown(_) => "",
-            other => other.as_str(),
-        }
+        self.as_str()
     }
 }
 
