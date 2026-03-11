@@ -4,11 +4,11 @@
 //! the `ProtocolNode` pattern defined in `wacore/src/protocol.rs`.
 
 use crate::StringEnum;
-use crate::iq::node::{optional_child, optional_u64};
+use crate::iq::node::optional_child;
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use log::warn;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
@@ -26,9 +26,12 @@ pub enum BlocklistAction {
 /// Request node for updating blocklist.
 ///
 /// Wire format: `<item action="block|unblock" jid="...@s.whatsapp.net"/>`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, crate::ProtocolNode)]
+#[protocol(tag = "item")]
 pub struct BlocklistItemRequest {
+    #[attr(name = "jid", jid)]
     pub jid: Jid,
+    #[attr(name = "action", string_enum)]
     pub action: BlocklistAction,
 }
 
@@ -48,75 +51,16 @@ impl BlocklistItemRequest {
         Self::new(jid, BlocklistAction::Unblock)
     }
 }
-
-impl ProtocolNode for BlocklistItemRequest {
-    fn tag(&self) -> &'static str {
-        "item"
-    }
-
-    fn into_node(self) -> Node {
-        NodeBuilder::new("item")
-            .attr("action", self.action.as_str())
-            .attr("jid", self.jid.to_string())
-            .build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "item" {
-            return Err(anyhow!("expected <item>, got <{}>", node.tag));
-        }
-
-        let mut attrs = node.attrs();
-        let action_str = attrs
-            .optional_string("action")
-            .ok_or_else(|| anyhow!("missing action attribute"))?;
-        let action = BlocklistAction::try_from(action_str)?;
-        let jid = attrs.optional_jid("jid");
-        if let Err(e) = attrs.finish() {
-            return Err(anyhow!("{e}"));
-        }
-        let jid = jid.ok_or_else(|| anyhow!("missing jid attribute"))?;
-
-        Ok(Self { jid, action })
-    }
-}
 /// A single blocklist entry from the response.
 ///
 /// Wire format: `<item jid="...@s.whatsapp.net" t="1234567890"/>`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, crate::ProtocolNode)]
+#[protocol(tag = "item")]
 pub struct BlocklistEntry {
+    #[attr(name = "jid", jid)]
     pub jid: Jid,
+    #[attr(name = "t", u64)]
     pub timestamp: Option<u64>,
-}
-
-impl ProtocolNode for BlocklistEntry {
-    fn tag(&self) -> &'static str {
-        "item"
-    }
-
-    fn into_node(self) -> Node {
-        let mut builder = NodeBuilder::new("item").attr("jid", self.jid.to_string());
-        if let Some(t) = self.timestamp {
-            builder = builder.attr("t", t.to_string());
-        }
-        builder.build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "item" {
-            return Err(anyhow!("expected <item>, got <{}>", node.tag));
-        }
-
-        let mut attrs = node.attrs();
-        let jid = attrs.optional_jid("jid");
-        if let Err(e) = attrs.finish() {
-            return Err(anyhow!("{e}"));
-        }
-        let jid = jid.ok_or_else(|| anyhow!("missing jid attribute"))?;
-        let timestamp = optional_u64(node, "t");
-
-        Ok(Self { jid, timestamp })
-    }
 }
 
 /// Response containing the blocklist entries.

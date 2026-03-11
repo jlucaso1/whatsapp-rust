@@ -42,6 +42,7 @@
 //! </iq>
 //! ```
 
+use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
@@ -52,44 +53,30 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
 /// Usync mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum UsyncMode {
     /// Query mode - used for contact lookups.
-    #[default]
+    #[string_default]
+    #[str = "query"]
     Query,
     /// Full mode - used for user info with more details.
+    #[str = "full"]
     Full,
 }
 
-impl UsyncMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Query => "query",
-            Self::Full => "full",
-        }
-    }
-}
-
 /// Usync context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum UsyncContext {
     /// Interactive context - for user-initiated operations.
-    #[default]
+    #[string_default]
+    #[str = "interactive"]
     Interactive,
     /// Background context - for background sync operations.
+    #[str = "background"]
     Background,
     /// Message context - for message-related operations.
+    #[str = "message"]
     Message,
-}
-
-impl UsyncContext {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Interactive => "interactive",
-            Self::Background => "background",
-            Self::Message => "message",
-        }
-    }
 }
 
 /// Build user nodes with phone number contact children.

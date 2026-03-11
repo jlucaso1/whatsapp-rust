@@ -10,8 +10,10 @@ use wacore_binary::node::Node;
 /// Unified session telemetry node.
 ///
 /// Session ID formula: `(now_ms + server_offset_ms + 3_DAYS_MS) % 7_DAYS_MS`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::ProtocolNode)]
+#[protocol(tag = "unified_session")]
 pub struct UnifiedSession {
+    #[attr(name = "id")]
     pub id: String,
 }
 
@@ -34,33 +36,6 @@ impl UnifiedSession {
 
     pub fn from_offset(server_time_offset_ms: i64) -> Self {
         Self::new(Self::calculate_id(server_time_offset_ms))
-    }
-}
-
-impl ProtocolNode for UnifiedSession {
-    fn tag(&self) -> &'static str {
-        "unified_session"
-    }
-
-    fn into_node(self) -> Node {
-        NodeBuilder::new("unified_session")
-            .attr("id", self.id)
-            .build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "unified_session" {
-            return Err(anyhow::anyhow!(
-                "expected <unified_session>, got <{}>",
-                node.tag
-            ));
-        }
-        let id = node
-            .attrs
-            .get("id")
-            .map(|v| v.to_string_value())
-            .unwrap_or_default();
-        Ok(Self { id })
     }
 }
 

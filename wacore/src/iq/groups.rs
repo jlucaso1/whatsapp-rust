@@ -298,28 +298,13 @@ pub fn build_create_group_node(options: &GroupCreateOptions) -> Node {
         .build()
 }
 /// Request to query group information.
-#[derive(Debug, Clone, Default)]
+///
+/// Wire format: `<query request="interactive"/>`
+#[derive(Debug, Clone, crate::ProtocolNode)]
+#[protocol(tag = "query")]
 pub struct GroupQueryRequest {
+    #[attr(name = "request", string_enum)]
     pub request: GroupQueryRequestType,
-}
-
-impl ProtocolNode for GroupQueryRequest {
-    fn tag(&self) -> &'static str {
-        "query"
-    }
-
-    fn into_node(self) -> Node {
-        NodeBuilder::new("query")
-            .attr("request", self.request.as_str())
-            .build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "query" {
-            return Err(anyhow!("expected <query>, got <{}>", node.tag));
-        }
-        Ok(Self::default())
-    }
 }
 
 /// A participant in a group response.
@@ -760,42 +745,18 @@ impl IqSpec for GroupCreateIq {
 // ---------------------------------------------------------------------------
 
 /// Response for participant change operations (add/remove/promote/demote).
-#[derive(Debug, Clone)]
+///
+/// Wire format: `<participant jid="..." type="200" error="..."/>`
+#[derive(Debug, Clone, crate::ProtocolNode)]
+#[protocol(tag = "participant")]
 pub struct ParticipantChangeResponse {
+    #[attr(name = "jid", jid)]
     pub jid: Jid,
     /// HTTP-like status code (e.g. 200, 403, 409).
+    #[attr(name = "type")]
     pub status: Option<String>,
+    #[attr(name = "error")]
     pub error: Option<String>,
-}
-
-impl ProtocolNode for ParticipantChangeResponse {
-    fn tag(&self) -> &'static str {
-        "participant"
-    }
-
-    fn into_node(self) -> Node {
-        let mut builder = NodeBuilder::new("participant").attr("jid", self.jid.to_string());
-        if let Some(ref status) = self.status {
-            builder = builder.attr("type", status);
-        }
-        if let Some(ref error) = self.error {
-            builder = builder.attr("error", error);
-        }
-        builder.build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "participant" {
-            return Err(anyhow!("expected <participant>, got <{}>", node.tag));
-        }
-        let jid = node
-            .attrs()
-            .optional_jid("jid")
-            .ok_or_else(|| anyhow!("participant missing required 'jid' attribute"))?;
-        let status = optional_attr(node, "type").map(String::from);
-        let error = optional_attr(node, "error").map(String::from);
-        Ok(Self { jid, status, error })
-    }
 }
 
 /// IQ specification for setting a group's subject.
@@ -958,219 +919,155 @@ impl IqSpec for LeaveGroupIq {
     }
 }
 
-/// IQ specification for adding participants to a group.
-///
-/// Wire format:
-/// ```xml
-/// <iq type="set" xmlns="w:g2" to="{group_jid}">
-///   <add>
-///     <participant jid="{user_jid}"/>
-///   </add>
-/// </iq>
-/// ```
-#[derive(Debug, Clone)]
-pub struct AddParticipantsIq {
-    pub group_jid: Jid,
-    pub participants: Vec<Jid>,
-}
-
-impl AddParticipantsIq {
-    pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
-        Self {
-            group_jid: group_jid.clone(),
-            participants: participants.to_vec(),
+/// Macro to generate group participant IQ specs that share the same structure:
+/// a `set` IQ to `{group_jid}` with `<{action}><participant jid="..."/>...</{action}>`.
+macro_rules! define_group_participant_iq {
+    (
+        $(#[$meta:meta])*
+        $name:ident, action = $action:literal, response = Vec<ParticipantChangeResponse>
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone)]
+        pub struct $name {
+            pub group_jid: Jid,
+            pub participants: Vec<Jid>,
         }
-    }
-}
 
-impl IqSpec for AddParticipantsIq {
-    type Response = Vec<ParticipantChangeResponse>;
-
-    fn build_iq(&self) -> InfoQuery<'static> {
-        let children: Vec<Node> = self
-            .participants
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("participant")
-                    .attr("jid", jid.to_string())
-                    .build()
-            })
-            .collect();
-
-        let add_node = NodeBuilder::new("add").children(children).build();
-
-        InfoQuery::set_ref(
-            GROUP_IQ_NAMESPACE,
-            &self.group_jid,
-            Some(NodeContent::Nodes(vec![add_node])),
-        )
-    }
-
-    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
-        let add_node = required_child(response, "add")?;
-        collect_children::<ParticipantChangeResponse>(add_node, "participant")
-    }
-}
-
-/// IQ specification for removing participants from a group.
-///
-/// Wire format:
-/// ```xml
-/// <iq type="set" xmlns="w:g2" to="{group_jid}">
-///   <remove>
-///     <participant jid="{user_jid}"/>
-///   </remove>
-/// </iq>
-/// ```
-#[derive(Debug, Clone)]
-pub struct RemoveParticipantsIq {
-    pub group_jid: Jid,
-    pub participants: Vec<Jid>,
-}
-
-impl RemoveParticipantsIq {
-    pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
-        Self {
-            group_jid: group_jid.clone(),
-            participants: participants.to_vec(),
+        impl $name {
+            pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
+                Self {
+                    group_jid: group_jid.clone(),
+                    participants: participants.to_vec(),
+                }
+            }
         }
-    }
-}
 
-impl IqSpec for RemoveParticipantsIq {
-    type Response = Vec<ParticipantChangeResponse>;
+        impl IqSpec for $name {
+            type Response = Vec<ParticipantChangeResponse>;
 
-    fn build_iq(&self) -> InfoQuery<'static> {
-        let children: Vec<Node> = self
-            .participants
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("participant")
-                    .attr("jid", jid.to_string())
-                    .build()
-            })
-            .collect();
+            fn build_iq(&self) -> InfoQuery<'static> {
+                let children: Vec<Node> = self
+                    .participants
+                    .iter()
+                    .map(|jid| {
+                        NodeBuilder::new("participant")
+                            .attr("jid", jid.to_string())
+                            .build()
+                    })
+                    .collect();
 
-        let remove_node = NodeBuilder::new("remove").children(children).build();
+                let action_node = NodeBuilder::new($action).children(children).build();
 
-        InfoQuery::set_ref(
-            GROUP_IQ_NAMESPACE,
-            &self.group_jid,
-            Some(NodeContent::Nodes(vec![remove_node])),
-        )
-    }
+                InfoQuery::set_ref(
+                    GROUP_IQ_NAMESPACE,
+                    &self.group_jid,
+                    Some(NodeContent::Nodes(vec![action_node])),
+                )
+            }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
-        let remove_node = required_child(response, "remove")?;
-        collect_children::<ParticipantChangeResponse>(remove_node, "participant")
-    }
-}
-
-/// IQ specification for promoting participants to admin.
-///
-/// Wire format:
-/// ```xml
-/// <iq type="set" xmlns="w:g2" to="{group_jid}">
-///   <promote>
-///     <participant jid="{user_jid}"/>
-///   </promote>
-/// </iq>
-/// ```
-#[derive(Debug, Clone)]
-pub struct PromoteParticipantsIq {
-    pub group_jid: Jid,
-    pub participants: Vec<Jid>,
-}
-
-impl PromoteParticipantsIq {
-    pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
-        Self {
-            group_jid: group_jid.clone(),
-            participants: participants.to_vec(),
+            fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+                let action_node = required_child(response, $action)?;
+                collect_children::<ParticipantChangeResponse>(action_node, "participant")
+            }
         }
-    }
-}
-
-impl IqSpec for PromoteParticipantsIq {
-    type Response = ();
-
-    fn build_iq(&self) -> InfoQuery<'static> {
-        let children: Vec<Node> = self
-            .participants
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("participant")
-                    .attr("jid", jid.to_string())
-                    .build()
-            })
-            .collect();
-
-        let promote_node = NodeBuilder::new("promote").children(children).build();
-
-        InfoQuery::set_ref(
-            GROUP_IQ_NAMESPACE,
-            &self.group_jid,
-            Some(NodeContent::Nodes(vec![promote_node])),
-        )
-    }
-
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
-        Ok(())
-    }
-}
-
-/// IQ specification for demoting participants from admin.
-///
-/// Wire format:
-/// ```xml
-/// <iq type="set" xmlns="w:g2" to="{group_jid}">
-///   <demote>
-///     <participant jid="{user_jid}"/>
-///   </demote>
-/// </iq>
-/// ```
-#[derive(Debug, Clone)]
-pub struct DemoteParticipantsIq {
-    pub group_jid: Jid,
-    pub participants: Vec<Jid>,
-}
-
-impl DemoteParticipantsIq {
-    pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
-        Self {
-            group_jid: group_jid.clone(),
-            participants: participants.to_vec(),
+    };
+    (
+        $(#[$meta:meta])*
+        $name:ident, action = $action:literal, response = ()
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone)]
+        pub struct $name {
+            pub group_jid: Jid,
+            pub participants: Vec<Jid>,
         }
-    }
+
+        impl $name {
+            pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
+                Self {
+                    group_jid: group_jid.clone(),
+                    participants: participants.to_vec(),
+                }
+            }
+        }
+
+        impl IqSpec for $name {
+            type Response = ();
+
+            fn build_iq(&self) -> InfoQuery<'static> {
+                let children: Vec<Node> = self
+                    .participants
+                    .iter()
+                    .map(|jid| {
+                        NodeBuilder::new("participant")
+                            .attr("jid", jid.to_string())
+                            .build()
+                    })
+                    .collect();
+
+                let action_node = NodeBuilder::new($action).children(children).build();
+
+                InfoQuery::set_ref(
+                    GROUP_IQ_NAMESPACE,
+                    &self.group_jid,
+                    Some(NodeContent::Nodes(vec![action_node])),
+                )
+            }
+
+            fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+                Ok(())
+            }
+        }
+    };
 }
 
-impl IqSpec for DemoteParticipantsIq {
-    type Response = ();
+define_group_participant_iq!(
+    /// IQ specification for adding participants to a group.
+    ///
+    /// Wire format:
+    /// ```xml
+    /// <iq type="set" xmlns="w:g2" to="{group_jid}">
+    ///   <add><participant jid="{user_jid}"/></add>
+    /// </iq>
+    /// ```
+    AddParticipantsIq, action = "add", response = Vec<ParticipantChangeResponse>
+);
 
-    fn build_iq(&self) -> InfoQuery<'static> {
-        let children: Vec<Node> = self
-            .participants
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("participant")
-                    .attr("jid", jid.to_string())
-                    .build()
-            })
-            .collect();
+define_group_participant_iq!(
+    /// IQ specification for removing participants from a group.
+    ///
+    /// Wire format:
+    /// ```xml
+    /// <iq type="set" xmlns="w:g2" to="{group_jid}">
+    ///   <remove><participant jid="{user_jid}"/></remove>
+    /// </iq>
+    /// ```
+    RemoveParticipantsIq, action = "remove", response = Vec<ParticipantChangeResponse>
+);
 
-        let demote_node = NodeBuilder::new("demote").children(children).build();
+define_group_participant_iq!(
+    /// IQ specification for promoting participants to admin.
+    ///
+    /// Wire format:
+    /// ```xml
+    /// <iq type="set" xmlns="w:g2" to="{group_jid}">
+    ///   <promote><participant jid="{user_jid}"/></promote>
+    /// </iq>
+    /// ```
+    PromoteParticipantsIq, action = "promote", response = ()
+);
 
-        InfoQuery::set_ref(
-            GROUP_IQ_NAMESPACE,
-            &self.group_jid,
-            Some(NodeContent::Nodes(vec![demote_node])),
-        )
-    }
-
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
-        Ok(())
-    }
-}
+define_group_participant_iq!(
+    /// IQ specification for demoting participants from admin.
+    ///
+    /// Wire format:
+    /// ```xml
+    /// <iq type="set" xmlns="w:g2" to="{group_jid}">
+    ///   <demote><participant jid="{user_jid}"/></demote>
+    /// </iq>
+    /// ```
+    DemoteParticipantsIq, action = "demote", response = ()
+);
 
 /// IQ specification for getting (or resetting) a group's invite link.
 ///

@@ -24,6 +24,7 @@
 //!
 //! Verified against WhatsApp Web JS (WAWebQueryPrivacy).
 
+use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
@@ -34,93 +35,52 @@ use wacore_binary::node::{Node, NodeContent};
 pub const PRIVACY_NAMESPACE: &str = "privacy";
 
 /// Privacy setting category name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum PrivacyCategory {
     /// Last seen visibility
+    #[str = "last"]
     Last,
     /// Online status visibility
+    #[str = "online"]
     Online,
     /// Profile photo visibility
+    #[str = "profile"]
     Profile,
     /// Status visibility
+    #[str = "status"]
     Status,
     /// Group add permissions
+    #[str = "groupadd"]
     GroupAdd,
     /// Read receipts
+    #[str = "readreceipts"]
     ReadReceipts,
     /// Other/unknown category
+    #[string_fallback]
     Other(String),
-}
-
-impl PrivacyCategory {
-    pub fn as_str(&self) -> &str {
-        match self {
-            PrivacyCategory::Last => "last",
-            PrivacyCategory::Online => "online",
-            PrivacyCategory::Profile => "profile",
-            PrivacyCategory::Status => "status",
-            PrivacyCategory::GroupAdd => "groupadd",
-            PrivacyCategory::ReadReceipts => "readreceipts",
-            PrivacyCategory::Other(s) => s.as_str(),
-        }
-    }
-}
-
-impl From<&str> for PrivacyCategory {
-    fn from(s: &str) -> Self {
-        match s {
-            "last" => PrivacyCategory::Last,
-            "online" => PrivacyCategory::Online,
-            "profile" => PrivacyCategory::Profile,
-            "status" => PrivacyCategory::Status,
-            "groupadd" => PrivacyCategory::GroupAdd,
-            "readreceipts" => PrivacyCategory::ReadReceipts,
-            other => PrivacyCategory::Other(other.to_string()),
-        }
-    }
 }
 
 /// Privacy setting value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum PrivacyValue {
     /// Visible to everyone
+    #[str = "all"]
     All,
     /// Visible only to contacts
+    #[str = "contacts"]
     Contacts,
     /// Not visible to anyone
+    #[str = "none"]
     None,
     /// Visible to contacts except specific list
+    #[str = "contact_blacklist"]
     ContactBlacklist,
     /// Match their settings (for online/last)
+    #[str = "match_last_seen"]
     MatchLastSeen,
     /// Other/unknown value
+    #[string_fallback]
     Other(String),
-}
-
-impl PrivacyValue {
-    pub fn as_str(&self) -> &str {
-        match self {
-            PrivacyValue::All => "all",
-            PrivacyValue::Contacts => "contacts",
-            PrivacyValue::None => "none",
-            PrivacyValue::ContactBlacklist => "contact_blacklist",
-            PrivacyValue::MatchLastSeen => "match_last_seen",
-            PrivacyValue::Other(s) => s.as_str(),
-        }
-    }
-}
-
-impl From<&str> for PrivacyValue {
-    fn from(s: &str) -> Self {
-        match s {
-            "all" => PrivacyValue::All,
-            "contacts" => PrivacyValue::Contacts,
-            "none" => PrivacyValue::None,
-            "contact_blacklist" => PrivacyValue::ContactBlacklist,
-            "match_last_seen" => PrivacyValue::MatchLastSeen,
-            other => PrivacyValue::Other(other.to_string()),
-        }
-    }
 }
 
 /// A single privacy setting.

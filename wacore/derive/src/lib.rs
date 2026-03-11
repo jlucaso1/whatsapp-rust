@@ -41,6 +41,10 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 ///   For `Option<String>` fields, a default always yields `Some(default)`.
 /// - `#[attr(name = "attrname", jid)]` - Marks a Jid field as a JID attribute (required).
 /// - `#[attr(name = "attrname", jid, optional)]` - Marks an Option<Jid> field as optional.
+/// - `#[attr(name = "attrname", string_enum)]` - Marks a StringEnum field (uses `as_str()`/`TryFrom`).
+/// - `#[attr(name = "attrname", u64)]` - Marks a u64 numeric attribute.
+/// - `#[attr(name = "attrname", u32)]` - Marks a u32 numeric attribute.
+///   Numeric fields can also be `Option<u64>` / `Option<u32>` for optional attributes.
 ///
 /// # Example
 ///
@@ -120,7 +124,6 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
 
             match (&info.attr_type, info.optional) {
                 (AttrType::Jid, true) => {
-                    // Option<Jid> - only insert if Some
                     quote! {
                         if let Some(jid) = self.#field_ident {
                             builder = builder.jid_attr(#attr_name, jid);
@@ -128,13 +131,11 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     }
                 }
                 (AttrType::Jid, false) => {
-                    // Required Jid - always insert
                     quote! {
                         builder = builder.jid_attr(#attr_name, self.#field_ident);
                     }
                 }
                 (AttrType::String, true) => {
-                    // Option<String> - only insert if Some
                     quote! {
                         if let Some(s) = self.#field_ident {
                             builder = builder.attr(#attr_name, s);
@@ -142,9 +143,32 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     }
                 }
                 (AttrType::String, false) => {
-                    // Required String - always insert
                     quote! {
                         builder = builder.attr(#attr_name, self.#field_ident);
+                    }
+                }
+                (AttrType::StringEnum, true) => {
+                    quote! {
+                        if let Some(ref v) = self.#field_ident {
+                            builder = builder.attr(#attr_name, v.as_str());
+                        }
+                    }
+                }
+                (AttrType::StringEnum, false) => {
+                    quote! {
+                        builder = builder.attr(#attr_name, self.#field_ident.as_str());
+                    }
+                }
+                (AttrType::U64, true) | (AttrType::U32, true) => {
+                    quote! {
+                        if let Some(v) = self.#field_ident {
+                            builder = builder.attr(#attr_name, v.to_string());
+                        }
+                    }
+                }
+                (AttrType::U64, false) | (AttrType::U32, false) => {
+                    quote! {
+                        builder = builder.attr(#attr_name, self.#field_ident.to_string());
                     }
                 }
             }
@@ -159,20 +183,17 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
 
             match (&info.attr_type, info.optional, &info.default) {
                 (AttrType::Jid, false, _) => {
-                    // Required Jid
                     quote! {
                         #field_ident: node.attrs().optional_jid(#attr_name)
                             .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
                     }
                 }
                 (AttrType::Jid, true, _) => {
-                    // Optional Jid
                     quote! {
                         #field_ident: node.attrs().optional_jid(#attr_name)
                     }
                 }
                 (AttrType::String, false, Some(default)) => {
-                    // String with default
                     quote! {
                         #field_ident: node.attrs().optional_string(#attr_name)
                             .map(|s| s.to_string())
@@ -180,13 +201,11 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     }
                 }
                 (AttrType::String, false, None) => {
-                    // Required String
                     quote! {
                         #field_ident: node.attrs().required_string(#attr_name)?.to_string()
                     }
                 }
                 (AttrType::String, true, Some(default)) => {
-                    // Optional String with default (always Some)
                     quote! {
                         #field_ident: node.attrs().optional_string(#attr_name)
                             .map(|s| s.to_string())
@@ -194,19 +213,70 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     }
                 }
                 (AttrType::String, true, None) => {
-                    // Optional String
                     quote! {
                         #field_ident: node.attrs().optional_string(#attr_name).map(|s| s.to_string())
+                    }
+                }
+                // StringEnum: parse using the `parse_string_enum` helper which tries TryFrom then From.
+                (AttrType::StringEnum, false, Some(default)) => {
+                    quote! {
+                        #field_ident: ::wacore::protocol::parse_string_enum(
+                            node.attrs().optional_string(#attr_name).unwrap_or(#default)
+                        )?
+                    }
+                }
+                (AttrType::StringEnum, false, None) => {
+                    quote! {
+                        #field_ident: ::wacore::protocol::parse_string_enum(
+                            node.attrs().optional_string(#attr_name)
+                                .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                        )?
+                    }
+                }
+                (AttrType::StringEnum, true, _) => {
+                    quote! {
+                        #field_ident: node.attrs().optional_string(#attr_name)
+                            .map(|s| ::wacore::protocol::parse_string_enum(s))
+                            .transpose()?
+                    }
+                }
+                // Numeric types
+                (AttrType::U64, false, _) => {
+                    quote! {
+                        #field_ident: node.attrs().optional_u64(#attr_name)
+                            .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                    }
+                }
+                (AttrType::U64, true, _) => {
+                    quote! {
+                        #field_ident: node.attrs().optional_u64(#attr_name)
+                    }
+                }
+                (AttrType::U32, false, _) => {
+                    quote! {
+                        #field_ident: node.attrs().optional_u64(#attr_name)
+                            .map(|v| u32::try_from(v))
+                            .transpose()
+                            .map_err(|_| ::anyhow::anyhow!("attribute '{}' value exceeds u32::MAX", #attr_name))?
+                            .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
+                    }
+                }
+                (AttrType::U32, true, _) => {
+                    quote! {
+                        #field_ident: node.attrs().optional_u64(#attr_name)
+                            .map(|v| u32::try_from(v))
+                            .transpose()
+                            .map_err(|_| ::anyhow::anyhow!("attribute '{}' value exceeds u32::MAX", #attr_name))?
                     }
                 }
             }
         })
         .collect();
 
-    // Only generate Default impl if all fields have defaults or are optional
-    let all_have_defaults = attr_fields
-        .iter()
-        .all(|info| info.default.is_some() || info.optional);
+    // Only generate Default impl if all fields have defaults or are optional or have Default impl
+    let all_have_defaults = attr_fields.iter().all(|info| {
+        info.default.is_some() || info.optional || matches!(info.attr_type, AttrType::StringEnum)
+    });
 
     let default_impl = if all_have_defaults {
         let default_fields: Vec<_> = attr_fields
@@ -218,6 +288,13 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                     (_, true, None) => quote! { #field_ident: None },
                     (AttrType::String, false, Some(default)) => {
                         quote! { #field_ident: #default.to_string() }
+                    }
+                    (AttrType::StringEnum, false, Some(default)) => {
+                        quote! { #field_ident: ::wacore::protocol::parse_string_enum(#default)
+                        .expect("invalid default for StringEnum field") }
+                    }
+                    (AttrType::StringEnum, false, None) => {
+                        quote! { #field_ident: ::core::default::Default::default() }
                     }
                     _ => unreachable!("all_have_defaults check should prevent this branch"),
                 }
@@ -330,6 +407,12 @@ fn generate_empty_impl(name: &syn::Ident, tag: &str) -> proc_macro2::TokenStream
 enum AttrType {
     String,
     Jid,
+    /// A type implementing StringEnum (has `as_str()` and `TryFrom<&str>` or `From<&str>`).
+    StringEnum,
+    /// A u64 numeric attribute.
+    U64,
+    /// A u32 numeric attribute.
+    U32,
 }
 
 struct AttrFieldInfo {
@@ -373,6 +456,9 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
             let mut attr_name = None;
             let mut default = None;
             let mut is_jid = false;
+            let mut is_string_enum = false;
+            let mut is_u64 = false;
+            let mut is_u32 = false;
             let mut explicit_optional = false;
 
             attr.parse_nested_meta(|meta| {
@@ -384,6 +470,12 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
                     default = Some(value.value());
                 } else if meta.path.is_ident("jid") {
                     is_jid = true;
+                } else if meta.path.is_ident("string_enum") {
+                    is_string_enum = true;
+                } else if meta.path.is_ident("u64") {
+                    is_u64 = true;
+                } else if meta.path.is_ident("u32") {
+                    is_u32 = true;
                 } else if meta.path.is_ident("optional") {
                     explicit_optional = true;
                 }
@@ -394,6 +486,12 @@ fn extract_attr_info(field: &syn::Field) -> Result<Option<AttrFieldInfo>, syn::E
                 Some(name) => {
                     let attr_type = if is_jid {
                         AttrType::Jid
+                    } else if is_string_enum {
+                        AttrType::StringEnum
+                    } else if is_u64 {
+                        AttrType::U64
+                    } else if is_u32 {
+                        AttrType::U32
                     } else {
                         AttrType::String
                     };
@@ -434,17 +532,20 @@ fn is_option_type(ty: &syn::Type) -> bool {
 /// Derive macro for enums with string representations.
 ///
 /// Automatically implements:
-/// - `as_str(&self) -> &'static str`
+/// - `as_str(&self) -> &'static str` (or `&str` with fallback)
 /// - `std::fmt::Display`
-/// - `TryFrom<&str>`
+/// - `TryFrom<&str>` (or `From<&str>` with fallback)
 /// - `Default` (first variant is default, or use `#[string_default]`)
 ///
 /// # Attributes
 ///
-/// - `#[str = "value"]` - Required on each variant. The string representation.
+/// - `#[str = "value"]` - Required on each unit variant. The string representation.
 /// - `#[string_default]` - Optional. Marks this variant as the default.
+/// - `#[string_fallback]` - Optional. Marks a `VariantName(String)` variant as catch-all.
+///   When present, unknown strings are captured instead of returning an error.
+///   Generates `From<&str>` instead of `TryFrom<&str>`, and `as_str()` returns `&str`.
 ///
-/// # Example
+/// # Example (standard)
 ///
 /// ```ignore
 /// #[derive(StringEnum)]
@@ -459,7 +560,25 @@ fn is_option_type(ty: &syn::Type) -> bool {
 /// assert_eq!(MemberAddMode::AdminAdd.as_str(), "admin_add");
 /// assert_eq!(MemberAddMode::try_from("all_member_add").unwrap(), MemberAddMode::AllMemberAdd);
 /// ```
-#[proc_macro_derive(StringEnum, attributes(str, string_default))]
+///
+/// # Example (with fallback)
+///
+/// ```ignore
+/// #[derive(StringEnum)]
+/// pub enum PrivacyCategory {
+///     #[str = "last"]
+///     Last,
+///     #[str = "online"]
+///     Online,
+///     #[string_fallback]
+///     Other(String),
+/// }
+///
+/// assert_eq!(PrivacyCategory::Last.as_str(), "last");
+/// assert_eq!(PrivacyCategory::from("last"), PrivacyCategory::Last);
+/// assert_eq!(PrivacyCategory::from("unknown"), PrivacyCategory::Other("unknown".to_string()));
+/// ```
+#[proc_macro_derive(StringEnum, attributes(str, string_default, string_fallback))]
 pub fn derive_string_enum(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -479,23 +598,16 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
 
     let mut variant_infos = Vec::new();
     let mut default_variant = None;
+    let mut fallback_variant: Option<syn::Ident> = None;
     let mut seen_str_values: std::collections::HashMap<String, syn::Ident> =
         std::collections::HashMap::new();
 
     for variant in variants {
         let variant_ident = &variant.ident;
 
-        if !matches!(variant.fields, syn::Fields::Unit) {
-            return syn::Error::new_spanned(
-                variant_ident,
-                "StringEnum only supports unit variants",
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        let mut str_value = None;
         let mut is_default = false;
+        let mut is_fallback = false;
+        let mut str_value = None;
 
         for attr in &variant.attrs {
             if attr.path().is_ident("str") {
@@ -507,7 +619,64 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
                 }
             } else if attr.path().is_ident("string_default") {
                 is_default = true;
+            } else if attr.path().is_ident("string_fallback") {
+                is_fallback = true;
             }
+        }
+
+        if is_fallback {
+            // Validate: fallback variant must have exactly one unnamed String field
+            match &variant.fields {
+                syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
+                _ => {
+                    return syn::Error::new_spanned(
+                        variant_ident,
+                        "string_fallback variant must have exactly one unnamed field: VariantName(String)",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+            if fallback_variant.is_some() {
+                return syn::Error::new_spanned(
+                    variant_ident,
+                    "Multiple #[string_fallback] attributes found; only one variant may be the fallback",
+                )
+                .to_compile_error()
+                .into();
+            }
+            if str_value.is_some() {
+                return syn::Error::new_spanned(
+                    variant_ident,
+                    "string_fallback variant should not have a #[str = \"...\"] attribute",
+                )
+                .to_compile_error()
+                .into();
+            }
+            fallback_variant = Some(variant_ident.clone());
+
+            if is_default {
+                if default_variant.is_some() {
+                    return syn::Error::new_spanned(
+                        variant_ident,
+                        "Multiple #[string_default] attributes found; only one variant may be the default",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                default_variant = Some(variant_ident.clone());
+            }
+            continue;
+        }
+
+        // Non-fallback variant must be a unit variant
+        if !matches!(variant.fields, syn::Fields::Unit) {
+            return syn::Error::new_spanned(
+                variant_ident,
+                "StringEnum only supports unit variants (except the #[string_fallback] variant)",
+            )
+            .to_compile_error()
+            .into();
         }
 
         let str_val = match str_value {
@@ -553,8 +722,8 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
         variant_infos.push((variant_ident.clone(), str_val));
     }
 
-    // Check for empty enums
-    if variant_infos.is_empty() {
+    // Check for empty enums (must have at least one known variant or a fallback)
+    if variant_infos.is_empty() && fallback_variant.is_none() {
         return syn::Error::new_spanned(
             &input.ident,
             "StringEnum cannot be derived for empty enums",
@@ -566,55 +735,120 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
     // If no explicit default, use first variant
     let default_variant = default_variant.unwrap_or_else(|| variant_infos[0].0.clone());
 
-    // Generate as_str() match arms
-    let as_str_arms: Vec<_> = variant_infos
-        .iter()
-        .map(|(ident, str_val)| {
-            quote! { #name::#ident => #str_val }
-        })
-        .collect();
+    if let Some(ref fallback_ident) = fallback_variant {
+        // === Fallback mode: as_str() returns &str, From<&str> instead of TryFrom ===
 
-    // Generate TryFrom match arms
-    let try_from_arms: Vec<_> = variant_infos
-        .iter()
-        .map(|(ident, str_val)| {
-            quote! { #str_val => Ok(#name::#ident) }
-        })
-        .collect();
+        let as_str_arms: Vec<_> = variant_infos
+            .iter()
+            .map(|(ident, str_val)| {
+                quote! { #name::#ident => #str_val }
+            })
+            .collect();
 
-    let expanded = quote! {
-        impl #name {
-            /// Returns the string representation of this enum variant.
-            pub fn as_str(&self) -> &'static str {
-                match self {
-                    #(#as_str_arms),*
+        let from_arms: Vec<_> = variant_infos
+            .iter()
+            .map(|(ident, str_val)| {
+                quote! { #str_val => #name::#ident }
+            })
+            .collect();
+
+        let expanded = quote! {
+            impl #name {
+                /// Returns the string representation of this enum variant.
+                pub fn as_str(&self) -> &str {
+                    match self {
+                        #(#as_str_arms,)*
+                        #name::#fallback_ident(s) => s.as_str(),
+                    }
                 }
             }
-        }
 
-        impl ::core::fmt::Display for #name {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl ::core::convert::TryFrom<&str> for #name {
-            type Error = ::anyhow::Error;
-
-            fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
-                match value {
-                    #(#try_from_arms),*,
-                    _ => Err(::anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)),
+            impl ::core::fmt::Display for #name {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.write_str(self.as_str())
                 }
             }
-        }
 
-        impl ::core::default::Default for #name {
-            fn default() -> Self {
-                #name::#default_variant
+            impl ::core::convert::From<&str> for #name {
+                fn from(value: &str) -> Self {
+                    match value {
+                        #(#from_arms,)*
+                        other => #name::#fallback_ident(other.to_string()),
+                    }
+                }
             }
-        }
-    };
 
-    expanded.into()
+            impl ::wacore::protocol::ParseStringEnum for #name {
+                fn parse_from_str(s: &str) -> ::anyhow::Result<Self> {
+                    Ok(::core::convert::From::from(s))
+                }
+            }
+
+            impl ::core::default::Default for #name {
+                fn default() -> Self {
+                    #name::#default_variant
+                }
+            }
+        };
+
+        expanded.into()
+    } else {
+        // === Standard mode: as_str() returns &'static str, TryFrom<&str> ===
+
+        let as_str_arms: Vec<_> = variant_infos
+            .iter()
+            .map(|(ident, str_val)| {
+                quote! { #name::#ident => #str_val }
+            })
+            .collect();
+
+        let try_from_arms: Vec<_> = variant_infos
+            .iter()
+            .map(|(ident, str_val)| {
+                quote! { #str_val => Ok(#name::#ident) }
+            })
+            .collect();
+
+        let expanded = quote! {
+            impl #name {
+                /// Returns the string representation of this enum variant.
+                pub fn as_str(&self) -> &'static str {
+                    match self {
+                        #(#as_str_arms),*
+                    }
+                }
+            }
+
+            impl ::core::fmt::Display for #name {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.write_str(self.as_str())
+                }
+            }
+
+            impl ::core::convert::TryFrom<&str> for #name {
+                type Error = ::anyhow::Error;
+
+                fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
+                    match value {
+                        #(#try_from_arms),*,
+                        _ => Err(::anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)),
+                    }
+                }
+            }
+
+            impl ::wacore::protocol::ParseStringEnum for #name {
+                fn parse_from_str(s: &str) -> ::anyhow::Result<Self> {
+                    ::core::convert::TryFrom::try_from(s)
+                }
+            }
+
+            impl ::core::default::Default for #name {
+                fn default() -> Self {
+                    #name::#default_variant
+                }
+            }
+        };
+
+        expanded.into()
+    }
 }

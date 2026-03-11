@@ -1,3 +1,4 @@
+use wacore::StringEnum;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
@@ -6,25 +7,18 @@ use crate::upload::UploadResponse;
 
 /// Privacy setting sent in the `<meta>` node of the status stanza.
 /// Matches WhatsApp Web's `status_setting` attribute.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum StatusPrivacySetting {
     /// Send to all contacts in address book.
-    #[default]
+    #[string_default]
+    #[str = "contacts"]
     Contacts,
     /// Send only to contacts in an allow list.
+    #[str = "allowlist"]
     AllowList,
     /// Send to all contacts except those in a deny list.
+    #[str = "denylist"]
     DenyList,
-}
-
-impl StatusPrivacySetting {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            StatusPrivacySetting::Contacts => "contacts",
-            StatusPrivacySetting::AllowList => "allowlist",
-            StatusPrivacySetting::DenyList => "denylist",
-        }
-    }
 }
 
 /// Options for sending a status update.
