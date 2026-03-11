@@ -8,7 +8,8 @@ repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Core WhatsApp protocol implementation without runtime dependencies"
 
 [features]
-default = []
+default = ["simd"]
+simd = ["wacore-appstate/simd"]
 debug-snapshots = []
 
 [dependencies]

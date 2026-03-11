@@ -1,3 +1,4 @@
+#[cfg(feature = "simd")]
 use core::simd::u16x8;
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -41,37 +42,53 @@ impl LTHash {
 
 fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool) {
     assert_eq!(base.len(), input.len(), "length mismatch");
-    assert!(base.len().is_multiple_of(2), "slice lengths must be even");
-
-    let (base_chunks, base_remainder) = base.as_chunks_mut::<16>();
-    let (input_chunks, input_remainder) = input.as_chunks::<16>();
-
-    for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-        let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
-        let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
-
-        let result_simd = if subtract {
-            base_simd - input_simd
-        } else {
-            base_simd + input_simd
-        };
-
-        *base_chunk = bytemuck::cast(result_simd.to_array());
+    // Use `% 2` instead of `.is_multiple_of(2)` for stable Rust compatibility.
+    #[allow(clippy::manual_is_multiple_of)]
+    {
+        assert!(base.len() % 2 == 0, "slice lengths must be even");
     }
 
-    for (base_pair, input_pair) in base_remainder
-        .chunks_exact_mut(2)
-        .zip(input_remainder.chunks_exact(2))
+    #[allow(unused_mut, unused_assignments)]
+    let (mut base_remaining, mut input_remaining): (&mut [u8], &[u8]) = (base, input);
+
+    #[cfg(feature = "simd")]
     {
-        let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
-        let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
+        let (base_chunks, base_rem) = base_remaining.as_chunks_mut::<16>();
+        let (input_chunks, input_rem) = input_remaining.as_chunks::<16>();
+
+        for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
+            let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
+            let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
+
+            let result_simd = if subtract {
+                base_simd - input_simd
+            } else {
+                base_simd + input_simd
+            };
+
+            *base_chunk = bytemuck::cast(result_simd.to_array());
+        }
+
+        base_remaining = base_rem;
+        input_remaining = input_rem;
+    }
+
+    // Use native endianness to match the SIMD path (bytemuck::cast reinterprets bytes as
+    // native-endian u16). The actual endianness doesn't matter for LTHash correctness —
+    // what matters is that SIMD and scalar paths agree.
+    for (base_pair, input_pair) in base_remaining
+        .chunks_exact_mut(2)
+        .zip(input_remaining.chunks_exact(2))
+    {
+        let x = u16::from_ne_bytes([base_pair[0], base_pair[1]]);
+        let y = u16::from_ne_bytes([input_pair[0], input_pair[1]]);
 
         let result = if subtract {
             x.wrapping_sub(y)
         } else {
             x.wrapping_add(y)
         };
-        let bytes = result.to_le_bytes();
+        let bytes = result.to_ne_bytes();
         base_pair[0] = bytes[0];
         base_pair[1] = bytes[1];
     }
