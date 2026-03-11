@@ -25,6 +25,8 @@ jobs:
           password: ${{ secrets.BARTENDER_GHCR_TOKEN }}
         ports:
           - 8080:8080
+        env:
+          CHATSTATE_TTL_SECS: "3"
         options: --log-driver none
     steps:
       - uses: actions/checkout@v4
