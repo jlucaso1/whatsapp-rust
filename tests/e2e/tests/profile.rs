@@ -260,19 +260,26 @@ async fn test_status_text_notification_received() -> anyhow::Result<()> {
         .set_status_text(new_status)
         .await?;
 
-    // Client B should receive a UserAboutUpdate event from the broadcast
+    let jid_a = client_a
+        .client
+        .get_pn()
+        .await
+        .expect("Client A should have a JID")
+        .to_non_ad();
+
+    // Client B should receive a UserAboutUpdate event from Client A
     let event = client_b
-        .wait_for_event(15, |e| matches!(e, Event::UserAboutUpdate(_)))
+        .wait_for_event(
+            15,
+            |e| matches!(e, Event::UserAboutUpdate(u) if u.jid == jid_a && u.status == new_status),
+        )
         .await?;
 
     if let Event::UserAboutUpdate(update) = event {
         info!(
-            "Client B received status update from {}: {:?}",
-            update.jid, update.status
-        );
-        assert_eq!(
-            update.status, new_status,
-            "Status text should match what Client A set"
+            "Client B received status update from {} (length={})",
+            update.jid,
+            update.status.len()
         );
     } else {
         panic!("Expected UserAboutUpdate event");

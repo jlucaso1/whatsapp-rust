@@ -1,6 +1,5 @@
 use e2e_tests::TestClient;
 use log::info;
-use std::time::Duration;
 use wacore::types::events::Event;
 use whatsapp_rust::waproto::whatsapp as wa;
 
@@ -220,13 +219,12 @@ async fn test_message_has_push_name() -> anyhow::Result<()> {
     // Wait for app state sync so push name mutations can be sent
     client_a.wait_for_app_state_sync().await?;
 
-    // Set a known push name on Client A
+    // Set a known push name on Client A.
+    // set_push_name() sends a presence stanza AND an app state mutation IQ.
+    // The IQ round-trip ensures the mock server has stored the name before we proceed.
     let push_name = "SenderBot";
     client_a.client.profile().set_push_name(push_name).await?;
     info!("Client A set push name to '{push_name}'");
-
-    // Small delay for the push name to propagate to the mock server
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let jid_b = client_b
         .client
@@ -261,9 +259,9 @@ async fn test_message_has_push_name() -> anyhow::Result<()> {
             "Client B received message with push_name: '{}'",
             info.push_name
         );
-        assert!(
-            !info.push_name.is_empty(),
-            "Received message should have a non-empty push_name from the sender"
+        assert_eq!(
+            info.push_name, push_name,
+            "Received message push_name should match the sender's display name"
         );
     } else {
         panic!("Expected Message event");

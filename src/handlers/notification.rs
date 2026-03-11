@@ -720,7 +720,7 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
 
         debug!(
             target: "Client/Status",
-            "Status update from {}: {:?}", from, status_text
+            "Status update from {} (length={})", from, status_text.len()
         );
 
         let event = Event::UserAboutUpdate(UserAboutUpdate {
