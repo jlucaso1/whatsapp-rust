@@ -10,6 +10,10 @@ description = "Appstate for WhatsApp protocol"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["simd"]
+simd = ["wacore-binary/simd"]
+
 [dependencies]
 anyhow = { workspace = true }
 bytemuck = { workspace = true }
@@ -22,7 +26,7 @@ serde-big-array = { workspace = true }
 serde_json = { workspace = true, features = ["alloc"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-wacore-binary = { workspace = true, features = ["serde"] }
+wacore-binary = { workspace = true, default-features = false, features = ["serde"] }
 wacore-libsignal = { workspace = true }
 waproto = { workspace = true }
 

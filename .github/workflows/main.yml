@@ -67,9 +67,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        uses: taiki-e/install-action@v2
+        with:
+          tool: protoc@${{ env.PROTOC_VERSION }}
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build wacore-binary (stable, no SIMD)
         run: cargo build -p wacore-binary --no-default-features --verbose
       - name: Test wacore-binary (stable, no SIMD)
         run: cargo test -p wacore-binary --no-default-features --lib --verbose
+      - name: Build wacore-appstate (stable, no SIMD)
+        run: cargo build -p wacore-appstate --no-default-features --verbose
+      - name: Test wacore-appstate (stable, no SIMD)
+        run: cargo test -p wacore-appstate --no-default-features --lib --verbose
+      - name: Build wacore (stable, no SIMD)
+        run: cargo build -p wacore --no-default-features --verbose
+      - name: Test wacore (stable, no SIMD)
+        run: cargo test -p wacore --no-default-features --lib --verbose

@@ -68,9 +68,9 @@ thiserror = "2.0.17"
 tokio = { version = "1.48.0", default-features = false }
 
 # Internal workspace crates
-wacore = { path = "./wacore", version = "0.3.0" }
-wacore-appstate = { path = "./wacore/appstate", version = "0.3.0" }
-wacore-binary = { path = "./wacore/binary", version = "0.3.0" }
+wacore = { path = "./wacore", default-features = false, version = "0.3.0" }
+wacore-appstate = { path = "./wacore/appstate", default-features = false, version = "0.3.0" }
+wacore-binary = { path = "./wacore/binary", default-features = false, version = "0.3.0" }
 wacore-derive = { path = "./wacore/derive", version = "0.3.0" }
 wacore-libsignal = { path = "./wacore/libsignal", version = "0.3.0" }
 wacore-noise = { path = "./wacore/noise", version = "0.3.0" }
@@ -79,7 +79,8 @@ waproto = { path = "./waproto", version = "0.3.0" }
 [features]
 debug-snapshots = []
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
-default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
+default = ["simd", "sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
+simd = ["wacore/simd"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
 signal = ["tokio/signal"]

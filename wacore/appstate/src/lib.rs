@@ -1,4 +1,4 @@
-#![feature(portable_simd)]
+#![cfg_attr(feature = "simd", feature(portable_simd))]
 pub mod decode;
 pub mod encode;
 pub mod errors;

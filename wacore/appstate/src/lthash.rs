@@ -1,3 +1,4 @@
+#[cfg(feature = "simd")]
 use core::simd::u16x8;
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -43,25 +44,34 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
     assert_eq!(base.len(), input.len(), "length mismatch");
     assert!(base.len().is_multiple_of(2), "slice lengths must be even");
 
-    let (base_chunks, base_remainder) = base.as_chunks_mut::<16>();
-    let (input_chunks, input_remainder) = input.as_chunks::<16>();
+    #[allow(unused_mut, unused_assignments)]
+    let (mut base_remaining, mut input_remaining): (&mut [u8], &[u8]) = (base, input);
 
-    for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-        let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
-        let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
+    #[cfg(feature = "simd")]
+    {
+        let (base_chunks, base_rem) = base_remaining.as_chunks_mut::<16>();
+        let (input_chunks, input_rem) = input_remaining.as_chunks::<16>();
 
-        let result_simd = if subtract {
-            base_simd - input_simd
-        } else {
-            base_simd + input_simd
-        };
+        for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
+            let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
+            let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
 
-        *base_chunk = bytemuck::cast(result_simd.to_array());
+            let result_simd = if subtract {
+                base_simd - input_simd
+            } else {
+                base_simd + input_simd
+            };
+
+            *base_chunk = bytemuck::cast(result_simd.to_array());
+        }
+
+        base_remaining = base_rem;
+        input_remaining = input_rem;
     }
 
-    for (base_pair, input_pair) in base_remainder
+    for (base_pair, input_pair) in base_remaining
         .chunks_exact_mut(2)
-        .zip(input_remainder.chunks_exact(2))
+        .zip(input_remaining.chunks_exact(2))
     {
         let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
         let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
