@@ -15,6 +15,7 @@ pub enum DeviceCommand {
         Option<wa::device_props::PlatformType>,
     ),
     SetPropsHash(Option<String>),
+    SetNextPreKeyId(u32),
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -42,6 +43,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetPropsHash(hash) => {
             device.props_hash = hash;
+        }
+        DeviceCommand::SetNextPreKeyId(id) => {
+            device.next_pre_key_id = id;
         }
     }
 }

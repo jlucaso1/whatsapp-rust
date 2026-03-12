@@ -866,25 +866,22 @@ impl Client {
                             address
                         );
 
-                        // Extract backend handle and address while holding the lock,
-                        // then drop the lock before the async I/O to avoid lock contention.
-                        let backend = {
-                            let device_arc = self.persistence_manager.get_device_arc().await;
-                            let device = device_arc.read().await;
-                            Arc::clone(&device.backend)
-                        };
-
-                        // Delete the old, untrusted identity using the backend.
-                        // Use the full protocol address string (including device ID) as the key.
+                        // Delete the old, untrusted identity through the signal cache.
                         // NOTE: We intentionally do NOT delete the session here. The session will be
                         // archived (not deleted) when the new PreKeySignalMessage is processed,
                         // allowing decryption of any in-flight messages encrypted with the old session.
                         let address_str = address.to_string();
-                        if let Err(err) = backend.delete_identity(&address_str).await {
-                            log::warn!("Failed to delete old identity for {}: {:?}", address, err);
-                        } else {
-                            log::info!("Successfully cleared old identity for {}", address);
+                        self.signal_cache.delete_identity(&address_str).await;
+                        // Flush immediately so the backend is updated BEFORE the retry decrypt below.
+                        // Device::is_trusted_identity reads from backend, not cache.
+                        if let Err(e) = self.flush_signal_cache().await {
+                            log::warn!("Failed to flush identity deletion for {}: {e:?}", address);
+                            continue;
                         }
+                        log::info!(
+                            "Cleared old identity for {} from cache and backend",
+                            address
+                        );
 
                         // Re-attempt decryption with the new identity
                         log::info!(
@@ -1013,23 +1010,16 @@ impl Client {
                             info.source.sender
                         );
 
-                        // Delete the stale session
-                        let device_arc = self.persistence_manager.get_device_arc().await;
-                        let device_guard = device_arc.write().await;
+                        // Delete the stale session from the signal cache.
+                        // IMPORTANT: Must go through the cache, not directly to the backend!
+                        // Going to the backend directly leaves the stale session in the cache,
+                        // which causes retry messages to also fail (they'd load the stale session).
                         let address_str = signal_address.to_string();
-                        if let Err(err) = device_guard.backend.delete_session(&address_str).await {
-                            log::warn!(
-                                "Failed to delete stale session for {}: {:?}",
-                                signal_address,
-                                err
-                            );
-                        } else {
-                            log::info!(
-                                "Deleted stale session for {} to allow re-establishment",
-                                signal_address
-                            );
-                        }
-                        drop(device_guard);
+                        self.signal_cache.delete_session(&address_str).await;
+                        log::info!(
+                            "Deleted stale session for {} from cache to allow re-establishment",
+                            signal_address
+                        );
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
                         dispatched_undecryptable = self.handle_decrypt_failure(
@@ -1095,6 +1085,9 @@ impl Client {
             return Ok(false);
         }
         let device_arc = self.persistence_manager.get_device_arc().await;
+        // Use the signal cache adapter for group decryption so sender keys are read/written
+        // through the cache, keeping it consistent with SKDM processing.
+        let mut adapter = SignalProtocolStoreAdapter::new(device_arc, self.signal_cache.clone());
 
         for enc_node in enc_nodes {
             let ciphertext: &[u8] = match &enc_node.content {
@@ -1121,10 +1114,8 @@ impl Client {
                 info.source.sender
             );
 
-            let decrypt_result = {
-                let mut device_guard = device_arc.write().await;
-                group_decrypt(ciphertext, &mut *device_guard, &sender_key_name).await
-            };
+            let decrypt_result =
+                group_decrypt(ciphertext, &mut adapter.sender_key_store, &sender_key_name).await;
 
             match decrypt_result {
                 Ok(padded_plaintext) => {
@@ -1580,15 +1571,21 @@ impl Client {
         };
 
         let device_arc = self.persistence_manager.get_device_arc().await;
-        let mut device_guard = device_arc.write().await;
 
         let sender_address = sender_jid.to_protocol_address();
 
         let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
 
-        if let Err(e) =
-            process_sender_key_distribution_message(&sender_key_name, &skdm, &mut *device_guard)
-                .await
+        // Route through the signal cache adapter so the sender key is immediately visible
+        // in the cache for subsequent group_decrypt calls within the same message batch.
+        let mut adapter = SignalProtocolStoreAdapter::new(device_arc, self.signal_cache.clone());
+
+        if let Err(e) = process_sender_key_distribution_message(
+            &sender_key_name,
+            &skdm,
+            &mut adapter.sender_key_store,
+        )
+        .await
         {
             log::error!(
                 "Failed to process SenderKeyDistributionMessage from {}: {:?}",

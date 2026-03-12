@@ -118,6 +118,11 @@ pub struct Device {
     /// Sent on subsequent connects to enable delta updates instead of full fetches.
     #[serde(default)]
     pub props_hash: Option<String>,
+    /// Monotonically increasing counter for one-time pre-key ID generation.
+    /// Matches WhatsApp Web's `NEXT_PK_ID` pattern: only increases, never resets.
+    /// Prevents prekey ID collisions when prekeys are consumed non-sequentially.
+    #[serde(default)]
+    pub next_pre_key_id: u32,
 }
 
 impl Default for Device {
@@ -169,6 +174,7 @@ impl Device {
             device_props: DEVICE_PROPS.clone(),
             edge_routing_info: None,
             props_hash: None,
+            next_pre_key_id: 1,
         }
     }
 
