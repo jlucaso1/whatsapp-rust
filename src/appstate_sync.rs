@@ -535,6 +535,9 @@ mod tests {
         async fn remove_prekey(&self, _: u32) -> StoreResult<()> {
             Ok(())
         }
+        async fn get_max_prekey_id(&self) -> StoreResult<u32> {
+            Ok(0)
+        }
         async fn store_signed_prekey(&self, _: u32, _: &[u8]) -> StoreResult<()> {
             Ok(())
         }

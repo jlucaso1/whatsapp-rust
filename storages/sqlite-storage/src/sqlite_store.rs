@@ -73,6 +73,7 @@ type DeviceRow = (
     i64,
     Option<Vec<u8>>,
     Option<String>,
+    i32,
 );
 
 #[derive(Clone)]
@@ -260,6 +261,7 @@ impl SqliteStore {
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
         let edge_routing_info = device_data.edge_routing_info.clone();
         let props_hash = device_data.props_hash.clone();
+        let next_pre_key_id = device_data.next_pre_key_id as i32;
         let new_lid = device_data
             .lid
             .as_ref()
@@ -296,6 +298,7 @@ impl SqliteStore {
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info.clone()),
                     device::props_hash.eq(props_hash.clone()),
+                    device::next_pre_key_id.eq(next_pre_key_id),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -317,6 +320,7 @@ impl SqliteStore {
                     device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
                     device::edge_routing_info.eq(edge_routing_info),
                     device::props_hash.eq(props_hash),
+                    device::next_pre_key_id.eq(next_pre_key_id),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -378,6 +382,7 @@ impl SqliteStore {
                     device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
                     device::edge_routing_info.eq(None::<Vec<u8>>),
                     device::props_hash.eq(None::<String>),
+                    device::next_pre_key_id.eq(new_device.next_pre_key_id as i32),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -459,6 +464,7 @@ impl SqliteStore {
             app_version_last_fetched_ms,
             edge_routing_info,
             props_hash,
+            next_pre_key_id,
         )) = row
         {
             let id = if !pn_str.is_empty() {
@@ -514,6 +520,7 @@ impl SqliteStore {
                 },
                 edge_routing_info,
                 props_hash,
+                next_pre_key_id: next_pre_key_id as u32,
             }))
         } else {
             Ok(None)
@@ -1277,6 +1284,31 @@ impl SignalStore for SqliteStore {
         Err(StoreError::Database(
             "remove_prekey exhausted retries".to_string(),
         ))
+    }
+
+    async fn get_max_prekey_id(&self) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let db_semaphore = self.db_semaphore.clone();
+        let _permit = db_semaphore
+            .acquire()
+            .await
+            .map_err(|e| StoreError::Database(format!("Failed to acquire semaphore: {}", e)))?;
+
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            use diesel::dsl::max;
+            let result: Option<i32> = prekeys::table
+                .filter(prekeys::device_id.eq(device_id))
+                .select(max(prekeys::id))
+                .first(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result.unwrap_or(0) as u32)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
