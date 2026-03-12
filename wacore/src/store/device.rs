@@ -275,6 +275,12 @@ impl Device {
         payload.device_pairing_data = Some(reg_data);
         payload.passive = Some(false);
         payload.pull = Some(false);
+
+        // Include push_name if set — enables deterministic phone assignment in mock server
+        if !self.push_name.is_empty() {
+            payload.push_name = Some(self.push_name.clone());
+        }
+
         payload
     }
 }
