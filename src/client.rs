@@ -327,6 +327,23 @@ impl Client {
         )
     }
 
+    /// Log a sync error, downgrading to debug level during shutdown/disconnect.
+    fn log_sync_error(&self, context: &str, err: &anyhow::Error) {
+        if self.should_downgrade_sync_error(err) {
+            debug!("Skipping {context} during shutdown: {err}");
+        } else {
+            warn!("Failed {context}: {err}");
+        }
+    }
+
+    /// Dispatch the Connected event and notify waiters.
+    fn dispatch_connected(&self) {
+        self.core
+            .event_bus
+            .dispatch(&Event::Connected(crate::types::events::Connected));
+        self.connected_notifier.notify_waiters();
+    }
+
     /// Enable or disable skipping of history sync notifications at runtime.
     ///
     /// When enabled, the client will acknowledge incoming history sync
@@ -1477,6 +1494,42 @@ impl Client {
                     check_generation!();
                 }
 
+                // Start the critical sync timeout timer matching WhatsApp Web's
+                // WAWebSyncBootstrap.$15 (setSyncDCriticalDataSyncTimeout).
+                // WhatsApp Web uses 180s and calls socketLogout(SyncdTimeout) if
+                // the critical data hasn't synced by then.
+                const CRITICAL_SYNC_TIMEOUT_SECS: u64 = 180;
+                let timeout_client = client_clone.clone();
+                let timeout_generation = task_generation;
+                let critical_sync_timeout_handle = tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(CRITICAL_SYNC_TIMEOUT_SECS)).await;
+                    // Check generation — if connection was replaced, this timeout is stale
+                    if timeout_client.connection_generation.load(Ordering::SeqCst)
+                        != timeout_generation
+                    {
+                        return;
+                    }
+                    // Matches WhatsApp Web's $16(): check if SettingPushName was synced.
+                    // If push_name is still empty after 180s, critical sync failed.
+                    let push_name = timeout_client.get_push_name().await;
+                    if push_name.is_empty() {
+                        warn!(
+                            target: "Client/AppState",
+                            "Critical app state sync timed out after {CRITICAL_SYNC_TIMEOUT_SECS}s \
+                             (push_name not synced). Disconnecting to retry."
+                        );
+                        // WhatsApp Web does socketLogout here which clears device identity.
+                        // We disconnect instead — preserving credentials but forcing a
+                        // reconnect, which is less destructive for library consumers.
+                        timeout_client.disconnect().await;
+                    } else {
+                        debug!(
+                            target: "Client/AppState",
+                            "Critical sync timeout fired but push_name was already synced"
+                        );
+                    }
+                });
+
                 // Await critical collections via batched IQ before dispatching Connected.
                 check_generation!();
                 if let Err(e) = client_clone
@@ -1486,12 +1539,11 @@ impl Client {
                     ])
                     .await
                 {
-                    if client_clone.should_downgrade_sync_error(&e) {
-                        debug!("Skipping critical app state sync during shutdown: {e}");
-                    } else {
-                        warn!("Failed to sync critical app state: {e}");
-                    }
+                    client_clone.log_sync_error("critical app state sync", &e);
                 }
+
+                // Critical sync completed — cancel the timeout timer
+                critical_sync_timeout_handle.abort();
 
                 check_generation!();
 
@@ -1499,11 +1551,7 @@ impl Client {
                 // Presence is NOT sent here — WhatsApp Web sends presence from the
                 // setting_pushName mutation handler (WAWebPushNameSync), not from
                 // criticalSyncDone. Our setting_pushName handler already does this.
-                client_clone
-                    .core
-                    .event_bus
-                    .dispatch(&Event::Connected(crate::types::events::Connected));
-                client_clone.connected_notifier.notify_waiters();
+                client_clone.dispatch_connected();
 
                 // Spawn remaining non-critical collections in background
                 let sync_client = client_clone.clone();
@@ -1522,11 +1570,7 @@ impl Client {
                         ])
                         .await
                     {
-                        if sync_client.should_downgrade_sync_error(&e) {
-                            debug!("Skipping non-critical app state sync during shutdown: {e}");
-                        } else {
-                            warn!("Failed to batch sync non-critical app state: {e}");
-                        }
+                        sync_client.log_sync_error("non-critical app state sync", &e);
                     }
 
                     sync_client
@@ -1550,11 +1594,7 @@ impl Client {
                 // for an outdated connection that was replaced mid-await.
                 check_generation!();
 
-                client_clone
-                    .core
-                    .event_bus
-                    .dispatch(&Event::Connected(crate::types::events::Connected));
-                client_clone.connected_notifier.notify_waiters();
+                client_clone.dispatch_connected();
             }
         });
     }
@@ -1729,7 +1769,7 @@ impl Client {
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
-                timeout: None,
+                timeout: Some(Duration::from_secs(30)),
             };
 
             let resp = self.send_iq(iq).await?;
