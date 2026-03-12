@@ -130,8 +130,10 @@ async fn test_prekey_collision_regression() -> anyhow::Result<()> {
         }));
     }
     for (i, handle) in send_handles.into_iter().enumerate() {
-        if let Err(e) = handle.await {
-            log::warn!("Offline sender {i} failed: {e}");
+        match handle.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => anyhow::bail!("Offline sender {i} send_message failed: {e}"),
+            Err(e) => anyhow::bail!("Offline sender {i} task panicked: {e}"),
         }
     }
     info!("All offline sends complete");

@@ -70,13 +70,13 @@ impl Client {
             device_guard.backend.clone()
         };
 
-        // Determine the starting ID using the persistent counter.
-        // If next_pre_key_id == 0 (old device before migration), fall back to
-        // MAX(key_id) from the database to avoid overwriting existing prekeys.
+        // Determine the starting ID using both the persistent counter AND the store max.
+        // Using max(counter, max_id+1) guards against crash-after-upload-before-persist:
+        // the counter would be stale, but the store already has the generated keys.
+        let max_id = backend.get_max_prekey_id().await?;
         let start_id = if device_snapshot.next_pre_key_id > 0 {
-            device_snapshot.next_pre_key_id
+            std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
         } else {
-            let max_id = backend.get_max_prekey_id().await.unwrap_or(0);
             log::info!(
                 "Migrating pre-key counter: MAX(key_id) in store = {}, starting from {}",
                 max_id,
@@ -114,16 +114,12 @@ impl Client {
         // Persist the freshly generated prekeys before uploading them so they are
         // already available for local decryption if the server starts sending
         // pkmsg traffic immediately after accepting the upload.
+        // Propagate errors — uploading a key we can't store locally would cause
+        // decryption failures when the server hands it out.
         for (id, record) in &keys_to_upload {
             use prost::Message;
             let record_bytes = record.encode_to_vec();
-            if let Err(e) = backend.store_prekey(*id, &record_bytes, false).await {
-                log::warn!(
-                    "Failed to pre-store prekey id {} before upload: {:?}",
-                    id,
-                    e
-                );
-            }
+            backend.store_prekey(*id, &record_bytes, false).await?;
         }
 
         let pre_key_pairs: Vec<(u32, PublicKey)> = key_pairs_to_upload

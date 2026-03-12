@@ -876,6 +876,7 @@ impl Client {
                         // Device::is_trusted_identity reads from backend, not cache.
                         if let Err(e) = self.flush_signal_cache().await {
                             log::warn!("Failed to flush identity deletion for {}: {e:?}", address);
+                            continue;
                         }
                         log::info!(
                             "Cleared old identity for {} from cache and backend",
