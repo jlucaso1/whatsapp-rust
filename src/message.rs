@@ -473,6 +473,24 @@ impl Client {
             }
         }
 
+        // WA Web diagnostic: validate skmsg is not first in multi-enc messages.
+        // If skmsg comes first, the SKDM (carried in pkmsg/msg) hasn't been processed yet,
+        // so the skmsg decryption would fail with NoSenderKey.
+        if !session_enc_nodes.is_empty()
+            && !group_content_enc_nodes.is_empty()
+            && all_enc_nodes
+                .first()
+                .and_then(|n| n.attrs().optional_string("type"))
+                == Some("skmsg")
+        {
+            log::error!(
+                "[msg:{}] Protocol violation: skmsg is first in multi-enc message from {}. \
+                 Expected pkmsg/msg first (containing SKDM).",
+                info.id,
+                info.source.sender
+            );
+        }
+
         // Determine decrypt fail mode from enc nodes (WA Web: hideFail)
         let decrypt_fail_mode = if has_hide_fail {
             crate::types::events::DecryptFailMode::Hide
@@ -571,17 +589,15 @@ impl Client {
         // 1. There were no session messages (session already exists), OR
         // 2. Session messages were successfully decrypted, OR
         // 3. Session messages were duplicates (already processed, so session exists)
-        // 4. It's a status@broadcast (we might have sender key cached from previous status)
-        // Skip only if session messages FAILED to decrypt (not duplicates, not absent)
+        // Skip only if session messages FAILED to decrypt (not duplicates, not absent).
+        // Matches WA Web's `canDecryptNext` pattern: if pkmsg fails with a retriable error,
+        // the SKDM it carried is lost, so skmsg will always fail with NoSenderKey — skip it
+        // to avoid unnecessary retry receipts. The retry for the pkmsg will cause the sender
+        // to resend the entire message including SKDM.
         if !group_content_enc_nodes.is_empty() {
-            // For status broadcasts, always try skmsg even if pkmsg failed.
-            // WhatsApp Web does this too - the pkmsg contains the SKDM which might fail,
-            // but if we already have the sender key cached from a previous status,
-            // we can still decrypt the skmsg content.
             let should_process_skmsg = session_enc_nodes.is_empty()
                 || session_decrypted_successfully
-                || session_had_duplicates
-                || info.source.chat.is_status_broadcast();
+                || session_had_duplicates;
 
             if should_process_skmsg {
                 match self
@@ -666,14 +682,20 @@ impl Client {
             } else {
                 // Only show warning if session messages actually FAILED (not duplicates)
                 if !session_had_duplicates {
-                    warn!(
-                        "Skipping skmsg decryption for message {} from {} because the initial session/senderkey message failed to decrypt. This prevents a retry loop.",
-                        info.id, info.source.sender
-                    );
-                    // Still dispatch an UndecryptableMessage event so the user knows
-                    // But only if we haven't already dispatched one in process_session_enc_batch
-                    if !session_dispatched_undecryptable {
-                        self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
+                    if info.is_expired_status() {
+                        log::debug!(
+                            "[msg:{}] Silently dropping expired status from {}",
+                            info.id,
+                            info.source.sender
+                        );
+                    } else {
+                        warn!(
+                            "Skipping skmsg decryption for message {} from {} because pkmsg failed to decrypt.",
+                            info.id, info.source.sender
+                        );
+                        if !session_dispatched_undecryptable {
+                            self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
+                        }
                     }
 
                     // Do NOT send a delivery receipt for undecryptable messages.
@@ -1158,6 +1180,15 @@ impl Client {
                     // This is expected when messages are redelivered, just continue silently
                 }
                 Err(SignalProtocolError::NoSenderKeyState(msg)) => {
+                    if info.is_expired_status() {
+                        log::debug!(
+                            "[msg:{}] Skipping retry for expired status from {}",
+                            info.id,
+                            info.source.sender
+                        );
+                        continue;
+                    }
+
                     // Optimization: Check if this message was already re-queued locally
                     let cache_key = self
                         .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
@@ -1187,6 +1218,16 @@ impl Client {
                     self.spawn_retry_receipt(info, RetryReason::NoSession);
                 }
                 Err(e) => {
+                    if info.is_expired_status() {
+                        log::debug!(
+                            "[msg:{}] Ignoring decrypt error for expired status from {}: {:?}",
+                            info.id,
+                            info.source.sender,
+                            e
+                        );
+                        continue;
+                    }
+
                     log::error!(
                         "Group batch decrypt failed [msg:{}] for group {} sender {}: {:?}",
                         info.id,
@@ -4058,89 +4099,59 @@ mod tests {
         );
     }
 
-    /// Test: Status broadcast messages should always try skmsg even if pkmsg fails
-    ///
-    /// - WhatsApp Web tracks pkmsg and skmsg failures separately
-    /// - If pkmsg fails but skmsg succeeds, result is SUCCESS
-    /// - For status@broadcast, we might have sender key cached from previous status
-    ///
-    /// This test verifies that the `should_process_skmsg` logic correctly
-    /// includes status broadcasts even when session decryption fails.
+    /// Test: Verify JID type detection for status broadcasts, broadcast lists, groups, and users.
     #[test]
-    fn test_status_broadcast_should_always_process_skmsg() {
+    fn test_status_broadcast_jid_detection() {
         use wacore_binary::jid::{Jid, JidExt};
 
-        // status@broadcast JID
         let status_jid: Jid = "status@broadcast".parse().expect("status JID should parse");
-        assert!(
-            status_jid.is_status_broadcast(),
-            "status@broadcast should be recognized as status broadcast"
-        );
+        assert!(status_jid.is_status_broadcast());
 
-        // Regular broadcast list should NOT be status broadcast
         let broadcast_list: Jid = "123456789@broadcast"
             .parse()
             .expect("broadcast JID should parse");
-        assert!(
-            !broadcast_list.is_status_broadcast(),
-            "Regular broadcast list should not be status broadcast"
-        );
-        assert!(
-            broadcast_list.is_broadcast_list(),
-            "123456789@broadcast should be broadcast list"
-        );
+        assert!(!broadcast_list.is_status_broadcast());
+        assert!(broadcast_list.is_broadcast_list());
 
-        // Group JID should NOT be status broadcast
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
             .expect("group JID should parse");
-        assert!(
-            !group_jid.is_status_broadcast(),
-            "Group JID should not be status broadcast"
-        );
+        assert!(!group_jid.is_status_broadcast());
 
-        // 1:1 JID should NOT be status broadcast
         let user_jid: Jid = "15551234567@s.whatsapp.net"
             .parse()
             .expect("user JID should parse");
-        assert!(
-            !user_jid.is_status_broadcast(),
-            "User JID should not be status broadcast"
-        );
+        assert!(!user_jid.is_status_broadcast());
     }
 
-    /// Test: Verify should_process_skmsg logic for status broadcast
+    /// Test: Verify should_process_skmsg logic matches WA Web's canDecryptNext pattern.
     ///
-    /// Simulates the decision logic from handle_incoming_message:
-    /// - For status@broadcast, should_process_skmsg should be true even when
-    ///   session_decrypted_successfully=false and session_had_duplicates=false
+    /// WA Web applies canDecryptNext uniformly: if pkmsg fails with a retriable error,
+    /// skmsg is skipped regardless of chat type (group, status, 1:1). No exception for
+    /// status broadcasts — the retry receipt for the pkmsg will cause the sender to
+    /// resend the entire message including SKDM.
     #[test]
-    fn test_should_process_skmsg_logic_for_status_broadcast() {
-        use wacore_binary::jid::{Jid, JidExt};
-
+    fn test_should_process_skmsg_logic_matches_wa_web() {
         // Test cases: (chat_jid, session_empty, session_success, session_dupe, expected)
         let test_cases = [
-            // Status broadcast: always process skmsg
-            ("status@broadcast", false, false, false, true),
-            ("status@broadcast", false, false, true, true),
-            ("status@broadcast", false, true, false, true),
-            ("status@broadcast", true, false, false, true),
-            // Regular group: only process if session ok or empty
-            ("120363021033254949@g.us", false, false, false, false), // Fail: session failed
-            ("120363021033254949@g.us", false, false, true, true),   // OK: duplicate
-            ("120363021033254949@g.us", false, true, false, true),   // OK: success
-            ("120363021033254949@g.us", true, false, false, true),   // OK: no session msgs
-            // 1:1 chat: same logic as group
+            // Status broadcast: same rules as all other chats (WA Web: canDecryptNext is uniform)
+            ("status@broadcast", false, false, false, false), // Fail: session failed → skip skmsg
+            ("status@broadcast", false, false, true, true),   // OK: duplicate
+            ("status@broadcast", false, true, false, true),   // OK: success
+            ("status@broadcast", true, false, false, true),   // OK: no session msgs
+            // Regular group
+            ("120363021033254949@g.us", false, false, false, false),
+            ("120363021033254949@g.us", false, false, true, true),
+            ("120363021033254949@g.us", false, true, false, true),
+            ("120363021033254949@g.us", true, false, false, true),
+            // 1:1 chat
             ("15551234567@s.whatsapp.net", false, false, false, false),
             ("15551234567@s.whatsapp.net", true, false, false, true),
         ];
 
         for (jid_str, session_empty, session_success, session_dupe, expected) in test_cases {
-            let chat_jid: Jid = jid_str.parse().expect("JID should parse");
-
             // Recreate the should_process_skmsg logic from handle_incoming_message
-            let should_process_skmsg =
-                session_empty || session_success || session_dupe || chat_jid.is_status_broadcast();
+            let should_process_skmsg = session_empty || session_success || session_dupe;
 
             assert_eq!(
                 should_process_skmsg,

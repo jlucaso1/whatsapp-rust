@@ -242,6 +242,40 @@ impl Client {
             let group_jid = receipt.source.chat.to_string();
             let participant_str = participant_jid.to_string();
 
+            // WA Web rotateKey check: if the requesting device is NOT in the group's
+            // participant list and is NOT a LID device, force full sender key rotation
+            // by clearing all SKDM recipients. This ensures unknown devices (new phone,
+            // re-registration) trigger SKDM redistribution to ALL participants.
+            if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
+                let is_known_participant = if let Some(group_info) =
+                    self.get_group_cache().await.get(&receipt.source.chat).await
+                {
+                    group_info
+                        .participants
+                        .iter()
+                        .any(|p| p.user == participant_jid.user)
+                } else {
+                    // No cached group info — assume known to avoid false rotations
+                    true
+                };
+
+                if !is_known_participant {
+                    log::warn!(
+                        "Unknown device {} in group {} — forcing full sender key rotation \
+                         (matches WA Web's rotateKey behavior)",
+                        participant_str,
+                        group_jid
+                    );
+                    if let Err(e) = self
+                        .persistence_manager
+                        .clear_skdm_recipients(&group_jid)
+                        .await
+                    {
+                        log::warn!("Failed to clear SKDM recipients for rotation: {}", e);
+                    }
+                }
+            }
+
             // Mark this participant as needing fresh SKDM (filters out own devices internally)
             if let Err(e) = self
                 .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_str))
