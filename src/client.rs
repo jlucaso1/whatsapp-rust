@@ -265,6 +265,11 @@ pub struct Client {
     /// Notifier for when the noise socket is established (before login).
     /// Use this to wait for the socket to be ready for sending messages.
     pub(crate) socket_ready_notifier: Arc<Notify>,
+    /// Set to `true` only when `dispatch_connected()` fires (after critical sync
+    /// completes). Reset on each new connection attempt. Used by
+    /// `wait_for_connected()` to avoid a false-positive fast path when the
+    /// client is logged in but critical app state hasn't synced yet.
+    pub(crate) is_ready: Arc<AtomicBool>,
     /// Notifier for when the client is fully connected and logged in.
     /// Triggered after Event::Connected is dispatched.
     pub(crate) connected_notifier: Arc<Notify>,
@@ -325,6 +330,31 @@ impl Client {
                     | crate::request::IqError::InternalChannelClosed
             )
         )
+    }
+
+    /// Log a sync error, downgrading to debug level during shutdown/disconnect.
+    fn log_sync_error(&self, context: &str, err: &anyhow::Error) {
+        if self.should_downgrade_sync_error(err) {
+            debug!("Skipping {context} during shutdown: {err}");
+        } else {
+            warn!("Failed {context}: {err}");
+        }
+    }
+
+    /// Returns `true` when the client has completed its full startup:
+    /// transport connected, server authenticated, and critical app state synced.
+    /// This is the condition `wait_for_connected` uses to resolve.
+    fn is_fully_ready(&self) -> bool {
+        self.is_connected() && self.is_logged_in() && self.is_ready.load(Ordering::Relaxed)
+    }
+
+    /// Dispatch the Connected event and notify waiters.
+    fn dispatch_connected(&self) {
+        self.is_ready.store(true, Ordering::Relaxed);
+        self.core
+            .event_bus
+            .dispatch(&Event::Connected(crate::types::events::Connected));
+        self.connected_notifier.notify_waiters();
     }
 
     /// Enable or disable skipping of history sync notifications at runtime.
@@ -459,6 +489,7 @@ impl Client {
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
             history_sync_idle_notifier: Arc::new(Notify::new()),
             socket_ready_notifier: Arc::new(Notify::new()),
+            is_ready: Arc::new(AtomicBool::new(false)),
             connected_notifier: Arc::new(Notify::new()),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
@@ -705,6 +736,7 @@ impl Client {
         // handle_success will properly process the <success> stanza even if
         // a previous connection's post-login task bailed out early.
         self.is_logged_in.store(false, Ordering::Relaxed);
+        self.is_ready.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
 
         let version_future = crate::version::resolve_and_update_version(
@@ -790,6 +822,7 @@ impl Client {
 
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
+        self.is_ready.store(false, Ordering::Relaxed);
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
@@ -1477,33 +1510,71 @@ impl Client {
                     check_generation!();
                 }
 
+                // Start the critical sync timeout timer matching WhatsApp Web's
+                // WAWebSyncBootstrap.$15 (setSyncDCriticalDataSyncTimeout).
+                // WhatsApp Web uses 180s and calls socketLogout(SyncdTimeout) if
+                // the critical data hasn't synced by then.
+                const CRITICAL_SYNC_TIMEOUT_SECS: u64 = 180;
+                let timeout_client = client_clone.clone();
+                let timeout_generation = task_generation;
+                let critical_sync_timeout_handle = tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(CRITICAL_SYNC_TIMEOUT_SECS)).await;
+                    // Check generation — if connection was replaced, this timeout is stale
+                    if timeout_client.connection_generation.load(Ordering::SeqCst)
+                        != timeout_generation
+                    {
+                        return;
+                    }
+                    // Matches WhatsApp Web's $16(): check if SettingPushName was synced.
+                    // If push_name is still empty after 180s, critical sync failed.
+                    let push_name = timeout_client.get_push_name().await;
+                    if push_name.is_empty() {
+                        warn!(
+                            target: "Client/AppState",
+                            "Critical app state sync timed out after {CRITICAL_SYNC_TIMEOUT_SECS}s \
+                             (push_name not synced). Reconnecting to retry."
+                        );
+                        // WhatsApp Web does socketLogout here which clears device identity.
+                        // We reconnect instead — preserving credentials and keeping the
+                        // run loop active so auto-reconnect can retry the sync.
+                        timeout_client.reconnect_immediately().await;
+                    } else {
+                        debug!(
+                            target: "Client/AppState",
+                            "Critical sync timeout fired but push_name was already synced"
+                        );
+                    }
+                });
+
                 // Await critical collections via batched IQ before dispatching Connected.
                 check_generation!();
-                if let Err(e) = client_clone
+                match client_clone
                     .sync_collections_batched(vec![
                         WAPatchName::CriticalBlock,
                         WAPatchName::CriticalUnblockLow,
                     ])
                     .await
                 {
-                    if client_clone.should_downgrade_sync_error(&e) {
-                        debug!("Skipping critical app state sync during shutdown: {e}");
-                    } else {
-                        warn!("Failed to sync critical app state: {e}");
+                    Ok(()) => {
+                        // Critical sync completed — cancel the timeout timer
+                        critical_sync_timeout_handle.abort();
+
+                        check_generation!();
+
+                        // Dispatch Connected after critical sync completes.
+                        // Presence is NOT sent here — WhatsApp Web sends presence from the
+                        // setting_pushName mutation handler (WAWebPushNameSync), not from
+                        // criticalSyncDone. Our setting_pushName handler already does this.
+                        client_clone.dispatch_connected();
+                    }
+                    Err(e) => {
+                        client_clone.log_sync_error("critical app state sync", &e);
+                        // Don't abort the timeout or dispatch Connected — the sync failed,
+                        // so the timeout watchdog should remain active to force a reconnect
+                        // if needed. Return early to avoid emitting a spurious Connected event.
+                        return;
                     }
                 }
-
-                check_generation!();
-
-                // Dispatch Connected after critical sync completes.
-                // Presence is NOT sent here — WhatsApp Web sends presence from the
-                // setting_pushName mutation handler (WAWebPushNameSync), not from
-                // criticalSyncDone. Our setting_pushName handler already does this.
-                client_clone
-                    .core
-                    .event_bus
-                    .dispatch(&Event::Connected(crate::types::events::Connected));
-                client_clone.connected_notifier.notify_waiters();
 
                 // Spawn remaining non-critical collections in background
                 let sync_client = client_clone.clone();
@@ -1522,11 +1593,7 @@ impl Client {
                         ])
                         .await
                     {
-                        if sync_client.should_downgrade_sync_error(&e) {
-                            debug!("Skipping non-critical app state sync during shutdown: {e}");
-                        } else {
-                            warn!("Failed to batch sync non-critical app state: {e}");
-                        }
+                        sync_client.log_sync_error("non-critical app state sync", &e);
                     }
 
                     sync_client
@@ -1550,11 +1617,7 @@ impl Client {
                 // for an outdated connection that was replaced mid-await.
                 check_generation!();
 
-                client_clone
-                    .core
-                    .event_bus
-                    .dispatch(&Event::Connected(crate::types::events::Connected));
-                client_clone.connected_notifier.notify_waiters();
+                client_clone.dispatch_connected();
             }
         });
     }
@@ -1729,7 +1792,7 @@ impl Client {
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
-                timeout: None,
+                timeout: Some(Duration::from_secs(30)),
             };
 
             let resp = self.send_iq(iq).await?;
@@ -2518,15 +2581,15 @@ impl Client {
         &self,
         timeout: std::time::Duration,
     ) -> Result<(), anyhow::Error> {
-        // Fast path: already connected and logged in
-        if self.is_connected() && self.is_logged_in() {
+        // Fast path: fully ready (connected + logged in + critical sync done).
+        if self.is_fully_ready() {
             return Ok(());
         }
 
-        // Register waiter and re-check to avoid race condition:
-        // If connection completes between checks, the notified future captures it.
+        // Register waiter and re-check to avoid TOCTOU race:
+        // dispatch_connected() could fire between the check above and notified() registration.
         let notified = self.connected_notifier.notified();
-        if self.is_connected() && self.is_logged_in() {
+        if self.is_fully_ready() {
             return Ok(());
         }
 
