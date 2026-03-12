@@ -11,7 +11,6 @@ use wacore::libsignal::protocol::{
     KeyPair, PreKeyBundle, PublicKey, UsePQRatchet, process_prekey_bundle,
 };
 use wacore::libsignal::store::PreKeyStore;
-use wacore::libsignal::store::SessionStore;
 use wacore::protocol::ProtocolNode;
 use wacore::types::jid::JidExt;
 use wacore_binary::builder::NodeBuilder;
@@ -201,28 +200,35 @@ impl Client {
                 // This handles the case where the requester reinstalled but didn't include keys.
                 if let Some(received_reg_id) = extract_registration_id_from_node(node) {
                     let signal_address = participant_jid.to_protocol_address();
+                    let addr_str = signal_address.to_string();
                     let device_store = self.persistence_manager.get_device_arc().await;
                     let device_guard = device_store.read().await;
 
-                    if let Ok(session) = device_guard.load_session(&signal_address).await
+                    // Read session through cache to get consistent state
+                    let session_data = self
+                        .signal_cache
+                        .get_session(&addr_str, &*device_guard.backend)
+                        .await
+                        .ok()
+                        .flatten();
+                    drop(device_guard);
+
+                    if let Some(data) = session_data
+                        && let Ok(session) =
+                            wacore::libsignal::protocol::SessionRecord::deserialize(&data)
                         && let Ok(stored_reg_id) = session.remote_registration_id()
                         && stored_reg_id != 0
                         && stored_reg_id != received_reg_id
                     {
-                        drop(device_guard);
                         info!(
                             "Registration ID mismatch for {} (stored: {}, received: {}). \
                              Deleting session since no key bundle provided.",
                             signal_address, stored_reg_id, received_reg_id
                         );
-                        if let Err(del_err) = device_store
-                            .write()
-                            .await
-                            .delete_session(&signal_address)
-                            .await
-                        {
-                            warn!("Failed to delete session for reg ID mismatch: {}", del_err);
-                        }
+                        self.signal_cache.delete_session(&addr_str).await;
+                        self.flush_signal_cache().await.unwrap_or_else(|e| {
+                            log::warn!("Failed to flush session deletion for reg ID mismatch: {e}");
+                        });
                     }
                 }
             }
@@ -266,10 +272,20 @@ impl Client {
             let address_str = signal_address.to_string();
             let device_store = self.persistence_manager.get_device_arc().await;
 
-            // Check for base key collision before deleting the session
+            // Check for base key collision before deleting the session.
+            // Read session through cache for consistent state.
             {
                 let device_guard = device_store.read().await;
-                if let Ok(session) = device_guard.load_session(&signal_address).await
+                let session_data = self
+                    .signal_cache
+                    .get_session(&address_str, &*device_guard.backend)
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(data) = session_data
+                    && let Ok(session) =
+                        wacore::libsignal::protocol::SessionRecord::deserialize(&data)
                     && let Ok(current_base_key) = session.alice_base_key()
                 {
                     if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
@@ -326,17 +342,13 @@ impl Client {
                 }
             }
 
-            // Delete the old session so a fresh one is established on resend.
-            if let Err(e) = device_store
-                .write()
-                .await
-                .delete_session(&signal_address)
-                .await
-            {
-                log::warn!("Failed to delete session for {signal_address}: {e}");
-            } else {
-                info!("Deleted session for {signal_address} due to retry receipt");
-            }
+            // Delete the old session through the signal cache so encryption uses a fresh session.
+            // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
+            self.signal_cache.delete_session(&address_str).await;
+            self.flush_signal_cache().await.unwrap_or_else(|e| {
+                log::warn!("Failed to flush signal cache after session delete: {e}");
+            });
+            info!("Deleted session for {signal_address} due to retry receipt");
         }
 
         // Status broadcasts cannot be resent through send_message_impl (it requires
@@ -422,29 +434,42 @@ impl Client {
         let signal_address = requester_jid.to_protocol_address();
 
         // Check if the registration ID changed (indicates device reinstall).
-        let device_store = self.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
-        if let Ok(session) = device_guard.load_session(&signal_address).await {
-            let existing_reg_id = session.remote_registration_id()?;
-            if existing_reg_id != 0 && existing_reg_id != registration_id {
-                // WhatsApp Web throws an error for peer device registration ID changes.
-                // This is a security measure - peer devices should maintain consistent identity.
-                if is_peer {
-                    return Err(anyhow::anyhow!(
-                        "Registration ID changed for peer device {} (was {}, now {}). \
-                         This may indicate the device was reinstalled.",
-                        signal_address,
-                        existing_reg_id,
-                        registration_id
-                    ));
+        // Read session through cache for consistent state.
+        let addr_str = signal_address.to_string();
+        {
+            let device_store = self.persistence_manager.get_device_arc().await;
+            let device_guard = device_store.read().await;
+            let session_data = self
+                .signal_cache
+                .get_session(&addr_str, &*device_guard.backend)
+                .await
+                .ok()
+                .flatten();
+            drop(device_guard);
+
+            if let Some(data) = session_data
+                && let Ok(session) = wacore::libsignal::protocol::SessionRecord::deserialize(&data)
+            {
+                let existing_reg_id = session.remote_registration_id()?;
+                if existing_reg_id != 0 && existing_reg_id != registration_id {
+                    // WhatsApp Web throws an error for peer device registration ID changes.
+                    // This is a security measure - peer devices should maintain consistent identity.
+                    if is_peer {
+                        return Err(anyhow::anyhow!(
+                            "Registration ID changed for peer device {} (was {}, now {}). \
+                             This may indicate the device was reinstalled.",
+                            signal_address,
+                            existing_reg_id,
+                            registration_id
+                        ));
+                    }
+                    info!(
+                        "Registration ID changed for {} (was {}, now {}). Session will be replaced.",
+                        signal_address, existing_reg_id, registration_id
+                    );
                 }
-                info!(
-                    "Registration ID changed for {} (was {}, now {}). Session will be replaced.",
-                    signal_address, existing_reg_id, registration_id
-                );
             }
         }
-        drop(device_guard);
 
         // Extract identity key.
         let identity_bytes = keys_node
