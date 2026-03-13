@@ -2391,6 +2391,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_json",
+ "sha1",
  "sha2",
  "thiserror 2.0.18",
  "typed-builder",

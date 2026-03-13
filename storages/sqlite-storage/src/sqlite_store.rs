@@ -1215,6 +1215,73 @@ impl SignalStore for SqliteStore {
         ))
     }
 
+    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
+        let device_id = self.device_id;
+        let keys = keys.to_vec();
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let keys_clone = keys.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+
+                    conn.transaction(|conn| {
+                        for (id, record) in &keys_clone {
+                            diesel::insert_into(prekeys::table)
+                                .values((
+                                    prekeys::id.eq(*id as i32),
+                                    prekeys::key.eq(record),
+                                    prekeys::uploaded.eq(uploaded),
+                                    prekeys::device_id.eq(device_id),
+                                ))
+                                .on_conflict((prekeys::id, prekeys::device_id))
+                                .do_update()
+                                .set((prekeys::key.eq(record), prekeys::uploaded.eq(uploaded)))
+                                .execute(conn)?;
+                        }
+                        Ok::<(), diesel::result::Error>(())
+                    })
+                    .map_err(DieselOrStore::Diesel)
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_prekeys_batch exhausted retries".to_string(),
+        ))
+    }
+
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
