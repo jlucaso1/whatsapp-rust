@@ -830,7 +830,9 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
         }
     };
 
-    let timestamp = chrono::DateTime::from_timestamp(notification.timestamp as i64, 0)
+    let timestamp = i64::try_from(notification.timestamp)
+        .ok()
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
         .unwrap_or_else(chrono::Utc::now);
 
     for action in notification.actions {
@@ -853,8 +855,8 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
 
         debug!(
             target: "Client/Group",
-            "Group notification: group={}, action={:?}",
-            notification.group_jid, std::mem::discriminant(&action)
+            "Group notification: group={}, action={}",
+            notification.group_jid, action.tag_name()
         );
 
         client
@@ -863,7 +865,9 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
             .dispatch(&Event::GroupUpdate(GroupUpdate {
                 group_jid: notification.group_jid.clone(),
                 participant: notification.participant.clone(),
+                participant_pn: notification.participant_pn.clone(),
                 timestamp,
+                is_lid_addressing_mode: notification.is_lid_addressing_mode,
                 action,
             }));
     }

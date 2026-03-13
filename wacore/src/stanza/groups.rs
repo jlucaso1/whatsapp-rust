@@ -21,8 +21,12 @@ pub struct GroupNotification {
     pub group_jid: Jid,
     /// Admin/user who triggered the notification (from `participant` attribute)
     pub participant: Option<Jid>,
+    /// Phone number JID of the participant (from `participant_pn` attribute, for LID groups)
+    pub participant_pn: Option<Jid>,
     /// Timestamp (from `t` attribute, unix seconds)
     pub timestamp: u64,
+    /// Whether the group uses LID addressing mode (from `addressing_mode="lid"`)
+    pub is_lid_addressing_mode: bool,
     /// One or more actions in this notification
     pub actions: Vec<GroupNotificationAction>,
 }
@@ -128,8 +132,10 @@ pub enum GroupNotificationAction {
 
     // -- Group lifecycle --
     /// `<create>` — Group created (complex structure, raw node preserved)
-    #[serde(skip)]
-    Create { raw: Node },
+    Create {
+        #[serde(skip)]
+        raw: Node,
+    },
     /// `<delete>` — Group deleted
     Delete {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,20 +144,56 @@ pub enum GroupNotificationAction {
 
     // -- Community linking --
     /// `<link link_type="...">` — Subgroup linked
-    #[serde(skip)]
-    Link { link_type: String, raw: Node },
+    Link {
+        link_type: String,
+        #[serde(skip)]
+        raw: Node,
+    },
     /// `<unlink unlink_type="..." unlink_reason="...">` — Subgroup unlinked
-    #[serde(skip)]
     Unlink {
         unlink_type: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         unlink_reason: Option<String>,
+        #[serde(skip)]
         raw: Node,
     },
 
     // -- Catch-all --
     /// Unknown child tag — preserved for forward compatibility
     Unknown { tag: String },
+}
+
+impl GroupNotificationAction {
+    /// Returns the wire tag name for this action, matching `GROUP_NOTIFICATION_TAG` values.
+    pub fn tag_name(&self) -> &str {
+        match self {
+            Self::Add { .. } => "add",
+            Self::Remove { .. } => "remove",
+            Self::Promote { .. } => "promote",
+            Self::Demote { .. } => "demote",
+            Self::Modify { .. } => "modify",
+            Self::Subject { .. } => "subject",
+            Self::Description { .. } => "description",
+            Self::Locked { .. } => "locked",
+            Self::Unlocked => "unlocked",
+            Self::Announce => "announcement",
+            Self::NotAnnounce => "not_announcement",
+            Self::Ephemeral { .. } => "ephemeral",
+            Self::MembershipApprovalMode { .. } => "membership_approval_mode",
+            Self::MemberAddMode { .. } => "member_add_mode",
+            Self::NoFrequentlyForwarded => "no_frequently_forwarded",
+            Self::FrequentlyForwardedOk => "frequently_forwarded_ok",
+            Self::Invite { .. } => "invite",
+            Self::RevokeInvite => "revoke",
+            Self::GrowthLocked { .. } => "growth_locked",
+            Self::GrowthUnlocked => "growth_unlocked",
+            Self::Create { .. } => "create",
+            Self::Delete { .. } => "delete",
+            Self::Link { .. } => "link",
+            Self::Unlink { .. } => "unlink",
+            Self::Unknown { tag } => tag.as_str(),
+        }
+    }
 }
 
 impl GroupNotification {
@@ -161,7 +203,13 @@ impl GroupNotification {
     pub fn try_from_node(node: &Node) -> Option<Self> {
         let group_jid = node.attrs().optional_jid("from")?;
         let participant = node.attrs().optional_jid("participant");
+        let participant_pn = node.attrs().optional_jid("participant_pn");
         let timestamp = node.attrs().optional_u64("t").unwrap_or(0);
+        let is_lid_addressing_mode = node
+            .attrs()
+            .optional_string("addressing_mode")
+            .map(|s| s == "lid")
+            .unwrap_or(false);
 
         let actions = node
             .children()
@@ -171,7 +219,9 @@ impl GroupNotification {
         Some(Self {
             group_jid,
             participant,
+            participant_pn,
             timestamp,
+            is_lid_addressing_mode,
             actions,
         })
     }

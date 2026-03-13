@@ -626,8 +626,13 @@ pub struct GroupUpdate {
     /// The admin/user who triggered the change (`participant` attribute)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub participant: Option<Jid>,
+    /// Phone number JID of the participant (for LID-addressed groups)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant_pn: Option<Jid>,
     /// When the change occurred
     pub timestamp: DateTime<Utc>,
+    /// Whether the group uses LID addressing mode
+    pub is_lid_addressing_mode: bool,
     /// The specific action
     pub action: crate::stanza::groups::GroupNotificationAction,
 }
