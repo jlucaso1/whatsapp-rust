@@ -105,6 +105,7 @@ type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
 const MAX_POOLED_BUFFER_CAP: usize = 512 * 1024;
+const MAX_POOLED_BUFFER_COUNT: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -494,7 +495,7 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(4))),
+            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(16))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
@@ -840,14 +841,31 @@ impl Client {
         self.history_sync_idle_notifier.notify_waiters();
         // Drain all pending IQ waiters so they fail fast with InternalChannelClosed
         // instead of hanging until the 75s timeout.
-        let waiters: Vec<_> = self.response_waiters.lock().await.drain().collect();
-        if !waiters.is_empty() {
+        let mut waiters_map = self.response_waiters.lock().await;
+        let waiter_count = waiters_map.len();
+        // Replace with new map to release backing storage; old senders drop here,
+        // causing receivers to get RecvError → IqError::InternalChannelClosed
+        *waiters_map = HashMap::new();
+        drop(waiters_map);
+        if waiter_count > 0 {
             debug!(
                 "Dropping {} orphaned IQ response waiter(s) on disconnect",
-                waiters.len()
+                waiter_count
             );
         }
-        // Senders are dropped here, causing receivers to get RecvError → IqError::InternalChannelClosed
+
+        // Clear app state tracking maps to prevent unbounded growth across reconnections.
+        // Replace with new collections to release backing storage.
+        *self.app_state_key_requests.lock().await = HashMap::new();
+        *self.app_state_syncing.lock().await = HashSet::new();
+
+        // Drop stale media connection (auth tokens become invalid on reconnect)
+        *self.media_conn.write().await = None;
+
+        // Clear app state key cache — keys will be re-fetched from DB on demand
+        if let Some(proc) = self.app_state_processor.get() {
+            proc.clear_key_cache().await;
+        }
     }
 
     /// Flush the in-memory signal cache to the database backend.
@@ -1918,6 +1936,8 @@ impl Client {
                             to_request.push(key_id);
                         }
                     }
+                    // Evict stale entries to prevent unbounded growth over long sessions
+                    guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
                     drop(guard);
                     if !to_request.is_empty() {
                         self.request_app_state_keys(&to_request).await;
@@ -2123,6 +2143,8 @@ impl Client {
                         to_request.push(key_id);
                     }
                 }
+                // Evict stale entries to prevent unbounded growth over long sessions
+                guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
                 drop(guard);
                 if !to_request.is_empty() {
                     self.request_app_state_keys(&to_request).await;
@@ -2686,7 +2708,9 @@ impl Client {
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
             let mut pool = self.plaintext_buffer_pool.lock().await;
-            if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+            if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP
+                && pool.len() < MAX_POOLED_BUFFER_COUNT
+            {
                 pool.push(plaintext_buf);
             }
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
@@ -2703,7 +2727,8 @@ impl Client {
             Err(mut e) => {
                 let p_buf = std::mem::take(&mut e.plaintext_buf);
                 let mut pool = self.plaintext_buffer_pool.lock().await;
-                if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+                if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP && pool.len() < MAX_POOLED_BUFFER_COUNT
+                {
                     pool.push(p_buf);
                 }
                 return Err(e.into());
@@ -2711,7 +2736,8 @@ impl Client {
         };
 
         let mut pool = self.plaintext_buffer_pool.lock().await;
-        if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP {
+        if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP && pool.len() < MAX_POOLED_BUFFER_COUNT
+        {
             pool.push(plaintext_buf);
         }
         Ok(())

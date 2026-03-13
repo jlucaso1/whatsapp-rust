@@ -21,7 +21,7 @@ pub use wacore::appstate::Mutation;
 #[derive(Clone)]
 pub struct AppStateProcessor {
     pub(crate) backend: Arc<dyn Backend>,
-    key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
+    key_cache: Arc<Mutex<HashMap<String, Arc<ExpandedAppStateKeys>>>>,
 }
 
 impl AppStateProcessor {
@@ -32,7 +32,10 @@ impl AppStateProcessor {
         }
     }
 
-    pub(crate) async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
+    pub(crate) async fn get_app_state_key(
+        &self,
+        key_id: &[u8],
+    ) -> Result<Arc<ExpandedAppStateKeys>> {
         use base64::Engine;
         use base64::engine::general_purpose::STANDARD_NO_PAD;
         let id_b64 = STANDARD_NO_PAD.encode(key_id);
@@ -41,9 +44,15 @@ impl AppStateProcessor {
         }
         let key_opt = self.backend.get_sync_key(key_id).await?;
         let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
-        let expanded: ExpandedAppStateKeys = expand_app_state_keys(&key.key_data);
+        let expanded = Arc::new(expand_app_state_keys(&key.key_data));
         self.key_cache.lock().await.insert(id_b64, expanded.clone());
         Ok(expanded)
+    }
+
+    /// Clear the in-memory key cache (e.g. on reconnect).
+    /// Keys will be re-fetched from the database backend on next access.
+    pub(crate) async fn clear_key_cache(&self) {
+        *self.key_cache.lock().await = HashMap::new();
     }
 
     /// Pre-fetch and cache all keys needed for a patch list.
@@ -213,7 +222,7 @@ impl AppStateProcessor {
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
                     keys_map
                         .get(&id_b64)
-                        .cloned()
+                        .map(|arc| (**arc).clone())
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 
@@ -298,7 +307,7 @@ impl AppStateProcessor {
                     use base64::engine::general_purpose::STANDARD_NO_PAD;
                     let id_b64 = STANDARD_NO_PAD.encode(key_id);
                     keys.get(&id_b64)
-                        .cloned()
+                        .map(|arc| (**arc).clone())
                         .ok_or(wacore::appstate::AppStateError::KeyNotFound)
                 };
 

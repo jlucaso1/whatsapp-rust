@@ -10,9 +10,13 @@
 //!
 //! When multiple LIDs exist for the same phone number (rare), the most recent one
 //! (by `created_at` timestamp) is considered "current".
+//!
+//! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
+//! memory growth in long-running sessions.
 
-use std::collections::HashMap;
-use tokio::sync::RwLock;
+use std::time::Duration;
+
+use moka::future::Cache;
 
 pub use wacore::types::{LearningSource, LidPnEntry};
 
@@ -23,12 +27,11 @@ pub use wacore::types::{LearningSource, LidPnEntry};
 /// Signal address resolution.
 ///
 /// The cache is thread-safe and can be shared across async tasks.
-#[derive(Debug)]
 pub struct LidPnCache {
     /// LID -> Entry mapping
-    lid_to_entry: RwLock<HashMap<String, LidPnEntry>>,
+    lid_to_entry: Cache<String, LidPnEntry>,
     /// Phone number -> Entry mapping (stores the most recent LID for that PN)
-    pn_to_entry: RwLock<HashMap<String, LidPnEntry>>,
+    pn_to_entry: Cache<String, LidPnEntry>,
 }
 
 impl Default for LidPnCache {
@@ -41,8 +44,14 @@ impl LidPnCache {
     /// Create a new empty cache
     pub fn new() -> Self {
         Self {
-            lid_to_entry: RwLock::new(HashMap::new()),
-            pn_to_entry: RwLock::new(HashMap::new()),
+            lid_to_entry: Cache::builder()
+                .max_capacity(10_000)
+                .time_to_idle(Duration::from_secs(3600))
+                .build(),
+            pn_to_entry: Cache::builder()
+                .max_capacity(10_000)
+                .time_to_idle(Duration::from_secs(3600))
+                .build(),
         }
     }
 
@@ -50,28 +59,27 @@ impl LidPnCache {
     ///
     /// Returns the LID user part if a mapping exists, None otherwise.
     pub async fn get_current_lid(&self, phone: &str) -> Option<String> {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.get(phone).map(|e| e.lid.clone())
+        self.pn_to_entry.get(phone).await.map(|e| e.lid.clone())
     }
 
     /// Get the phone number for a LID.
     ///
     /// Returns the phone number user part if a mapping exists, None otherwise.
     pub async fn get_phone_number(&self, lid: &str) -> Option<String> {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.get(lid).map(|e| e.phone_number.clone())
+        self.lid_to_entry
+            .get(lid)
+            .await
+            .map(|e| e.phone_number.clone())
     }
 
     /// Get the full entry for a LID.
     pub async fn get_entry_by_lid(&self, lid: &str) -> Option<LidPnEntry> {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.get(lid).cloned()
+        self.lid_to_entry.get(lid).await
     }
 
     /// Get the full entry for a phone number.
     pub async fn get_entry_by_phone(&self, phone: &str) -> Option<LidPnEntry> {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.get(phone).cloned()
+        self.pn_to_entry.get(phone).await
     }
 
     /// Add or update a mapping in the cache.
@@ -80,30 +88,22 @@ impl LidPnCache {
     /// For the PN -> Entry map, this only updates if the new entry has a
     /// newer or equal `created_at` timestamp (matching WhatsApp Web behavior).
     pub async fn add(&self, entry: LidPnEntry) {
-        // Check if PN map needs update first (before we move/clone the entry)
-        let should_update_pn = {
-            let pn_map = self.pn_to_entry.read().await;
-            match pn_map.get(&entry.phone_number) {
-                Some(existing) => existing.created_at <= entry.created_at,
-                None => true,
-            }
+        // Check if PN map needs update first
+        let should_update_pn = match self.pn_to_entry.get(&entry.phone_number).await {
+            Some(existing) => existing.created_at <= entry.created_at,
+            None => true,
         };
 
-        // Clone for LID map (we need the original for PN map if updating)
-        let entry_for_lid = entry.clone();
-
         // Update LID -> Entry map
-        {
-            let mut lid_map = self.lid_to_entry.write().await;
-            lid_map.insert(entry_for_lid.lid.clone(), entry_for_lid);
-        }
+        self.lid_to_entry
+            .insert(entry.lid.clone(), entry.clone())
+            .await;
 
         // Update PN -> Entry map (only if newer or equal timestamp)
         if should_update_pn {
-            let mut pn_map = self.pn_to_entry.write().await;
-            // Use the original entry - avoids an extra clone
-            let phone_key = entry.phone_number.clone();
-            pn_map.insert(phone_key, entry);
+            self.pn_to_entry
+                .insert(entry.phone_number.clone(), entry)
+                .await;
         }
     }
 
@@ -129,26 +129,20 @@ impl LidPnCache {
 
     /// Clear all entries from the cache.
     pub async fn clear(&self) {
-        {
-            let mut lid_map = self.lid_to_entry.write().await;
-            lid_map.clear();
-        }
-        {
-            let mut pn_map = self.pn_to_entry.write().await;
-            pn_map.clear();
-        }
+        self.lid_to_entry.invalidate_all();
+        self.pn_to_entry.invalidate_all();
     }
 
     /// Get the number of LID entries in the cache.
-    pub async fn lid_count(&self) -> usize {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.len()
+    pub async fn lid_count(&self) -> u64 {
+        self.lid_to_entry.run_pending_tasks().await;
+        self.lid_to_entry.entry_count()
     }
 
     /// Get the number of phone number entries in the cache.
-    pub async fn pn_count(&self) -> usize {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.len()
+    pub async fn pn_count(&self) -> u64 {
+        self.pn_to_entry.run_pending_tasks().await;
+        self.pn_to_entry.entry_count()
     }
 }
 
@@ -306,7 +300,7 @@ mod tests {
         assert_eq!(cache.pn_count().await, 1);
 
         cache.clear().await;
-
+        // run_pending_tasks is called inside lid_count/pn_count
         assert_eq!(cache.lid_count().await, 0);
         assert_eq!(cache.pn_count().await, 0);
         assert!(cache.get_current_lid("559980000001").await.is_none());

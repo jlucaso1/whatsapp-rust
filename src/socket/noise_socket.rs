@@ -99,14 +99,10 @@ impl NoiseSocket {
         let counter = *write_counter;
         *write_counter = write_counter.wrapping_add(1);
 
-        // For small messages, encrypt in-place in out_buf to avoid allocation
+        // For small messages, encrypt plaintext_buf in-place then frame into out_buf.
+        // This avoids the previous triple-copy pattern (plaintext→out→plaintext→out).
         if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-            // Copy plaintext to out_buf and encrypt in-place
-            out_buf.clear();
-            out_buf.extend_from_slice(&plaintext_buf);
-            plaintext_buf.clear();
-
-            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut out_buf) {
+            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut plaintext_buf) {
                 return Err(EncryptSendError::crypto(
                     anyhow::anyhow!(e.to_string()),
                     plaintext_buf,
@@ -114,16 +110,9 @@ impl NoiseSocket {
                 ));
             }
 
-            // Frame the ciphertext - we need a temporary copy since encode_frame_into
-            // clears the output buffer
-            let ciphertext_len = out_buf.len();
-            plaintext_buf.extend_from_slice(&out_buf);
+            // Frame the ciphertext from plaintext_buf into out_buf (single copy)
             out_buf.clear();
-            if let Err(e) = wacore::framing::encode_frame_into(
-                &plaintext_buf[..ciphertext_len],
-                None,
-                &mut out_buf,
-            ) {
+            if let Err(e) = wacore::framing::encode_frame_into(&plaintext_buf, None, &mut out_buf) {
                 plaintext_buf.clear();
                 return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
             }
