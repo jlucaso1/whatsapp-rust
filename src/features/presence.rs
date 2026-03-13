@@ -123,7 +123,7 @@ impl<'a> Presence<'a> {
         self.client
             .send_node(node)
             .await
-            .map_err(|e| anyhow::Error::from(e))
+            .map_err(anyhow::Error::from)
     }
 }
 

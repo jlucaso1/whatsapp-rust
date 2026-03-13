@@ -717,6 +717,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bot_builder_missing_http_client() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let result = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .build()
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            BotBuilderError::MissingHttpClient
+        ));
+    }
+
+    #[tokio::test]
     async fn test_bot_builder_with_version_override() {
         let backend = create_test_sqlite_backend().await;
         let transport = TokioWebSocketTransportFactory::new();

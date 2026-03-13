@@ -310,7 +310,7 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            matches!(err, wacore::download::MediaDecryptionError::InvalidMac),
+            matches!(&err, wacore::download::MediaDecryptionError::InvalidMac),
             "Expected InvalidMac, got: {}",
             err
         );

@@ -1692,10 +1692,11 @@ impl Client {
                         }
                         continue;
                     }
-                    if e.downcast_ref::<wacore::store::error::StoreError>()
+                    let is_db_locked = e.downcast_ref::<wacore::store::error::StoreError>()
                         .is_some_and(|se| matches!(se, wacore::store::error::StoreError::Database(msg) if msg.contains("locked") || msg.contains("busy")))
-                        && attempt < APP_STATE_RETRY_MAX_ATTEMPTS
-                    {
+                        || e.downcast_ref::<crate::appstate_sync::AppStateSyncError>()
+                            .is_some_and(|ase| matches!(ase, crate::appstate_sync::AppStateSyncError::Store(wacore::store::error::StoreError::Database(msg)) if msg.contains("locked") || msg.contains("busy")));
+                    if is_db_locked && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
                         tokio::time::sleep(backoff).await;
