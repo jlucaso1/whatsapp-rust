@@ -67,7 +67,7 @@ impl Client {
         let own_pn = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in - no phone number available for PDO"))?;
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
 
         // Create JID for device 0 (primary phone)
         let primary_phone_jid = own_pn.with_device(0);

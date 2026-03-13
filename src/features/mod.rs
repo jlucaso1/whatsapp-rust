@@ -25,7 +25,7 @@ pub use groups::{
 
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
 
-pub use presence::{Presence, PresenceStatus};
+pub use presence::{Presence, PresenceError, PresenceStatus};
 
 pub use profile::{Profile, SetProfilePictureResponse};
 

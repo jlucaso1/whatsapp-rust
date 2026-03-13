@@ -250,6 +250,11 @@ pub struct Client {
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
 
+    /// Tracks whether the server has our prekeys (matches WA Web's `setServerHasPreKeys`).
+    /// Set to `false` when encrypt/count notification arrives, `true` after successful upload.
+    pub(crate) server_has_prekeys: Arc<AtomicBool>,
+    /// Prevents concurrent prekey upload operations (matches WA Web's dedup set in `handlePreKeyLow`).
+    pub(crate) prekey_upload_lock: Arc<tokio::sync::Mutex<()>>,
     /// Notifier for when offline sync (ib offline stanza) is received.
     /// WhatsApp Web waits for this before sending passive tasks (prekey upload, active IQ, presence).
     pub(crate) offline_sync_notifier: Arc<Notify>,
@@ -485,6 +490,8 @@ impl Client {
             app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
+            server_has_prekeys: Arc::new(AtomicBool::new(true)),
+            prekey_upload_lock: Arc::new(tokio::sync::Mutex::new(())),
             offline_sync_notifier: Arc::new(Notify::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
@@ -741,6 +748,7 @@ impl Client {
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.server_has_prekeys.store(true, Ordering::Relaxed);
 
         let version_future = crate::version::resolve_and_update_version(
             &self.persistence_manager,
@@ -838,6 +846,7 @@ impl Client {
             Arc::new(tokio::sync::Semaphore::new(1));
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.server_has_prekeys.store(true, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
             .store(0, Ordering::Relaxed);
         self.history_sync_idle_notifier.notify_waiters();
@@ -1406,7 +1415,7 @@ impl Client {
             // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
             // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
             check_generation!();
-            if let Err(e) = client_clone.upload_pre_keys().await {
+            if let Err(e) = client_clone.upload_pre_keys(false).await {
                 warn!("Failed to upload pre-keys during startup: {e:?}");
             }
 
@@ -1692,8 +1701,12 @@ impl Client {
             match res {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    let es = e.to_string();
-                    if es.contains("app state key not found") && attempt == 1 {
+                    if e.downcast_ref::<crate::appstate_sync::AppStateSyncError>()
+                        .is_some_and(|ase| {
+                            matches!(ase, crate::appstate_sync::AppStateSyncError::KeyNotFound(_))
+                        })
+                        && attempt == 1
+                    {
                         if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
                             debug!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
                             if tokio::time::timeout(
@@ -1708,7 +1721,11 @@ impl Client {
                         }
                         continue;
                     }
-                    if es.contains("database is locked") && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
+                    let is_db_locked = e.downcast_ref::<wacore::store::error::StoreError>()
+                        .is_some_and(|se| matches!(se, wacore::store::error::StoreError::Database(msg) if msg.contains("locked") || msg.contains("busy")))
+                        || e.downcast_ref::<crate::appstate_sync::AppStateSyncError>()
+                            .is_some_and(|ase| matches!(ase, crate::appstate_sync::AppStateSyncError::Store(wacore::store::error::StoreError::Database(msg)) if msg.contains("locked") || msg.contains("busy")));
+                    if is_db_locked && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
                         tokio::time::sleep(backoff).await;
@@ -2647,7 +2664,7 @@ impl Client {
             )
         } else {
             if self.get_pn().await.is_none() {
-                return Err(anyhow!("Not logged in"));
+                return Err(anyhow::Error::from(ClientError::NotLoggedIn));
             }
             None
         };
@@ -2803,7 +2820,7 @@ impl Client {
         let own_pn = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow!("Not logged in"))?;
+            .ok_or_else(|| anyhow::Error::from(ClientError::NotLoggedIn))?;
 
         let addressing_mode = self
             .groups()
@@ -3563,11 +3580,12 @@ mod tests {
             "establish_primary_phone_session_immediate should fail when no PN is set"
         );
 
-        let error_msg = result.unwrap_err().to_string();
+        let err = result.unwrap_err();
         assert!(
-            error_msg.contains("Not logged in"),
-            "Error should mention 'Not logged in', got: {}",
-            error_msg
+            err.downcast_ref::<ClientError>()
+                .is_some_and(|e| matches!(e, ClientError::NotLoggedIn)),
+            "Error should be ClientError::NotLoggedIn, got: {}",
+            err
         );
 
         info!("✅ test_establish_primary_phone_session_fails_without_pn passed");

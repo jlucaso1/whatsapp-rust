@@ -43,12 +43,23 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
     match notification_type {
         "encrypt" => {
             if node.attrs().optional_string("from") == Some(SERVER_JID) {
-                let client_clone = client.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = client_clone.upload_pre_keys().await {
-                        warn!("Failed to upload pre-keys after notification: {:?}", e);
+                // Dispatch based on first child tag, matching WA Web's handleEncryptNotification.
+                // "count" → handlePreKeyLow, "digest" → handleDigestKey
+                let first_child_tag = node
+                    .children()
+                    .and_then(|c| c.first().map(|n| n.tag.clone()));
+
+                match first_child_tag.as_deref() {
+                    Some("count") => {
+                        handle_prekey_low(client).await;
                     }
-                });
+                    Some("digest") => {
+                        handle_digest_key(client);
+                    }
+                    other => {
+                        warn!("Unhandled encrypt notification child: {:?}", other);
+                    }
+                }
             }
         }
         "server_sync" => {
@@ -190,6 +201,74 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                 .dispatch(&Event::Notification(node.clone()));
         }
     }
+}
+
+/// Handle encrypt/count notification (PreKey Low).
+///
+/// Matches WA Web's `WAWebHandlePreKeyLow`:
+/// 1. Mark `server_has_prekeys = false`
+/// 2. Wait for offline delivery to complete
+/// 3. Acquire dedup lock (prevents concurrent uploads)
+/// 4. Upload prekeys with Fibonacci retry
+async fn handle_prekey_low(client: &Arc<Client>) {
+    // Mark server as not having our prekeys
+    client
+        .server_has_prekeys
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
+    let client_clone = client.clone();
+    tokio::spawn(async move {
+        // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
+        // Done BEFORE acquiring the lock so the lock isn't held during an
+        // indefinite wait that could block digest-key or other upload paths.
+        client_clone.wait_for_offline_delivery_end().await;
+
+        // Bail if disconnected during offline delivery wait
+        if !client_clone
+            .is_logged_in
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!("Pre-key upload skipped: disconnected during offline delivery wait");
+            return;
+        }
+
+        // Serialize upload — prevents concurrent uploads from count + digest paths
+        let _guard = client_clone.prekey_upload_lock.lock().await;
+
+        // Dedup: if a previous upload already succeeded, skip
+        if client_clone
+            .server_has_prekeys
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!("Pre-key upload already completed by another task, skipping");
+            return;
+        }
+
+        if let Err(e) = client_clone.upload_pre_keys_with_retry(false).await {
+            warn!(
+                "Failed to upload pre-keys after prekey_low notification: {:?}",
+                e
+            );
+        }
+    });
+}
+
+/// Handle encrypt/digest notification (Digest Key validation).
+///
+/// Matches WA Web's `WAWebHandleDigestKey`:
+/// Queries server for key bundle digest, validates SHA-1 hash locally,
+/// re-uploads if mismatch or missing.
+///
+/// Acquires `prekey_upload_lock` to serialize with the count-based upload path,
+/// preventing concurrent uploads that could race on prekey ID allocation.
+fn handle_digest_key(client: &Arc<Client>) {
+    let client_clone = client.clone();
+    tokio::spawn(async move {
+        let _guard = client_clone.prekey_upload_lock.lock().await;
+        if let Err(e) = client_clone.validate_digest_key().await {
+            warn!("Digest key validation failed: {:?}", e);
+        }
+    });
 }
 
 /// Handle device list change notifications.
