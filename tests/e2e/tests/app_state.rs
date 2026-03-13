@@ -270,9 +270,16 @@ async fn test_multi_device_app_state_sync() -> anyhow::Result<()> {
     client_a1.wait_for_app_state_sync().await?;
     client_a2.wait_for_app_state_sync().await?;
 
-    // A1 sets a new push name — this sends a critical_block mutation
-    let new_name = "MultiDevNewName";
-    client_a1.client.profile().set_push_name(new_name).await?;
+    // Use a unique push name each run so the test is idempotent even if the
+    // mock server persists push_name state across sessions (like the real server).
+    let new_name = format!(
+        "MultiDev_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    client_a1.client.profile().set_push_name(&new_name).await?;
     info!("A1 set push name to '{new_name}'");
 
     // A2 should receive SelfPushNameUpdated via ib dirty → re-sync → critical_block patch
@@ -282,7 +289,7 @@ async fn test_multi_device_app_state_sync() -> anyhow::Result<()> {
 
     if let Event::SelfPushNameUpdated(update) = &event {
         assert_eq!(
-            update.new_name, new_name,
+            update.new_name, *new_name,
             "A2 should receive the updated push name from A1"
         );
         info!("A2 received SelfPushNameUpdated: '{}'", update.new_name);
