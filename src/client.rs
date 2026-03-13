@@ -249,6 +249,11 @@ pub struct Client {
     pub(crate) initial_keys_synced_notifier: Arc<Notify>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
 
+    /// Tracks whether the server has our prekeys (matches WA Web's `setServerHasPreKeys`).
+    /// Set to `false` when encrypt/count notification arrives, `true` after successful upload.
+    pub(crate) server_has_prekeys: Arc<AtomicBool>,
+    /// Prevents concurrent prekey upload operations (matches WA Web's dedup set in `handlePreKeyLow`).
+    pub(crate) prekey_upload_lock: Arc<tokio::sync::Mutex<()>>,
     /// Notifier for when offline sync (ib offline stanza) is received.
     /// WhatsApp Web waits for this before sending passive tasks (prekey upload, active IQ, presence).
     pub(crate) offline_sync_notifier: Arc<Notify>,
@@ -484,6 +489,8 @@ impl Client {
             app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
             initial_keys_synced_notifier: Arc::new(Notify::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
+            server_has_prekeys: Arc::new(AtomicBool::new(true)),
+            prekey_upload_lock: Arc::new(tokio::sync::Mutex::new(())),
             offline_sync_notifier: Arc::new(Notify::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
@@ -738,6 +745,7 @@ impl Client {
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.server_has_prekeys.store(true, Ordering::Relaxed);
 
         let version_future = crate::version::resolve_and_update_version(
             &self.persistence_manager,
@@ -835,6 +843,7 @@ impl Client {
             Arc::new(tokio::sync::Semaphore::new(1));
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.server_has_prekeys.store(true, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
             .store(0, Ordering::Relaxed);
         self.history_sync_idle_notifier.notify_waiters();

@@ -27,7 +27,7 @@ log = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["alloc"] }
-sha1 = { version = "0.10.6", default-features = false }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
 subtle = "2.6.1"
 thiserror = { workspace = true }
