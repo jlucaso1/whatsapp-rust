@@ -64,18 +64,16 @@ impl StanzaHandler for MessageHandler {
 
                 let client_for_worker = client.clone();
 
-                // Clone these for cleanup when the worker exits
-                let chat_id_for_cleanup = chat_id.clone();
-                let queues_for_cleanup = client.message_queues.clone();
-
-                // Spawn a worker task that processes messages sequentially for this chat
+                // Spawn a worker task that processes messages sequentially for this chat.
+                // The worker exits when all tx senders are dropped (cache TTI expiry drops
+                // the cached tx, and any cloned tx's are short-lived). No explicit
+                // invalidate() here — that would race with new queue entries under the
+                // same key (see bug audit #27).
                 tokio::spawn(async move {
                     while let Some(msg_node) = rx.recv().await {
                         let client = client_for_worker.clone();
                         Box::pin(client.handle_incoming_message(msg_node)).await;
                     }
-                    // Clean up when channel closes to prevent memory leaks
-                    queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;
                 });
 
                 tx
