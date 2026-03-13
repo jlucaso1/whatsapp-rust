@@ -16,7 +16,8 @@ use wacore_binary::jid::Jid;
 
 pub use wacore::prekeys::PreKeyUtils;
 
-const WANTED_PRE_KEY_COUNT: usize = 50;
+/// Matches WA Web's UPLOAD_KEYS_COUNT from WAWebSignalStoreApi.
+const WANTED_PRE_KEY_COUNT: usize = 812;
 const MIN_PRE_KEY_COUNT: usize = 5;
 
 impl Client {
@@ -116,10 +117,13 @@ impl Client {
         // pkmsg traffic immediately after accepting the upload.
         // Propagate errors — uploading a key we can't store locally would cause
         // decryption failures when the server hands it out.
-        for (id, record) in &keys_to_upload {
+        {
             use prost::Message;
-            let record_bytes = record.encode_to_vec();
-            backend.store_prekey(*id, &record_bytes, false).await?;
+            let batch: Vec<(u32, Vec<u8>)> = keys_to_upload
+                .iter()
+                .map(|(id, record)| (*id, record.encode_to_vec()))
+                .collect();
+            backend.store_prekeys_batch(&batch, false).await?;
         }
 
         let pre_key_pairs: Vec<(u32, PublicKey)> = key_pairs_to_upload
@@ -139,11 +143,14 @@ impl Client {
         self.execute(spec).await?;
 
         // Mark the uploaded prekeys as server-synced
-        for (id, record) in keys_to_upload {
+        {
             use prost::Message;
-            let record_bytes = record.encode_to_vec();
-            if let Err(e) = backend.store_prekey(id, &record_bytes, true).await {
-                log::warn!("Failed to store prekey id {}: {:?}", id, e);
+            let batch: Vec<(u32, Vec<u8>)> = keys_to_upload
+                .iter()
+                .map(|(id, record)| (*id, record.encode_to_vec()))
+                .collect();
+            if let Err(e) = backend.store_prekeys_batch(&batch, true).await {
+                log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
             }
         }
 

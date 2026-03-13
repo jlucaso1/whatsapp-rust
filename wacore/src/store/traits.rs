@@ -110,6 +110,15 @@ pub trait SignalStore: Send + Sync {
     /// Store a pre-key.
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()>;
 
+    /// Store multiple pre-keys in a single batch operation.
+    /// Default implementation falls back to individual `store_prekey` calls.
+    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+        for (id, record) in keys {
+            self.store_prekey(*id, record, uploaded).await?;
+        }
+        Ok(())
+    }
+
     /// Load a pre-key by ID.
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
 
