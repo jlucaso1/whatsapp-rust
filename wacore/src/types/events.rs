@@ -321,10 +321,8 @@ pub enum Event {
     UserAboutUpdate(UserAboutUpdate),
 
     JoinedGroup(LazyConversation),
-    GroupInfoUpdate {
-        jid: Jid,
-        update: Box<wa::SyncActionValue>,
-    },
+    /// Group metadata/settings/participant change from w:gp2 notification.
+    GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
 
     PushNameUpdate(PushNameUpdate),
@@ -615,6 +613,23 @@ pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
+}
+
+/// Group update notification.
+///
+/// Emitted for each action in a `<notification type="w:gp2">` stanza.
+/// A single notification may produce multiple `GroupUpdate` events (one per action).
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupUpdate {
+    /// The group this update applies to
+    pub group_jid: Jid,
+    /// The admin/user who triggered the change (`participant` attribute)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<Jid>,
+    /// When the change occurred
+    pub timestamp: DateTime<Utc>,
+    /// The specific action
+    pub action: crate::stanza::groups::GroupNotificationAction,
 }
 
 #[derive(Debug, Clone, Serialize)]
