@@ -220,19 +220,19 @@ impl Client {
     pub(crate) async fn validate_digest_key(&self) -> Result<(), anyhow::Error> {
         let response = match self.execute(DigestKeyBundleSpec::new()).await {
             Ok(resp) => resp,
+            Err(crate::request::IqError::ServerError { code: 404, .. }) => {
+                log::warn!("digestKey: no record found for current user, re-uploading");
+                return self.upload_pre_keys_with_retry().await;
+            }
+            Err(crate::request::IqError::ServerError { code: 406, .. }) => {
+                log::warn!("digestKey: malformed request");
+                return Ok(());
+            }
+            Err(crate::request::IqError::ServerError { code: 503, .. }) => {
+                log::warn!("digestKey: service unavailable");
+                return Ok(());
+            }
             Err(e) => {
-                let error_str = format!("{e:?}");
-                // Match WA Web's error code handling
-                if error_str.contains("404") {
-                    log::warn!("digestKey: no record found for current user, re-uploading");
-                    return self.upload_pre_keys_with_retry().await;
-                } else if error_str.contains("406") {
-                    log::warn!("digestKey: malformed request");
-                    return Ok(());
-                } else if error_str.contains("503") {
-                    log::warn!("digestKey: service unavailable");
-                    return Ok(());
-                }
                 log::warn!("digestKey: server error: {:?}", e);
                 return Ok(());
             }
