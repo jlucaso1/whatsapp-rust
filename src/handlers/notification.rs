@@ -207,8 +207,8 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 ///
 /// Matches WA Web's `WAWebHandlePreKeyLow`:
 /// 1. Mark `server_has_prekeys = false`
-/// 2. Acquire dedup lock (prevents concurrent uploads)
-/// 3. Wait for offline delivery to complete
+/// 2. Wait for offline delivery to complete
+/// 3. Acquire dedup lock (prevents concurrent uploads)
 /// 4. Upload prekeys with Fibonacci retry
 async fn handle_prekey_low(client: &Arc<Client>) {
     // Mark server as not having our prekeys
@@ -218,10 +218,24 @@ async fn handle_prekey_low(client: &Arc<Client>) {
 
     let client_clone = client.clone();
     tokio::spawn(async move {
-        // Dedup: if another upload is in progress, wait for it then check if still needed
+        // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
+        // Done BEFORE acquiring the lock so the lock isn't held during an
+        // indefinite wait that could block digest-key or other upload paths.
+        client_clone.wait_for_offline_delivery_end().await;
+
+        // Bail if disconnected during offline delivery wait
+        if !client_clone
+            .is_logged_in
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!("Pre-key upload skipped: disconnected during offline delivery wait");
+            return;
+        }
+
+        // Serialize upload — prevents concurrent uploads from count + digest paths
         let _guard = client_clone.prekey_upload_lock.lock().await;
 
-        // If a previous upload already succeeded, skip
+        // Dedup: if a previous upload already succeeded, skip
         if client_clone
             .server_has_prekeys
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -230,10 +244,7 @@ async fn handle_prekey_low(client: &Arc<Client>) {
             return;
         }
 
-        // Wait for offline delivery to complete (matches WA Web's waitForOfflineDeliveryEnd)
-        client_clone.wait_for_offline_delivery_end().await;
-
-        if let Err(e) = client_clone.upload_pre_keys_with_retry().await {
+        if let Err(e) = client_clone.upload_pre_keys_with_retry(false).await {
             warn!(
                 "Failed to upload pre-keys after prekey_low notification: {:?}",
                 e
@@ -247,9 +258,13 @@ async fn handle_prekey_low(client: &Arc<Client>) {
 /// Matches WA Web's `WAWebHandleDigestKey`:
 /// Queries server for key bundle digest, validates SHA-1 hash locally,
 /// re-uploads if mismatch or missing.
+///
+/// Acquires `prekey_upload_lock` to serialize with the count-based upload path,
+/// preventing concurrent uploads that could race on prekey ID allocation.
 fn handle_digest_key(client: &Arc<Client>) {
     let client_clone = client.clone();
     tokio::spawn(async move {
+        let _guard = client_clone.prekey_upload_lock.lock().await;
         if let Err(e) = client_clone.validate_digest_key().await {
             warn!("Digest key validation failed: {:?}", e);
         }

@@ -1395,7 +1395,7 @@ impl Client {
             // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
             // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
             check_generation!();
-            if let Err(e) = client_clone.upload_pre_keys().await {
+            if let Err(e) = client_clone.upload_pre_keys(false).await {
                 warn!("Failed to upload pre-keys during startup: {e:?}");
             }
 

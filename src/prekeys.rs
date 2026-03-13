@@ -53,13 +53,16 @@ impl Client {
     /// WANTED_PRE_KEY_COUNT new pre-keys. Uses a persistent monotonic counter
     /// (Device::next_pre_key_id) to avoid ID collisions — matching WhatsApp Web's
     /// NEXT_PK_ID / FIRST_UNUPLOAD_PK_ID pattern from WAWebSignalStoreApi.
-    pub(crate) async fn upload_pre_keys(&self) -> Result<(), anyhow::Error> {
+    ///
+    /// When `force` is true, skips the count guard and always uploads. This is used
+    /// by the digest key repair path (WA Web's `_uploadPreKeys` does NOT check count).
+    pub(crate) async fn upload_pre_keys(&self, force: bool) -> Result<(), anyhow::Error> {
         let server_count = match self.get_server_pre_key_count().await {
             Ok(c) => c,
             Err(e) => return Err(anyhow::anyhow!(e)),
         };
 
-        if server_count >= MIN_PRE_KEY_COUNT {
+        if !force && server_count >= MIN_PRE_KEY_COUNT {
             log::debug!("Server has {} pre-keys, no upload needed.", server_count);
             return Ok(());
         }
@@ -115,19 +118,21 @@ impl Client {
             return Ok(());
         }
 
+        // Encode once — reused for both pre-upload store and post-upload mark.
+        let encoded_batch: Vec<(u32, Vec<u8>)> = {
+            use prost::Message;
+            keys_to_upload
+                .iter()
+                .map(|(id, record)| (*id, record.encode_to_vec()))
+                .collect()
+        };
+
         // Persist the freshly generated prekeys before uploading them so they are
         // already available for local decryption if the server starts sending
         // pkmsg traffic immediately after accepting the upload.
         // Propagate errors — uploading a key we can't store locally would cause
         // decryption failures when the server hands it out.
-        {
-            use prost::Message;
-            let batch: Vec<(u32, Vec<u8>)> = keys_to_upload
-                .iter()
-                .map(|(id, record)| (*id, record.encode_to_vec()))
-                .collect();
-            backend.store_prekeys_batch(&batch, false).await?;
-        }
+        backend.store_prekeys_batch(&encoded_batch, false).await?;
 
         let pre_key_pairs: Vec<(u32, PublicKey)> = key_pairs_to_upload
             .iter()
@@ -145,16 +150,9 @@ impl Client {
 
         self.execute(spec).await?;
 
-        // Mark the uploaded prekeys as server-synced
-        {
-            use prost::Message;
-            let batch: Vec<(u32, Vec<u8>)> = keys_to_upload
-                .iter()
-                .map(|(id, record)| (*id, record.encode_to_vec()))
-                .collect();
-            if let Err(e) = backend.store_prekeys_batch(&batch, true).await {
-                log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
-            }
+        // Mark the uploaded prekeys as server-synced (reuse encoded batch)
+        if let Err(e) = backend.store_prekeys_batch(&encoded_batch, true).await {
+            log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
         }
 
         // Update the persistent counter so future uploads never reuse these IDs.
@@ -178,13 +176,18 @@ impl Client {
     ///
     /// Retry schedule: 1s, 2s, 3s, 5s, 8s, 13s, ... capped at 610s.
     /// Verified against WA Web JS: `{ algo: { type: "fibonacci", first: 1e3, second: 2e3 }, max: 61e4 }`
-    pub(crate) async fn upload_pre_keys_with_retry(&self) -> Result<(), anyhow::Error> {
+    ///
+    /// When `force` is true, bypasses the count guard (used by digest repair path).
+    pub(crate) async fn upload_pre_keys_with_retry(
+        &self,
+        force: bool,
+    ) -> Result<(), anyhow::Error> {
         let mut delay_a: u64 = 1;
         let mut delay_b: u64 = 2;
         const MAX_DELAY_SECS: u64 = 610;
 
         loop {
-            match self.upload_pre_keys().await {
+            match self.upload_pre_keys(force).await {
                 Ok(()) => {
                     log::info!("Pre-key upload succeeded");
                     return Ok(());
@@ -222,7 +225,7 @@ impl Client {
             Ok(resp) => resp,
             Err(crate::request::IqError::ServerError { code: 404, .. }) => {
                 log::warn!("digestKey: no record found for current user, re-uploading");
-                return self.upload_pre_keys_with_retry().await;
+                return self.upload_pre_keys_with_retry(true).await;
             }
             Err(crate::request::IqError::ServerError { code: 406, .. }) => {
                 log::warn!("digestKey: malformed request");
@@ -246,7 +249,7 @@ impl Client {
                 response.reg_id,
                 device_snapshot.registration_id
             );
-            return self.upload_pre_keys_with_retry().await;
+            return self.upload_pre_keys_with_retry(true).await;
         }
 
         // Compute local SHA-1 digest over the same material as WA Web's validateLocalKeyBundle:
@@ -277,7 +280,7 @@ impl Client {
                                     "digestKey: prekey {} has no public key, re-uploading",
                                     prekey_id
                                 );
-                                return self.upload_pre_keys_with_retry().await;
+                                return self.upload_pre_keys_with_retry(true).await;
                             }
                         }
                         Err(e) => {
@@ -286,7 +289,7 @@ impl Client {
                                 prekey_id,
                                 e
                             );
-                            return self.upload_pre_keys_with_retry().await;
+                            return self.upload_pre_keys_with_retry(true).await;
                         }
                     }
                 }
@@ -295,7 +298,7 @@ impl Client {
                         "digestKey: missing local prekey {}, re-uploading",
                         prekey_id
                     );
-                    return self.upload_pre_keys_with_retry().await;
+                    return self.upload_pre_keys_with_retry(true).await;
                 }
                 Err(e) => {
                     log::warn!(
@@ -303,7 +306,7 @@ impl Client {
                         prekey_id,
                         e
                     );
-                    return self.upload_pre_keys_with_retry().await;
+                    return self.upload_pre_keys_with_retry(true).await;
                 }
             }
         }
@@ -322,7 +325,7 @@ impl Client {
                 hex::encode(&response.hash),
                 hex::encode(local_hash)
             );
-            return self.upload_pre_keys_with_retry().await;
+            return self.upload_pre_keys_with_retry(true).await;
         }
 
         log::debug!("digestKey: key bundle validation successful");

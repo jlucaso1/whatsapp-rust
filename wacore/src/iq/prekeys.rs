@@ -234,8 +234,15 @@ impl IqSpec for DigestKeyBundleSpec {
             .get_optional_child("digest")
             .ok_or_else(|| anyhow::anyhow!("missing <digest> child in response"))?;
 
-        let reg_id = extract_content_uint(digest_node.get_optional_child("registration"), 4);
-        let identity = extract_content_bytes(digest_node.get_optional_child("identity"));
+        // Required fields — error if missing node or empty content
+        let reg_node = required_child(digest_node, "registration")?;
+        let reg_id = extract_content_uint(Some(reg_node), 4);
+
+        let identity_node = required_child(digest_node, "identity")?;
+        let identity = match &identity_node.content {
+            Some(NodeContent::Bytes(b)) if !b.is_empty() => b.clone(),
+            _ => return Err(anyhow!("missing or empty bytes in <identity>")),
+        };
 
         let skey_node = digest_node.get_optional_child("skey");
         let (skey_id, skey_pubkey, skey_signature) = if let Some(skey) = skey_node {
@@ -248,18 +255,24 @@ impl IqSpec for DigestKeyBundleSpec {
             (0, Vec::new(), Vec::new())
         };
 
+        // Filter children by tag "key" to skip any non-prekey nodes
         let prekey_ids = digest_node
             .get_optional_child("list")
             .and_then(|list| list.children())
             .map(|children| {
                 children
                     .iter()
+                    .filter(|child| child.tag == "key")
                     .map(|child| extract_content_uint(Some(child), 4))
                     .collect()
             })
             .unwrap_or_default();
 
-        let hash = extract_content_bytes(digest_node.get_optional_child("hash"));
+        let hash_node = required_child(digest_node, "hash")?;
+        let hash = match &hash_node.content {
+            Some(NodeContent::Bytes(b)) if !b.is_empty() => b.clone(),
+            _ => return Err(anyhow!("missing or empty bytes in <hash>")),
+        };
 
         Ok(DigestKeyBundleResponse {
             reg_id,
