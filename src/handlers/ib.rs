@@ -2,9 +2,10 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use wacore::appstate::patch_decode::WAPatchName;
 use wacore_binary::node::{Node, NodeContent};
 
 /// Handler for `<ib>` (information broadcast) stanzas.
@@ -62,6 +63,25 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         .await
                     {
                         warn!("Failed to send clean dirty bits IQ: {e:?}");
+                    }
+
+                    // Re-sync app state collections when notified they are stale.
+                    // Real WA Web re-syncs all collections on syncd_app_state dirty.
+                    // See WAWebHandleDirtyBits → WAWebSyncdCollectionsStateMachine.
+                    if dirty_type == "syncd_app_state" {
+                        info!("syncd_app_state dirty — re-syncing all app state collections");
+                        if let Err(e) = client_clone
+                            .sync_collections_batched(vec![
+                                WAPatchName::CriticalBlock,
+                                WAPatchName::CriticalUnblockLow,
+                                WAPatchName::RegularLow,
+                                WAPatchName::RegularHigh,
+                                WAPatchName::Regular,
+                            ])
+                            .await
+                        {
+                            warn!("App state re-sync after dirty notification failed: {e:?}");
+                        }
                     }
                 });
             }

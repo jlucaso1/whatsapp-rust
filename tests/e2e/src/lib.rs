@@ -51,17 +51,33 @@ impl TestClient {
     /// Create a client, connect to the mock server, and wait for PairSuccess + Connected.
     /// Returns the connected TestClient with its JID available via `client.get_pn()`.
     pub async fn connect(prefix: &str) -> anyhow::Result<Self> {
+        Self::connect_inner(prefix, None).await
+    }
+
+    /// Connect with a specific push_name for deterministic phone assignment.
+    ///
+    /// Two clients with the same `push_name` will be paired to the same phone number
+    /// with different device IDs, enabling multi-device testing.
+    pub async fn connect_as(prefix: &str, push_name: &str) -> anyhow::Result<Self> {
+        Self::connect_inner(prefix, Some(push_name.to_string())).await
+    }
+
+    async fn connect_inner(prefix: &str, push_name: Option<String>) -> anyhow::Result<Self> {
         let store = create_test_store(prefix).await?;
         let backend = Arc::new(store) as Arc<dyn Backend>;
         let transport_factory = TokioWebSocketTransportFactory::new().with_url(mock_server_url());
         let (event_handler, mut event_rx) = ChannelEventHandler::new();
 
-        let mut bot = Bot::builder()
+        let mut builder = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport_factory)
-            .with_http_client(UreqHttpClient::new())
-            .build()
-            .await?;
+            .with_http_client(UreqHttpClient::new());
+
+        if let Some(name) = push_name {
+            builder = builder.with_push_name(name);
+        }
+
+        let mut bot = builder.build().await?;
 
         let client = bot.client();
         client.register_handler(event_handler);

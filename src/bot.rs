@@ -217,6 +217,7 @@ pub struct BotBuilder {
     )>,
     pair_code_options: Option<PairCodeOptions>,
     skip_history_sync: bool,
+    initial_push_name: Option<String>,
 }
 
 impl BotBuilder {
@@ -231,6 +232,7 @@ impl BotBuilder {
             os_info: None,
             pair_code_options: None,
             skip_history_sync: false,
+            initial_push_name: None,
         }
     }
 
@@ -467,6 +469,16 @@ impl BotBuilder {
         self
     }
 
+    /// Set an initial push name on the device before connecting.
+    ///
+    /// This is included in the `ClientPayload` during registration, allowing the
+    /// mock server to deterministically assign phone numbers based on push name
+    /// (same push name = same phone, enabling multi-device testing).
+    pub fn with_push_name(mut self, name: impl Into<String>) -> Self {
+        self.initial_push_name = Some(name.into());
+        self
+    }
+
     pub async fn build(self) -> Result<Bot> {
         let backend = self.backend.ok_or_else(|| {
             anyhow::anyhow!(
@@ -495,6 +507,13 @@ impl BotBuilder {
         persistence_manager
             .clone()
             .run_background_saver(std::time::Duration::from_secs(30));
+
+        // Apply initial push name if specified (for deterministic mock server phone assignment)
+        if let Some(name) = self.initial_push_name {
+            persistence_manager
+                .process_command(DeviceCommand::SetPushName(name))
+                .await;
+        }
 
         // Apply device props override if specified
         if let Some((os_name, version, platform_type)) = self.os_info {
