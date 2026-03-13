@@ -893,10 +893,12 @@ impl Client {
                                         // - Critical nodes (success/failure/stream:error): inline, required for state
                                         // - Message nodes: inline, preserves arrival order for per-chat queues
                                         //   (MessageHandler just enqueues + ACKs, heavy crypto runs in workers)
+                                        // - ib (in-band): inline, ensures offline sync tracking (expected count)
+                                        //   is set up before offline messages are processed
                                         // - Everything else: spawned concurrently for parallelism
                                         let process_inline = matches!(
                                             node.tag.as_str(),
-                                            "success" | "failure" | "stream:error" | "message"
+                                            "success" | "failure" | "stream:error" | "message" | "ib"
                                         );
 
                                         if process_inline {
