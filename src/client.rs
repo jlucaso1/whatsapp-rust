@@ -1672,8 +1672,12 @@ impl Client {
             match res {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    let es = e.to_string();
-                    if es.contains("app state key not found") && attempt == 1 {
+                    if e.downcast_ref::<crate::appstate_sync::AppStateSyncError>()
+                        .is_some_and(|ase| {
+                            matches!(ase, crate::appstate_sync::AppStateSyncError::KeyNotFound(_))
+                        })
+                        && attempt == 1
+                    {
                         if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
                             debug!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
                             if tokio::time::timeout(
@@ -1688,7 +1692,10 @@ impl Client {
                         }
                         continue;
                     }
-                    if es.contains("database is locked") && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
+                    if e.downcast_ref::<wacore::store::error::StoreError>()
+                        .is_some_and(|se| matches!(se, wacore::store::error::StoreError::Database(msg) if msg.contains("locked") || msg.contains("busy")))
+                        && attempt < APP_STATE_RETRY_MAX_ATTEMPTS
+                    {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
                         tokio::time::sleep(backoff).await;
@@ -2623,7 +2630,7 @@ impl Client {
             )
         } else {
             if self.get_pn().await.is_none() {
-                return Err(anyhow!("Not logged in"));
+                return Err(anyhow::Error::from(ClientError::NotLoggedIn));
             }
             None
         };
@@ -2775,7 +2782,7 @@ impl Client {
         let own_pn = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow!("Not logged in"))?;
+            .ok_or_else(|| anyhow::Error::from(ClientError::NotLoggedIn))?;
 
         let addressing_mode = self
             .groups()
@@ -3535,11 +3542,12 @@ mod tests {
             "establish_primary_phone_session_immediate should fail when no PN is set"
         );
 
-        let error_msg = result.unwrap_err().to_string();
+        let err = result.unwrap_err();
         assert!(
-            error_msg.contains("Not logged in"),
-            "Error should mention 'Not logged in', got: {}",
-            error_msg
+            err.downcast_ref::<ClientError>()
+                .is_some_and(|e| matches!(e, ClientError::NotLoggedIn)),
+            "Error should be ClientError::NotLoggedIn, got: {}",
+            err
         );
 
         info!("✅ test_establish_primary_phone_session_fails_without_pn passed");

@@ -3,7 +3,9 @@ use crate::mediaconn::MediaConn;
 use anyhow::{Result, anyhow};
 use std::io::{Seek, SeekFrom, Write};
 
-pub use wacore::download::{DownloadUtils, Downloadable, MediaDecryption, MediaType};
+pub use wacore::download::{
+    DownloadUtils, Downloadable, MediaDecryption, MediaDecryptionError, MediaType,
+};
 
 impl From<&MediaConn> for wacore::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
@@ -307,6 +309,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().to_lowercase().contains("invalid mac"));
+        assert!(
+            matches!(err, wacore::download::MediaDecryptionError::InvalidMac),
+            "Expected InvalidMac, got: {}",
+            err
+        );
     }
 }

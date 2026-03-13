@@ -1,9 +1,18 @@
 use crate::client::Client;
 use log::{debug, warn};
+use thiserror::Error;
 use wacore::StringEnum;
 use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
+
+#[derive(Debug, Error)]
+pub enum PresenceError {
+    #[error("cannot send presence without a push name set")]
+    PushNameEmpty,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 /// Presence status for online/offline state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
@@ -34,7 +43,7 @@ impl<'a> Presence<'a> {
     }
 
     /// Set the presence status.
-    pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error> {
+    pub async fn set(&self, status: PresenceStatus) -> Result<(), PresenceError> {
         let device_snapshot = self
             .client
             .persistence_manager()
@@ -48,9 +57,7 @@ impl<'a> Presence<'a> {
 
         if device_snapshot.push_name.is_empty() {
             warn!("Cannot send presence: push_name is empty!");
-            return Err(anyhow::anyhow!(
-                "Cannot send presence without a push name set"
-            ));
+            return Err(PresenceError::PushNameEmpty);
         }
 
         if status == PresenceStatus::Available {
@@ -73,16 +80,19 @@ impl<'a> Presence<'a> {
                 .unwrap_or("")
         );
 
-        self.client.send_node(node).await.map_err(|e| e.into())
+        self.client
+            .send_node(node)
+            .await
+            .map_err(|e| PresenceError::Other(anyhow::Error::from(e)))
     }
 
     /// Set presence to available (online).
-    pub async fn set_available(&self) -> Result<(), anyhow::Error> {
+    pub async fn set_available(&self) -> Result<(), PresenceError> {
         self.set(PresenceStatus::Available).await
     }
 
     /// Set presence to unavailable (offline).
-    pub async fn set_unavailable(&self) -> Result<(), anyhow::Error> {
+    pub async fn set_unavailable(&self) -> Result<(), PresenceError> {
         self.set(PresenceStatus::Unavailable).await
     }
 
@@ -110,7 +120,10 @@ impl<'a> Presence<'a> {
         }
 
         let node = builder.build();
-        self.client.send_node(node).await.map_err(|e| e.into())
+        self.client
+            .send_node(node)
+            .await
+            .map_err(|e| anyhow::Error::from(e))
     }
 }
 
@@ -182,19 +195,15 @@ mod tests {
             "Pushname should be empty on fresh device"
         );
 
-        let result: Result<(), anyhow::Error> =
-            client.presence().set(PresenceStatus::Available).await;
+        let result = client.presence().set(PresenceStatus::Available).await;
 
         assert!(
             result.is_err(),
             "Presence should fail when pushname is empty"
         );
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Cannot send presence without a push name set"),
-            "Error should indicate missing pushname"
+            matches!(result.unwrap_err(), PresenceError::PushNameEmpty),
+            "Error should be PushNameEmpty"
         );
     }
 
@@ -223,20 +232,18 @@ mod tests {
         assert_eq!(snapshot.push_name, "Test User");
 
         // Validation passes; error should be connection-related, not pushname
-        let result: Result<(), anyhow::Error> =
-            client.presence().set(PresenceStatus::Available).await;
+        let result = client.presence().set(PresenceStatus::Available).await;
 
         if let Err(e) = result {
-            let err_msg = e.to_string();
             assert!(
-                !err_msg.contains("push name"),
-                "Should not fail due to pushname: {}",
-                err_msg
+                !matches!(e, PresenceError::PushNameEmpty),
+                "Should not fail due to pushname, got: {}",
+                e
             );
             assert!(
-                err_msg.contains("not connected") || err_msg.contains("NotConnected"),
-                "Expected connection error, got: {}",
-                err_msg
+                matches!(e, PresenceError::Other(_)),
+                "Expected connection error (Other), got: {}",
+                e
             );
         }
     }
@@ -262,9 +269,8 @@ mod tests {
         assert!(snapshot.push_name.is_empty());
 
         // Presence deferred when pushname empty
-        let result: Result<(), anyhow::Error> =
-            client.presence().set(PresenceStatus::Available).await;
-        assert!(result.is_err());
+        let result = client.presence().set(PresenceStatus::Available).await;
+        assert!(matches!(result, Err(PresenceError::PushNameEmpty)));
 
         // Pushname arrives via app state sync
         client
@@ -273,12 +279,11 @@ mod tests {
             .await;
 
         // Now presence validation passes
-        let result: Result<(), anyhow::Error> =
-            client.presence().set(PresenceStatus::Available).await;
+        let result = client.presence().set(PresenceStatus::Available).await;
 
         if let Err(e) = result {
             assert!(
-                !e.to_string().contains("push name"),
+                !matches!(e, PresenceError::PushNameEmpty),
                 "Error should be connection-related: {}",
                 e
             );

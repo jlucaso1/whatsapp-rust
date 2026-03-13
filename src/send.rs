@@ -86,7 +86,7 @@ impl Client {
         let own_jid = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow!("Not logged in"))?;
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
         // Status always uses PN addressing, so own_lid is only needed as a
         // fallback parameter for prepare_group_stanza (unused in PN mode).
         let own_lid = device_snapshot
@@ -494,7 +494,7 @@ impl Client {
         // Verify we're logged in
         self.get_pn()
             .await
-            .ok_or_else(|| anyhow!("Not logged in"))?;
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
 
         let (from_me, participant, edit_attr) = match &revoke_type {
             RevokeType::Sender => {
@@ -622,7 +622,7 @@ impl Client {
             let own_jid = device_snapshot
                 .pn
                 .clone()
-                .ok_or_else(|| anyhow!("Not logged in"))?;
+                .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
             let own_lid = device_snapshot
                 .lid
                 .clone()
@@ -892,7 +892,7 @@ impl Client {
             let own_jid = device_snapshot
                 .pn
                 .clone()
-                .ok_or_else(|| anyhow!("Not logged in"))?;
+                .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
             let account_info = device_snapshot.account.clone();
 
             // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
