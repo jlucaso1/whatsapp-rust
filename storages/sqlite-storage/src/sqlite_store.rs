@@ -214,6 +214,58 @@ impl SqliteStore {
         Ok(result)
     }
 
+    /// Execute a database operation with semaphore serialization and retry on
+    /// transient SQLite lock/busy errors. Mirrors WhatsApp Web's PromiseQueue
+    /// pattern that serializes database commits to avoid concurrent write contention.
+    async fn with_retry<F, T>(&self, op_name: &str, make_op: F) -> Result<T>
+    where
+        F: Fn() -> Box<
+            dyn FnOnce(&mut SqliteConnection) -> std::result::Result<T, DieselError> + Send,
+        >,
+        T: Send + 'static,
+    {
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit = self
+                .db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(format!("Semaphore error: {}", e)))?;
+
+            let pool = self.pool.clone();
+            let op = make_op();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<T, DieselOrStore> {
+                    let _permit = permit;
+                    let mut conn = pool
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    op(&mut conn).map_err(DieselOrStore::Diesel)
+                })
+                .await;
+
+            match result {
+                Ok(Ok(val)) => return Ok(val),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "{} exhausted retries",
+            op_name
+        )))
+    }
+
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(64);
         bytes.extend_from_slice(key_pair.private_key.serialize());
@@ -970,30 +1022,27 @@ impl SqliteStore {
         state: HashState,
         device_id: i32,
     ) -> Result<()> {
-        let pool = self.pool.clone();
         let name = name.to_string();
         let data = bincode::serde::encode_to_vec(&state, bincode::config::standard())
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(app_state_versions::table)
-                .values((
-                    app_state_versions::name.eq(&name),
-                    app_state_versions::state_data.eq(&data),
-                    app_state_versions::device_id.eq(device_id),
-                ))
-                .on_conflict((app_state_versions::name, app_state_versions::device_id))
-                .do_update()
-                .set(app_state_versions::state_data.eq(&data))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        self.with_retry("set_app_state_version", || {
+            let name = name.clone();
+            let data = data.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(app_state_versions::table)
+                    .values((
+                        app_state_versions::name.eq(&name),
+                        app_state_versions::state_data.eq(&data),
+                        app_state_versions::device_id.eq(device_id),
+                    ))
+                    .on_conflict((app_state_versions::name, app_state_versions::device_id))
+                    .do_update()
+                    .set(app_state_versions::state_data.eq(&data))
+                    .execute(conn)?;
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn put_app_state_mutation_macs_for_device(
@@ -1006,54 +1055,50 @@ impl SqliteStore {
         if mutations.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let name = name.to_string();
         let mutations: Vec<AppStateMutationMAC> = mutations.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("put_app_state_mutation_macs", || {
+            let name = name.clone();
+            let mutations = mutations.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                let records: Vec<_> = mutations
+                    .iter()
+                    .map(|m| {
+                        (
+                            app_state_mutation_macs::name.eq(&name),
+                            app_state_mutation_macs::version.eq(version as i64),
+                            app_state_mutation_macs::index_mac.eq(&m.index_mac),
+                            app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                            app_state_mutation_macs::device_id.eq(device_id),
+                        )
+                    })
+                    .collect();
 
-            let records: Vec<_> = mutations
-                .iter()
-                .map(|m| {
-                    (
-                        app_state_mutation_macs::name.eq(&name),
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::index_mac.eq(&m.index_mac),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
-                        app_state_mutation_macs::device_id.eq(device_id),
-                    )
-                })
-                .collect();
+                // SQLite variable limit is typically 999 or 32766.
+                // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
+                const CHUNK_SIZE: usize = 100;
 
-            // SQLite variable limit is typically 999 or 32766.
-            // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
-            const CHUNK_SIZE: usize = 100;
-
-            for chunk in records.chunks(CHUNK_SIZE) {
-                diesel::insert_into(app_state_mutation_macs::table)
-                    .values(chunk)
-                    .on_conflict((
-                        app_state_mutation_macs::name,
-                        app_state_mutation_macs::index_mac,
-                        app_state_mutation_macs::device_id,
-                    ))
-                    .do_update()
-                    .set((
-                        app_state_mutation_macs::version
-                            .eq(excluded(app_state_mutation_macs::version)),
-                        app_state_mutation_macs::value_mac
-                            .eq(excluded(app_state_mutation_macs::value_mac)),
-                    ))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in records.chunks(CHUNK_SIZE) {
+                    diesel::insert_into(app_state_mutation_macs::table)
+                        .values(chunk)
+                        .on_conflict((
+                            app_state_mutation_macs::name,
+                            app_state_mutation_macs::index_mac,
+                            app_state_mutation_macs::device_id,
+                        ))
+                        .do_update()
+                        .set((
+                            app_state_mutation_macs::version
+                                .eq(excluded(app_state_mutation_macs::version)),
+                            app_state_mutation_macs::value_mac
+                                .eq(excluded(app_state_mutation_macs::value_mac)),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn delete_app_state_mutation_macs_for_device(
@@ -1065,35 +1110,31 @@ impl SqliteStore {
         if index_macs.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let name = name.to_string();
         let index_macs: Vec<Vec<u8>> = index_macs.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("delete_app_state_mutation_macs", || {
+            let name = name.clone();
+            let index_macs = index_macs.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                // SQLite variable limit is usually 999 or higher.
+                // We use a safe chunk size to stay well within limits.
+                const CHUNK_SIZE: usize = 500;
 
-            // SQLite variable limit is usually 999 or higher.
-            // We use a safe chunk size to stay well within limits.
-            const CHUNK_SIZE: usize = 500;
-
-            for chunk in index_macs.chunks(CHUNK_SIZE) {
-                diesel::delete(
-                    app_state_mutation_macs::table.filter(
-                        app_state_mutation_macs::name
-                            .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq_any(chunk))
-                            .and(app_state_mutation_macs::device_id.eq(device_id)),
-                    ),
-                )
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in index_macs.chunks(CHUNK_SIZE) {
+                    diesel::delete(
+                        app_state_mutation_macs::table.filter(
+                            app_state_mutation_macs::name
+                                .eq(&name)
+                                .and(app_state_mutation_macs::index_mac.eq_any(chunk))
+                                .and(app_state_mutation_macs::device_id.eq(device_id)),
+                        ),
+                    )
+                    .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn get_app_state_mutation_mac_for_device(
