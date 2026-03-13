@@ -12,9 +12,22 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task;
 use waproto::whatsapp as wa;
+
+#[derive(Debug, Error)]
+pub enum BotBuilderError {
+    #[error("backend is required — use with_backend() to set a storage implementation")]
+    MissingBackend,
+    #[error("transport factory is required — use with_transport_factory() to set one")]
+    MissingTransport,
+    #[error("HTTP client is required — use with_http_client() to provide one")]
+    MissingHttpClient,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 pub struct MessageContext {
     pub message: Box<wa::Message>,
@@ -479,22 +492,14 @@ impl BotBuilder {
         self
     }
 
-    pub async fn build(self) -> Result<Bot> {
-        let backend = self.backend.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Backend is required. Use with_backend() to set a storage implementation."
-            )
-        })?;
+    pub async fn build(self) -> std::result::Result<Bot, BotBuilderError> {
+        let backend = self.backend.ok_or(BotBuilderError::MissingBackend)?;
 
-        let transport_factory = self.transport_factory.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Transport factory is required. Use with_transport_factory() to set one."
-            )
-        })?;
+        let transport_factory = self
+            .transport_factory
+            .ok_or(BotBuilderError::MissingTransport)?;
 
-        let http_client = self.http_client.ok_or_else(|| {
-            anyhow::anyhow!("HTTP client is required. Use with_http_client() to provide one.")
-        })?;
+        let http_client = self.http_client.ok_or(BotBuilderError::MissingHttpClient)?;
 
         // Note: For multi-account mode, create the backend with SqliteStore::new_for_device()
         // before passing it to with_backend()
@@ -688,14 +693,10 @@ mod tests {
             .build()
             .await;
 
-        // This should fail
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Backend is required")
-        );
+        assert!(matches!(
+            result.unwrap_err(),
+            BotBuilderError::MissingBackend
+        ));
     }
 
     #[tokio::test]
@@ -709,14 +710,26 @@ mod tests {
             .build()
             .await;
 
-        // This should fail
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Transport factory is required")
-        );
+        assert!(matches!(
+            result.unwrap_err(),
+            BotBuilderError::MissingTransport
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_bot_builder_missing_http_client() {
+        let backend = create_test_sqlite_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+        let result = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .build()
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            BotBuilderError::MissingHttpClient
+        ));
     }
 
     #[tokio::test]

@@ -213,7 +213,7 @@ impl Client {
         let own_pn = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in - no phone number available"))?;
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
 
         let primary_phone_pn = own_pn.with_device(0);
         let primary_phone_lid = device_snapshot.lid.as_ref().map(|lid| lid.with_device(0));

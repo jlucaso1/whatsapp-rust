@@ -6,9 +6,22 @@ use hkdf::Hkdf;
 use hmac::Hmac;
 use hmac::Mac;
 use sha2::Sha256;
+use thiserror::Error;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::ExternalBlobReference;
 use waproto::whatsapp::message::HistorySyncNotification;
+
+#[derive(Debug, Error)]
+pub enum MediaDecryptionError {
+    #[error("downloaded file is too short to contain MAC")]
+    PayloadTooShort,
+    #[error("invalid MAC signature")]
+    InvalidMac,
+    #[error("decryption error: {0}")]
+    Decryption(String),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
@@ -451,10 +464,10 @@ impl DownloadUtils {
         encrypted_payload: &[u8],
         media_key: &[u8],
         media_type: MediaType,
-    ) -> Result<Vec<u8>> {
+    ) -> std::result::Result<Vec<u8>, MediaDecryptionError> {
         const MAC_SIZE: usize = 10;
         if encrypted_payload.len() <= MAC_SIZE {
-            return Err(anyhow!("Downloaded file is too short to contain MAC"));
+            return Err(MediaDecryptionError::PayloadTooShort);
         }
 
         let (ciphertext, received_mac) =
@@ -464,18 +477,18 @@ impl DownloadUtils {
 
         let computed_mac_full = {
             let mut mac = CryptographicMac::new("HmacSha256", &mac_key)
-                .map_err(|e| anyhow!(e.to_string()))?;
+                .map_err(|e| MediaDecryptionError::Decryption(e.to_string()))?;
             mac.update(&iv);
             mac.update(ciphertext);
             mac.finalize()
         };
         if &computed_mac_full[..MAC_SIZE] != received_mac {
-            return Err(anyhow!("Invalid MAC signature"));
+            return Err(MediaDecryptionError::InvalidMac);
         }
 
         let mut output = Vec::new();
         aes_256_cbc_decrypt_into(ciphertext, &cipher_key, &iv, &mut output)
-            .map_err(|e| anyhow!(e.to_string()))?;
+            .map_err(|e| MediaDecryptionError::Decryption(e.to_string()))?;
         Ok(output)
     }
 }

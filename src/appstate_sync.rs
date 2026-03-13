@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use prost::Message;
+use thiserror::Error;
 use tokio::sync::Mutex;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::keys::ExpandedAppStateKeys;
@@ -17,6 +18,16 @@ use waproto::whatsapp as wa;
 
 // Re-export Mutation from wacore for backwards compatibility
 pub use wacore::appstate::Mutation;
+
+#[derive(Debug, Error)]
+pub enum AppStateSyncError {
+    #[error("app state key not found: {0}")]
+    KeyNotFound(String),
+    #[error("store error: {0}")]
+    Store(#[from] wacore::store::error::StoreError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 #[derive(Clone)]
 pub struct AppStateProcessor {
@@ -32,7 +43,10 @@ impl AppStateProcessor {
         }
     }
 
-    pub(crate) async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
+    pub(crate) async fn get_app_state_key(
+        &self,
+        key_id: &[u8],
+    ) -> std::result::Result<ExpandedAppStateKeys, AppStateSyncError> {
         use base64::Engine;
         use base64::engine::general_purpose::STANDARD_NO_PAD;
         let id_b64 = STANDARD_NO_PAD.encode(key_id);
@@ -40,7 +54,7 @@ impl AppStateProcessor {
             return Ok(cached);
         }
         let key_opt = self.backend.get_sync_key(key_id).await?;
-        let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
+        let key = key_opt.ok_or_else(|| AppStateSyncError::KeyNotFound(id_b64.clone()))?;
         let expanded: ExpandedAppStateKeys = expand_app_state_keys(&key.key_data);
         self.key_cache.lock().await.insert(id_b64, expanded.clone());
         Ok(expanded)
