@@ -495,7 +495,9 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(16))),
+            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(
+                MAX_POOLED_BUFFER_COUNT,
+            ))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: crate::pdo::new_pdo_cache(),
