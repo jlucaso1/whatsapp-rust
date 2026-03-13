@@ -7,10 +7,11 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::stanza::business::BusinessNotification;
 use wacore::stanza::devices::DeviceNotification;
+use wacore::stanza::groups::{GroupNotification, GroupNotificationAction};
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{
     BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
-    PictureUpdate, UserAboutUpdate,
+    GroupUpdate, PictureUpdate, UserAboutUpdate,
 };
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
@@ -189,9 +190,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             handle_status_notification(client, node);
         }
         "w:gp2" => {
-            // Cache invalidation for these notifications is handled inside
-            // handle_group_participant_notification() and currently only applies to add/remove.
-            handle_group_participant_notification(client, node).await;
+            handle_group_notification(client, node).await;
         }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
@@ -816,51 +815,64 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
     }
 }
 
-/// Handle w:gp2 group participant change notifications.
+/// Handle w:gp2 group notifications.
 ///
-/// These are sent when participants are added, removed, promoted, or demoted
-/// in a group — either by us on another device or by another group admin.
-/// Invalidates the group cache so the next message send uses the updated
-/// participant list.
-async fn handle_group_participant_notification(client: &Arc<Client>, node: &Node) {
-    let group_jid = match node.attrs().optional_jid("from") {
-        Some(jid) => jid,
+/// Parses all child actions (participant changes, setting changes, metadata updates)
+/// and dispatches typed `Event::GroupUpdate` events for each.
+///
+/// Reference: WhatsApp Web `WAWebHandleGroupNotification` (Ri7Gf1BxhsX.js:12556-12962)
+async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
+    let notification = match GroupNotification::try_from_node(node) {
+        Some(n) => n,
         None => {
             warn!(target: "Client/Group", "w:gp2 notification missing 'from' attribute");
             return;
         }
     };
 
-    // Determine the action type from children (add, remove, promote, demote)
-    let action = node
-        .children()
-        .and_then(|children| {
-            children
-                .iter()
-                .find(|c| matches!(c.tag.as_str(), "add" | "remove" | "promote" | "demote"))
-                .map(|c| c.tag.as_str())
-        })
-        .unwrap_or("unknown");
+    let timestamp = i64::try_from(notification.timestamp)
+        .ok()
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .unwrap_or_else(chrono::Utc::now);
 
-    debug!(
-        target: "Client/Group",
-        "Group participant notification: group={}, action={}",
-        group_jid, action
-    );
+    for action in notification.actions {
+        // Cache invalidation for participant list changes
+        if matches!(
+            action,
+            GroupNotificationAction::Add { .. } | GroupNotificationAction::Remove { .. }
+        ) {
+            client
+                .get_group_cache()
+                .await
+                .invalidate(&notification.group_jid)
+                .await;
+            debug!(
+                target: "Client/Group",
+                "Invalidated group cache for {} after participant change",
+                notification.group_jid
+            );
+        }
 
-    // Invalidate group cache for add/remove (participant list changed).
-    // Promote/demote don't change the participant list stored in GroupInfo,
-    // so no cache invalidation is needed for those.
-    if matches!(action, "add" | "remove") {
-        client.get_group_cache().await.invalidate(&group_jid).await;
         debug!(
             target: "Client/Group",
-            "Invalidated group cache for {} after {} notification",
-            group_jid, action
+            "Group notification: group={}, action={}",
+            notification.group_jid, action.tag_name()
         );
+
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::GroupUpdate(GroupUpdate {
+                group_jid: notification.group_jid.clone(),
+                participant: notification.participant.clone(),
+                participant_pn: notification.participant_pn.clone(),
+                timestamp,
+                is_lid_addressing_mode: notification.is_lid_addressing_mode,
+                action,
+            }));
     }
 
-    // Dispatch generic notification event for application-level handling
+    // Also dispatch legacy generic notification for backward compatibility
     client
         .core
         .event_bus
