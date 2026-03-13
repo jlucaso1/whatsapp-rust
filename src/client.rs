@@ -133,17 +133,6 @@ pub(crate) struct OfflineSyncMetrics {
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
-/// Metrics for tracking the effectiveness of the local re-queue optimization.
-/// This helps monitor whether the 500ms delay and cache TTL are well-tuned.
-pub(crate) struct RetryMetrics {
-    /// Number of times messages triggered local re-queue (NoSession on first attempt)
-    pub local_requeue_attempts: AtomicUsize,
-    /// Number of times re-queued messages successfully decrypted
-    pub local_requeue_success: AtomicUsize,
-    /// Number of times re-queued messages still failed (fell back to network retry)
-    pub local_requeue_fallback: AtomicUsize,
-}
-
 pub struct Client {
     pub(crate) core: wacore::client::CoreClient,
 
@@ -230,12 +219,6 @@ pub struct Client {
     /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
     pub(crate) message_retry_counts: Cache<String, u8>,
 
-    /// Cache for tracking local re-queue attempts for NoSession errors.
-    /// Used to tolerate out-of-order delivery where skmsg arrives before pkmsg.
-    /// Key: Message ID, Value: ()
-    /// TTL: 10 seconds (short-lived buffer)
-    pub(crate) local_retry_cache: Cache<String, ()>,
-
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
     pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
@@ -266,8 +249,6 @@ pub struct Client {
     pub(crate) history_sync_idle_notifier: Arc<Notify>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
-    /// Metrics for tracking the effectiveness of local re-queue optimization
-    pub(crate) retry_metrics: Arc<RetryMetrics>,
     /// Notifier for when the noise socket is established (before login).
     /// Use this to wait for the socket to be ready for sending messages.
     pub(crate) socket_ready_notifier: Arc<Notify>,
@@ -424,7 +405,7 @@ impl Client {
                 .max_capacity(10_000) // Limit to 10k concurrent sessions
                 .build(),
             message_queues: Cache::builder()
-                .time_to_live(Duration::from_secs(300)) // Idle queues expire after 5 mins
+                .time_to_idle(Duration::from_secs(300)) // Idle queues expire after 5 mins of no access
                 .max_capacity(10_000) // Limit to 10k concurrent chats
                 .build(),
             lid_pn_cache: Arc::new(LidPnCache::new()),
@@ -459,24 +440,11 @@ impl Client {
                 .max_capacity(5_000)
                 .build(),
 
-            // Local retry cache for out-of-order message tolerance
-            // 10s TTL is sufficient for packet reordering
-            local_retry_cache: Cache::builder()
-                .time_to_live(Duration::from_secs(10))
-                .max_capacity(5_000)
-                .build(),
-
             offline_sync_metrics: Arc::new(OfflineSyncMetrics {
                 active: AtomicBool::new(false),
                 total_messages: AtomicUsize::new(0),
                 processed_messages: AtomicUsize::new(0),
                 start_time: std::sync::Mutex::new(None),
-            }),
-
-            retry_metrics: Arc::new(RetryMetrics {
-                local_requeue_attempts: AtomicUsize::new(0),
-                local_requeue_success: AtomicUsize::new(0),
-                local_requeue_fallback: AtomicUsize::new(0),
             }),
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
@@ -921,17 +889,21 @@ impl Client {
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
                                     if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
-                                        // Handle critical nodes synchronously to avoid race conditions.
-                                        // <success> must be processed inline to ensure is_logged_in state
-                                        // is set before checking expected_disconnect or spawning other tasks.
-                                        let is_critical = matches!(node.tag.as_str(), "success" | "failure" | "stream:error");
+                                        // Determine processing mode for this node:
+                                        // - Critical nodes (success/failure/stream:error): inline, required for state
+                                        // - Message nodes: inline, preserves arrival order for per-chat queues
+                                        //   (MessageHandler just enqueues + ACKs, heavy crypto runs in workers)
+                                        // - ib (in-band): inline, ensures offline sync tracking (expected count)
+                                        //   is set up before offline messages are processed
+                                        // - Everything else: spawned concurrently for parallelism
+                                        let process_inline = matches!(
+                                            node.tag.as_str(),
+                                            "success" | "failure" | "stream:error" | "message" | "ib"
+                                        );
 
-                                        if is_critical {
-                                            // Process critical nodes inline
+                                        if process_inline {
                                             self.process_decrypted_node(node).await;
                                         } else {
-                                            // Spawn non-critical node processing as a separate task
-                                            // to allow concurrent handling (Signal protocol work, etc.)
                                             let client = self.clone();
                                             tokio::spawn(async move {
                                                 client.process_decrypted_node(node).await;
