@@ -1161,9 +1161,15 @@ impl Client {
         );
 
         match wa::Message::decode(plaintext_slice) {
-            Ok(mut original_msg) => {
+            Ok(original_msg) => {
+                // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
+                // the primary device). The actual content (reactions, text, etc.)
+                // is nested inside device_sent_message.message and must be
+                // extracted before protocol checks or dispatch.
+                let mut msg = unwrap_device_sent(original_msg);
+
                 // Post-decryption logic (SKDM, sync keys, etc.)
-                if let Some(skdm) = &original_msg.sender_key_distribution_message
+                if let Some(skdm) = &msg.sender_key_distribution_message
                     && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
                 {
                     self.handle_sender_key_distribution_message(
@@ -1174,21 +1180,21 @@ impl Client {
                     .await;
                 }
 
-                if let Some(protocol_msg) = &original_msg.protocol_message
+                if let Some(protocol_msg) = &msg.protocol_message
                     && let Some(keys) = &protocol_msg.app_state_sync_key_share
                 {
                     self.handle_app_state_sync_key_share(keys).await;
                 }
 
-                if let Some(protocol_msg) = &original_msg.protocol_message
+                if let Some(protocol_msg) = &msg.protocol_message
                     && let Some(pdo_response) =
                         &protocol_msg.peer_data_operation_request_response_message
                 {
                     self.handle_pdo_response(pdo_response, info).await;
                 }
 
-                // Note: original_msg might be modified by take() below
-                let history_sync_taken = original_msg
+                // Note: msg might be modified by take() below
+                let history_sync_taken = msg
                     .protocol_message
                     .as_mut()
                     .and_then(|pm| pm.history_sync_notification.take());
@@ -1202,13 +1208,13 @@ impl Client {
                 // (protocol-level key exchange) with no user-visible content.
                 // These arrive as a separate pkmsg enc node alongside the actual
                 // group message (skmsg) and would otherwise surface as "unknown".
-                if is_sender_key_distribution_only(&original_msg) {
+                if is_sender_key_distribution_only(&msg) {
                     log::debug!(
                         "[msg:{}] Skipping event dispatch for sender key distribution message",
                         info.id
                     );
                 } else {
-                    self.dispatch_parsed_message(original_msg, info);
+                    self.dispatch_parsed_message(msg, info);
                 }
                 Ok(())
             }
@@ -1544,6 +1550,22 @@ impl Client {
             );
         }
     }
+}
+
+/// Unwraps a `DeviceSentMessage` wrapper, returning the inner message.
+///
+/// Self-sent messages synced from the primary device arrive with the actual
+/// content (reactions, text, etc.) nested inside `device_sent_message.message`.
+/// This extracts the inner message when present, or returns the original
+/// message unchanged when there is no wrapper or the wrapper has no inner message.
+fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
+    if let Some(mut dsm) = msg.device_sent_message.take() {
+        if let Some(inner) = dsm.message.take() {
+            return *inner;
+        }
+        msg.device_sent_message = Some(dsm);
+    }
+    msg
 }
 
 /// Returns `true` if the message contains only a SenderKey distribution
@@ -4217,6 +4239,74 @@ mod tests {
             protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
             ..Default::default()
         }));
+    }
+
+    /// Test: unwrap_device_sent extracts a reaction from a DeviceSentMessage wrapper.
+    #[test]
+    fn test_unwrap_device_sent_extracts_reaction() {
+        let wrapped = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        text: Some("\u{2764}".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = unwrap_device_sent(wrapped);
+        assert!(
+            unwrapped.device_sent_message.is_none(),
+            "DSM wrapper should be removed"
+        );
+        assert_eq!(
+            unwrapped
+                .reaction_message
+                .as_ref()
+                .and_then(|r| r.text.as_deref()),
+            Some("\u{2764}"),
+            "reaction should be accessible after unwrapping"
+        );
+        assert!(
+            !is_sender_key_distribution_only(&unwrapped),
+            "unwrapped reaction should not be filtered as SKDM-only"
+        );
+    }
+
+    /// Test: unwrap_device_sent preserves the wrapper when inner message is None.
+    #[test]
+    fn test_unwrap_device_sent_preserves_empty_wrapper() {
+        let wrapped = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: None,
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(wrapped);
+        assert!(
+            result.device_sent_message.is_some(),
+            "empty DSM wrapper should be preserved"
+        );
+    }
+
+    /// Test: unwrap_device_sent passes through a plain message unchanged.
+    #[test]
+    fn test_unwrap_device_sent_passthrough() {
+        let msg = wa::Message {
+            conversation: Some("hello".to_string()),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(msg);
+        assert_eq!(result.conversation.as_deref(), Some("hello"));
     }
 
     #[tokio::test]
