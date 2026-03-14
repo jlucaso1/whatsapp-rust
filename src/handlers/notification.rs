@@ -192,6 +192,13 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         "w:gp2" => {
             handle_group_notification(client, node).await;
         }
+        "disappearing_mode" => {
+            // WA Web: WAWebHandleDisappearingModeNotification →
+            // WAWebUpdateDisappearingModeForContact.
+            // Parses <disappearing_mode duration="..." t="..."/> child,
+            // updates the contact's default ephemeral setting.
+            handle_disappearing_mode_notification(client, node);
+        }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
@@ -877,6 +884,55 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
         .core
         .event_bus
         .dispatch(&Event::Notification(node.clone()));
+}
+
+/// Handle `<notification type="disappearing_mode">` — a contact changed
+/// their default disappearing messages setting.
+///
+/// WA Web: `WAWebHandleDisappearingModeNotification` parses the
+/// `<disappearing_mode duration="..." t="..."/>` child and calls
+/// `WAWebUpdateDisappearingModeForContact` which applies the update only
+/// if the new timestamp is newer than the stored one.
+///
+/// We dispatch `Event::DisappearingModeChanged` and let consumers decide
+/// how to persist/apply it.
+fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &Node) {
+    let mut attrs = node.attrs();
+    let from = attrs.jid("from").to_non_ad();
+
+    let Some(dm_node) = node.get_optional_child("disappearing_mode") else {
+        warn!(
+            "disappearing_mode notification missing <disappearing_mode> child: {}",
+            wacore::xml::DisplayableNode(node)
+        );
+        return;
+    };
+
+    let mut dm_attrs = dm_node.attrs();
+    let duration = dm_attrs
+        .optional_string("duration")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let setting_timestamp = dm_attrs
+        .optional_string("t")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    debug!(
+        "Disappearing mode changed for {}: duration={}s, t={}",
+        from, duration, setting_timestamp
+    );
+
+    client
+        .core
+        .event_bus
+        .dispatch(&Event::DisappearingModeChanged(
+            wacore::types::events::DisappearingModeChanged {
+                from,
+                duration,
+                setting_timestamp,
+            },
+        ));
 }
 
 #[cfg(test)]
