@@ -1162,8 +1162,18 @@ impl Client {
 
         match wa::Message::decode(plaintext_slice) {
             Ok(mut original_msg) => {
+                // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
+                // the primary device). The actual content (reactions, text, etc.)
+                // is nested inside device_sent_message.message and must be
+                // extracted before protocol checks or dispatch.
+                let mut msg = if let Some(dsm) = original_msg.device_sent_message.take() {
+                    dsm.message.map_or(original_msg, |inner| *inner)
+                } else {
+                    original_msg
+                };
+
                 // Post-decryption logic (SKDM, sync keys, etc.)
-                if let Some(skdm) = &original_msg.sender_key_distribution_message
+                if let Some(skdm) = &msg.sender_key_distribution_message
                     && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
                 {
                     self.handle_sender_key_distribution_message(
@@ -1174,21 +1184,21 @@ impl Client {
                     .await;
                 }
 
-                if let Some(protocol_msg) = &original_msg.protocol_message
+                if let Some(protocol_msg) = &msg.protocol_message
                     && let Some(keys) = &protocol_msg.app_state_sync_key_share
                 {
                     self.handle_app_state_sync_key_share(keys).await;
                 }
 
-                if let Some(protocol_msg) = &original_msg.protocol_message
+                if let Some(protocol_msg) = &msg.protocol_message
                     && let Some(pdo_response) =
                         &protocol_msg.peer_data_operation_request_response_message
                 {
                     self.handle_pdo_response(pdo_response, info).await;
                 }
 
-                // Note: original_msg might be modified by take() below
-                let history_sync_taken = original_msg
+                // Note: msg might be modified by take() below
+                let history_sync_taken = msg
                     .protocol_message
                     .as_mut()
                     .and_then(|pm| pm.history_sync_notification.take());
@@ -1202,13 +1212,13 @@ impl Client {
                 // (protocol-level key exchange) with no user-visible content.
                 // These arrive as a separate pkmsg enc node alongside the actual
                 // group message (skmsg) and would otherwise surface as "unknown".
-                if is_sender_key_distribution_only(&original_msg) {
+                if is_sender_key_distribution_only(&msg) {
                     log::debug!(
                         "[msg:{}] Skipping event dispatch for sender key distribution message",
                         info.id
                     );
                 } else {
-                    self.dispatch_parsed_message(original_msg, info);
+                    self.dispatch_parsed_message(msg, info);
                 }
                 Ok(())
             }
@@ -4217,6 +4227,40 @@ mod tests {
             protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
             ..Default::default()
         }));
+    }
+
+    /// Test: a reaction wrapped in DeviceSentMessage is not treated as SKDM-only,
+    /// confirming it would be dispatched after DSM unwrapping in handle_decrypted_plaintext.
+    #[test]
+    fn test_dsm_wrapped_reaction_not_skdm_only() {
+        // Simulate what arrives after DSM unwrapping: the inner message with a reaction
+        let inner = wa::Message {
+            reaction_message: Some(wa::message::ReactionMessage {
+                text: Some("\u{2764}".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            !is_sender_key_distribution_only(&inner),
+            "unwrapped reaction should not be filtered as SKDM-only"
+        );
+
+        // Before the fix: the outer wrapper has no visible content fields set,
+        // but is_sender_key_distribution_only returns false for it too (no SKDM).
+        // The real problem was that dispatch sent the outer wrapper with all-None fields.
+        let outer = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(inner)),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+        assert!(
+            !is_sender_key_distribution_only(&outer),
+            "DSM wrapper should not be filtered as SKDM-only"
+        );
     }
 
     #[tokio::test]

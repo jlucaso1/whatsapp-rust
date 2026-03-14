@@ -91,6 +91,9 @@ macro_rules! set_context_info_impl {
 pub trait MessageExt {
     /// Recursively unwraps ephemeral/view-once/document_with_caption/edited wrappers to get the core message.
     fn get_base_message(&self) -> &wa::Message;
+    /// Consuming version of [`get_base_message`]. Moves the innermost message out of
+    /// wrapper types (device_sent, ephemeral, view_once, etc.) without cloning.
+    fn into_base_message(self) -> wa::Message;
     fn is_ephemeral(&self) -> bool;
     fn is_view_once(&self) -> bool;
     /// Gets the caption for media messages (Image, Video, Document).
@@ -191,6 +194,40 @@ impl MessageExt for wa::Message {
             current = msg;
         }
         current
+    }
+
+    fn into_base_message(mut self) -> wa::Message {
+        if let Some(dsm) = self.device_sent_message.take()
+            && let Some(msg) = dsm.message
+        {
+            self = *msg;
+        }
+        if let Some(wrapper) = self.ephemeral_message.take()
+            && let Some(msg) = wrapper.message
+        {
+            self = *msg;
+        }
+        if let Some(wrapper) = self.view_once_message.take()
+            && let Some(msg) = wrapper.message
+        {
+            self = *msg;
+        }
+        if let Some(wrapper) = self.view_once_message_v2.take()
+            && let Some(msg) = wrapper.message
+        {
+            self = *msg;
+        }
+        if let Some(wrapper) = self.document_with_caption_message.take()
+            && let Some(msg) = wrapper.message
+        {
+            self = *msg;
+        }
+        if let Some(wrapper) = self.edited_message.take()
+            && let Some(msg) = wrapper.message
+        {
+            self = *msg;
+        }
+        self
     }
 
     fn is_ephemeral(&self) -> bool {
@@ -1148,5 +1185,99 @@ mod tests {
             Some("123456@s.whatsapp.net"),
             "Status broadcast participant should fall back to sender"
         );
+    }
+
+    // ── into_base_message tests ──────────────────────────────────────────
+
+    /// Test: into_base_message unwraps DeviceSentMessage containing a reaction.
+    #[test]
+    fn test_into_base_message_unwraps_device_sent_reaction() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        text: Some("\u{2764}".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert!(
+            unwrapped.device_sent_message.is_none(),
+            "device_sent_message wrapper should be removed"
+        );
+        assert!(
+            unwrapped.reaction_message.is_some(),
+            "reaction_message should be accessible after unwrapping"
+        );
+        assert_eq!(
+            unwrapped.reaction_message.as_ref().unwrap().text.as_deref(),
+            Some("\u{2764}")
+        );
+    }
+
+    /// Test: into_base_message unwraps nested DSM + ephemeral wrappers.
+    #[test]
+    fn test_into_base_message_unwraps_nested_dsm_ephemeral() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                        message: Some(Box::new(wa::Message {
+                            conversation: Some("secret".to_string()),
+                            ..Default::default()
+                        })),
+                    })),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert_eq!(
+            unwrapped.conversation.as_deref(),
+            Some("secret"),
+            "should unwrap through DSM then ephemeral to reach conversation"
+        );
+    }
+
+    /// Test: into_base_message passes through a plain message unchanged.
+    #[test]
+    fn test_into_base_message_passthrough_plain() {
+        let msg = wa::Message {
+            conversation: Some("hello".to_string()),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert_eq!(unwrapped.conversation.as_deref(), Some("hello"));
+    }
+
+    /// Test: into_base_message handles DSM with no inner message.
+    #[test]
+    fn test_into_base_message_empty_dsm() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: None,
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        // With no inner message the outer message is returned as-is
+        // (device_sent_message was consumed by take())
+        assert!(unwrapped.device_sent_message.is_none());
+        assert!(unwrapped.conversation.is_none());
     }
 }
