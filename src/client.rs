@@ -25,7 +25,7 @@ use crate::types::events::{ConnectFailureReason, Event};
 
 use log::{debug, error, info, trace, warn};
 
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use scopeguard;
 use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
@@ -144,6 +144,14 @@ pub struct Client {
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
+    /// Timestamp (ms since UNIX epoch) of the last received WebSocket data.
+    /// Updated on every `DataReceived` transport event.
+    /// WA Web: `parseAndHandleStanza` → `deadSocketTimer.cancel()`.
+    pub(crate) last_data_received_ms: Arc<AtomicU64>,
+    /// Timestamp (ms since UNIX epoch) of the last sent WebSocket data.
+    /// Updated on every `send_node` call.
+    /// WA Web: `callStanza` → `deadSocketTimer.onOrBefore(deadSocketTime)`.
+    pub(crate) last_data_sent_ms: Arc<AtomicU64>,
 
     pub(crate) transport: Arc<Mutex<Option<Arc<dyn crate::transport::Transport>>>>,
     pub(crate) transport_events:
@@ -410,6 +418,8 @@ impl Client {
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
             shutdown_notifier: Arc::new(Notify::new()),
+            last_data_received_ms: Arc::new(AtomicU64::new(0)),
+            last_data_sent_ms: Arc::new(AtomicU64::new(0)),
 
             transport: Arc::new(Mutex::new(None)),
             transport_events: Arc::new(Mutex::new(None)),
@@ -684,8 +694,10 @@ impl Client {
             }
 
             let error_count = self.auto_reconnect_errors.fetch_add(1, Ordering::SeqCst);
-            let delay_secs = u64::from(error_count * 2).min(30);
-            let delay = Duration::from_secs(delay_secs);
+            // WA Web: Fibonacci backoff with 10% jitter, max 900s.
+            // algo: { type: "fibonacci", first: 1000, second: 1000 }
+            // jitter: 0.1, max: 9e5
+            let delay = fibonacci_backoff(error_count);
             info!(
                 "Will attempt to reconnect in {:?} (attempt {})",
                 delay,
@@ -763,6 +775,15 @@ impl Client {
         self.cleanup_connection_state().await;
     }
 
+    /// Backoff step used by [`reconnect()`] to create an offline window.
+    ///
+    /// `fibonacci_backoff(RECONNECT_BACKOFF_STEP)` determines the delay before
+    /// the run loop re-connects.  This must be longer than the mock server's
+    /// chatstate TTL (`CHATSTATE_TTL_SECS=3`) so TTL-expiry tests pass.
+    ///
+    /// Sequence: fib(0)=1s, fib(1)=1s, fib(2)=2s, fib(3)=3s, **fib(4)=5s**.
+    pub const RECONNECT_BACKOFF_STEP: u32 = 4;
+
     /// Drop the current connection and trigger the auto-reconnect loop.
     ///
     /// Unlike [`disconnect`], this does **not** stop the run loop. The client
@@ -776,10 +797,8 @@ impl Client {
     /// - Testing offline message delivery
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
-        // Create a deterministic offline window before the next reconnect
-        // attempt so reconnect-based e2e tests can reliably exercise
-        // queued-offline behavior before the run loop dials back in.
-        self.auto_reconnect_errors.store(2, Ordering::Relaxed);
+        self.auto_reconnect_errors
+            .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -815,6 +834,10 @@ impl Client {
         // Old workers holding the previous semaphore Arc will finish normally.
         *self.message_processing_semaphore.lock().unwrap() =
             Arc::new(tokio::sync::Semaphore::new(1));
+        // Reset dead-socket timestamps so stale values from the previous
+        // connection don't trigger an immediate reconnect on the next one.
+        self.last_data_received_ms.store(0, Ordering::Relaxed);
+        self.last_data_sent_ms.store(0, Ordering::Relaxed);
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.server_has_prekeys.store(true, Ordering::Relaxed);
@@ -883,6 +906,12 @@ impl Client {
                     event_result = transport_events.recv() => {
                         match event_result {
                             Ok(crate::transport::TransportEvent::DataReceived(data)) => {
+                                // Update dead-socket timer (WA Web: deadSocketTimer reset)
+                                self.last_data_received_ms.store(
+                                    chrono::Utc::now().timestamp_millis() as u64,
+                                    Ordering::Relaxed,
+                                );
+
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
 
@@ -2729,6 +2758,13 @@ impl Client {
         {
             pool.push(plaintext_buf);
         }
+
+        // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
+        self.last_data_sent_ms.store(
+            chrono::Utc::now().timestamp_millis() as u64,
+            Ordering::Relaxed,
+        );
+
         Ok(())
     }
 
@@ -2870,6 +2906,34 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
         builder = builder.attr("id", id);
     }
     builder.build()
+}
+
+/// Computes a reconnect delay matching WhatsApp Web's Fibonacci backoff:
+/// `{ algo: { type: "fibonacci", first: 1000, second: 1000 }, jitter: 0.1, max: 9e5 }`
+///
+/// Sequence: 1s, 1s, 2s, 3s, 5s, 8s, 13s, 21s, 34s, 55s, 89s, 144s, ... capped at 900s.
+/// Each value gets ±10% random jitter.
+fn fibonacci_backoff(attempt: u32) -> Duration {
+    const MAX_MS: u64 = 900_000; // WA Web: 9e5
+
+    let mut a: u64 = 1000;
+    let mut b: u64 = 1000;
+    for _ in 0..attempt {
+        let next = a.saturating_add(b).min(MAX_MS);
+        a = b;
+        b = next;
+    }
+    let base = a.min(MAX_MS);
+
+    // ±10% jitter (WA Web: jitter: 0.1)
+    let jitter_range = base / 10;
+    let jitter = if jitter_range > 0 {
+        rand::rng().random_range(0..=(jitter_range * 2)) as i64 - jitter_range as i64
+    } else {
+        0
+    };
+    let ms = (base as i64 + jitter).max(0) as u64;
+    Duration::from_millis(ms)
 }
 
 #[cfg(test)]
@@ -4476,6 +4540,50 @@ mod tests {
         assert!(
             handled,
             "handle_iq must recognize ping without id attribute"
+        );
+    }
+
+    // ── fibonacci_backoff tests ────────────────────────────────────────
+
+    #[test]
+    fn test_fibonacci_backoff_sequence() {
+        // WA Web: first=1000, second=1000 → 1,1,2,3,5,8,13,21,34,55,89,144...s
+        // We test base values without jitter by checking the range (±10%).
+        let expected_base_ms = [1000, 1000, 2000, 3000, 5000, 8000, 13000, 21000];
+        for (attempt, &base) in expected_base_ms.iter().enumerate() {
+            let delay = fibonacci_backoff(attempt as u32);
+            let ms = delay.as_millis() as u64;
+            let low = base - base / 10;
+            let high = base + base / 10;
+            assert!(
+                ms >= low && ms <= high,
+                "attempt {attempt}: expected {low}..={high}ms, got {ms}ms"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fibonacci_backoff_max_900s() {
+        // After many attempts, should cap at 900s (±10%)
+        let delay = fibonacci_backoff(100);
+        let ms = delay.as_millis() as u64;
+        assert!(
+            ms <= 990_000,
+            "should never exceed 900s + 10% jitter, got {ms}ms"
+        );
+        assert!(
+            ms >= 810_000,
+            "should be at least 900s - 10% jitter, got {ms}ms"
+        );
+    }
+
+    #[test]
+    fn test_fibonacci_backoff_first_attempt_is_1s() {
+        let delay = fibonacci_backoff(0);
+        let ms = delay.as_millis() as u64;
+        assert!(
+            (900..=1100).contains(&ms),
+            "first attempt should be ~1s (±10%), got {ms}ms"
         );
     }
 

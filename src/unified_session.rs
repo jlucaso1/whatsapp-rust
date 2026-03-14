@@ -55,6 +55,25 @@ impl UnifiedSessionManager {
         }
     }
 
+    /// Update server time offset using RTT-adjusted midpoint calculation.
+    ///
+    /// WA Web: `Math.round((startTime + rtt/2) / 1000 - serverTime)`
+    ///
+    /// This gives a more accurate clock skew estimate by assuming the server
+    /// timestamp corresponds to the midpoint of the round trip.
+    pub fn update_server_time_offset_with_rtt(&self, node: &Node, start_time_ms: i64, rtt_ms: i64) {
+        if let Some(t_str) = node.attrs.get("t").and_then(|v| v.as_str())
+            && let Ok(server_time) = t_str.parse::<i64>()
+            && server_time > 0
+        {
+            let midpoint_s = (start_time_ms + rtt_ms / 2) / 1000;
+            let offset_ms = (server_time - midpoint_s) * 1000;
+            self.server_time_offset_ms
+                .store(offset_ms, Ordering::Relaxed);
+            debug!(target: "UnifiedSession", "Server time offset: {}ms (RTT: {}ms)", offset_ms, rtt_ms);
+        }
+    }
+
     pub fn calculate_session_id(&self) -> String {
         let offset = self.server_time_offset_ms.load(Ordering::Relaxed);
         UnifiedSession::calculate_id(offset)

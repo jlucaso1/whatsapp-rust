@@ -14,11 +14,11 @@ use wacore::types::events::Event;
 ///
 /// Flow:
 /// 1. A and B connect
-/// 2. B goes offline via reconnect() — auto_reconnect_errors=2 creates a ~4s offline window
+/// 2. B goes offline via reconnect() — creates a ~5s offline window (see `RECONNECT_BACKOFF_STEP`)
 /// 3. A sends typing indicator to B (queued with TTL)
 /// 4. B auto-reconnects after the TTL expires — chatstate should be filtered out during drain
 ///
-/// Requires mock server with CHATSTATE_TTL_SECS=3 (so TTL expires before the ~4s reconnect).
+/// Requires mock server with CHATSTATE_TTL_SECS=3 (so TTL expires before the ~5s reconnect).
 #[tokio::test]
 async fn test_expired_chatstate_not_delivered() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -30,18 +30,18 @@ async fn test_expired_chatstate_not_delivered() -> anyhow::Result<()> {
 
     info!("B={jid_b}");
 
-    // B goes offline — reconnect() sets auto_reconnect_errors=2, causing ~4s delay
-    // before auto-reconnect. With CHATSTATE_TTL_SECS=3, the chatstate expires at 3s,
-    // and B reconnects at ~4s, so the drain filters it out.
+    // B goes offline — reconnect() uses RECONNECT_BACKOFF_STEP to create a ~5s
+    // offline window. With CHATSTATE_TTL_SECS=3, the chatstate expires at 3s,
+    // and B reconnects at ~5s, so the drain filters it out.
     client_b.client.reconnect().await;
-    info!("B disconnected (will auto-reconnect in ~4s)");
+    info!("B disconnected (will auto-reconnect after backoff)");
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // A sends typing indicator while B is offline (queued with short TTL)
     client_a.client.chatstate().send_composing(&jid_b).await?;
     info!("A sent typing indicator to offline B");
 
-    // B auto-reconnects after ~4s. Wait for reconnect + event drain.
+    // B auto-reconnects after backoff. Wait for reconnect + event drain.
     // The expired chatstate should NOT be delivered.
     let result = client_b
         .wait_for_event(15, |e| matches!(e, Event::ChatPresence(_)))
