@@ -325,6 +325,56 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     }
 }
 
+/// Merges `MessageContextInfo` from the outer and inner messages of a
+/// `DeviceSentMessage` wrapper, matching WhatsApp Web's
+/// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic.
+///
+/// Merge strategy:
+/// - **Base**: all fields from `inner`
+/// - **`message_secret`**: inner, falling back to outer
+/// - **`message_association`**: inner, falling back to outer
+/// - **`limit_sharing_v2`**: always from outer (unconditional override)
+/// - **`thread_id`**: inner if non-empty, otherwise outer
+/// - **`bot_metadata`**: inner, falling back to outer
+pub fn merge_dsm_context(
+    inner: Option<wa::MessageContextInfo>,
+    outer: Option<&wa::MessageContextInfo>,
+) -> Option<wa::MessageContextInfo> {
+    match (inner, outer) {
+        (None, None) => None,
+        (Some(mut inner), None) => {
+            // limit_sharing_v2 always comes from outer; clear it when outer is absent
+            inner.limit_sharing_v2 = None;
+            Some(inner)
+        }
+        (None, Some(outer)) => Some(wa::MessageContextInfo {
+            message_secret: outer.message_secret.clone(),
+            message_association: outer.message_association.clone(),
+            limit_sharing_v2: outer.limit_sharing_v2,
+            thread_id: outer.thread_id.clone(),
+            bot_metadata: outer.bot_metadata.clone(),
+            ..Default::default()
+        }),
+        (Some(mut inner), Some(outer)) => {
+            if inner.message_secret.is_none() {
+                inner.message_secret = outer.message_secret.clone();
+            }
+            if inner.message_association.is_none() {
+                inner.message_association = outer.message_association.clone();
+            }
+            // limit_sharing_v2: always from outer (WA Web unconditionally overrides)
+            inner.limit_sharing_v2 = outer.limit_sharing_v2;
+            if inner.thread_id.is_empty() {
+                inner.thread_id = outer.thread_id.clone();
+            }
+            if inner.bot_metadata.is_none() {
+                inner.bot_metadata = outer.bot_metadata.clone();
+            }
+            Some(inner)
+        }
+    }
+}
+
 /// Builds a quote context for replying to a message.
 ///
 /// This is a standalone function that can be used without `MessageContext`,
@@ -355,52 +405,6 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
 ///     ..Default::default()
 /// };
 /// ```
-/// Merges `MessageContextInfo` from the outer and inner messages of a
-/// `DeviceSentMessage` wrapper, matching WhatsApp Web's
-/// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic.
-///
-/// Merge strategy:
-/// - **Base**: all fields from `inner`
-/// - **`message_secret`**: inner, falling back to outer
-/// - **`message_association`**: inner, falling back to outer
-/// - **`limit_sharing_v2`**: always from outer (unconditional override)
-/// - **`thread_id`**: inner if non-empty, otherwise outer
-/// - **`bot_metadata`**: inner, falling back to outer
-pub fn merge_dsm_context(
-    inner: Option<wa::MessageContextInfo>,
-    outer: Option<&wa::MessageContextInfo>,
-) -> Option<wa::MessageContextInfo> {
-    match (inner, outer) {
-        (None, None) => None,
-        (Some(inner), None) => Some(inner),
-        (None, Some(outer)) => Some(wa::MessageContextInfo {
-            message_secret: outer.message_secret.clone(),
-            message_association: outer.message_association.clone(),
-            limit_sharing_v2: outer.limit_sharing_v2,
-            thread_id: outer.thread_id.clone(),
-            bot_metadata: outer.bot_metadata.clone(),
-            ..Default::default()
-        }),
-        (Some(mut inner), Some(outer)) => {
-            if inner.message_secret.is_none() {
-                inner.message_secret = outer.message_secret.clone();
-            }
-            if inner.message_association.is_none() {
-                inner.message_association = outer.message_association.clone();
-            }
-            // limit_sharing_v2: always from outer (WA Web unconditionally overrides)
-            inner.limit_sharing_v2 = outer.limit_sharing_v2;
-            if inner.thread_id.is_empty() {
-                inner.thread_id = outer.thread_id.clone();
-            }
-            if inner.bot_metadata.is_none() {
-                inner.bot_metadata = outer.bot_metadata.clone();
-            }
-            Some(inner)
-        }
-    }
-}
-
 pub fn build_quote_context(
     message_id: impl Into<String>,
     sender_jid: impl Into<String>,
@@ -1410,6 +1414,17 @@ mod tests {
             result.limit_sharing_v2,
             Some(outer_ls),
             "limit_sharing_v2 should always come from outer"
+        );
+
+        // When outer is None, inner's limit_sharing_v2 should be cleared
+        let inner_with_ls = wa::MessageContextInfo {
+            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner_with_ls), None).unwrap();
+        assert_eq!(
+            result.limit_sharing_v2, None,
+            "limit_sharing_v2 should be cleared when outer is None"
         );
     }
 
