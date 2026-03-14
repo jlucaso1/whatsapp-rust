@@ -34,7 +34,11 @@ fn classify_keepalive_error(e: &IqError) -> KeepaliveResult {
         | IqError::Disconnected(_)
         | IqError::NotConnected
         | IqError::InternalChannelClosed => KeepaliveResult::FatalFailure,
-        _ => KeepaliveResult::TransientFailure,
+        // Exhaustive: forces a compile error when new IqError variants are added
+        // so the developer must decide the classification.
+        IqError::Timeout | IqError::ServerError { .. } | IqError::ParseError(_) => {
+            KeepaliveResult::TransientFailure
+        }
     }
 }
 
@@ -101,7 +105,7 @@ impl Client {
                                         .expect("KEEP_ALIVE_MAX_FAIL_TIME fits in chrono::Duration")
                             {
                                 warn!(target: "Client/Keepalive", "Forcing reconnect due to keepalive failure for over {} seconds.", KEEP_ALIVE_MAX_FAIL_TIME.as_secs());
-                                self.disconnect().await;
+                                self.reconnect_immediately().await;
                                 return;
                             }
                         }
