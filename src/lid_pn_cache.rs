@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use moka::future::Cache;
 
+use crate::cache_config::CacheEntryConfig;
 pub use wacore::types::{LearningSource, LidPnEntry};
 
 /// Cache for LID to Phone Number mappings.
@@ -41,17 +42,19 @@ impl Default for LidPnCache {
 }
 
 impl LidPnCache {
-    /// Create a new empty cache
+    /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
     pub fn new() -> Self {
+        Self::with_config(&CacheEntryConfig::new(
+            Some(Duration::from_secs(3600)),
+            10_000,
+        ))
+    }
+
+    /// Create a new cache with custom configuration (uses time_to_idle semantics).
+    pub fn with_config(config: &CacheEntryConfig) -> Self {
         Self {
-            lid_to_entry: Cache::builder()
-                .max_capacity(10_000)
-                .time_to_idle(Duration::from_secs(3600))
-                .build(),
-            pn_to_entry: Cache::builder()
-                .max_capacity(10_000)
-                .time_to_idle(Duration::from_secs(3600))
-                .build(),
+            lid_to_entry: config.build_with_tti(),
+            pn_to_entry: config.build_with_tti(),
         }
     }
 

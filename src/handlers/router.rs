@@ -74,6 +74,7 @@ impl Default for StanzaRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_config::CacheConfig;
     use crate::test_utils::MockHttpClient;
     use std::sync::Arc;
     use wacore_binary::node::{Attrs, Node, NodeContent};
@@ -161,8 +162,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;
@@ -193,8 +200,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;

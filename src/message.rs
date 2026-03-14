@@ -1573,6 +1573,7 @@ fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_config::CacheConfig;
     use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
@@ -1600,7 +1601,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
@@ -1653,7 +1661,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1720,7 +1735,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1800,8 +1822,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -1897,8 +1925,14 @@ mod tests {
                 .expect("test backend should initialize"),
         );
         let transport_factory = Arc::new(crate::transport::mock::MockTransportFactory::new());
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), transport_factory, mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            pm.clone(),
+            transport_factory,
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2119,7 +2153,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         // Test case 1: LID group message with participant_pn
         let lid_group_node = NodeBuilder::new("message")
@@ -2353,8 +2394,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2444,8 +2491,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let sender_jid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -2542,8 +2595,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2612,8 +2671,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2686,8 +2751,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         // Simulate a group chat scenario
         let group_jid: Jid = "120363021033254949@g.us"
@@ -2776,7 +2847,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         // Simulate self-sent DM to another user (from your phone to your bot echo)
         // Real log example:
@@ -2863,7 +2941,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         // Simulate DM from another user via their LID
         // The sender_pn attribute should contain their phone number for session lookup
@@ -2951,7 +3036,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         // Simulate DM to self (like "Notes to Myself" or pinging yourself)
         // from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
@@ -3015,7 +3107,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3077,7 +3176,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3126,7 +3232,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3192,7 +3305,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3262,7 +3382,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3396,7 +3523,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3504,7 +3638,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3640,7 +3781,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
         client
     }
 
@@ -4087,7 +4235,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let node = NodeBuilder::new("message")
             .attr("from", "15551234567@s.whatsapp.net")
@@ -4130,8 +4285,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _rx) = Client::new(
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+            CacheConfig::default(),
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
         let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();

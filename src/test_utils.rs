@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::CacheConfig;
 use crate::Client;
 use crate::http::{HttpClient, HttpRequest, HttpResponse};
 use crate::store::SqliteStore;
@@ -63,6 +64,7 @@ pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
         Arc::new(MockTransportFactory::new()),
         Arc::new(MockHttpClient),
         None,
+        CacheConfig::default(),
     )
     .await;
 
@@ -98,6 +100,7 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
         Arc::new(MockTransportFactory::new()),
         Arc::new(FailingMockHttpClient),
         None,
+        CacheConfig::default(),
     )
     .await;
 
