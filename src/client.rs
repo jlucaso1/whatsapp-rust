@@ -2406,6 +2406,53 @@ impl Client {
                         });
                     }
                 }
+                "401" => {
+                    // 401: unauthorized — session invalid, needs re-authentication.
+                    // Matches WA Web's handling of unauthorized stream errors.
+                    info!("Got 401 stream error (unauthorized). Logging out.");
+                    self.expect_disconnect().await;
+                    self.enable_auto_reconnect.store(false, Ordering::Relaxed);
+                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                        crate::types::events::LoggedOut {
+                            on_connect: false,
+                            reason: ConnectFailureReason::LoggedOut,
+                        },
+                    ));
+
+                    let transport_opt = self.transport.lock().await.clone();
+                    if let Some(transport) = transport_opt {
+                        tokio::spawn(async move {
+                            info!("Disconnecting transport after 401");
+                            transport.disconnect().await;
+                        });
+                    }
+                }
+                "409" => {
+                    // 409: conflict — another client instance connected.
+                    // Same semantics as conflict child element but via code.
+                    info!("Got 409 stream error (conflict). Another session replaced this one.");
+                    self.expect_disconnect().await;
+                    self.enable_auto_reconnect.store(false, Ordering::Relaxed);
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::StreamReplaced(crate::types::events::StreamReplaced));
+
+                    let transport_opt = self.transport.lock().await.clone();
+                    if let Some(transport) = transport_opt {
+                        tokio::spawn(async move {
+                            info!("Disconnecting transport after 409");
+                            transport.disconnect().await;
+                        });
+                    }
+                }
+                "429" => {
+                    // 429: rate limited — server is throttling connections.
+                    // Auto-reconnect with extended backoff.
+                    warn!(
+                        "Got 429 stream error (rate limited). Will auto-reconnect with extended backoff."
+                    );
+                    self.auto_reconnect_errors.fetch_add(5, Ordering::Relaxed);
+                }
                 "503" => {
                     info!("Got 503 service unavailable, will auto-reconnect.");
                 }
@@ -4584,6 +4631,75 @@ mod tests {
         assert!(
             (900..=1100).contains(&ms),
             "first attempt should be ~1s (±10%), got {ms}ms"
+        );
+    }
+
+    // ── stream error tests ─────────────────────────────────────────────
+
+    async fn create_test_client() -> Arc<Client> {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+        client
+    }
+
+    #[tokio::test]
+    async fn test_stream_error_401_disables_reconnect() {
+        let client = create_test_client().await;
+        let node = NodeBuilder::new("stream:error").attr("code", "401").build();
+        client.handle_stream_error(&node).await;
+        assert!(
+            !client.enable_auto_reconnect.load(Ordering::Relaxed),
+            "401 should disable auto-reconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stream_error_409_disables_reconnect() {
+        let client = create_test_client().await;
+        let node = NodeBuilder::new("stream:error").attr("code", "409").build();
+        client.handle_stream_error(&node).await;
+        assert!(
+            !client.enable_auto_reconnect.load(Ordering::Relaxed),
+            "409 should disable auto-reconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stream_error_429_keeps_reconnect_with_backoff() {
+        let client = create_test_client().await;
+        let before = client.auto_reconnect_errors.load(Ordering::Relaxed);
+        let node = NodeBuilder::new("stream:error").attr("code", "429").build();
+        client.handle_stream_error(&node).await;
+        assert!(
+            client.enable_auto_reconnect.load(Ordering::Relaxed),
+            "429 should keep auto-reconnect enabled"
+        );
+        let after = client.auto_reconnect_errors.load(Ordering::Relaxed);
+        assert!(
+            after >= before + 5,
+            "429 should increase backoff: before={before}, after={after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stream_error_503_keeps_reconnect() {
+        let client = create_test_client().await;
+        let node = NodeBuilder::new("stream:error").attr("code", "503").build();
+        client.handle_stream_error(&node).await;
+        assert!(
+            client.enable_auto_reconnect.load(Ordering::Relaxed),
+            "503 should keep auto-reconnect enabled"
         );
     }
 
