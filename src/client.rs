@@ -775,6 +775,15 @@ impl Client {
         self.cleanup_connection_state().await;
     }
 
+    /// Backoff step used by [`reconnect()`] to create an offline window.
+    ///
+    /// `fibonacci_backoff(RECONNECT_BACKOFF_STEP)` determines the delay before
+    /// the run loop re-connects.  This must be longer than the mock server's
+    /// chatstate TTL (`CHATSTATE_TTL_SECS=3`) so TTL-expiry tests pass.
+    ///
+    /// Sequence: fib(0)=1s, fib(1)=1s, fib(2)=2s, fib(3)=3s, **fib(4)=5s**.
+    pub const RECONNECT_BACKOFF_STEP: u32 = 4;
+
     /// Drop the current connection and trigger the auto-reconnect loop.
     ///
     /// Unlike [`disconnect`], this does **not** stop the run loop. The client
@@ -786,16 +795,6 @@ impl Client {
     /// - Handling network changes (e.g., Wi-Fi → cellular)
     /// - Forcing a fresh server session
     /// - Testing offline message delivery
-
-    /// Backoff step used by [`reconnect()`] to create an offline window.
-    ///
-    /// `fibonacci_backoff(RECONNECT_BACKOFF_STEP)` determines the delay before
-    /// the run loop re-connects.  This must be longer than the mock server's
-    /// chatstate TTL (`CHATSTATE_TTL_SECS=3`) so TTL-expiry tests pass.
-    ///
-    /// Sequence: fib(0)=1s, fib(1)=1s, fib(2)=2s, fib(3)=3s, **fib(4)=5s**.
-    pub const RECONNECT_BACKOFF_STEP: u32 = 4;
-
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
         self.auto_reconnect_errors
