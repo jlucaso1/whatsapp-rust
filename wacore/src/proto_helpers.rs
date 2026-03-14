@@ -325,6 +325,56 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     }
 }
 
+/// Merges `MessageContextInfo` from the outer and inner messages of a
+/// `DeviceSentMessage` wrapper, matching WhatsApp Web's
+/// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic.
+///
+/// Merge strategy:
+/// - **Base**: all fields from `inner`
+/// - **`message_secret`**: inner, falling back to outer
+/// - **`message_association`**: inner, falling back to outer
+/// - **`limit_sharing_v2`**: always from outer (unconditional override)
+/// - **`thread_id`**: inner if non-empty, otherwise outer
+/// - **`bot_metadata`**: inner, falling back to outer
+pub fn merge_dsm_context(
+    inner: Option<wa::MessageContextInfo>,
+    outer: Option<&wa::MessageContextInfo>,
+) -> Option<wa::MessageContextInfo> {
+    match (inner, outer) {
+        (None, None) => None,
+        (Some(mut inner), None) => {
+            // limit_sharing_v2 always comes from outer; clear it when outer is absent
+            inner.limit_sharing_v2 = None;
+            Some(inner)
+        }
+        (None, Some(outer)) => Some(wa::MessageContextInfo {
+            message_secret: outer.message_secret.clone(),
+            message_association: outer.message_association.clone(),
+            limit_sharing_v2: outer.limit_sharing_v2,
+            thread_id: outer.thread_id.clone(),
+            bot_metadata: outer.bot_metadata.clone(),
+            ..Default::default()
+        }),
+        (Some(mut inner), Some(outer)) => {
+            if inner.message_secret.is_none() {
+                inner.message_secret = outer.message_secret.clone();
+            }
+            if inner.message_association.is_none() {
+                inner.message_association = outer.message_association.clone();
+            }
+            // limit_sharing_v2: always from outer (WA Web unconditionally overrides)
+            inner.limit_sharing_v2 = outer.limit_sharing_v2;
+            if inner.thread_id.is_empty() {
+                inner.thread_id = outer.thread_id.clone();
+            }
+            if inner.bot_metadata.is_none() {
+                inner.bot_metadata = outer.bot_metadata.clone();
+            }
+            Some(inner)
+        }
+    }
+}
+
 /// Builds a quote context for replying to a message.
 ///
 /// This is a standalone function that can be used without `MessageContext`,
@@ -1269,5 +1319,140 @@ mod tests {
             "empty DSM wrapper should be preserved"
         );
         assert!(unwrapped.conversation.is_none());
+    }
+
+    // ── merge_dsm_context tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_merge_dsm_context_both_none() {
+        assert!(merge_dsm_context(None, None).is_none());
+    }
+
+    #[test]
+    fn test_merge_dsm_context_inner_only() {
+        let inner = wa::MessageContextInfo {
+            message_secret: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner.clone()), None).unwrap();
+        assert_eq!(result.message_secret, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn test_merge_dsm_context_outer_only() {
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(None, Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![4, 5, 6]),
+            "message_secret should come from outer when inner is None"
+        );
+        assert!(
+            result.limit_sharing_v2.is_some(),
+            "limit_sharing_v2 should come from outer"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_inner_preferred_for_secret() {
+        let inner = wa::MessageContextInfo {
+            message_secret: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![1, 2, 3]),
+            "inner message_secret should be preferred over outer"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_secret_fallback_to_outer() {
+        let inner = wa::MessageContextInfo {
+            message_secret: None,
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![4, 5, 6]),
+            "should fall back to outer message_secret when inner is None"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_limit_sharing_v2_always_outer() {
+        let inner_ls = wa::LimitSharing {
+            ..Default::default()
+        };
+        let outer_ls = wa::LimitSharing {
+            ..Default::default()
+        };
+        let inner = wa::MessageContextInfo {
+            limit_sharing_v2: Some(inner_ls),
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            limit_sharing_v2: Some(outer_ls),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.limit_sharing_v2,
+            Some(outer_ls),
+            "limit_sharing_v2 should always come from outer"
+        );
+
+        // When outer is None, inner's limit_sharing_v2 should be cleared
+        let inner_with_ls = wa::MessageContextInfo {
+            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner_with_ls), None).unwrap();
+        assert_eq!(
+            result.limit_sharing_v2, None,
+            "limit_sharing_v2 should be cleared when outer is None"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_thread_id_fallback() {
+        let outer = wa::MessageContextInfo {
+            thread_id: vec![wa::ThreadId::default()],
+            ..Default::default()
+        };
+        // Inner has empty thread_id → should fall back to outer
+        let inner_empty = wa::MessageContextInfo::default();
+        let result = merge_dsm_context(Some(inner_empty), Some(&outer)).unwrap();
+        assert_eq!(
+            result.thread_id.len(),
+            1,
+            "should fall back to outer thread_id when inner is empty"
+        );
+
+        // Inner has non-empty thread_id → should keep inner
+        let inner_filled = wa::MessageContextInfo {
+            thread_id: vec![wa::ThreadId::default(), wa::ThreadId::default()],
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner_filled), Some(&outer)).unwrap();
+        assert_eq!(
+            result.thread_id.len(),
+            2,
+            "should keep inner thread_id when non-empty"
+        );
     }
 }
