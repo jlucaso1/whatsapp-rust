@@ -801,6 +801,10 @@ impl Client {
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
+        // Signal the keepalive loop (and any other tasks) to exit promptly.
+        // Without this, a stale keepalive loop can overlap with the next one
+        // after reconnect, causing duplicate pings.
+        self.shutdown_notifier.notify_waiters();
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
