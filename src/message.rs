@@ -1161,16 +1161,12 @@ impl Client {
         );
 
         match wa::Message::decode(plaintext_slice) {
-            Ok(mut original_msg) => {
+            Ok(original_msg) => {
                 // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
                 // the primary device). The actual content (reactions, text, etc.)
                 // is nested inside device_sent_message.message and must be
                 // extracted before protocol checks or dispatch.
-                let mut msg = if let Some(dsm) = original_msg.device_sent_message.take() {
-                    dsm.message.map_or(original_msg, |inner| *inner)
-                } else {
-                    original_msg
-                };
+                let mut msg = unwrap_device_sent(original_msg);
 
                 // Post-decryption logic (SKDM, sync keys, etc.)
                 if let Some(skdm) = &msg.sender_key_distribution_message
@@ -1554,6 +1550,22 @@ impl Client {
             );
         }
     }
+}
+
+/// Unwraps a `DeviceSentMessage` wrapper, returning the inner message.
+///
+/// Self-sent messages synced from the primary device arrive with the actual
+/// content (reactions, text, etc.) nested inside `device_sent_message.message`.
+/// This extracts the inner message when present, or returns the original
+/// message unchanged when there is no wrapper or the wrapper has no inner message.
+fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
+    if let Some(mut dsm) = msg.device_sent_message.take() {
+        if let Some(inner) = dsm.message.take() {
+            return *inner;
+        }
+        msg.device_sent_message = Some(dsm);
+    }
+    msg
 }
 
 /// Returns `true` if the message contains only a SenderKey distribution
@@ -4229,38 +4241,72 @@ mod tests {
         }));
     }
 
-    /// Test: a reaction wrapped in DeviceSentMessage is not treated as SKDM-only,
-    /// confirming it would be dispatched after DSM unwrapping in handle_decrypted_plaintext.
+    /// Test: unwrap_device_sent extracts a reaction from a DeviceSentMessage wrapper.
     #[test]
-    fn test_dsm_wrapped_reaction_not_skdm_only() {
-        // Simulate what arrives after DSM unwrapping: the inner message with a reaction
-        let inner = wa::Message {
-            reaction_message: Some(wa::message::ReactionMessage {
-                text: Some("\u{2764}".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        assert!(
-            !is_sender_key_distribution_only(&inner),
-            "unwrapped reaction should not be filtered as SKDM-only"
-        );
-
-        // Before the fix: the outer wrapper has no visible content fields set,
-        // but is_sender_key_distribution_only returns false for it too (no SKDM).
-        // The real problem was that dispatch sent the outer wrapper with all-None fields.
-        let outer = wa::Message {
+    fn test_unwrap_device_sent_extracts_reaction() {
+        let wrapped = wa::Message {
             device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(inner)),
+                message: Some(Box::new(wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        text: Some("\u{2764}".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
                 phash: None,
             })),
             ..Default::default()
         };
+
+        let unwrapped = unwrap_device_sent(wrapped);
         assert!(
-            !is_sender_key_distribution_only(&outer),
-            "DSM wrapper should not be filtered as SKDM-only"
+            unwrapped.device_sent_message.is_none(),
+            "DSM wrapper should be removed"
         );
+        assert_eq!(
+            unwrapped
+                .reaction_message
+                .as_ref()
+                .and_then(|r| r.text.as_deref()),
+            Some("\u{2764}"),
+            "reaction should be accessible after unwrapping"
+        );
+        assert!(
+            !is_sender_key_distribution_only(&unwrapped),
+            "unwrapped reaction should not be filtered as SKDM-only"
+        );
+    }
+
+    /// Test: unwrap_device_sent preserves the wrapper when inner message is None.
+    #[test]
+    fn test_unwrap_device_sent_preserves_empty_wrapper() {
+        let wrapped = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: None,
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(wrapped);
+        assert!(
+            result.device_sent_message.is_some(),
+            "empty DSM wrapper should be preserved"
+        );
+    }
+
+    /// Test: unwrap_device_sent passes through a plain message unchanged.
+    #[test]
+    fn test_unwrap_device_sent_passthrough() {
+        let msg = wa::Message {
+            conversation: Some("hello".to_string()),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(msg);
+        assert_eq!(result.conversation.as_deref(), Some("hello"));
     }
 
     #[tokio::test]

@@ -197,36 +197,24 @@ impl MessageExt for wa::Message {
     }
 
     fn into_base_message(mut self) -> wa::Message {
-        if let Some(dsm) = self.device_sent_message.take()
-            && let Some(msg) = dsm.message
-        {
-            self = *msg;
+        macro_rules! peel_wrapper {
+            ($field:ident) => {
+                if let Some(mut wrapper) = self.$field.take() {
+                    if let Some(msg) = wrapper.message.take() {
+                        self = *msg;
+                    } else {
+                        self.$field = Some(wrapper);
+                    }
+                }
+            };
         }
-        if let Some(wrapper) = self.ephemeral_message.take()
-            && let Some(msg) = wrapper.message
-        {
-            self = *msg;
-        }
-        if let Some(wrapper) = self.view_once_message.take()
-            && let Some(msg) = wrapper.message
-        {
-            self = *msg;
-        }
-        if let Some(wrapper) = self.view_once_message_v2.take()
-            && let Some(msg) = wrapper.message
-        {
-            self = *msg;
-        }
-        if let Some(wrapper) = self.document_with_caption_message.take()
-            && let Some(msg) = wrapper.message
-        {
-            self = *msg;
-        }
-        if let Some(wrapper) = self.edited_message.take()
-            && let Some(msg) = wrapper.message
-        {
-            self = *msg;
-        }
+
+        peel_wrapper!(device_sent_message);
+        peel_wrapper!(ephemeral_message);
+        peel_wrapper!(view_once_message);
+        peel_wrapper!(view_once_message_v2);
+        peel_wrapper!(document_with_caption_message);
+        peel_wrapper!(edited_message);
         self
     }
 
@@ -1275,9 +1263,11 @@ mod tests {
         };
 
         let unwrapped = msg.into_base_message();
-        // With no inner message the outer message is returned as-is
-        // (device_sent_message was consumed by take())
-        assert!(unwrapped.device_sent_message.is_none());
+        // With no inner message the wrapper is preserved
+        assert!(
+            unwrapped.device_sent_message.is_some(),
+            "empty DSM wrapper should be preserved"
+        );
         assert!(unwrapped.conversation.is_none());
     }
 }
