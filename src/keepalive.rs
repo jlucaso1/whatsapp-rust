@@ -179,4 +179,13 @@ mod tests {
             "ServerError should be transient — server may recover"
         );
     }
+
+    #[test]
+    fn test_classify_parse_error_is_transient() {
+        assert_eq!(
+            classify_keepalive_error(&IqError::ParseError(anyhow::anyhow!("bad response"))),
+            KeepaliveResult::TransientFailure,
+            "ParseError should be transient — bad response, not a dead connection"
+        );
+    }
 }
