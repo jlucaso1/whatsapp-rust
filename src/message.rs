@@ -1162,6 +1162,15 @@ impl Client {
 
         match wa::Message::decode(plaintext_slice) {
             Ok(original_msg) => {
+                // Validate DSM presence against sender identity
+                // (WAWebHandleMsgError.DeviceSentMessageError)
+                if original_msg.device_sent_message.is_some() && !info.source.is_from_me {
+                    warn!(
+                        "[msg:{}] DeviceSentMessage present but sender {} is not self",
+                        info.id, info.source.sender,
+                    );
+                }
+
                 // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
                 // the primary device). The actual content (reactions, text, etc.)
                 // is nested inside device_sent_message.message and must be
@@ -1552,15 +1561,23 @@ impl Client {
     }
 }
 
-/// Unwraps a `DeviceSentMessage` wrapper, returning the inner message.
+/// Unwraps a `DeviceSentMessage` wrapper, returning the inner message with
+/// merged `message_context_info`.
 ///
 /// Self-sent messages synced from the primary device arrive with the actual
 /// content (reactions, text, etc.) nested inside `device_sent_message.message`.
-/// This extracts the inner message when present, or returns the original
-/// message unchanged when there is no wrapper or the wrapper has no inner message.
+/// This extracts the inner message when present, merges `MessageContextInfo`
+/// from outer and inner following WhatsApp Web's
+/// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic, or returns
+/// the original message unchanged when there is no wrapper or the wrapper has
+/// no inner message.
 fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
     if let Some(mut dsm) = msg.device_sent_message.take() {
-        if let Some(inner) = dsm.message.take() {
+        if let Some(mut inner) = dsm.message.take() {
+            inner.message_context_info = wacore::proto_helpers::merge_dsm_context(
+                inner.message_context_info.take(),
+                msg.message_context_info.as_ref(),
+            );
             return *inner;
         }
         msg.device_sent_message = Some(dsm);
@@ -4307,6 +4324,76 @@ mod tests {
 
         let result = unwrap_device_sent(msg);
         assert_eq!(result.conversation.as_deref(), Some("hello"));
+    }
+
+    /// Test: unwrap_device_sent merges messageContextInfo from outer and inner,
+    /// matching WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage.
+    #[test]
+    fn test_unwrap_device_sent_merges_context_info() {
+        let wrapped = wa::Message {
+            // Outer message_context_info (from the DSM envelope)
+            message_context_info: Some(wa::MessageContextInfo {
+                message_secret: Some(vec![10, 20, 30]),
+                limit_sharing_v2: Some(wa::LimitSharing::default()),
+                ..Default::default()
+            }),
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    conversation: Some("hello".to_string()),
+                    // Inner has its own message_secret but no limit_sharing_v2
+                    message_context_info: Some(wa::MessageContextInfo {
+                        message_secret: Some(vec![1, 2, 3]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(wrapped);
+        let ctx = result.message_context_info.as_ref().unwrap();
+
+        assert_eq!(
+            ctx.message_secret,
+            Some(vec![1, 2, 3]),
+            "inner message_secret should be preferred"
+        );
+        assert!(
+            ctx.limit_sharing_v2.is_some(),
+            "limit_sharing_v2 should come from outer (always)"
+        );
+    }
+
+    /// Test: unwrap_device_sent falls back to outer message_secret when inner has none.
+    #[test]
+    fn test_unwrap_device_sent_secret_fallback() {
+        let wrapped = wa::Message {
+            message_context_info: Some(wa::MessageContextInfo {
+                message_secret: Some(vec![10, 20, 30]),
+                ..Default::default()
+            }),
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    conversation: Some("hello".to_string()),
+                    // Inner has no message_context_info at all
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let result = unwrap_device_sent(wrapped);
+        let ctx = result.message_context_info.as_ref().unwrap();
+        assert_eq!(
+            ctx.message_secret,
+            Some(vec![10, 20, 30]),
+            "should fall back to outer message_secret"
+        );
     }
 
     #[tokio::test]
