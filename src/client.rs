@@ -2458,14 +2458,8 @@ impl Client {
             info!("Received ping, sending pong.");
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
-            let id = parser.optional_string("id").unwrap_or("").to_string();
-            let pong = NodeBuilder::new("iq")
-                .attrs([
-                    ("to", from_jid.to_string()),
-                    ("id", id),
-                    ("type", "result".to_string()),
-                ])
-                .build();
+            let id = parser.optional_string("id").map(|s| s.to_string());
+            let pong = build_pong(from_jid.to_string(), id.as_deref());
             if let Err(e) = self.send_node(pong).await {
                 warn!("Failed to send pong: {e:?}");
             }
@@ -2864,6 +2858,18 @@ impl Client {
             }
         }
     }
+}
+
+/// Builds a pong response node for a server-initiated ping.
+///
+/// Matches WhatsApp Web (`WAWebCommsHandleStanza`): only includes `id`
+/// when the server ping carried one.
+fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
+    let mut builder = NodeBuilder::new("iq").attr("to", to).attr("type", "result");
+    if let Some(id) = id {
+        builder = builder.attr("id", id);
+    }
+    builder.build()
 }
 
 #[cfg(test)]
@@ -4406,6 +4412,70 @@ mod tests {
         assert!(
             !handled,
             "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
+        );
+    }
+
+    // ── build_pong tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_build_pong_with_id() {
+        let pong = build_pong("s.whatsapp.net".to_string(), Some("ping-123"));
+        assert_eq!(
+            pong.attrs.get("id").and_then(|v| v.as_str()),
+            Some("ping-123"),
+            "pong should include id when server ping has one"
+        );
+        assert_eq!(
+            pong.attrs.get("type").and_then(|v| v.as_str()),
+            Some("result")
+        );
+        assert_eq!(
+            pong.attrs.get("to").and_then(|v| v.as_str()),
+            Some("s.whatsapp.net")
+        );
+    }
+
+    #[test]
+    fn test_build_pong_without_id() {
+        let pong = build_pong("s.whatsapp.net".to_string(), None);
+        assert!(
+            !pong.attrs.contains_key("id"),
+            "pong should NOT include id when server ping has none"
+        );
+        assert_eq!(
+            pong.attrs.get("type").and_then(|v| v.as_str()),
+            Some("result")
+        );
+    }
+
+    /// Smoke test: server ping with xmlns but no id attribute is handled.
+    #[tokio::test]
+    async fn test_handle_iq_ping_without_id() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Server ping without id — real format observed in production logs
+        let ping_node = NodeBuilder::new("iq")
+            .attr("type", "get")
+            .attr("from", SERVER_JID)
+            .attr("xmlns", "urn:xmpp:ping")
+            .build();
+
+        let handled = client.handle_iq(&ping_node).await;
+        assert!(
+            handled,
+            "handle_iq must recognize ping without id attribute"
         );
     }
 
