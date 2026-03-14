@@ -791,7 +791,8 @@ impl Client {
         // Create a deterministic offline window before the next reconnect
         // attempt so reconnect-based e2e tests can reliably exercise
         // queued-offline behavior before the run loop dials back in.
-        self.auto_reconnect_errors.store(2, Ordering::Relaxed);
+        // fibonacci_backoff(4) ≈ 5s (sequence: 1,1,2,3,5,...).
+        self.auto_reconnect_errors.store(4, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -827,6 +828,10 @@ impl Client {
         // Old workers holding the previous semaphore Arc will finish normally.
         *self.message_processing_semaphore.lock().unwrap() =
             Arc::new(tokio::sync::Semaphore::new(1));
+        // Reset dead-socket timestamps so stale values from the previous
+        // connection don't trigger an immediate reconnect on the next one.
+        self.last_data_received_ms.store(0, Ordering::Relaxed);
+        self.last_data_sent_ms.store(0, Ordering::Relaxed);
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.server_has_prekeys.store(true, Ordering::Relaxed);
