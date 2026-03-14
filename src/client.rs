@@ -366,7 +366,28 @@ impl Client {
         self.expected_disconnect.load(Ordering::Relaxed) || !self.is_running.load(Ordering::Relaxed)
     }
 
+    /// Create a new `Client` with default cache configuration.
+    ///
+    /// This is the standard constructor. Use [`Client::new_with_cache_config`]
+    /// if you need to customise cache TTL / capacity.
     pub async fn new(
+        persistence_manager: Arc<PersistenceManager>,
+        transport_factory: Arc<dyn crate::transport::TransportFactory>,
+        http_client: Arc<dyn crate::http::HttpClient>,
+        override_version: Option<(u32, u32, u32)>,
+    ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
+        Self::new_with_cache_config(
+            persistence_manager,
+            transport_factory,
+            http_client,
+            override_version,
+            CacheConfig::default(),
+        )
+        .await
+    }
+
+    /// Create a new `Client` with a custom [`CacheConfig`].
+    pub async fn new_with_cache_config(
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
@@ -406,10 +427,13 @@ impl Client {
             message_processing_semaphore: std::sync::Mutex::new(Arc::new(
                 tokio::sync::Semaphore::new(1),
             )),
-            session_locks: cache_config.session_locks.build_with_ttl(),
-            message_queues: cache_config.message_queues.build_with_tti(),
+            // Coordination caches: capacity-only eviction, no TTL/TTI.
+            // These hold live mutexes and channel senders; time-based eviction
+            // while tasks hold references would silently break serialisation.
+            session_locks: Cache::builder().max_capacity(10_000).build(),
+            message_queues: Cache::builder().max_capacity(10_000).build(),
             lid_pn_cache: Arc::new(LidPnCache::with_config(&cache_config.lid_pn_cache)),
-            message_enqueue_locks: cache_config.message_enqueue_locks.build_with_ttl(),
+            message_enqueue_locks: Cache::builder().max_capacity(10_000).build(),
             group_cache: OnceCell::new(),
             device_cache: OnceCell::new(),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
@@ -2859,7 +2883,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2913,7 +2936,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2958,7 +2980,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3025,7 +3046,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3069,7 +3089,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3141,7 +3160,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3231,7 +3249,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3287,7 +3304,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3332,7 +3348,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3382,7 +3397,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3433,7 +3447,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3471,7 +3484,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3529,7 +3541,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3575,7 +3586,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3667,7 +3677,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3771,7 +3780,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3895,7 +3903,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3971,7 +3978,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4066,7 +4072,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
         client
@@ -4255,7 +4260,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4289,7 +4293,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4322,7 +4325,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4355,7 +4357,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4387,7 +4388,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4403,5 +4403,37 @@ mod tests {
             !handled,
             "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
         );
+    }
+
+    #[tokio::test]
+    async fn test_custom_cache_config_is_respected() {
+        use crate::cache_config::{CacheConfig, CacheEntryConfig};
+        use std::time::Duration;
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+
+        let custom_config = CacheConfig {
+            group_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
+            device_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
+            ..CacheConfig::default()
+        };
+
+        // Verify that constructing a client with a custom config does not panic
+        // and the client is usable.
+        let (client, _rx) = Client::new_with_cache_config(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            custom_config,
+        )
+        .await;
+
+        assert!(!client.is_logged_in());
     }
 }

@@ -3,19 +3,23 @@ use std::time::Duration;
 
 /// Configuration for a single cache instance.
 ///
-/// Controls the TTL and maximum capacity of a moka cache.
-/// Set `ttl` to `None` to disable time-based expiry (entries stay until evicted by capacity).
+/// Controls the expiry timeout and maximum capacity of a moka cache.
+/// The `timeout` field is used as either TTL (`build_with_ttl`) or TTI
+/// (`build_with_tti`) depending on which builder method is called.
+/// Set `timeout` to `None` to disable time-based expiry (entries stay until
+/// evicted by capacity).
 #[derive(Debug, Clone)]
 pub struct CacheEntryConfig {
-    /// TTL duration. `None` means no time-based expiry.
-    pub ttl: Option<Duration>,
+    /// Expiry timeout duration. `None` means no time-based expiry.
+    /// Interpreted as TTL or TTI depending on the builder method used.
+    pub timeout: Option<Duration>,
     /// Maximum number of entries.
     pub capacity: u64,
 }
 
 impl CacheEntryConfig {
-    pub fn new(ttl: Option<Duration>, capacity: u64) -> Self {
-        Self { ttl, capacity }
+    pub fn new(timeout: Option<Duration>, capacity: u64) -> Self {
+        Self { timeout, capacity }
     }
 
     /// Build a moka Cache using time_to_live semantics.
@@ -25,8 +29,8 @@ impl CacheEntryConfig {
         V: Clone + Send + Sync + 'static,
     {
         let mut builder = Cache::builder().max_capacity(self.capacity);
-        if let Some(ttl) = self.ttl {
-            builder = builder.time_to_live(ttl);
+        if let Some(timeout) = self.timeout {
+            builder = builder.time_to_live(timeout);
         }
         builder.build()
     }
@@ -38,8 +42,8 @@ impl CacheEntryConfig {
         V: Clone + Send + Sync + 'static,
     {
         let mut builder = Cache::builder().max_capacity(self.capacity);
-        if let Some(ttl) = self.ttl {
-            builder = builder.time_to_idle(ttl);
+        if let Some(timeout) = self.timeout {
+            builder = builder.time_to_idle(timeout);
         }
         builder.build()
     }
@@ -49,6 +53,13 @@ impl CacheEntryConfig {
 ///
 /// All fields default to WhatsApp Web behavior. Use `..Default::default()` to
 /// override only specific caches.
+///
+/// Note: coordination caches (`session_locks`, `message_queues`,
+/// `message_enqueue_locks`) are **not** configurable here because they hold
+/// live synchronisation primitives (mutexes and channel senders). Allowing
+/// TTL eviction on those caches would silently break Signal-session
+/// serialisation guarantees. They are always built with capacity-only eviction
+/// inside `Client`.
 ///
 /// # Example
 ///
@@ -69,14 +80,8 @@ pub struct CacheConfig {
     pub device_cache: CacheEntryConfig,
     /// Device registry cache (time_to_live). Default: 1h TTL, 5000 entries.
     pub device_registry_cache: CacheEntryConfig,
-    /// LID-to-phone cache (time_to_idle). Default: 1h TTL, 10000 entries.
+    /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 10000 entries.
     pub lid_pn_cache: CacheEntryConfig,
-    /// Signal session locks (time_to_live). Default: 5m TTL, 10000 entries.
-    pub session_locks: CacheEntryConfig,
-    /// Per-chat message queues (time_to_idle). Default: 5m TTL, 10000 entries.
-    pub message_queues: CacheEntryConfig,
-    /// Message enqueue locks (time_to_live). Default: 5m TTL, 10000 entries.
-    pub message_enqueue_locks: CacheEntryConfig,
     /// Retried group messages tracker (time_to_live). Default: 5m TTL, 2000 entries.
     pub retried_group_messages: CacheEntryConfig,
     /// Recent messages for retry (time_to_live). Default: 5m TTL, 1000 entries.
@@ -97,9 +102,6 @@ impl Default for CacheConfig {
             device_cache: CacheEntryConfig::new(one_hour, 5_000),
             device_registry_cache: CacheEntryConfig::new(one_hour, 5_000),
             lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
-            session_locks: CacheEntryConfig::new(five_min, 10_000),
-            message_queues: CacheEntryConfig::new(five_min, 10_000),
-            message_enqueue_locks: CacheEntryConfig::new(five_min, 10_000),
             retried_group_messages: CacheEntryConfig::new(five_min, 2_000),
             recent_messages: CacheEntryConfig::new(five_min, 1_000),
             message_retry_counts: CacheEntryConfig::new(five_min, 5_000),

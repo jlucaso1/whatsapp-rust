@@ -779,7 +779,6 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_config::CacheConfig;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
     use wacore_binary::jid::{Jid, JidExt};
@@ -800,7 +799,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -1602,7 +1600,6 @@ mod tests {
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            CacheConfig::default(),
         )
         .await;
 

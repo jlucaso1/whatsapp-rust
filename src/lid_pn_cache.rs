@@ -14,11 +14,9 @@
 //! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
 //! memory growth in long-running sessions.
 
-use std::time::Duration;
-
 use moka::future::Cache;
 
-use crate::cache_config::CacheEntryConfig;
+use crate::cache_config::{CacheConfig, CacheEntryConfig};
 pub use wacore::types::{LearningSource, LidPnEntry};
 
 /// Cache for LID to Phone Number mappings.
@@ -44,10 +42,7 @@ impl Default for LidPnCache {
 impl LidPnCache {
     /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
     pub fn new() -> Self {
-        Self::with_config(&CacheEntryConfig::new(
-            Some(Duration::from_secs(3600)),
-            10_000,
-        ))
+        Self::with_config(&CacheConfig::default().lid_pn_cache)
     }
 
     /// Create a new cache with custom configuration (uses time_to_idle semantics).

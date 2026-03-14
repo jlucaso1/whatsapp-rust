@@ -1573,7 +1573,6 @@ fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_config::CacheConfig;
     use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
@@ -1606,7 +1605,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -1666,7 +1664,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -1740,7 +1737,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -1827,7 +1823,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -1930,7 +1925,6 @@ mod tests {
             transport_factory,
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2158,7 +2152,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2399,7 +2392,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2496,7 +2488,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2600,7 +2591,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2676,7 +2666,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2756,7 +2745,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2852,7 +2840,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -2946,7 +2933,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3041,7 +3027,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3112,7 +3097,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3181,7 +3165,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3237,7 +3220,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3310,7 +3292,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3387,7 +3368,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3528,7 +3508,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3643,7 +3622,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -3786,7 +3764,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
         client
@@ -4240,7 +4217,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -4290,7 +4266,6 @@ mod tests {
             mock_transport(),
             mock_http_client(),
             None,
-            CacheConfig::default(),
         )
         .await;
 

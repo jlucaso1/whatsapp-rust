@@ -566,7 +566,7 @@ impl BotBuilder {
         }
 
         info!("Creating client...");
-        let (client, sync_task_receiver) = Client::new(
+        let (client, sync_task_receiver) = Client::new_with_cache_config(
             persistence_manager.clone(),
             transport_factory,
             http_client,

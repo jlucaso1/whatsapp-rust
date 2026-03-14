@@ -74,7 +74,6 @@ impl Default for StanzaRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_config::CacheConfig;
     use crate::test_utils::MockHttpClient;
     use std::sync::Arc;
     use wacore_binary::node::{Attrs, Node, NodeContent};
@@ -167,7 +166,6 @@ mod tests {
             transport,
             http_client,
             None,
-            CacheConfig::default(),
         )
         .await;
 
@@ -205,7 +203,6 @@ mod tests {
             transport,
             http_client,
             None,
-            CacheConfig::default(),
         )
         .await;
 
