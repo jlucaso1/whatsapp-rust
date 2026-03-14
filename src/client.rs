@@ -786,6 +786,7 @@ impl Client {
     /// - Handling network changes (e.g., Wi-Fi → cellular)
     /// - Forcing a fresh server session
     /// - Testing offline message delivery
+
     /// Backoff step used by [`reconnect()`] to create an offline window.
     ///
     /// `fibonacci_backoff(RECONNECT_BACKOFF_STEP)` determines the delay before
