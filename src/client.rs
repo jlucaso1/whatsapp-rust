@@ -786,13 +786,19 @@ impl Client {
     /// - Handling network changes (e.g., Wi-Fi → cellular)
     /// - Forcing a fresh server session
     /// - Testing offline message delivery
+    /// Backoff step used by [`reconnect()`] to create an offline window.
+    ///
+    /// `fibonacci_backoff(RECONNECT_BACKOFF_STEP)` determines the delay before
+    /// the run loop re-connects.  This must be longer than the mock server's
+    /// chatstate TTL (`CHATSTATE_TTL_SECS=3`) so TTL-expiry tests pass.
+    ///
+    /// Sequence: fib(0)=1s, fib(1)=1s, fib(2)=2s, fib(3)=3s, **fib(4)=5s**.
+    pub const RECONNECT_BACKOFF_STEP: u32 = 4;
+
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
-        // Create a deterministic offline window before the next reconnect
-        // attempt so reconnect-based e2e tests can reliably exercise
-        // queued-offline behavior before the run loop dials back in.
-        // fibonacci_backoff(2) ≈ 2s (sequence: 1,1,2,3,5,...).
-        self.auto_reconnect_errors.store(2, Ordering::Relaxed);
+        self.auto_reconnect_errors
+            .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
