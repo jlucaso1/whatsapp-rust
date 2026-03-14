@@ -2449,7 +2449,8 @@ impl Client {
 
     pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
         if let Some("get") = node.attrs.get("type").and_then(|s| s.as_str())
-            && node.get_optional_child("ping").is_some()
+            && (node.get_optional_child("ping").is_some()
+                || node.attrs.get("xmlns").and_then(|s| s.as_str()) == Some("urn:xmpp:ping"))
         {
             info!("Received ping, sending pong.");
             let mut parser = node.attrs();
@@ -4222,6 +4223,186 @@ mod tests {
                 .load(Ordering::Acquire),
             1,
             "offline message should increment processed count"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Server-initiated ping detection tests
+    //
+    // The WhatsApp server can send pings in two formats:
+    //
+    // 1. Child-element format (legacy/whatsmeow style):
+    //    <iq type="get" from="s.whatsapp.net" id="...">
+    //      <ping/>
+    //    </iq>
+    //
+    // 2. xmlns-attribute format (real WhatsApp Web format):
+    //    <iq from="s.whatsapp.net" t="..." type="get" xmlns="urn:xmpp:ping"/>
+    //    This is a self-closing tag with NO child elements.
+    //    Verified against captured WhatsApp Web JS (WAWebCommsHandleStanza):
+    //      if (t.xmlns === "urn:xmpp:ping") return wap("iq", { type: "result", to: t.from });
+    //
+    // Both must be recognized and answered with a pong, otherwise the
+    // server considers the client dead and stops responding to keepalive
+    // pings — causing a timeout cascade and forced reconnect.
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_handle_iq_ping_with_child_element() {
+        // Format 1: <iq type="get"><ping/></iq> — the legacy format with a <ping> child node.
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let ping_node = NodeBuilder::new("iq")
+            .attr("type", "get")
+            .attr("from", SERVER_JID)
+            .attr("id", "ping-child-1")
+            .children([NodeBuilder::new("ping").build()])
+            .build();
+
+        let handled = client.handle_iq(&ping_node).await;
+        assert!(
+            handled,
+            "handle_iq must recognize ping with <ping> child element"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_iq_ping_with_xmlns_attribute() {
+        // Format 2: <iq type="get" xmlns="urn:xmpp:ping"/> — the real WhatsApp Web format.
+        // This is a self-closing IQ with NO children, only an xmlns attribute.
+        // The server sends this format; failing to respond causes keepalive timeout cascade.
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let ping_node = NodeBuilder::new("iq")
+            .attr("type", "get")
+            .attr("from", SERVER_JID)
+            .attr("id", "ping-xmlns-1")
+            .attr("xmlns", "urn:xmpp:ping")
+            .build();
+
+        let handled = client.handle_iq(&ping_node).await;
+        assert!(
+            handled,
+            "handle_iq must recognize ping with xmlns=\"urn:xmpp:ping\" attribute (no children)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_iq_ping_with_both_child_and_xmlns() {
+        // Edge case: node has BOTH a <ping> child AND xmlns="urn:xmpp:ping".
+        // Should still be handled (OR condition).
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let ping_node = NodeBuilder::new("iq")
+            .attr("type", "get")
+            .attr("from", SERVER_JID)
+            .attr("id", "ping-both-1")
+            .attr("xmlns", "urn:xmpp:ping")
+            .children([NodeBuilder::new("ping").build()])
+            .build();
+
+        let handled = client.handle_iq(&ping_node).await;
+        assert!(
+            handled,
+            "handle_iq must handle ping with both child and xmlns"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_iq_non_ping_returns_false() {
+        // A type="get" IQ without ping child or xmlns should NOT be handled as ping.
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let non_ping_node = NodeBuilder::new("iq")
+            .attr("type", "get")
+            .attr("from", SERVER_JID)
+            .attr("id", "not-a-ping")
+            .attr("xmlns", "some:other:namespace")
+            .build();
+
+        let handled = client.handle_iq(&non_ping_node).await;
+        assert!(
+            !handled,
+            "handle_iq must NOT treat non-ping xmlns as a ping"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_iq_ping_wrong_type_returns_false() {
+        // xmlns="urn:xmpp:ping" but type="result" (not "get") — should NOT be handled as ping.
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let result_node = NodeBuilder::new("iq")
+            .attr("type", "result")
+            .attr("from", SERVER_JID)
+            .attr("id", "ping-result-1")
+            .attr("xmlns", "urn:xmpp:ping")
+            .build();
+
+        let handled = client.handle_iq(&result_node).await;
+        assert!(
+            !handled,
+            "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
         );
     }
 }

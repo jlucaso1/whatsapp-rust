@@ -1,7 +1,7 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
-use log::warn;
+use log::{debug, warn};
 use std::sync::Arc;
 use wacore::xml::DisplayableNode;
 use wacore_binary::node::Node;
@@ -24,7 +24,14 @@ impl StanzaHandler for IqHandler {
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
         if !client.handle_iq(&node).await {
-            warn!("Received unhandled IQ: {}", DisplayableNode(&node));
+            if node.attrs.get("type").and_then(|s| s.as_str()) == Some("result") {
+                debug!(
+                    "Received late IQ response (waiter already removed): {}",
+                    DisplayableNode(&node)
+                );
+            } else {
+                warn!("Received unhandled IQ: {}", DisplayableNode(&node));
+            }
         }
         true
     }
