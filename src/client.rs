@@ -791,8 +791,8 @@ impl Client {
         // Create a deterministic offline window before the next reconnect
         // attempt so reconnect-based e2e tests can reliably exercise
         // queued-offline behavior before the run loop dials back in.
-        // fibonacci_backoff(4) ≈ 5s (sequence: 1,1,2,3,5,...).
-        self.auto_reconnect_errors.store(4, Ordering::Relaxed);
+        // fibonacci_backoff(2) ≈ 2s (sequence: 1,1,2,3,5,...).
+        self.auto_reconnect_errors.store(2, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }

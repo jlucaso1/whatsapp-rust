@@ -181,9 +181,11 @@ async fn test_deferred_delivery_receipt_on_reconnect() -> anyhow::Result<()> {
     let msg_id = client_a.client.send_message(jid_b.clone(), message).await?;
     info!("A sent message to offline B: {msg_id}");
 
-    // A should NOT get delivery receipt yet (only sender receipt)
+    // A should NOT get delivery receipt yet (only sender receipt).
+    // Timeout must be shorter than the reconnect backoff (~2s fibonacci)
+    // so B is still offline during this window.
     let early_receipt = client_a
-        .wait_for_event(3, |e| {
+        .wait_for_event(1, |e| {
             matches!(
                 e,
                 Event::Receipt(receipt)
@@ -302,9 +304,10 @@ async fn test_offline_presence_coalescing() -> anyhow::Result<()> {
         panic!("Expected Presence event");
     }
 
-    // Try to get a second presence — should timeout (coalesced to one)
+    // Try to get a second presence — should timeout (coalesced to one).
+    // Short timeout: just enough to confirm no extra event is pending.
     let second = client_b
-        .wait_for_event(3, |e| matches!(e, Event::Presence(_)))
+        .wait_for_event(1, |e| matches!(e, Event::Presence(_)))
         .await;
 
     assert!(
