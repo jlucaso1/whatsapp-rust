@@ -4571,7 +4571,7 @@ mod tests {
         let delay = fibonacci_backoff(0);
         let ms = delay.as_millis() as u64;
         assert!(
-            ms >= 900 && ms <= 1100,
+            (900..=1100).contains(&ms),
             "first attempt should be ~1s (±10%), got {ms}ms"
         );
     }

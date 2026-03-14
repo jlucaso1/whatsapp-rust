@@ -156,15 +156,15 @@ impl Client {
                     // If we recently received data, the connection is proven alive;
                     // skip the ping and reschedule (same as WA Web rescheduling the
                     // healthCheckTimer after activity).
-                    if let Some(since_recv) = ms_since(last_recv) {
-                        if since_recv < KEEP_ALIVE_INTERVAL_MIN.as_millis() as u64 {
-                            // Connection alive — reset error state, skip ping.
-                            if error_count > 0 {
-                                debug!(target: "Client/Keepalive", "Keepalive restored (recent activity).");
-                                error_count = 0;
-                            }
-                            continue;
+                    if let Some(since_recv) = ms_since(last_recv)
+                        && since_recv < KEEP_ALIVE_INTERVAL_MIN.as_millis() as u64
+                    {
+                        // Connection alive — reset error state, skip ping.
+                        if error_count > 0 {
+                            debug!(target: "Client/Keepalive", "Keepalive restored (recent activity).");
+                            error_count = 0;
                         }
+                        continue;
                     }
 
                     match self.send_keepalive().await {
@@ -281,7 +281,7 @@ mod tests {
         let thirty_sec_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(30_000);
         let elapsed = ms_since(thirty_sec_ago).unwrap();
         assert!(
-            elapsed >= 29_000 && elapsed <= 31_000,
+            (29_000..=31_000).contains(&elapsed),
             "should be ~30s, got {elapsed}ms"
         );
     }
