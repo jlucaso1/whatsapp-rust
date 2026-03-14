@@ -96,6 +96,7 @@ use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use waproto::whatsapp as wa;
 
+use crate::cache_config::CacheConfig;
 use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
 
@@ -302,6 +303,10 @@ pub struct Client {
     /// When true, history sync notifications are acknowledged but not downloaded
     /// or processed. Set via `BotBuilder::skip_history_sync()`.
     pub(crate) skip_history_sync: AtomicBool,
+
+    /// Cache configuration for TTL and capacity of all caches.
+    /// Stored for use by lazily-initialized caches (group_cache, device_cache).
+    pub(crate) cache_config: CacheConfig,
 }
 
 impl Client {
@@ -361,11 +366,33 @@ impl Client {
         self.expected_disconnect.load(Ordering::Relaxed) || !self.is_running.load(Ordering::Relaxed)
     }
 
+    /// Create a new `Client` with default cache configuration.
+    ///
+    /// This is the standard constructor. Use [`Client::new_with_cache_config`]
+    /// if you need to customise cache TTL / capacity.
     pub async fn new(
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
         override_version: Option<(u32, u32, u32)>,
+    ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
+        Self::new_with_cache_config(
+            persistence_manager,
+            transport_factory,
+            http_client,
+            override_version,
+            CacheConfig::default(),
+        )
+        .await
+    }
+
+    /// Create a new `Client` with a custom [`CacheConfig`].
+    pub async fn new_with_cache_config(
+        persistence_manager: Arc<PersistenceManager>,
+        transport_factory: Arc<dyn crate::transport::TransportFactory>,
+        http_client: Arc<dyn crate::http::HttpClient>,
+        override_version: Option<(u32, u32, u32)>,
+        cache_config: CacheConfig,
     ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
@@ -400,45 +427,25 @@ impl Client {
             message_processing_semaphore: std::sync::Mutex::new(Arc::new(
                 tokio::sync::Semaphore::new(1),
             )),
-            session_locks: Cache::builder()
-                .time_to_live(Duration::from_secs(300)) // 5 minute TTL
-                .max_capacity(10_000) // Limit to 10k concurrent sessions
-                .build(),
-            message_queues: Cache::builder()
-                .time_to_idle(Duration::from_secs(300)) // Idle queues expire after 5 mins of no access
-                .max_capacity(10_000) // Limit to 10k concurrent chats
-                .build(),
-            lid_pn_cache: Arc::new(LidPnCache::new()),
-            message_enqueue_locks: Cache::builder()
-                .time_to_live(Duration::from_secs(300))
-                .max_capacity(10_000)
-                .build(),
+            // Coordination caches: capacity-only eviction, no TTL/TTI.
+            // These hold live mutexes and channel senders; time-based eviction
+            // while tasks hold references would silently break serialisation.
+            session_locks: Cache::builder().max_capacity(10_000).build(),
+            message_queues: Cache::builder().max_capacity(10_000).build(),
+            lid_pn_cache: Arc::new(LidPnCache::with_config(&cache_config.lid_pn_cache)),
+            message_enqueue_locks: Cache::builder().max_capacity(10_000).build(),
             group_cache: OnceCell::new(),
             device_cache: OnceCell::new(),
-            retried_group_messages: Cache::builder()
-                .time_to_live(Duration::from_secs(300))
-                .max_capacity(2_000)
-                .build(),
+            retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
             connection_generation: Arc::new(AtomicU64::new(0)),
 
-            // Recent messages cache for retry functionality
-            // TTL of 5 minutes (retries don't happen after that)
-            // Max 1000 messages to bound memory usage
-            recent_messages: Cache::builder()
-                .time_to_live(Duration::from_secs(300))
-                .max_capacity(1_000)
-                .build(),
+            recent_messages: cache_config.recent_messages.build_with_ttl(),
 
             pending_retries: Arc::new(Mutex::new(HashSet::new())),
 
-            // Retry count tracking cache for preventing infinite retry loops.
-            // TTL of 5 minutes to match retry functionality, max 5000 entries.
-            message_retry_counts: Cache::builder()
-                .time_to_live(Duration::from_secs(300))
-                .max_capacity(5_000)
-                .build(),
+            message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
 
             offline_sync_metrics: Arc::new(OfflineSyncMetrics {
                 active: AtomicBool::new(false),
@@ -475,16 +482,14 @@ impl Client {
             ))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
-            pdo_pending_requests: crate::pdo::new_pdo_cache(),
-            device_registry_cache: Cache::builder()
-                .max_capacity(5_000) // Match WhatsApp Web's 5000 entry limit
-                .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
-                .build(),
+            pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
+            device_registry_cache: cache_config.device_registry_cache.build_with_ttl(),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
             override_version,
             skip_history_sync: AtomicBool::new(false),
+            cache_config,
         };
 
         let arc = Arc::new(this);
@@ -510,10 +515,7 @@ impl Client {
         self.group_cache
             .get_or_init(|| async {
                 debug!("Initializing Group Cache for the first time.");
-                Cache::builder()
-                    .time_to_live(Duration::from_secs(3600))
-                    .max_capacity(1_000)
-                    .build()
+                self.cache_config.group_cache.build_with_ttl()
             })
             .await
     }
@@ -522,10 +524,7 @@ impl Client {
         self.device_cache
             .get_or_init(|| async {
                 debug!("Initializing Device Cache for the first time.");
-                Cache::builder()
-                    .time_to_live(Duration::from_secs(3600))
-                    .max_capacity(5_000)
-                    .build()
+                self.cache_config.device_cache.build_with_ttl()
             })
             .await
     }
@@ -4404,5 +4403,37 @@ mod tests {
             !handled,
             "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
         );
+    }
+
+    #[tokio::test]
+    async fn test_custom_cache_config_is_respected() {
+        use crate::cache_config::{CacheConfig, CacheEntryConfig};
+        use std::time::Duration;
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+
+        let custom_config = CacheConfig {
+            group_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
+            device_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
+            ..CacheConfig::default()
+        };
+
+        // Verify that constructing a client with a custom config does not panic
+        // and the client is usable.
+        let (client, _rx) = Client::new_with_cache_config(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            custom_config,
+        )
+        .await;
+
+        assert!(!client.is_logged_in());
     }
 }

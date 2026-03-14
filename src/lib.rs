@@ -3,6 +3,8 @@ pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;
 
+pub mod cache_config;
+pub use cache_config::{CacheConfig, CacheEntryConfig};
 pub mod http;
 pub mod types;
 

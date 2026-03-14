@@ -1,3 +1,4 @@
+use crate::cache_config::CacheConfig;
 use crate::client::Client;
 use crate::pair_code::PairCodeOptions;
 use crate::store::commands::DeviceCommand;
@@ -231,6 +232,7 @@ pub struct BotBuilder {
     pair_code_options: Option<PairCodeOptions>,
     skip_history_sync: bool,
     initial_push_name: Option<String>,
+    cache_config: CacheConfig,
 }
 
 impl BotBuilder {
@@ -246,6 +248,7 @@ impl BotBuilder {
             pair_code_options: None,
             skip_history_sync: false,
             initial_push_name: None,
+            cache_config: CacheConfig::default(),
         }
     }
 
@@ -492,6 +495,33 @@ impl BotBuilder {
         self
     }
 
+    /// Configure cache TTL and capacity settings.
+    ///
+    /// By default, all caches match WhatsApp Web behavior. Use this method
+    /// to customize cache durations for your use case.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use whatsapp_rust::{CacheConfig, CacheEntryConfig};
+    ///
+    /// // Disable TTL for group and device caches (good for bots with few groups)
+    /// let bot = Bot::builder()
+    ///     .with_backend(backend)
+    ///     .with_transport_factory(transport)
+    ///     .with_http_client(http_client)
+    ///     .with_cache_config(CacheConfig {
+    ///         group_cache: CacheEntryConfig::new(None, 1_000),
+    ///         device_cache: CacheEntryConfig::new(None, 5_000),
+    ///         ..Default::default()
+    ///     })
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_cache_config(mut self, config: CacheConfig) -> Self {
+        self.cache_config = config;
+        self
+    }
+
     pub async fn build(self) -> std::result::Result<Bot, BotBuilderError> {
         let backend = self.backend.ok_or(BotBuilderError::MissingBackend)?;
 
@@ -536,11 +566,12 @@ impl BotBuilder {
         }
 
         info!("Creating client...");
-        let (client, sync_task_receiver) = Client::new(
+        let (client, sync_task_receiver) = Client::new_with_cache_config(
             persistence_manager.clone(),
             transport_factory,
             http_client,
             self.override_version,
+            self.cache_config,
         )
         .await;
 
