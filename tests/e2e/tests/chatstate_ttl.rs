@@ -18,7 +18,7 @@ use wacore::types::events::Event;
 /// 3. A sends typing indicator to B (queued with TTL)
 /// 4. B auto-reconnects after the TTL expires — chatstate should be filtered out during drain
 ///
-/// Requires mock server with CHATSTATE_TTL_SECS=3 (so TTL expires before the ~4s reconnect).
+/// Requires mock server with CHATSTATE_TTL_SECS=3 (so TTL expires before the ~5s reconnect).
 #[tokio::test]
 async fn test_expired_chatstate_not_delivered() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
