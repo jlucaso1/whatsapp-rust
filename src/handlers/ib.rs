@@ -1,10 +1,9 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
-use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
+use crate::types::events::{Event, OfflineSyncPreview};
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore_binary::node::{Node, NodeContent};
 
@@ -143,35 +142,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let count = attrs.optional_u64("count").unwrap_or(0) as i32;
 
                 debug!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
-
-                // Signal that offline sync is complete - post-login tasks are waiting for this.
-                // This mimics WhatsApp Web's offlineDeliveryEnd event.
-                // Use compare_exchange to ensure we only run this once (add_permits is NOT idempotent).
-                if client
-                    .offline_sync_completed
-                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    client.offline_sync_notifier.notify_waiters();
-
-                    // Allow parallel message processing now that offline sync is done.
-                    // During offline sync, permits=1 serialized all message processing.
-                    // Add 63 more permits for concurrent processing (1 + 63 = 64).
-                    client
-                        .message_processing_semaphore
-                        .lock()
-                        .expect("message_processing_semaphore poisoned")
-                        .add_permits(63);
-
-                    // NOTE: Session with primary phone (device 0) is established on login
-                    // BEFORE offline messages arrive (see client.rs post-login task).
-                    // This ensures PDO can send immediately when decryption fails.
-
-                    client
-                        .core
-                        .event_bus
-                        .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
-                }
+                client.complete_offline_sync(count);
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.
