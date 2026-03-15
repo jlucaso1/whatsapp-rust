@@ -335,6 +335,9 @@ pub enum Event {
     Presence(PresenceUpdate),
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
+    ContactUpdated(ContactUpdated),
+    ContactNumberChanged(ContactNumberChanged),
+    ContactSyncRequested(ContactSyncRequested),
 
     JoinedGroup(LazyConversation),
     /// Group metadata/settings/participant change from w:gp2 notification.
@@ -631,6 +634,26 @@ pub struct PictureUpdate {
 pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactUpdated {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactNumberChanged {
+    pub old_jid: Jid,
+    pub new_jid: Jid,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactSyncRequested {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<DateTime<Utc>>,
     pub timestamp: DateTime<Utc>,
 }
 

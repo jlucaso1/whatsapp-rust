@@ -10,8 +10,9 @@ use wacore::stanza::devices::DeviceNotification;
 use wacore::stanza::groups::{GroupNotification, GroupNotificationAction};
 use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 use wacore::types::events::{
-    BusinessStatusUpdate, BusinessUpdateType, DeviceListUpdate, DeviceNotificationInfo,
-    GroupUpdate, PictureUpdate, UserAboutUpdate,
+    BusinessStatusUpdate, BusinessUpdateType, ContactNumberChanged, ContactSyncRequested,
+    ContactUpdated, DeviceListUpdate, DeviceNotificationInfo, GroupUpdate, PictureUpdate,
+    UserAboutUpdate,
 };
 use wacore_binary::jid::{Jid, JidExt};
 use wacore_binary::{jid::SERVER_JID, node::Node};
@@ -188,6 +189,9 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         "status" => {
             // Handle status/about text change notifications (WhatsApp Web: WAWebHandleAboutNotification)
             handle_status_notification(client, node);
+        }
+        "contacts" => {
+            handle_contacts_notification(client, node).await;
         }
         "w:gp2" => {
             handle_group_notification(client, node).await;
@@ -822,6 +826,151 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
     }
 }
 
+fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
+    node.attrs()
+        .optional_u64("t")
+        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
+        .unwrap_or_else(chrono::Utc::now)
+}
+
+async fn learn_contact_modify_mapping(client: &Arc<Client>, old_jid: &Jid, new_jid: &Jid) {
+    let mapping = if old_jid.is_lid() && new_jid.is_pn() {
+        Some((old_jid.user.clone(), new_jid.user.clone()))
+    } else if old_jid.is_pn() && new_jid.is_lid() {
+        Some((new_jid.user.clone(), old_jid.user.clone()))
+    } else if old_jid.is_lid() && new_jid.is_lid() {
+        client
+            .lid_pn_cache
+            .get_phone_number(&old_jid.user)
+            .await
+            .map(|phone_number| (new_jid.user.clone(), phone_number))
+    } else if old_jid.is_pn() && new_jid.is_pn() {
+        client
+            .lid_pn_cache
+            .get_current_lid(&old_jid.user)
+            .await
+            .map(|lid| (lid, new_jid.user.clone()))
+    } else {
+        None
+    };
+
+    let Some((lid, phone_number)) = mapping else {
+        debug!(
+            target: "Client/Contacts",
+            "No LID-PN mapping inferred for contact modify old={} new={}",
+            old_jid,
+            new_jid
+        );
+        return;
+    };
+
+    if let Err(e) = client
+        .add_lid_pn_mapping(&lid, &phone_number, LearningSource::DeviceNotification)
+        .await
+    {
+        warn!(
+            target: "Client/Contacts",
+            "Failed to add LID-PN mapping from contacts modify old={} new={}: {e}",
+            old_jid,
+            new_jid
+        );
+    }
+}
+
+/// Handle contact change notifications.
+///
+/// These stanzas are sent as `<notification type="contacts">` with a single child action:
+/// - `<update jid="..."/>` when a contact profile changed
+/// - `<modify old="..." new="..."/>` when a contact changes phone number
+/// - `<sync after="..."/>` when the client should re-sync contacts
+/// - `<add .../>` or `<remove .../>` for lightweight contact roster changes
+async fn handle_contacts_notification(client: &Arc<Client>, node: &Node) {
+    let timestamp = notification_timestamp(node);
+
+    let Some(child) = node.children().and_then(|children| children.first()) else {
+        debug!(
+            target: "Client/Contacts",
+            "Ignoring contacts notification without child action"
+        );
+        return;
+    };
+
+    match child.tag.as_str() {
+        "update" => {
+            let Some(jid) = child.attrs().optional_jid("jid") else {
+                warn!(target: "Client/Contacts", "contacts update missing 'jid' attribute");
+                return;
+            };
+
+            debug!(target: "Client/Contacts", "Contact updated for {}", jid);
+            client
+                .core
+                .event_bus
+                .dispatch(&Event::ContactUpdated(ContactUpdated { jid, timestamp }));
+        }
+        "modify" => {
+            let Some(old_jid) = child.attrs().optional_jid("old") else {
+                warn!(target: "Client/Contacts", "contacts modify missing 'old' attribute");
+                return;
+            };
+            let Some(new_jid) = child.attrs().optional_jid("new") else {
+                warn!(target: "Client/Contacts", "contacts modify missing 'new' attribute");
+                return;
+            };
+
+            learn_contact_modify_mapping(client, &old_jid, &new_jid).await;
+
+            debug!(
+                target: "Client/Contacts",
+                "Contact number changed: {} -> {}",
+                old_jid,
+                new_jid
+            );
+            client
+                .core
+                .event_bus
+                .dispatch(&Event::ContactNumberChanged(ContactNumberChanged {
+                    old_jid,
+                    new_jid,
+                    timestamp,
+                }));
+        }
+        "sync" => {
+            let after = child
+                .attrs()
+                .optional_u64("after")
+                .and_then(|after| chrono::DateTime::from_timestamp(after as i64, 0));
+
+            debug!(
+                target: "Client/Contacts",
+                "Contact sync requested after {:?}",
+                after
+            );
+            client
+                .core
+                .event_bus
+                .dispatch(&Event::ContactSyncRequested(ContactSyncRequested {
+                    after,
+                    timestamp,
+                }));
+        }
+        "add" | "remove" => {
+            debug!(
+                target: "Client/Contacts",
+                "Contact {} notification handled without extra work",
+                child.tag
+            );
+        }
+        other => {
+            debug!(
+                target: "Client/Contacts",
+                "Ignoring unknown contacts notification child {:?}",
+                other
+            );
+        }
+    }
+}
+
 /// Handle w:gp2 group notifications.
 ///
 /// Parses all child actions (participant changes, setting changes, metadata updates)
@@ -948,9 +1097,34 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &Node) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::create_test_client;
+    use std::sync::{Arc, Mutex};
     use wacore::stanza::devices::DeviceNotificationType;
-    use wacore::types::events::DeviceListUpdateType;
+    use wacore::types::events::{DeviceListUpdateType, EventHandler};
     use wacore_binary::builder::NodeBuilder;
+
+    #[derive(Default)]
+    struct TestEventCollector {
+        events: Mutex<Vec<Event>>,
+    }
+
+    impl EventHandler for TestEventCollector {
+        fn handle_event(&self, event: &Event) {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .push(event.clone());
+        }
+    }
+
+    impl TestEventCollector {
+        fn events(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .clone()
+        }
+    }
 
     #[test]
     fn test_parse_device_add_notification() {
@@ -1301,5 +1475,86 @@ mod tests {
 
         let (duration, _) = parse_disappearing_mode(&node).expect("should parse");
         assert_eq!(duration, 0, "missing duration should default to 0");
+    }
+
+    #[tokio::test]
+    async fn test_contacts_update_dispatches_contact_updated_event() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        let node = NodeBuilder::new("notification")
+            .attr("type", "contacts")
+            .attr("from", "s.whatsapp.net")
+            .attr("id", "contacts-update-1")
+            .attr("t", "1773519041")
+            .children([NodeBuilder::new("update")
+                .attr("jid", "5511999999999@s.whatsapp.net")
+                .build()])
+            .build();
+
+        handle_notification_impl(&client, &node).await;
+
+        let events = collector.events();
+        assert!(matches!(
+            events.as_slice(),
+            [Event::ContactUpdated(ContactUpdated { jid, .. })]
+            if jid == &Jid::pn("5511999999999")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_contacts_modify_dispatches_event_and_learns_mapping() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        let node = NodeBuilder::new("notification")
+            .attr("type", "contacts")
+            .attr("from", "s.whatsapp.net")
+            .attr("id", "contacts-modify-1")
+            .children([NodeBuilder::new("modify")
+                .attr("old", "5511999999999@s.whatsapp.net")
+                .attr("new", "100000012345678@lid")
+                .build()])
+            .build();
+
+        handle_notification_impl(&client, &node).await;
+
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid("5511999999999").await,
+            Some("100000012345678".to_string())
+        );
+
+        let events = collector.events();
+        assert!(matches!(
+            events.as_slice(),
+            [Event::ContactNumberChanged(ContactNumberChanged { old_jid, new_jid, .. })]
+            if old_jid == &Jid::pn("5511999999999")
+                && new_jid == &Jid::lid("100000012345678")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_contacts_sync_dispatches_contact_sync_requested_event() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        let node = NodeBuilder::new("notification")
+            .attr("type", "contacts")
+            .attr("from", "s.whatsapp.net")
+            .attr("id", "contacts-sync-1")
+            .children([NodeBuilder::new("sync").attr("after", "1773519041").build()])
+            .build();
+
+        handle_notification_impl(&client, &node).await;
+
+        let events = collector.events();
+        assert!(matches!(
+            events.as_slice(),
+            [Event::ContactSyncRequested(ContactSyncRequested { after, .. })]
+            if after.is_some()
+        ));
     }
 }
