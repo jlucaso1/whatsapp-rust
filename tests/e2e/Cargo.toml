@@ -4,6 +4,12 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[package.metadata.cargo-shear]
+ignored = ["dhat"]
+
+[features]
+dhat-heap = ["dep:dhat"]
+
 [dependencies]
 anyhow = { workspace = true }
 dhat = { version = "0.3", optional = true }
@@ -18,9 +24,6 @@ whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", fea
 whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client", features = [
   "danger-skip-tls-verify",
 ] }
-
-[features]
-dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
 chrono = { workspace = true, features = ["now", "serde"] }
