@@ -158,7 +158,7 @@ diesel::table! {
         message_id -> Text,
         payload -> Binary,
         device_id -> Integer,
-        created_at -> Integer,
+        created_at -> BigInt,
     }
 }
 

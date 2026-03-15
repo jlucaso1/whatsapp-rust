@@ -49,18 +49,18 @@ fn env_or(var: &str, default: usize) -> usize {
 // RSS tracking via /proc/self/statm
 // ---------------------------------------------------------------------------
 
-/// Returns current RSS in KiB (Linux only).
+/// Returns current RSS in KiB by parsing /proc/self/status (no page-size assumption).
 fn rss_kib() -> usize {
     let mut buf = String::new();
-    if std::fs::File::open("/proc/self/statm")
+    if std::fs::File::open("/proc/self/status")
         .and_then(|mut f| f.read_to_string(&mut buf))
         .is_ok()
     {
-        // statm fields: size resident shared text lib data dt (in pages)
-        if let Some(resident_pages) = buf.split_whitespace().nth(1) {
-            if let Ok(pages) = resident_pages.parse::<usize>() {
-                let page_size = 4; // 4 KiB on most platforms
-                return pages * page_size;
+        for line in buf.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                if let Some(kb_str) = rest.trim().strip_suffix("kB").map(str::trim) {
+                    return kb_str.parse().unwrap_or(0);
+                }
             }
         }
     }

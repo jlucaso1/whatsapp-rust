@@ -552,14 +552,14 @@ impl Client {
             // These hold live mutexes and channel senders; time-based eviction
             // while tasks hold references would silently break serialisation.
             session_locks: Cache::builder()
-                .max_capacity(cache_config.session_locks_capacity)
+                .max_capacity(cache_config.session_locks_capacity.max(1))
                 .build(),
             message_queues: Cache::builder()
-                .max_capacity(cache_config.message_queues_capacity)
+                .max_capacity(cache_config.message_queues_capacity.max(1))
                 .build(),
             lid_pn_cache: Arc::new(LidPnCache::with_config(&cache_config.lid_pn_cache)),
             message_enqueue_locks: Cache::builder()
-                .max_capacity(cache_config.message_enqueue_locks_capacity)
+                .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
             group_cache: OnceCell::new(),
             device_cache: OnceCell::new(),
@@ -2961,6 +2961,16 @@ impl Client {
         Ok(original_id)
     }
 
+    /// Return a plaintext buffer to the pool if it meets size/count limits.
+    async fn try_recycle_buffer(&self, buf: Vec<u8>) {
+        let mut pool = self.plaintext_buffer_pool.lock().await;
+        if buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
+            && pool.len() < self.cache_config.max_pooled_buffers
+        {
+            pool.push(buf);
+        }
+    }
+
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
@@ -2978,12 +2988,7 @@ impl Client {
 
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
-            let mut pool = self.plaintext_buffer_pool.lock().await;
-            if plaintext_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
-                && pool.len() < self.cache_config.max_pooled_buffers
-            {
-                pool.push(plaintext_buf);
-            }
+            self.try_recycle_buffer(plaintext_buf).await;
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
@@ -2996,23 +3001,13 @@ impl Client {
         {
             Ok(bufs) => bufs,
             Err(mut e) => {
-                let p_buf = std::mem::take(&mut e.plaintext_buf);
-                let mut pool = self.plaintext_buffer_pool.lock().await;
-                if p_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
-                    && pool.len() < self.cache_config.max_pooled_buffers
-                {
-                    pool.push(p_buf);
-                }
+                self.try_recycle_buffer(std::mem::take(&mut e.plaintext_buf))
+                    .await;
                 return Err(e.into());
             }
         };
 
-        let mut pool = self.plaintext_buffer_pool.lock().await;
-        if plaintext_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
-            && pool.len() < self.cache_config.max_pooled_buffers
-        {
-            pool.push(plaintext_buf);
-        }
+        self.try_recycle_buffer(plaintext_buf).await;
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
         self.last_data_sent_ms.store(

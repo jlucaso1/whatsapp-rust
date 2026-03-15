@@ -2244,28 +2244,27 @@ impl ProtocolStore for SqliteStore {
         message_id: &str,
         payload: &[u8],
     ) -> Result<()> {
-        let pool = self.pool.clone();
-        let device_id = self.device_id;
         let chat_jid = chat_jid.to_string();
         let message_id = message_id.to_string();
         let payload = payload.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::replace_into(sent_messages::table)
-                .values((
-                    sent_messages::chat_jid.eq(&chat_jid),
-                    sent_messages::message_id.eq(&message_id),
-                    sent_messages::payload.eq(&payload),
-                    sent_messages::device_id.eq(device_id),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        let device_id = self.device_id;
+        self.with_retry("store_sent_message", || {
+            let chat_jid = chat_jid.clone();
+            let message_id = message_id.clone();
+            let payload = payload.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::replace_into(sent_messages::table)
+                    .values((
+                        sent_messages::chat_jid.eq(&chat_jid),
+                        sent_messages::message_id.eq(&message_id),
+                        sent_messages::payload.eq(&payload),
+                        sent_messages::device_id.eq(device_id),
+                    ))
+                    .execute(conn)?;
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
@@ -2310,7 +2309,7 @@ impl ProtocolStore for SqliteStore {
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             let deleted = diesel::delete(
                 sent_messages::table
-                    .filter(sent_messages::created_at.lt(cutoff_timestamp as i32))
+                    .filter(sent_messages::created_at.lt(cutoff_timestamp))
                     .filter(sent_messages::device_id.eq(device_id)),
             )
             .execute(&mut conn)
