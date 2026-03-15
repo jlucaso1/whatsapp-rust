@@ -56,12 +56,22 @@ impl Downloadable for DownloadParams {
 #[derive(Debug)]
 enum DownloadRequestError {
     Auth(anyhow::Error),
+    /// 404/410 — media URL expired or not found. Needs fresh auth + URL re-derivation.
+    /// Matches WA Web's `MediaNotFoundError` handling.
+    NotFound(anyhow::Error),
     Other(anyhow::Error),
 }
 
 impl DownloadRequestError {
     fn auth(status_code: u16) -> Self {
         Self::Auth(anyhow!("Download failed with status: {}", status_code))
+    }
+
+    fn not_found(status_code: u16) -> Self {
+        Self::NotFound(anyhow!(
+            "Download media not found/expired with status: {}",
+            status_code
+        ))
     }
 
     fn other(err: impl Into<anyhow::Error>) -> Self {
@@ -72,9 +82,14 @@ impl DownloadRequestError {
         matches!(self, Self::Auth(_))
     }
 
+    /// Returns true for 404/410 (expired URL) — should trigger auth refresh like auth errors.
+    fn is_not_found(&self) -> bool {
+        matches!(self, Self::NotFound(_))
+    }
+
     fn into_anyhow(self) -> anyhow::Error {
         match self {
-            Self::Auth(err) | Self::Other(err) => err,
+            Self::Auth(err) | Self::NotFound(err) | Self::Other(err) => err,
         }
     }
 }
@@ -111,13 +126,15 @@ where
         for request in requests {
             match execute_request(request.clone()).await {
                 Ok(data) => return Ok(data),
-                Err(err) if err.is_auth() && attempt == 0 => {
+                Err(err) if (err.is_auth() || err.is_not_found()) && attempt == 0 => {
+                    // Auth error or 404/410 (expired URL): refresh media conn and re-derive URLs.
+                    // Matches WA Web's MediaNotFoundError → forceRefresh flow.
                     invalidate_media_conn().await;
                     force_refresh = true;
                     retry_with_fresh_auth = true;
                     break;
                 }
-                Err(err) if err.is_auth() => return Err(err.into_anyhow()),
+                Err(err) if err.is_auth() || err.is_not_found() => return Err(err.into_anyhow()),
                 Err(err) => {
                     let err = err.into_anyhow();
                     log::warn!(
@@ -179,13 +196,13 @@ where
 
             match result {
                 Ok(()) => return Ok(writer),
-                Err(err) if err.is_auth() && attempt == 0 => {
+                Err(err) if (err.is_auth() || err.is_not_found()) && attempt == 0 => {
                     invalidate_media_conn().await;
                     force_refresh = true;
                     retry_with_fresh_auth = true;
                     break;
                 }
-                Err(err) if err.is_auth() => return Err(err.into_anyhow()),
+                Err(err) if err.is_auth() || err.is_not_found() => return Err(err.into_anyhow()),
                 Err(err) => {
                     let err = err.into_anyhow();
                     log::warn!(
@@ -277,6 +294,8 @@ impl Client {
         if response.status_code >= 300 {
             return Err(if is_media_auth_error(response.status_code) {
                 DownloadRequestError::auth(response.status_code)
+            } else if matches!(response.status_code, 404 | 410) {
+                DownloadRequestError::not_found(response.status_code)
             } else {
                 DownloadRequestError::other(anyhow!(
                     "Download failed with status: {}",
@@ -380,6 +399,8 @@ impl Client {
                 if resp.status_code >= 300 {
                     return Err(if is_media_auth_error(resp.status_code) {
                         DownloadRequestError::auth(resp.status_code)
+                    } else if matches!(resp.status_code, 404 | 410) {
+                        DownloadRequestError::not_found(resp.status_code)
                     } else {
                         DownloadRequestError::other(anyhow!(
                             "Download failed with status: {}",
@@ -467,11 +488,10 @@ mod tests {
         MediaConn {
             auth: auth.to_string(),
             ttl: 60,
+            auth_ttl: None,
             hosts: hosts
                 .iter()
-                .map(|hostname| MediaConnHost {
-                    hostname: (*hostname).to_string(),
-                })
+                .map(|hostname| MediaConnHost::new((*hostname).to_string()))
                 .collect(),
             fetched_at: Instant::now(),
         }
