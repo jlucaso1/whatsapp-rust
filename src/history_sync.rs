@@ -176,6 +176,12 @@ impl Client {
                 self.core.event_bus.dispatch(&Event::JoinedGroup(lazy_conv));
             }
 
+            // Drop receiver before awaiting the blocking task. If we broke out
+            // of the loop during shutdown, the sender may be blocked on
+            // tx.blocking_send() — dropping rx causes it to return Err and
+            // unblock, preventing a deadlock.
+            drop(rx);
+
             // Wait for parsing to complete
             parse_handle.await
         } else {
