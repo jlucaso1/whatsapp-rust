@@ -192,6 +192,13 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         "w:gp2" => {
             handle_group_notification(client, node).await;
         }
+        "disappearing_mode" => {
+            // WA Web: WAWebHandleDisappearingModeNotification →
+            // WAWebUpdateDisappearingModeForContact.
+            // Parses <disappearing_mode duration="..." t="..."/> child,
+            // updates the contact's default ephemeral setting.
+            handle_disappearing_mode_notification(client, node);
+        }
         _ => {
             warn!("TODO: Implement handler for <notification type='{notification_type}'>");
             client
@@ -879,6 +886,65 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
         .dispatch(&Event::Notification(node.clone()));
 }
 
+/// Handle `<notification type="disappearing_mode">` — a contact changed
+/// their default disappearing messages setting.
+///
+/// WA Web: `WAWebHandleDisappearingModeNotification` parses the
+/// `<disappearing_mode duration="..." t="..."/>` child and calls
+/// `WAWebUpdateDisappearingModeForContact` which applies the update only
+/// if the new timestamp is newer than the stored one.
+///
+/// We dispatch `Event::DisappearingModeChanged` and let consumers decide
+/// how to persist/apply it.
+fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &Node) {
+    let mut attrs = node.attrs();
+    let from = attrs.jid("from").to_non_ad();
+
+    let Some(dm_node) = node.get_optional_child("disappearing_mode") else {
+        warn!(
+            "disappearing_mode notification missing <disappearing_mode> child: {}",
+            wacore::xml::DisplayableNode(node)
+        );
+        return;
+    };
+
+    let mut dm_attrs = dm_node.attrs();
+
+    // WA Web: `t.attrInt("duration", 0)` — defaults to 0 (disabled).
+    let duration = dm_attrs
+        .optional_string("duration")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    // WA Web: `t.attrTime("t")` — required, no default.
+    let Some(setting_timestamp) = dm_attrs
+        .optional_string("t")
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        warn!(
+            "disappearing_mode notification missing or invalid 't' attribute: {}",
+            wacore::xml::DisplayableNode(node)
+        );
+        return;
+    };
+
+    debug!(
+        "Disappearing mode changed for {}: duration={}s, t={}",
+        from, duration, setting_timestamp
+    );
+
+    client
+        .core
+        .event_bus
+        .dispatch(&Event::DisappearingModeChanged(
+            wacore::types::events::DisappearingModeChanged {
+                from,
+                duration,
+                setting_timestamp,
+            },
+        ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,5 +1207,99 @@ mod tests {
         assert_eq!(devices[1].key_index, Some(1));
         assert_eq!(devices[2].key_index, Some(5));
         assert_eq!(devices[3].key_index, Some(10));
+    }
+
+    // ── disappearing_mode notification parsing tests ─────────────────────
+
+    /// Helper: parse a disappearing_mode notification node the same way
+    /// the handler does, returning `(duration, setting_timestamp)` or `None`
+    /// on validation failure.
+    fn parse_disappearing_mode(node: &Node) -> Option<(u32, u64)> {
+        let dm_node = node.get_optional_child("disappearing_mode")?;
+        let mut dm_attrs = dm_node.attrs();
+        let duration = dm_attrs
+            .optional_string("duration")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let setting_timestamp = dm_attrs
+            .optional_string("t")
+            .and_then(|s| s.parse::<u64>().ok())?;
+        Some((duration, setting_timestamp))
+    }
+
+    #[test]
+    fn test_parse_disappearing_mode_valid() {
+        let node = NodeBuilder::new("notification")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .attr("type", "disappearing_mode")
+            .children([NodeBuilder::new("disappearing_mode")
+                .attr("duration", "86400")
+                .attr("t", "1773519041")
+                .build()])
+            .build();
+
+        let (duration, ts) = parse_disappearing_mode(&node).expect("should parse");
+        assert_eq!(duration, 86400);
+        assert_eq!(ts, 1773519041);
+    }
+
+    #[test]
+    fn test_parse_disappearing_mode_disabled() {
+        // duration=0 means disappearing messages disabled
+        let node = NodeBuilder::new("notification")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .children([NodeBuilder::new("disappearing_mode")
+                .attr("duration", "0")
+                .attr("t", "1773519041")
+                .build()])
+            .build();
+
+        let (duration, ts) = parse_disappearing_mode(&node).expect("should parse");
+        assert_eq!(duration, 0, "duration=0 means disabled");
+        assert_eq!(ts, 1773519041);
+    }
+
+    #[test]
+    fn test_parse_disappearing_mode_missing_child() {
+        // No <disappearing_mode> child → returns None
+        let node = NodeBuilder::new("notification")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .attr("type", "disappearing_mode")
+            .build();
+
+        assert!(
+            parse_disappearing_mode(&node).is_none(),
+            "should return None when child element is missing"
+        );
+    }
+
+    #[test]
+    fn test_parse_disappearing_mode_missing_timestamp() {
+        // Missing 't' attribute → returns None (required field)
+        let node = NodeBuilder::new("notification")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .children([NodeBuilder::new("disappearing_mode")
+                .attr("duration", "86400")
+                .build()])
+            .build();
+
+        assert!(
+            parse_disappearing_mode(&node).is_none(),
+            "should return None when 't' attribute is missing"
+        );
+    }
+
+    #[test]
+    fn test_parse_disappearing_mode_missing_duration_defaults_to_zero() {
+        // Missing duration defaults to 0 (WA Web: attrInt("duration", 0))
+        let node = NodeBuilder::new("notification")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .children([NodeBuilder::new("disappearing_mode")
+                .attr("t", "1773519041")
+                .build()])
+            .build();
+
+        let (duration, _) = parse_disappearing_mode(&node).expect("should parse");
+        assert_eq!(duration, 0, "missing duration should default to 0");
     }
 }

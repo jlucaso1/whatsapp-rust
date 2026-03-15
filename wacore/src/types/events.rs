@@ -288,6 +288,22 @@ pub struct BusinessStatusUpdate {
     pub subscriptions: Vec<BusinessSubscription>,
 }
 
+/// A contact's default disappearing messages setting changed.
+///
+/// Sent by the server as `<notification type="disappearing_mode">`.
+/// WA Web: `WAWebHandleDisappearingModeNotification` →
+/// `WAWebUpdateDisappearingModeForContact`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DisappearingModeChanged {
+    /// The contact whose setting changed.
+    pub from: wacore_binary::jid::Jid,
+    /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
+    pub duration: u32,
+    /// Unix timestamp (seconds) when the setting was changed.
+    /// Consumers should only apply this if it's newer than their stored timestamp.
+    pub setting_timestamp: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum Event {
     Connected(Connected),
@@ -347,6 +363,9 @@ pub enum Event {
     TemporaryBan(TemporaryBan),
     ConnectFailure(ConnectFailure),
     StreamError(StreamError),
+
+    /// A contact changed their default disappearing messages setting.
+    DisappearingModeChanged(DisappearingModeChanged),
 }
 
 #[derive(Debug, Clone, Serialize)]
