@@ -130,6 +130,7 @@ pub(crate) struct OfflineSyncMetrics {
     pub active: AtomicBool,
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
+    pub next_expected_sequence: AtomicUsize,
     // Using simple std Mutex for timestamp as it's rarely contended and non-async
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
@@ -461,6 +462,7 @@ impl Client {
                 active: AtomicBool::new(false),
                 total_messages: AtomicUsize::new(0),
                 processed_messages: AtomicUsize::new(0),
+                next_expected_sequence: AtomicUsize::new(0),
                 start_time: std::sync::Mutex::new(None),
             }),
 
@@ -840,6 +842,22 @@ impl Client {
         self.last_data_sent_ms.store(0, Ordering::Relaxed);
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.offline_sync_metrics
+            .active
+            .store(false, Ordering::Release);
+        self.offline_sync_metrics
+            .total_messages
+            .store(0, Ordering::Release);
+        self.offline_sync_metrics
+            .processed_messages
+            .store(0, Ordering::Release);
+        self.offline_sync_metrics
+            .next_expected_sequence
+            .store(0, Ordering::Release);
+        match self.offline_sync_metrics.start_time.lock() {
+            Ok(mut guard) => *guard = None,
+            Err(poison) => *poison.into_inner() = None,
+        }
         self.server_has_prekeys.store(true, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
             .store(0, Ordering::Relaxed);
@@ -1049,6 +1067,9 @@ impl Client {
                         .processed_messages
                         .store(0, Ordering::Release);
                     self.offline_sync_metrics
+                        .next_expected_sequence
+                        .store(0, Ordering::Release);
+                    self.offline_sync_metrics
                         .active
                         .store(true, Ordering::Release);
                     match self.offline_sync_metrics.start_time.lock() {
@@ -1087,6 +1108,31 @@ impl Client {
                     .processed_messages
                     .fetch_add(1, Ordering::Release)
                     + 1;
+                if let Some(offline_sequence) = node
+                    .attrs
+                    .get("offline")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| value.parse::<usize>().ok())
+                {
+                    let expected = self
+                        .offline_sync_metrics
+                        .next_expected_sequence
+                        .load(Ordering::Acquire);
+                    if expected != 0 && offline_sequence != expected {
+                        log::warn!(
+                            target: "Client/OfflineSync",
+                            "Offline sync stanza arrived out of order: expected sequence {}, got {} (tag={}, from={:?}, id={:?})",
+                            expected,
+                            offline_sequence,
+                            node.tag,
+                            node.attrs.get("from").and_then(|v| v.as_str()),
+                            node.attrs.get("id").and_then(|v| v.as_str()),
+                        );
+                    }
+                    self.offline_sync_metrics
+                        .next_expected_sequence
+                        .store(offline_sequence.saturating_add(1), Ordering::Release);
+                }
                 let total = self
                     .offline_sync_metrics
                     .total_messages
@@ -1433,30 +1479,10 @@ impl Client {
 
             // === Wait for offline sync to complete ===
             // The server sends <ib><offline count="X"/></ib> after we exit passive mode.
-            // Use a timeout to handle cases where the server doesn't send offline ib
-            // (e.g., during initial pairing or if there are no offline messages).
-            const OFFLINE_SYNC_TIMEOUT_SECS: u64 = 5;
+            client_clone.wait_for_offline_delivery_end().await;
 
-            if !client_clone.offline_sync_completed.load(Ordering::Relaxed) {
-                debug!(
-                    "Waiting for offline sync to complete (up to {}s)...",
-                    OFFLINE_SYNC_TIMEOUT_SECS
-                );
-                let wait_result = tokio::time::timeout(
-                    Duration::from_secs(OFFLINE_SYNC_TIMEOUT_SECS),
-                    client_clone.offline_sync_notifier.notified(),
-                )
-                .await;
-
-                // Check if connection was replaced while waiting
-                check_generation!();
-
-                if wait_result.is_err() {
-                    debug!("Offline sync wait timed out, proceeding with passive tasks");
-                } else {
-                    debug!("Offline sync completed, proceeding with passive tasks");
-                }
-            }
+            // Check if connection was replaced while waiting
+            check_generation!();
 
             // Re-check connection and generation before sending presence
             check_generation!();
@@ -3472,29 +3498,34 @@ mod tests {
         )
         .await;
 
-        // Flag is false by default, so we need to use a shorter timeout for the test
-        // We'll verify behavior by using tokio timeout
+        // Flag is false by default, so use a short timeout and verify the helper
+        // marks the sync complete on timeout.
         let start = std::time::Instant::now();
-
-        // Use a short timeout to test the behavior without waiting 10 seconds
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            client.wait_for_offline_delivery_end(),
-        )
-        .await;
+        client
+            .wait_for_offline_delivery_end_with_timeout(std::time::Duration::from_millis(50))
+            .await;
 
         let elapsed = start.elapsed();
+        let permits = client
+            .message_processing_semaphore
+            .lock()
+            .expect("message_processing_semaphore poisoned")
+            .available_permits();
 
-        // The wait should NOT complete immediately - it should timeout
-        // (because the flag is false and no one is notifying)
         assert!(
-            result.is_err(),
-            "wait_for_offline_delivery_end should not return immediately when flag is false"
+            elapsed.as_millis() >= 45, // Allow small timing variance
+            "Should have waited for the configured timeout duration, took {:?}",
+            elapsed
         );
         assert!(
-            elapsed.as_millis() >= 95, // Allow small timing variance
-            "Should have waited for the timeout duration, took {:?}",
-            elapsed
+            client
+                .offline_sync_completed
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "wait_for_offline_delivery_end should mark offline sync complete on timeout"
+        );
+        assert_eq!(
+            permits, 64,
+            "timeout completion should restore parallel permits"
         );
 
         info!("✅ test_wait_for_offline_delivery_end_times_out_when_flag_not_set passed");
@@ -4343,6 +4374,81 @@ mod tests {
                 .load(Ordering::Acquire),
             1,
             "offline message should increment processed count"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_offline_message_sequence_tracker_advances() {
+        let client = create_offline_sync_test_client().await;
+
+        let preview = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("offline_preview")
+                .attr("count", "2")
+                .attr("message", "2")
+                .attr("notification", "0")
+                .attr("receipt", "0")
+                .attr("appdata", "0")
+                .build()])
+            .build();
+        client.process_node(Arc::new(preview)).await;
+
+        let first = NodeBuilder::new("message")
+            .attr("offline", "7")
+            .attr("from", "5551234567@s.whatsapp.net")
+            .attr("id", "TEST123")
+            .attr("t", "1772884671")
+            .attr("type", "text")
+            .build();
+        client.process_node(Arc::new(first)).await;
+        assert_eq!(
+            client
+                .offline_sync_metrics
+                .next_expected_sequence
+                .load(Ordering::Acquire),
+            8
+        );
+
+        let second = NodeBuilder::new("message")
+            .attr("offline", "8")
+            .attr("from", "5551234567@s.whatsapp.net")
+            .attr("id", "TEST124")
+            .attr("t", "1772884672")
+            .attr("type", "text")
+            .build();
+        client.process_node(Arc::new(second)).await;
+        assert_eq!(
+            client
+                .offline_sync_metrics
+                .next_expected_sequence
+                .load(Ordering::Acquire),
+            9
+        );
+    }
+
+    #[tokio::test]
+    async fn test_offline_sync_completion_resets_sequence_tracker() {
+        let client = create_offline_sync_test_client().await;
+        client
+            .offline_sync_metrics
+            .active
+            .store(true, Ordering::Release);
+        client
+            .offline_sync_metrics
+            .next_expected_sequence
+            .store(9, Ordering::Release);
+
+        let node = NodeBuilder::new("ib")
+            .children([NodeBuilder::new("offline").attr("count", "1").build()])
+            .build();
+
+        client.process_node(Arc::new(node)).await;
+        assert_eq!(
+            client
+                .offline_sync_metrics
+                .next_expected_sequence
+                .load(Ordering::Acquire),
+            0,
+            "offline sync completion should reset sequence tracking"
         );
     }
 

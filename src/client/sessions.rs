@@ -2,27 +2,83 @@
 
 use anyhow::Result;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
 
 use super::Client;
+use crate::types::events::{Event, OfflineSyncCompleted};
 
 impl Client {
+    pub(crate) const DEFAULT_OFFLINE_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+
+    pub(crate) fn complete_offline_sync(&self, count: i32) {
+        self.offline_sync_metrics
+            .active
+            .store(false, Ordering::Release);
+        self.offline_sync_metrics
+            .next_expected_sequence
+            .store(0, Ordering::Release);
+        match self.offline_sync_metrics.start_time.lock() {
+            Ok(mut guard) => *guard = None,
+            Err(poison) => *poison.into_inner() = None,
+        }
+
+        // Signal that offline sync is complete - post-login tasks are waiting for this.
+        // This mimics WhatsApp Web's offlineDeliveryEnd event.
+        // Use compare_exchange to ensure we only run this once (add_permits is NOT idempotent).
+        if self
+            .offline_sync_completed
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.offline_sync_notifier.notify_waiters();
+
+            // Allow parallel message processing now that offline sync is done.
+            // During offline sync, permits=1 serialized all message processing.
+            // Add 63 more permits for concurrent processing (1 + 63 = 64).
+            self.message_processing_semaphore
+                .lock()
+                .expect("message_processing_semaphore poisoned")
+                .add_permits(63);
+
+            self.core
+                .event_bus
+                .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+        }
+    }
+
     /// Wait for offline message delivery to complete (with timeout).
     pub(crate) async fn wait_for_offline_delivery_end(&self) {
-        use std::sync::atomic::Ordering;
+        self.wait_for_offline_delivery_end_with_timeout(Self::DEFAULT_OFFLINE_SYNC_TIMEOUT)
+            .await;
+    }
 
+    pub(crate) async fn wait_for_offline_delivery_end_with_timeout(&self, timeout: Duration) {
+        let offline_fut = self.offline_sync_notifier.notified();
         if self.offline_sync_completed.load(Ordering::Relaxed) {
             return;
         }
 
-        const TIMEOUT_SECS: u64 = 10;
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(TIMEOUT_SECS),
-            self.offline_sync_notifier.notified(),
-        )
-        .await;
+        if tokio::time::timeout(timeout, offline_fut).await.is_err() {
+            let processed = self
+                .offline_sync_metrics
+                .processed_messages
+                .load(Ordering::Acquire);
+            let expected = self
+                .offline_sync_metrics
+                .total_messages
+                .load(Ordering::Acquire);
+            log::warn!(
+                target: "Client/OfflineSync",
+                "Offline sync timed out after {:?} (processed {} of {} items); marking sync complete",
+                timeout,
+                processed,
+                expected,
+            );
+            self.complete_offline_sync(i32::try_from(processed).unwrap_or(i32::MAX));
+        }
     }
 
     pub(crate) fn begin_history_sync_task(&self) {
