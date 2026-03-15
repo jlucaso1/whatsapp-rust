@@ -56,7 +56,7 @@ impl<'a> Presence<'a> {
         builder.build()
     }
 
-    fn build_unsubscription_node(jid: &Jid) -> Node {
+    fn build_unsubscription_node(&self, jid: &Jid) -> Node {
         NodeBuilder::new("presence")
             .attr("type", "unsubscribe")
             .attr("to", jid.to_string())
@@ -149,7 +149,7 @@ impl<'a> Presence<'a> {
     /// ```
     pub async fn unsubscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
         debug!("presence unsubscribe: unsubscribing from {}", jid);
-        let node = Self::build_unsubscription_node(jid);
+        let node = self.build_unsubscription_node(jid);
         self.client
             .send_node(node)
             .await
@@ -420,11 +420,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_unsubscribe_builds_expected_presence_stanza() {
+    #[tokio::test]
+    async fn test_unsubscribe_builds_expected_presence_stanza() {
         let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
 
-        let node = Presence::build_unsubscription_node(&jid);
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let node = client.presence().build_unsubscription_node(&jid);
 
         assert_eq!(node.tag, "presence");
         assert_eq!(
