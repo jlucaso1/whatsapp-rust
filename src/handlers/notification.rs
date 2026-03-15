@@ -829,8 +829,10 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
 fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
-        .unwrap_or_else(chrono::Utc::now)
+        .map(|t| {
+            chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(|| chrono::Utc::now())
+        })
+        .unwrap_or_else(|| chrono::Utc::now())
 }
 
 async fn learn_contact_modify_mapping(client: &Arc<Client>, old_jid: &Jid, new_jid: &Jid) {
