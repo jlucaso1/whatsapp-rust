@@ -95,7 +95,11 @@ impl Client {
         // L1 cache check (if capacity > 0)
         if has_l1_cache && let Some(bytes) = self.recent_messages.remove(&key).await {
             if let Ok(msg) = wa::Message::decode(bytes.as_slice()) {
-                // Cache hit — also consume the DB row in the background to avoid orphans
+                // Cache hit — consume the DB row in the background to avoid orphans.
+                // Note: if the background DB write from add_recent_message hasn't completed
+                // yet, this delete may run first and the write creates an orphan. This is
+                // harmless — periodic cleanup (sent_message_ttl_secs) purges it. The race
+                // window is negligible since retry receipts arrive seconds after send.
                 let backend = self.persistence_manager.backend();
                 let cs = chat_str.clone();
                 let mid = key.id.clone();
