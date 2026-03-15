@@ -1108,30 +1108,43 @@ impl Client {
                     .processed_messages
                     .fetch_add(1, Ordering::Release)
                     + 1;
-                if let Some(offline_sequence) = node
+                match node
                     .attrs
                     .get("offline")
                     .and_then(|v| v.as_str())
-                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|value| value.parse::<usize>())
                 {
-                    let expected = self
-                        .offline_sync_metrics
-                        .next_expected_sequence
-                        .load(Ordering::Acquire);
-                    if expected != 0 && offline_sequence != expected {
+                    Some(Ok(offline_sequence)) => {
+                        let expected = self
+                            .offline_sync_metrics
+                            .next_expected_sequence
+                            .load(Ordering::Acquire);
+                        if expected != 0 && offline_sequence != expected {
+                            log::warn!(
+                                target: "Client/OfflineSync",
+                                "Offline sync stanza arrived out of order: expected sequence {}, got {} (tag={}, from={:?}, id={:?})",
+                                expected,
+                                offline_sequence,
+                                node.tag,
+                                node.attrs.get("from").and_then(|v| v.as_str()),
+                                node.attrs.get("id").and_then(|v| v.as_str()),
+                            );
+                        }
+                        self.offline_sync_metrics
+                            .next_expected_sequence
+                            .store(offline_sequence.saturating_add(1), Ordering::Release);
+                    }
+                    Some(Err(_)) => {
                         log::warn!(
                             target: "Client/OfflineSync",
-                            "Offline sync stanza arrived out of order: expected sequence {}, got {} (tag={}, from={:?}, id={:?})",
-                            expected,
-                            offline_sequence,
+                            "Offline sync stanza has non-numeric offline attribute (tag={}, from={:?}, id={:?}, offline={:?})",
                             node.tag,
                             node.attrs.get("from").and_then(|v| v.as_str()),
                             node.attrs.get("id").and_then(|v| v.as_str()),
+                            node.attrs.get("offline").and_then(|v| v.as_str()),
                         );
                     }
-                    self.offline_sync_metrics
-                        .next_expected_sequence
-                        .store(offline_sequence.saturating_add(1), Ordering::Release);
+                    None => {}
                 }
                 let total = self
                     .offline_sync_metrics

@@ -56,12 +56,26 @@ impl Client {
     }
 
     pub(crate) async fn wait_for_offline_delivery_end_with_timeout(&self, timeout: Duration) {
+        let wait_generation = self.connection_generation.load(Ordering::Acquire);
         let offline_fut = self.offline_sync_notifier.notified();
         if self.offline_sync_completed.load(Ordering::Relaxed) {
             return;
         }
 
         if tokio::time::timeout(timeout, offline_fut).await.is_err() {
+            // Guard: don't complete sync for a stale connection generation.
+            // A reconnect may have happened while we were waiting, making this
+            // timeout belong to the old connection.
+            if self.connection_generation.load(Ordering::Acquire) != wait_generation
+                || self.expected_disconnect.load(Ordering::Relaxed)
+            {
+                log::debug!(
+                    target: "Client/OfflineSync",
+                    "Offline sync timeout ignored: connection generation changed or disconnected",
+                );
+                return;
+            }
+
             let processed = self
                 .offline_sync_metrics
                 .processed_messages
