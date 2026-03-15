@@ -25,9 +25,11 @@ pub(crate) fn is_media_auth_error(status_code: u16) -> bool {
 pub struct MediaConn {
     /// Authentication token for media operations.
     pub auth: String,
-    /// Time-to-live in seconds.
+    /// Time-to-live in seconds for route info.
     pub ttl: u64,
-    /// Available media hosts.
+    /// Time-to-live in seconds for auth token (may differ from route TTL).
+    pub auth_ttl: Option<u64>,
+    /// Available media hosts (sorted: primary first, fallback second).
     pub hosts: Vec<MediaConnHost>,
     /// When this connection info was fetched (runtime-specific).
     pub fetched_at: Instant,
@@ -35,8 +37,10 @@ pub struct MediaConn {
 
 impl MediaConn {
     /// Check if this connection info has expired.
+    /// Uses the earlier of route TTL and auth TTL (auth may expire before routes).
     pub fn is_expired(&self) -> bool {
-        self.fetched_at.elapsed() > Duration::from_secs(self.ttl)
+        let effective_ttl = self.auth_ttl.map_or(self.ttl, |at| self.ttl.min(at));
+        self.fetched_at.elapsed() > Duration::from_secs(effective_ttl)
     }
 }
 
@@ -61,6 +65,7 @@ impl Client {
         let new_conn = MediaConn {
             auth: response.auth,
             ttl: response.ttl,
+            auth_ttl: response.auth_ttl,
             hosts: response.hosts,
             fetched_at: Instant::now(),
         };

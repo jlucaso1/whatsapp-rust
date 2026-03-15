@@ -7,19 +7,86 @@ use crate::client::Client;
 use crate::http::{HttpRequest, HttpResponse};
 use crate::mediaconn::{MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS, is_media_auth_error};
 
+/// Files >= 5 MiB check for existing/partial upload before sending.
+/// Matches WA Web's `_checkIfAlreadyUploaded` flow.
+const RESUMABLE_UPLOAD_THRESHOLD: usize = 5 * 1024 * 1024;
+
+/// Result of checking if an upload already exists on the server.
+enum UploadExistsResult {
+    /// Upload is complete — server already has the file.
+    Complete { url: String, direct_path: String },
+    /// Upload is partially done — resume from this byte offset.
+    Resume { byte_offset: u64 },
+    /// No previous upload found — start from scratch.
+    NotFound,
+}
+
+/// Server response for upload progress check (`?resume=1`).
+#[derive(Deserialize)]
+struct UploadProgressResponse {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    direct_path: Option<String>,
+    /// "complete" or a byte offset as string.
+    #[serde(default)]
+    resume: Option<String>,
+}
+
+/// Parse an upload progress response into an `UploadExistsResult`.
+fn parse_upload_progress(resp: &HttpResponse, total_size: u64) -> UploadExistsResult {
+    if resp.status_code >= 400 {
+        return UploadExistsResult::NotFound;
+    }
+    let Ok(progress) = serde_json::from_slice::<UploadProgressResponse>(&resp.body) else {
+        return UploadExistsResult::NotFound;
+    };
+    match progress.resume.as_deref() {
+        Some("complete") => {
+            if let (Some(url), Some(direct_path)) = (progress.url, progress.direct_path) {
+                UploadExistsResult::Complete { url, direct_path }
+            } else {
+                UploadExistsResult::NotFound
+            }
+        }
+        Some(offset_str) => match offset_str.parse::<u64>() {
+            Ok(offset) if offset > 0 && offset < total_size => UploadExistsResult::Resume {
+                byte_offset: offset,
+            },
+            _ => UploadExistsResult::NotFound,
+        },
+        _ => UploadExistsResult::NotFound,
+    }
+}
+
 fn build_upload_request(
     hostname: &str,
     mms_type: &str,
     auth: &str,
     token: &str,
     body: &[u8],
+    file_offset: Option<u64>,
 ) -> HttpRequest {
-    let url = format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}");
+    let mut url = format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}");
+    if let Some(offset) = file_offset {
+        url.push_str(&format!("&file_offset={offset}"));
+    }
 
     HttpRequest::post(url)
         .with_header("Content-Type", "application/octet-stream")
         .with_header("Origin", "https://web.whatsapp.com")
         .with_body(body.to_vec())
+}
+
+fn build_resume_check_request(
+    hostname: &str,
+    mms_type: &str,
+    auth: &str,
+    token: &str,
+) -> HttpRequest {
+    let url =
+        format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}&resume=1");
+    HttpRequest::post(url).with_header("Origin", "https://web.whatsapp.com")
 }
 
 fn upload_error_from_response(response: HttpResponse) -> anyhow::Error {
@@ -70,12 +137,45 @@ where
         let mut retry_with_fresh_auth = false;
 
         for host in &media_conn.hosts {
+            // For large files, check if the upload already exists or can be resumed.
+            // Matches WA Web's _checkIfAlreadyUploaded / _getExistingOrUpload flow.
+            let mut upload_data: &[u8] = &enc.data_to_upload;
+            let mut file_offset: Option<u64> = None;
+
+            if enc.data_to_upload.len() >= RESUMABLE_UPLOAD_THRESHOLD {
+                let check_req =
+                    build_resume_check_request(&host.hostname, mms_type, &media_conn.auth, &token);
+                if let Ok(check_resp) = execute_request(check_req).await {
+                    let total = enc.data_to_upload.len() as u64;
+                    match parse_upload_progress(&check_resp, total) {
+                        UploadExistsResult::Complete { url, direct_path } => {
+                            return Ok(UploadResponse {
+                                url,
+                                direct_path,
+                                media_key: enc.media_key.to_vec(),
+                                file_enc_sha256: enc.file_enc_sha256.to_vec(),
+                                file_sha256: enc.file_sha256.to_vec(),
+                                file_length,
+                            });
+                        }
+                        UploadExistsResult::Resume { byte_offset } => {
+                            log::info!("Resuming upload from byte {byte_offset}/{total}");
+                            upload_data = &enc.data_to_upload[byte_offset as usize..];
+                            file_offset = Some(byte_offset);
+                        }
+                        UploadExistsResult::NotFound => {}
+                    }
+                }
+                // Non-fatal: if check request itself fails, proceed with full upload
+            }
+
             let request = build_upload_request(
                 &host.hostname,
                 mms_type,
                 &media_conn.auth,
                 &token,
-                &enc.data_to_upload,
+                upload_data,
+                file_offset,
             );
 
             let response = match execute_request(request).await {
@@ -171,11 +271,10 @@ mod tests {
         MediaConn {
             auth: auth.to_string(),
             ttl: 60,
+            auth_ttl: None,
             hosts: hosts
                 .iter()
-                .map(|hostname| MediaConnHost {
-                    hostname: (*hostname).to_string(),
-                })
+                .map(|hostname| MediaConnHost::new((*hostname).to_string()))
                 .collect(),
             fetched_at: Instant::now(),
         }

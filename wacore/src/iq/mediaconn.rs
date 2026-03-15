@@ -25,9 +25,27 @@ use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
 /// Media connection host information.
+///
+/// Hosts are sorted primary-first by `MediaConnSpec::parse_response`.
+/// WA Web: `mapParsedMediaConn` categorizes hosts as `"primary"` or `"fallback"`.
 #[derive(Debug, Clone)]
 pub struct MediaConnHost {
     pub hostname: String,
+    /// `"primary"` or `"fallback"` — determines retry order.
+    pub host_type: String,
+    /// Fallback hostname to try if this host fails.
+    pub fallback_hostname: Option<String>,
+}
+
+impl MediaConnHost {
+    /// Create a host with just a hostname (defaults to primary, no fallback).
+    pub fn new(hostname: String) -> Self {
+        Self {
+            hostname,
+            host_type: "primary".to_string(),
+            fallback_hostname: None,
+        }
+    }
 }
 
 /// Extended media connection host with all attributes (for server-side responses).
@@ -203,6 +221,7 @@ impl ProtocolNode for MediaConnHostExtended {
 pub struct MediaConnResponse {
     pub auth: String,
     pub ttl: u64,
+    pub auth_ttl: Option<u64>,
     pub max_buckets: Option<u64>,
     pub hosts: Vec<MediaConnHost>,
 }
@@ -330,21 +349,28 @@ impl IqSpec for MediaConnSpec {
             .ok_or_else(|| anyhow!("Missing 'auth' attribute in media_conn response"))?
             .to_string();
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
+        let auth_ttl = attrs.optional_u64("auth_ttl");
         let max_buckets = attrs.optional_u64("max_buckets");
 
-        let mut hosts = Vec::new();
-        for host_node in media_conn_node.get_children_by_tag("host") {
-            let hostname = host_node
-                .attrs()
-                .optional_string("hostname")
-                .ok_or_else(|| anyhow!("Missing 'hostname' attribute in host node"))?
-                .to_string();
-            hosts.push(MediaConnHost { hostname });
-        }
+        // Parse extended host info (type, fallback) and map to MediaConnHost.
+        // Sort: primary hosts first, fallback hosts second (matches WA Web's mapParsedMediaConn).
+        let mut hosts: Vec<MediaConnHost> = media_conn_node
+            .get_children_by_tag("host")
+            .filter_map(|host_node| {
+                let ext = MediaConnHostExtended::try_from_node(host_node).ok()?;
+                Some(MediaConnHost {
+                    hostname: ext.hostname,
+                    host_type: ext.host_type,
+                    fallback_hostname: ext.fallback_hostname,
+                })
+            })
+            .collect();
+        hosts.sort_by_key(|h| if h.host_type == "primary" { 0 } else { 1 });
 
         Ok(MediaConnResponse {
             auth,
             ttl,
+            auth_ttl,
             max_buckets,
             hosts,
         })
