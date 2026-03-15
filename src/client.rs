@@ -109,6 +109,9 @@ const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 ///
 /// All counts are approximate (moka caches may have pending evictions).
 /// Call [`Client::memory_diagnostics`] to obtain a snapshot.
+///
+/// Requires the `debug-diagnostics` feature.
+#[cfg(feature = "debug-diagnostics")]
 #[derive(Debug, Clone)]
 pub struct MemoryDiagnostics {
     // -- Moka caches (TTL/capacity-bounded) --
@@ -141,6 +144,7 @@ pub struct MemoryDiagnostics {
     pub custom_enc_handlers: usize,
 }
 
+#[cfg(feature = "debug-diagnostics")]
 impl std::fmt::Display for MemoryDiagnostics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== Memory Diagnostics ===")?;
@@ -1008,6 +1012,9 @@ impl Client {
     ///
     /// Moka caches report approximate counts (pending evictions may not be reflected).
     /// Call `run_pending_tasks()` on individual caches first if you need exact counts.
+    ///
+    /// Requires the `debug-diagnostics` feature.
+    #[cfg(feature = "debug-diagnostics")]
     pub async fn memory_diagnostics(&self) -> MemoryDiagnostics {
         let (sig_sessions, sig_identities, sig_sender_keys) =
             self.signal_cache.entry_counts().await;

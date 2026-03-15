@@ -217,6 +217,7 @@ impl SignalStoreCache {
     }
 
     /// Returns the number of entries in each store (sessions, identities, sender_keys).
+    #[cfg(feature = "debug-diagnostics")]
     pub async fn entry_counts(&self) -> (usize, usize, usize) {
         let s = self.sessions.lock().await;
         let i = self.identities.lock().await;

@@ -54,6 +54,7 @@ impl LidPnCache {
     }
 
     /// Returns approximate entry counts for the LID and PN maps.
+    #[cfg(feature = "debug-diagnostics")]
     pub fn entry_counts(&self) -> (u64, u64) {
         (
             self.lid_to_entry.entry_count(),
