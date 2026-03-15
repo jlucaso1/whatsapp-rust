@@ -129,27 +129,30 @@ impl Client {
         }
     }
 
-    /// Store a sent message for retry handling. Always writes to DB (durable),
-    /// and optionally to L1 moka cache if capacity > 0.
+    /// Store a sent message for retry handling. Writes to DB in the background
+    /// (non-blocking, matching WA Web's async IndexedDB pattern), and optionally
+    /// to L1 moka cache if capacity > 0.
     pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
         use prost::Message;
         let key = self.make_stanza_key(to, id).await;
         let bytes = msg.encode_to_vec();
 
-        // Always store to DB (primary, matches WA Web)
-        let chat_str = key.chat.to_string();
-        if let Err(e) = self
-            .persistence_manager
-            .backend()
-            .store_sent_message(&chat_str, &key.id, &bytes)
-            .await
-        {
-            log::warn!("Failed to store sent message to DB: {e}");
-        }
-
         // Optional L1 cache (when user configures recent_messages capacity > 0)
         if self.recent_messages.policy().max_capacity().unwrap_or(0) > 0 {
-            self.recent_messages.insert(key, bytes).await;
+            self.recent_messages
+                .insert(key.clone(), bytes.clone())
+                .await;
         }
+
+        // Store to DB in background — don't block the send path.
+        // Retry receipts arrive seconds later, so the row will be available.
+        let backend = self.persistence_manager.backend();
+        let chat_str = key.chat.to_string();
+        let msg_id = key.id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = backend.store_sent_message(&chat_str, &msg_id, &bytes).await {
+                log::warn!("Failed to store sent message to DB: {e}");
+            }
+        });
     }
 }

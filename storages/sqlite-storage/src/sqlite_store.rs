@@ -2246,18 +2246,19 @@ impl ProtocolStore for SqliteStore {
     ) -> Result<()> {
         let chat_jid = chat_jid.to_string();
         let message_id = message_id.to_string();
-        let payload = payload.to_vec();
+        // Arc avoids cloning the full payload bytes on each retry iteration
+        let payload: Arc<Vec<u8>> = Arc::new(payload.to_vec());
         let device_id = self.device_id;
         self.with_retry("store_sent_message", || {
             let chat_jid = chat_jid.clone();
             let message_id = message_id.clone();
-            let payload = payload.clone();
+            let payload = Arc::clone(&payload);
             Box::new(move |conn: &mut SqliteConnection| {
                 diesel::replace_into(sent_messages::table)
                     .values((
                         sent_messages::chat_jid.eq(&chat_jid),
                         sent_messages::message_id.eq(&message_id),
-                        sent_messages::payload.eq(&payload),
+                        sent_messages::payload.eq(payload.as_slice()),
                         sent_messages::device_id.eq(device_id),
                     ))
                     .execute(conn)?;
