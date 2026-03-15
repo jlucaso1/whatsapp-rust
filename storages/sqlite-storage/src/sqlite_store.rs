@@ -2269,39 +2269,36 @@ impl ProtocolStore for SqliteStore {
     }
 
     async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
-        let pool = self.pool.clone();
-        let device_id = self.device_id;
         let chat_jid = chat_jid.to_string();
         let message_id = message_id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            // Atomic SELECT+DELETE inside an immediate transaction so only one
-            // concurrent caller can take the same row.
-            conn.immediate_transaction(|conn| {
-                let row: Option<Vec<u8>> = sent_messages::table
-                    .select(sent_messages::payload)
-                    .filter(sent_messages::chat_jid.eq(&chat_jid))
-                    .filter(sent_messages::message_id.eq(&message_id))
-                    .filter(sent_messages::device_id.eq(device_id))
-                    .first(conn)
-                    .optional()?;
-                if row.is_some() {
-                    diesel::delete(
-                        sent_messages::table
-                            .filter(sent_messages::chat_jid.eq(&chat_jid))
-                            .filter(sent_messages::message_id.eq(&message_id))
-                            .filter(sent_messages::device_id.eq(device_id)),
-                    )
-                    .execute(conn)?;
-                }
-                Ok(row)
+        let device_id = self.device_id;
+        // Atomic SELECT+DELETE with retry for SQLITE_BUSY resilience.
+        self.with_retry("take_sent_message", || {
+            let chat_jid = chat_jid.clone();
+            let message_id = message_id.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                conn.immediate_transaction(|conn| {
+                    let row: Option<Vec<u8>> = sent_messages::table
+                        .select(sent_messages::payload)
+                        .filter(sent_messages::chat_jid.eq(&chat_jid))
+                        .filter(sent_messages::message_id.eq(&message_id))
+                        .filter(sent_messages::device_id.eq(device_id))
+                        .first(conn)
+                        .optional()?;
+                    if row.is_some() {
+                        diesel::delete(
+                            sent_messages::table
+                                .filter(sent_messages::chat_jid.eq(&chat_jid))
+                                .filter(sent_messages::message_id.eq(&message_id))
+                                .filter(sent_messages::device_id.eq(device_id)),
+                        )
+                        .execute(conn)?;
+                    }
+                    Ok(row)
+                })
             })
-            .map_err(|e: DieselError| StoreError::Database(e.to_string()))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
