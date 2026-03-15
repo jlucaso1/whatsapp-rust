@@ -1,13 +1,11 @@
 use crate::client::Client;
-use crate::mediaconn::MediaConn;
+use crate::mediaconn::{MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS, MediaConn, is_media_auth_error};
 use anyhow::{Result, anyhow};
 use std::io::{Seek, SeekFrom, Write};
 
 pub use wacore::download::{
     DownloadUtils, Downloadable, MediaDecryption, MediaDecryptionError, MediaType,
 };
-
-const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
 
 impl From<&MediaConn> for wacore::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
@@ -53,10 +51,6 @@ impl Downloadable for DownloadParams {
     fn app_info(&self) -> MediaType {
         self.media_type
     }
-}
-
-fn is_media_auth_error(status_code: u16) -> bool {
-    matches!(status_code, 401 | 403)
 }
 
 #[derive(Debug)]

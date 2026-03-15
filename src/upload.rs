@@ -5,26 +5,21 @@ use wacore::download::MediaType;
 
 use crate::client::Client;
 use crate::http::{HttpRequest, HttpResponse};
-
-const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
-
-fn is_media_auth_error(status_code: u16) -> bool {
-    matches!(status_code, 401 | 403)
-}
+use crate::mediaconn::{MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS, is_media_auth_error};
 
 fn build_upload_request(
     hostname: &str,
     mms_type: &str,
     auth: &str,
     token: &str,
-    body: Vec<u8>,
+    body: &[u8],
 ) -> HttpRequest {
     let url = format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}");
 
     HttpRequest::post(url)
         .with_header("Content-Type", "application/octet-stream")
         .with_header("Origin", "https://web.whatsapp.com")
-        .with_body(body)
+        .with_body(body.to_vec())
 }
 
 fn upload_error_from_response(response: HttpResponse) -> anyhow::Error {
@@ -80,7 +75,7 @@ where
                 mms_type,
                 &media_conn.auth,
                 &token,
-                enc.data_to_upload.clone(),
+                &enc.data_to_upload,
             );
 
             let response = match execute_request(request).await {

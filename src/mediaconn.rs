@@ -10,6 +10,16 @@ use wacore::iq::mediaconn::MediaConnSpec;
 /// Re-export the host type from wacore.
 pub use wacore::iq::mediaconn::MediaConnHost;
 
+/// Number of retry attempts after a media auth error (401/403).
+/// On auth failure, the media connection is invalidated and refreshed before retrying.
+pub(crate) const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
+
+/// Returns `true` if the HTTP status code indicates a media auth error
+/// that should trigger a media connection refresh and retry.
+pub(crate) fn is_media_auth_error(status_code: u16) -> bool {
+    matches!(status_code, 401 | 403)
+}
+
 /// Media connection with runtime-specific fields.
 #[derive(Debug, Clone)]
 pub struct MediaConn {
