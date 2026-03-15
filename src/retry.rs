@@ -794,11 +794,15 @@ mod tests {
                 .await
                 .expect("persistence manager should initialize"),
         );
-        let (client, _sync_rx) = Client::new(
+        // Enable L1 cache so MockBackend (which doesn't persist) works for this test
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            config,
         )
         .await;
 
@@ -1595,11 +1599,15 @@ mod tests {
                 .await
                 .expect("persistence manager should initialize"),
         );
-        let (client, _sync_rx) = Client::new(
+        // Enable L1 cache so MockBackend (which doesn't persist) works for this test
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
+            config,
         )
         .await;
 
