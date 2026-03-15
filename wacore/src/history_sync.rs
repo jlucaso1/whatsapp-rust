@@ -33,14 +33,14 @@ mod wire_type {
 }
 
 pub fn process_history_sync<F>(
-    compressed_data: &[u8],
+    compressed_data: Vec<u8>,
     own_user: Option<&str>,
     mut on_conversation_bytes: Option<F>,
 ) -> Result<HistorySyncResult, HistorySyncError>
 where
     F: FnMut(Bytes),
 {
-    let decoder = ZlibDecoder::new(compressed_data);
+    let decoder = ZlibDecoder::new(std::io::Cursor::new(compressed_data));
     let mut buf_reader = BufReader::with_capacity(STREAMING_BUFFER_SIZE, decoder);
     let mut cis = CodedInputStream::from_buf_read(&mut buf_reader);
 
