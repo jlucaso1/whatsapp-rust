@@ -7,6 +7,8 @@ pub use wacore::download::{
     DownloadUtils, Downloadable, MediaDecryption, MediaDecryptionError, MediaType,
 };
 
+const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
+
 impl From<&MediaConn> for wacore::download::MediaConnection {
     fn from(conn: &MediaConn) -> Self {
         wacore::download::MediaConnection {
@@ -108,7 +110,7 @@ where
     let mut force_refresh = false;
     let mut last_err: Option<anyhow::Error> = None;
 
-    for attempt in 0..=1 {
+    for attempt in 0..=MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS {
         let requests = prepare_requests(force_refresh).await?;
         let mut retry_with_fresh_auth = false;
 
@@ -173,7 +175,7 @@ where
     let mut force_refresh = false;
     let mut last_err: Option<anyhow::Error> = None;
 
-    for attempt in 0..=1 {
+    for attempt in 0..=MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS {
         let requests = prepare_requests(force_refresh).await?;
         let mut retry_with_fresh_auth = false;
 

@@ -6,6 +6,8 @@ use wacore::download::MediaType;
 use crate::client::Client;
 use crate::http::{HttpRequest, HttpResponse};
 
+const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
+
 fn is_media_auth_error(status_code: u16) -> bool {
     matches!(status_code, 401 | 403)
 }
@@ -64,7 +66,7 @@ where
     let mut force_refresh = false;
     let mut last_error: Option<anyhow::Error> = None;
 
-    for attempt in 0..=1 {
+    for attempt in 0..=MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS {
         let media_conn = get_media_conn(force_refresh).await?;
         if media_conn.hosts.is_empty() {
             return Err(anyhow!("No media hosts"));
