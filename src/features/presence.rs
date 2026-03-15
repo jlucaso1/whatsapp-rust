@@ -5,6 +5,7 @@ use wacore::StringEnum;
 use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
+use wacore_binary::node::Node;
 
 #[derive(Debug, Error)]
 pub enum PresenceError {
@@ -40,6 +41,26 @@ pub struct Presence<'a> {
 impl<'a> Presence<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
+    }
+
+    async fn build_subscription_node(&self, jid: &Jid) -> Node {
+        let mut builder = NodeBuilder::new("presence")
+            .attr("type", "subscribe")
+            .attr("to", jid.to_string());
+
+        // Include tctoken if available (no t attribute, matching WhatsApp Web)
+        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
+            builder = builder.children([build_tc_token_node(&token)]);
+        }
+
+        builder.build()
+    }
+
+    fn build_unsubscription_node(jid: &Jid) -> Node {
+        NodeBuilder::new("presence")
+            .attr("type", "unsubscribe")
+            .attr("to", jid.to_string())
+            .build()
     }
 
     /// Set the presence status.
@@ -109,25 +130,85 @@ impl<'a> Presence<'a> {
     /// ```
     pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
         debug!("presence subscribe: subscribing to {}", jid);
-
-        let mut builder = NodeBuilder::new("presence")
-            .attr("type", "subscribe")
-            .attr("to", jid.to_string());
-
-        // Include tctoken if available (no t attribute, matching WhatsApp Web)
-        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
-            builder = builder.children([build_tc_token_node(&token)]);
-        }
-
-        let node = builder.build();
+        let node = self.build_subscription_node(jid).await;
         self.client
             .send_node(node)
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from)?;
+        self.client.track_presence_subscription(jid.clone()).await;
+        Ok(())
+    }
+
+    /// Unsubscribe from a contact's presence updates.
+    ///
+    /// Sends a `<presence type="unsubscribe">` stanza to the target JID.
+    ///
+    /// ## Wire Format
+    /// ```xml
+    /// <presence type="unsubscribe" to="user@s.whatsapp.net"/>
+    /// ```
+    pub async fn unsubscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        debug!("presence unsubscribe: unsubscribing from {}", jid);
+        let node = Self::build_unsubscription_node(jid);
+        self.client
+            .send_node(node)
+            .await
+            .map_err(anyhow::Error::from)?;
+        self.client.untrack_presence_subscription(jid).await;
+        Ok(())
     }
 }
 
 impl Client {
+    pub(crate) async fn track_presence_subscription(&self, jid: Jid) {
+        self.presence_subscriptions.lock().await.insert(jid);
+    }
+
+    pub(crate) async fn untrack_presence_subscription(&self, jid: &Jid) {
+        self.presence_subscriptions.lock().await.remove(jid);
+    }
+
+    pub(crate) async fn tracked_presence_subscriptions(&self) -> Vec<Jid> {
+        self.presence_subscriptions
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) async fn resubscribe_presence_subscriptions(&self, expected_generation: u64) {
+        let subscribed_jids = self.tracked_presence_subscriptions().await;
+        if subscribed_jids.is_empty() {
+            return;
+        }
+
+        debug!(
+            "Re-subscribing to {} tracked presence subscriptions",
+            subscribed_jids.len()
+        );
+
+        for jid in subscribed_jids {
+            if self
+                .connection_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != expected_generation
+            {
+                debug!("Stopping presence re-subscribe: connection generation changed");
+                return;
+            }
+
+            if !self.is_connected() {
+                debug!("Stopping presence re-subscribe: connection closed");
+                return;
+            }
+
+            if let Err(err) = self.presence().subscribe(&jid).await {
+                warn!("Failed to re-subscribe to presence for {jid}: {err:?}");
+            }
+        }
+    }
+
     /// Access presence operations.
     #[allow(clippy::wrong_self_convention)]
     pub fn presence(&self) -> Presence<'_> {
@@ -143,6 +224,7 @@ mod tests {
     use crate::store::SqliteStore;
     use crate::store::commands::DeviceCommand;
     use anyhow::Result;
+    use std::str::FromStr;
     use std::sync::Arc;
     use wacore::store::traits::Backend;
     use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
@@ -288,5 +370,74 @@ mod tests {
                 e
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_presence_subscription_tracking_is_deduplicated() {
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+
+        client.track_presence_subscription(jid.clone()).await;
+        client.track_presence_subscription(jid.clone()).await;
+
+        let tracked = client.tracked_presence_subscriptions().await;
+        assert_eq!(tracked, vec![jid]);
+    }
+
+    #[tokio::test]
+    async fn test_presence_unsubscription_removes_tracked_jid() {
+        let backend = create_test_backend().await;
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+
+        client.track_presence_subscription(jid.clone()).await;
+        client.untrack_presence_subscription(&jid).await;
+
+        assert!(
+            client.tracked_presence_subscriptions().await.is_empty(),
+            "unsubscribe tracking should remove the jid"
+        );
+    }
+
+    #[test]
+    fn test_unsubscribe_builds_expected_presence_stanza() {
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+
+        let node = Presence::build_unsubscription_node(&jid);
+
+        assert_eq!(node.tag, "presence");
+        assert_eq!(
+            node.attrs.get("type").and_then(|v| v.as_str()),
+            Some("unsubscribe")
+        );
+        assert_eq!(
+            node.attrs.get("to").map(ToString::to_string),
+            Some(jid.to_string())
+        );
+        assert!(
+            node.content.is_none(),
+            "unsubscribe stanza should not have children"
+        );
     }
 }
