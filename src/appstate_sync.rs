@@ -704,6 +704,15 @@ mod tests {
         async fn delete_expired_tc_tokens(&self, _: i64) -> StoreResult<u32> {
             Ok(0)
         }
+        async fn store_sent_message(&self, _: &str, _: &str, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn take_sent_message(&self, _: &str, _: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn delete_expired_sent_messages(&self, _: i64) -> StoreResult<u32> {
+            Ok(0)
+        }
     }
 
     // Implement DeviceStore - Device persistence

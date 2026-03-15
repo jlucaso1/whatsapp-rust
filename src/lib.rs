@@ -9,7 +9,10 @@ pub mod http;
 pub mod types;
 
 pub mod client;
-pub use client::{Client, NodeFilter};
+pub use client::Client;
+#[cfg(feature = "debug-diagnostics")]
+pub use client::MemoryDiagnostics;
+pub use client::NodeFilter;
 pub mod download;
 pub mod handlers;
 pub use handlers::chatstate::ChatStateEvent;

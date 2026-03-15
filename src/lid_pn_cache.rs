@@ -53,6 +53,15 @@ impl LidPnCache {
         }
     }
 
+    /// Returns approximate entry counts for the LID and PN maps.
+    #[cfg(feature = "debug-diagnostics")]
+    pub fn entry_counts(&self) -> (u64, u64) {
+        (
+            self.lid_to_entry.entry_count(),
+            self.pn_to_entry.entry_count(),
+        )
+    }
+
     /// Get the current LID for a phone number.
     ///
     /// Returns the LID user part if a mapping exists, None otherwise.

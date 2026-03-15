@@ -6,10 +6,11 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
+dhat = { version = "0.3", optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "1.0", features = ["v4"] }
 wacore = { path = "../../wacore" }
-whatsapp-rust = { path = "../..", features = ["danger-skip-tls-verify"] }
+whatsapp-rust = { path = "../..", features = ["danger-skip-tls-verify", "debug-diagnostics"] }
 whatsapp-rust-sqlite-storage = { path = "../../storages/sqlite-storage" }
 whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", features = [
   "danger-skip-tls-verify",
@@ -17,6 +18,9 @@ whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", fea
 whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client", features = [
   "danger-skip-tls-verify",
 ] }
+
+[features]
+dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
 chrono = { workspace = true, features = ["now", "serde"] }

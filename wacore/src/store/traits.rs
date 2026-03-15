@@ -270,6 +270,24 @@ pub trait ProtocolStore: Send + Sync {
 
     /// Delete tc tokens with token_timestamp older than cutoff. Returns count deleted.
     async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+
+    // --- Sent Message Store (retry support, matches WA Web's getMessageTable) ---
+
+    /// Store a sent message's serialized payload for retry handling.
+    /// Called after each send_message(); the payload is the protobuf-encoded Message.
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()>;
+
+    /// Retrieve and delete a sent message (atomic take). Returns serialized payload.
+    /// Called when a retry receipt arrives; consuming prevents double-retry.
+    async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Delete sent messages older than cutoff (unix timestamp seconds). Returns count deleted.
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32>;
 }
 
 /// Device data persistence operations.
