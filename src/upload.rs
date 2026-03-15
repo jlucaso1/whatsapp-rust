@@ -33,6 +33,32 @@ struct UploadProgressResponse {
     resume: Option<String>,
 }
 
+/// Parse an upload progress response into an `UploadExistsResult`.
+fn parse_upload_progress(resp: &HttpResponse, total_size: u64) -> UploadExistsResult {
+    if resp.status_code >= 400 {
+        return UploadExistsResult::NotFound;
+    }
+    let Ok(progress) = serde_json::from_slice::<UploadProgressResponse>(&resp.body) else {
+        return UploadExistsResult::NotFound;
+    };
+    match progress.resume.as_deref() {
+        Some("complete") => {
+            if let (Some(url), Some(direct_path)) = (progress.url, progress.direct_path) {
+                UploadExistsResult::Complete { url, direct_path }
+            } else {
+                UploadExistsResult::NotFound
+            }
+        }
+        Some(offset_str) => match offset_str.parse::<u64>() {
+            Ok(offset) if offset > 0 && offset < total_size => UploadExistsResult::Resume {
+                byte_offset: offset,
+            },
+            _ => UploadExistsResult::NotFound,
+        },
+        _ => UploadExistsResult::NotFound,
+    }
+}
+
 fn build_upload_request(
     hostname: &str,
     mms_type: &str,
@@ -120,44 +146,27 @@ where
                 let check_req =
                     build_resume_check_request(&host.hostname, mms_type, &media_conn.auth, &token);
                 if let Ok(check_resp) = execute_request(check_req).await {
-                    if check_resp.status_code < 400 {
-                        if let Ok(progress) =
-                            serde_json::from_slice::<UploadProgressResponse>(&check_resp.body)
-                        {
-                            match progress.resume.as_deref() {
-                                Some("complete") => {
-                                    // Already uploaded — return immediately
-                                    if let (Some(url), Some(direct_path)) =
-                                        (progress.url, progress.direct_path)
-                                    {
-                                        return Ok(UploadResponse {
-                                            url,
-                                            direct_path,
-                                            media_key: enc.media_key.to_vec(),
-                                            file_enc_sha256: enc.file_enc_sha256.to_vec(),
-                                            file_sha256: enc.file_sha256.to_vec(),
-                                            file_length,
-                                        });
-                                    }
-                                }
-                                Some(offset_str) => {
-                                    if let Ok(offset) = offset_str.parse::<u64>() {
-                                        let total = enc.data_to_upload.len() as u64;
-                                        if offset > 0 && offset < total {
-                                            log::info!(
-                                                "Resuming upload from byte {offset}/{total}"
-                                            );
-                                            upload_data = &enc.data_to_upload[offset as usize..];
-                                            file_offset = Some(offset);
-                                        }
-                                    }
-                                }
-                                _ => {} // NotFound — proceed with full upload
-                            }
+                    let total = enc.data_to_upload.len() as u64;
+                    match parse_upload_progress(&check_resp, total) {
+                        UploadExistsResult::Complete { url, direct_path } => {
+                            return Ok(UploadResponse {
+                                url,
+                                direct_path,
+                                media_key: enc.media_key.to_vec(),
+                                file_enc_sha256: enc.file_enc_sha256.to_vec(),
+                                file_sha256: enc.file_sha256.to_vec(),
+                                file_length,
+                            });
                         }
+                        UploadExistsResult::Resume { byte_offset } => {
+                            log::info!("Resuming upload from byte {byte_offset}/{total}");
+                            upload_data = &enc.data_to_upload[byte_offset as usize..];
+                            file_offset = Some(byte_offset);
+                        }
+                        UploadExistsResult::NotFound => {}
                     }
-                    // Non-fatal: if check fails, proceed with full upload
                 }
+                // Non-fatal: if check request itself fails, proceed with full upload
             }
 
             let request = build_upload_request(

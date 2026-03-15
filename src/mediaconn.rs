@@ -37,8 +37,10 @@ pub struct MediaConn {
 
 impl MediaConn {
     /// Check if this connection info has expired.
+    /// Uses the earlier of route TTL and auth TTL (auth may expire before routes).
     pub fn is_expired(&self) -> bool {
-        self.fetched_at.elapsed() > Duration::from_secs(self.ttl)
+        let effective_ttl = self.auth_ttl.map_or(self.ttl, |at| self.ttl.min(at));
+        self.fetched_at.elapsed() > Duration::from_secs(effective_ttl)
     }
 }
 
