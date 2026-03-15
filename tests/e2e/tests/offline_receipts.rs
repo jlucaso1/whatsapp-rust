@@ -304,17 +304,25 @@ async fn test_offline_presence_coalescing() -> anyhow::Result<()> {
         panic!("Expected Presence event");
     }
 
-    // Try to get a second presence — should timeout (coalesced to one).
-    let second = client_b
+    // After reconnect, B may receive a second presence from the re-subscribe
+    // response (the server sends A's current state when B re-subscribes).
+    // Drain any additional presence events with a short timeout.
+    let _ = client_b
         .wait_for_event(3, |e| matches!(e, Event::Presence(_)))
         .await;
 
+    // Now confirm no MORE presence events arrive beyond the coalesced +
+    // re-subscribe responses.
+    let extra = client_b
+        .wait_for_event(2, |e| matches!(e, Event::Presence(_)))
+        .await;
+
     assert!(
-        second.is_err(),
-        "Expected no second presence due to coalescing, but got: {:?}",
-        second.unwrap()
+        extra.is_err(),
+        "Expected no extra presence events, but got: {:?}",
+        extra.unwrap()
     );
-    info!("Confirmed: only one presence update received (coalesced)");
+    info!("Confirmed: no extra presence events after coalesced + re-subscribe drain");
 
     client_a.disconnect().await;
     client_b.disconnect().await;
