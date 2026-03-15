@@ -14,6 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      mock-server:
+        image: ghcr.io/whiskeysockets-devtools/bartender:latest
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.BARTENDER_GHCR_TOKEN }}
+        ports:
+          - 8080:8080
+        env:
+          CHATSTATE_TTL_SECS: "3"
+        options: --log-driver none
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,3 +53,19 @@ jobs:
 
       - name: Fetch Rust dependencies
         run: cargo fetch
+
+      - name: Wait for mock server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sk https://localhost:8080/ > /dev/null 2>&1; then
+              echo "Mock server is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mock server failed to become ready"
+          exit 1
+
+      - name: Export mock server URL
+        run: |
+          echo "MOCK_SERVER_URL=wss://127.0.0.1:8080/ws/chat" >> "$GITHUB_ENV"
