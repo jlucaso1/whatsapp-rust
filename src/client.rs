@@ -4636,26 +4636,9 @@ mod tests {
 
     // ── stream error tests ─────────────────────────────────────────────
 
-    async fn create_test_client() -> Arc<Client> {
-        let backend = crate::test_utils::create_test_backend().await;
-        let pm = Arc::new(
-            PersistenceManager::new(backend)
-                .await
-                .expect("persistence manager should initialize"),
-        );
-        let (client, _rx) = Client::new(
-            pm,
-            Arc::new(crate::transport::mock::MockTransportFactory::new()),
-            Arc::new(MockHttpClient),
-            None,
-        )
-        .await;
-        client
-    }
-
     #[tokio::test]
     async fn test_stream_error_401_disables_reconnect() {
-        let client = create_test_client().await;
+        let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "401").build();
         client.handle_stream_error(&node).await;
         assert!(
@@ -4666,7 +4649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_error_409_disables_reconnect() {
-        let client = create_test_client().await;
+        let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "409").build();
         client.handle_stream_error(&node).await;
         assert!(
@@ -4677,7 +4660,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_error_429_keeps_reconnect_with_backoff() {
-        let client = create_test_client().await;
+        let client = create_offline_sync_test_client().await;
         let before = client.auto_reconnect_errors.load(Ordering::Relaxed);
         let node = NodeBuilder::new("stream:error").attr("code", "429").build();
         client.handle_stream_error(&node).await;
@@ -4686,15 +4669,16 @@ mod tests {
             "429 should keep auto-reconnect enabled"
         );
         let after = client.auto_reconnect_errors.load(Ordering::Relaxed);
-        assert!(
-            after >= before + 5,
-            "429 should increase backoff: before={before}, after={after}"
+        assert_eq!(
+            after,
+            before + 5,
+            "429 should increase backoff by exactly 5: before={before}, after={after}"
         );
     }
 
     #[tokio::test]
     async fn test_stream_error_503_keeps_reconnect() {
-        let client = create_test_client().await;
+        let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "503").build();
         client.handle_stream_error(&node).await;
         assert!(
