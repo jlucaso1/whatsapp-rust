@@ -11,7 +11,8 @@ use super::Client;
 use crate::types::events::{Event, OfflineSyncCompleted};
 
 impl Client {
-    pub(crate) const DEFAULT_OFFLINE_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+    /// WA Web: `WAWebOfflineResumeConst.OFFLINE_STANZA_TIMEOUT_MS = 60000`
+    pub(crate) const DEFAULT_OFFLINE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
     pub(crate) fn complete_offline_sync(&self, count: i32) {
         self.offline_sync_metrics
