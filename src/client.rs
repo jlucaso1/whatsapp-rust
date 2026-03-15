@@ -256,6 +256,8 @@ pub struct Client {
     pub(crate) history_sync_tasks_in_flight: Arc<AtomicUsize>,
     /// Notifier triggered when history sync work becomes idle.
     pub(crate) history_sync_idle_notifier: Arc<Notify>,
+    /// Contacts with active presence subscriptions that must be re-subscribed on reconnect.
+    pub(crate) presence_subscriptions: Arc<tokio::sync::Mutex<HashSet<Jid>>>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
     /// Notifier for when the noise socket is established (before login).
@@ -481,6 +483,7 @@ impl Client {
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
             history_sync_idle_notifier: Arc::new(Notify::new()),
+            presence_subscriptions: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             socket_ready_notifier: Arc::new(Notify::new()),
             is_ready: Arc::new(AtomicBool::new(false)),
             connected_notifier: Arc::new(Notify::new()),
@@ -1594,6 +1597,12 @@ impl Client {
 
                         check_generation!();
 
+                        client_clone
+                            .resubscribe_presence_subscriptions(task_generation)
+                            .await;
+
+                        check_generation!();
+
                         // Dispatch Connected after critical sync completes.
                         // Presence is NOT sent here — WhatsApp Web sends presence from the
                         // setting_pushName mutation handler (WAWebPushNameSync), not from
@@ -1645,6 +1654,10 @@ impl Client {
                         debug!("Initial presence sent successfully.");
                     }
                 }
+
+                client_clone
+                    .resubscribe_presence_subscriptions(task_generation)
+                    .await;
 
                 // Re-check generation after awaits to avoid dispatching Connected
                 // for an outdated connection that was replaced mid-await.
