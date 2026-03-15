@@ -2276,25 +2276,28 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let row: Option<Vec<u8>> = sent_messages::table
-                .select(sent_messages::payload)
-                .filter(sent_messages::chat_jid.eq(&chat_jid))
-                .filter(sent_messages::message_id.eq(&message_id))
-                .filter(sent_messages::device_id.eq(device_id))
-                .first(&mut conn)
-                .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            if row.is_some() {
-                diesel::delete(
-                    sent_messages::table
-                        .filter(sent_messages::chat_jid.eq(&chat_jid))
-                        .filter(sent_messages::message_id.eq(&message_id))
-                        .filter(sent_messages::device_id.eq(device_id)),
-                )
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(row)
+            // Atomic SELECT+DELETE inside an immediate transaction so only one
+            // concurrent caller can take the same row.
+            conn.immediate_transaction(|conn| {
+                let row: Option<Vec<u8>> = sent_messages::table
+                    .select(sent_messages::payload)
+                    .filter(sent_messages::chat_jid.eq(&chat_jid))
+                    .filter(sent_messages::message_id.eq(&message_id))
+                    .filter(sent_messages::device_id.eq(device_id))
+                    .first(conn)
+                    .optional()?;
+                if row.is_some() {
+                    diesel::delete(
+                        sent_messages::table
+                            .filter(sent_messages::chat_jid.eq(&chat_jid))
+                            .filter(sent_messages::message_id.eq(&message_id))
+                            .filter(sent_messages::device_id.eq(device_id)),
+                    )
+                    .execute(conn)?;
+                }
+                Ok(row)
+            })
+            .map_err(|e: DieselError| StoreError::Database(e.to_string()))
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
