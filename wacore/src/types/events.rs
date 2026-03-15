@@ -335,6 +335,9 @@ pub enum Event {
     Presence(PresenceUpdate),
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
+    ContactUpdated(ContactUpdated),
+    ContactNumberChanged(ContactNumberChanged),
+    ContactSyncRequested(ContactSyncRequested),
 
     JoinedGroup(LazyConversation),
     /// Group metadata/settings/participant change from w:gp2 notification.
@@ -631,6 +634,52 @@ pub struct PictureUpdate {
 pub struct UserAboutUpdate {
     pub jid: Jid,
     pub status: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// A contact's profile changed (server notification).
+///
+/// Emitted from `<notification type="contacts"><update jid="..."/>`.
+/// WA Web resets cached presence and refreshes the profile picture on this
+/// event — consumers should invalidate any cached presence/profile data.
+///
+/// Not to be confused with [`ContactUpdate`] which comes from app-state
+/// sync mutations (different source, different payload).
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactUpdated {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// A contact changed their phone number.
+///
+/// Emitted from `<notification type="contacts"><modify old="..." new="..."
+/// old_lid="..." new_lid="..."/>`.
+///
+/// WA Web creates two LID-PN mappings (`old_lid→old_jid`, `new_lid→new_jid`)
+/// and generates a system notification message in both old and new chats.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactNumberChanged {
+    /// Old phone number JID.
+    pub old_jid: Jid,
+    /// New phone number JID.
+    pub new_jid: Jid,
+    /// Old LID (if provided by server).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_lid: Option<Jid>,
+    /// New LID (if provided by server).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_lid: Option<Jid>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Server requests a full contact re-sync.
+///
+/// Emitted from `<notification type="contacts"><sync after="..."/>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactSyncRequested {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<DateTime<Utc>>,
     pub timestamp: DateTime<Utc>,
 }
 
