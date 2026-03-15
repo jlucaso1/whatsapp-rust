@@ -203,6 +203,13 @@ impl Client {
                 return;
             }
 
+            // Check membership before re-subscribing — a concurrent unsubscribe()
+            // call may have removed this JID while we were iterating.
+            if !self.presence_subscriptions.lock().await.contains(&jid) {
+                debug!("Skipping re-subscribe for {jid}: unsubscribed during iteration");
+                continue;
+            }
+
             if let Err(err) = self.presence().subscribe(&jid).await {
                 warn!("Failed to re-subscribe to presence for {jid}: {err:?}");
             }
