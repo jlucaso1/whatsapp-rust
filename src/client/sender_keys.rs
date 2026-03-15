@@ -84,29 +84,72 @@ impl Client {
             .map_err(|e| anyhow!("{e}"))
     }
 
-    /// Take a recent message from the cache (removes it).
-    /// Returns the deserialized message if found, None otherwise.
+    /// Take a sent message for retry handling. Checks L1 cache first (if enabled),
+    /// then falls back to DB. Matches WA Web's getMessageTable().get() pattern.
     pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
         use prost::Message;
         let key = self.make_stanza_key(to.clone(), id.clone()).await;
-        self.recent_messages.remove(&key).await.and_then(|bytes| {
-            match wa::Message::decode(bytes.as_slice()) {
+
+        // L1 cache hit (if capacity > 0)
+        if let Some(bytes) = self.recent_messages.remove(&key).await {
+            return match wa::Message::decode(bytes.as_slice()) {
                 Ok(msg) => Some(msg),
                 Err(e) => {
                     log::warn!("Failed to decode cached message for {}:{}: {}", to, id, e);
                     None
                 }
+            };
+        }
+
+        // DB fallback (primary path when cache capacity = 0)
+        let chat_str = key.chat.to_string();
+        match self
+            .persistence_manager
+            .backend()
+            .take_sent_message(&chat_str, &key.id)
+            .await
+        {
+            Ok(Some(bytes)) => match wa::Message::decode(bytes.as_slice()) {
+                Ok(msg) => Some(msg),
+                Err(e) => {
+                    log::warn!("Failed to decode DB message for {}:{}: {}", to, id, e);
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!(
+                    "Failed to read sent message from DB for {}:{}: {}",
+                    to,
+                    id,
+                    e
+                );
+                None
             }
-        })
+        }
     }
 
-    /// Store a recent message in the cache (serialized as bytes).
-    /// This is lightweight - only stores the protobuf bytes, not Arc<Message>.
+    /// Store a sent message for retry handling. Always writes to DB (durable),
+    /// and optionally to L1 moka cache if capacity > 0.
     pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
         use prost::Message;
         let key = self.make_stanza_key(to, id).await;
-        // Serialize message to bytes - much lighter than storing Arc<Message>
         let bytes = msg.encode_to_vec();
-        self.recent_messages.insert(key, bytes).await;
+
+        // Always store to DB (primary, matches WA Web)
+        let chat_str = key.chat.to_string();
+        if let Err(e) = self
+            .persistence_manager
+            .backend()
+            .store_sent_message(&chat_str, &key.id, &bytes)
+            .await
+        {
+            log::warn!("Failed to store sent message to DB: {e}");
+        }
+
+        // Optional L1 cache (when user configures recent_messages capacity > 0)
+        if self.recent_messages.policy().max_capacity().unwrap_or(0) > 0 {
+            self.recent_messages.insert(key, bytes).await;
+        }
     }
 }

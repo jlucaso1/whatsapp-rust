@@ -105,8 +105,112 @@ type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
-const MAX_POOLED_BUFFER_CAP: usize = 512 * 1024;
-const MAX_POOLED_BUFFER_COUNT: usize = 16;
+/// Snapshot of internal collection sizes for memory leak detection.
+///
+/// All counts are approximate (moka caches may have pending evictions).
+/// Call [`Client::memory_diagnostics`] to obtain a snapshot.
+#[derive(Debug, Clone)]
+pub struct MemoryDiagnostics {
+    // -- Moka caches (TTL/capacity-bounded) --
+    pub group_cache: u64,
+    pub device_cache: u64,
+    pub device_registry_cache: u64,
+    pub lid_pn_lid_entries: u64,
+    pub lid_pn_pn_entries: u64,
+    pub retried_group_messages: u64,
+    pub recent_messages: u64,
+    pub message_retry_counts: u64,
+    pub pdo_pending_requests: u64,
+    // -- Moka caches (capacity-only, no TTL) --
+    pub session_locks: u64,
+    pub message_queues: u64,
+    pub message_enqueue_locks: u64,
+    // -- Unbounded collections --
+    pub response_waiters: usize,
+    pub node_waiters: usize,
+    pub pending_retries: usize,
+    pub presence_subscriptions: usize,
+    pub app_state_key_requests: usize,
+    pub app_state_syncing: usize,
+    pub signal_cache_sessions: usize,
+    pub signal_cache_identities: usize,
+    pub signal_cache_sender_keys: usize,
+    // -- Misc --
+    pub plaintext_buffer_pool: usize,
+    pub chatstate_handlers: usize,
+    pub custom_enc_handlers: usize,
+}
+
+impl std::fmt::Display for MemoryDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "=== Memory Diagnostics ===")?;
+        writeln!(f, "--- Moka caches (TTL-bounded) ---")?;
+        writeln!(f, "  group_cache:            {}", self.group_cache)?;
+        writeln!(f, "  device_cache:           {}", self.device_cache)?;
+        writeln!(
+            f,
+            "  device_registry_cache:  {}",
+            self.device_registry_cache
+        )?;
+        writeln!(f, "  lid_pn (lid):           {}", self.lid_pn_lid_entries)?;
+        writeln!(f, "  lid_pn (pn):            {}", self.lid_pn_pn_entries)?;
+        writeln!(
+            f,
+            "  retried_group_messages: {}",
+            self.retried_group_messages
+        )?;
+        writeln!(f, "  recent_messages:        {}", self.recent_messages)?;
+        writeln!(f, "  message_retry_counts:   {}", self.message_retry_counts)?;
+        writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
+        writeln!(f, "--- Moka caches (capacity-only) ---")?;
+        writeln!(f, "  session_locks:          {}", self.session_locks)?;
+        writeln!(f, "  message_queues:         {}", self.message_queues)?;
+        writeln!(
+            f,
+            "  message_enqueue_locks:  {}",
+            self.message_enqueue_locks
+        )?;
+        writeln!(f, "--- Unbounded collections ---")?;
+        writeln!(f, "  response_waiters:       {}", self.response_waiters)?;
+        writeln!(f, "  node_waiters:           {}", self.node_waiters)?;
+        writeln!(f, "  pending_retries:        {}", self.pending_retries)?;
+        writeln!(
+            f,
+            "  presence_subscriptions: {}",
+            self.presence_subscriptions
+        )?;
+        writeln!(
+            f,
+            "  app_state_key_requests: {}",
+            self.app_state_key_requests
+        )?;
+        writeln!(f, "  app_state_syncing:      {}", self.app_state_syncing)?;
+        writeln!(
+            f,
+            "  signal_sessions:        {}",
+            self.signal_cache_sessions
+        )?;
+        writeln!(
+            f,
+            "  signal_identities:      {}",
+            self.signal_cache_identities
+        )?;
+        writeln!(
+            f,
+            "  signal_sender_keys:     {}",
+            self.signal_cache_sender_keys
+        )?;
+        writeln!(f, "--- Misc ---")?;
+        writeln!(
+            f,
+            "  plaintext_buffer_pool:  {}",
+            self.plaintext_buffer_pool
+        )?;
+        writeln!(f, "  chatstate_handlers:     {}", self.chatstate_handlers)?;
+        writeln!(f, "  custom_enc_handlers:    {}", self.custom_enc_handlers)?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -443,10 +547,16 @@ impl Client {
             // Coordination caches: capacity-only eviction, no TTL/TTI.
             // These hold live mutexes and channel senders; time-based eviction
             // while tasks hold references would silently break serialisation.
-            session_locks: Cache::builder().max_capacity(10_000).build(),
-            message_queues: Cache::builder().max_capacity(10_000).build(),
+            session_locks: Cache::builder()
+                .max_capacity(cache_config.session_locks_capacity)
+                .build(),
+            message_queues: Cache::builder()
+                .max_capacity(cache_config.message_queues_capacity)
+                .build(),
             lid_pn_cache: Arc::new(LidPnCache::with_config(&cache_config.lid_pn_cache)),
-            message_enqueue_locks: Cache::builder().max_capacity(10_000).build(),
+            message_enqueue_locks: Cache::builder()
+                .max_capacity(cache_config.message_enqueue_locks_capacity)
+                .build(),
             group_cache: OnceCell::new(),
             device_cache: OnceCell::new(),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
@@ -493,7 +603,7 @@ impl Client {
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
             plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(
-                MAX_POOLED_BUFFER_COUNT,
+                cache_config.max_pooled_buffers,
             ))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
@@ -891,6 +1001,43 @@ impl Client {
         // Clear app state key cache — keys will be re-fetched from DB on demand
         if let Some(proc) = self.app_state_processor.get() {
             proc.clear_key_cache().await;
+        }
+    }
+
+    /// Returns a snapshot of all internal collection sizes for memory leak detection.
+    ///
+    /// Moka caches report approximate counts (pending evictions may not be reflected).
+    /// Call `run_pending_tasks()` on individual caches first if you need exact counts.
+    pub async fn memory_diagnostics(&self) -> MemoryDiagnostics {
+        let (sig_sessions, sig_identities, sig_sender_keys) =
+            self.signal_cache.entry_counts().await;
+        let (lid_lid, lid_pn) = self.lid_pn_cache.entry_counts();
+
+        MemoryDiagnostics {
+            group_cache: self.group_cache.get().map_or(0, |c| c.entry_count()),
+            device_cache: self.device_cache.get().map_or(0, |c| c.entry_count()),
+            device_registry_cache: self.device_registry_cache.entry_count(),
+            lid_pn_lid_entries: lid_lid,
+            lid_pn_pn_entries: lid_pn,
+            retried_group_messages: self.retried_group_messages.entry_count(),
+            recent_messages: self.recent_messages.entry_count(),
+            message_retry_counts: self.message_retry_counts.entry_count(),
+            pdo_pending_requests: self.pdo_pending_requests.entry_count(),
+            session_locks: self.session_locks.entry_count(),
+            message_queues: self.message_queues.entry_count(),
+            message_enqueue_locks: self.message_enqueue_locks.entry_count(),
+            response_waiters: self.response_waiters.lock().await.len(),
+            node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
+            pending_retries: self.pending_retries.lock().await.len(),
+            presence_subscriptions: self.presence_subscriptions.lock().await.len(),
+            app_state_key_requests: self.app_state_key_requests.lock().await.len(),
+            app_state_syncing: self.app_state_syncing.lock().await.len(),
+            signal_cache_sessions: sig_sessions,
+            signal_cache_identities: sig_identities,
+            signal_cache_sender_keys: sig_sender_keys,
+            plaintext_buffer_pool: self.plaintext_buffer_pool.lock().await.len(),
+            chatstate_handlers: self.chatstate_handlers.read().await.len(),
+            custom_enc_handlers: self.custom_enc_handlers.len(),
         }
     }
 
@@ -2825,8 +2972,8 @@ impl Client {
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
             let mut pool = self.plaintext_buffer_pool.lock().await;
-            if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP
-                && pool.len() < MAX_POOLED_BUFFER_COUNT
+            if plaintext_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
+                && pool.len() < self.cache_config.max_pooled_buffers
             {
                 pool.push(plaintext_buf);
             }
@@ -2844,7 +2991,8 @@ impl Client {
             Err(mut e) => {
                 let p_buf = std::mem::take(&mut e.plaintext_buf);
                 let mut pool = self.plaintext_buffer_pool.lock().await;
-                if p_buf.capacity() <= MAX_POOLED_BUFFER_CAP && pool.len() < MAX_POOLED_BUFFER_COUNT
+                if p_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
+                    && pool.len() < self.cache_config.max_pooled_buffers
                 {
                     pool.push(p_buf);
                 }
@@ -2853,7 +3001,8 @@ impl Client {
         };
 
         let mut pool = self.plaintext_buffer_pool.lock().await;
-        if plaintext_buf.capacity() <= MAX_POOLED_BUFFER_CAP && pool.len() < MAX_POOLED_BUFFER_COUNT
+        if plaintext_buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
+            && pool.len() < self.cache_config.max_pooled_buffers
         {
             pool.push(plaintext_buf);
         }

@@ -122,6 +122,8 @@ impl Client {
 
     pub(crate) async fn keepalive_loop(self: Arc<Self>) {
         let mut error_count = 0u32;
+        let mut cleanup_counter = 0u32;
+        let sent_msg_ttl = self.cache_config.sent_message_ttl_secs;
 
         loop {
             let interval_ms = rand::rng().random_range(
@@ -173,6 +175,23 @@ impl Client {
                                 debug!(target: "Client/Keepalive", "Keepalive restored after {error_count} failure(s).");
                             }
                             error_count = 0;
+
+                            // Periodic cleanup of expired sent messages (~every 12 ticks ≈ 5 min)
+                            cleanup_counter += 1;
+                            if sent_msg_ttl > 0 && cleanup_counter >= 12 {
+                                cleanup_counter = 0;
+                                let backend = self.persistence_manager.backend();
+                                let cutoff = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64
+                                    - sent_msg_ttl as i64;
+                                tokio::spawn(async move {
+                                    if let Err(e) = backend.delete_expired_sent_messages(cutoff).await {
+                                        log::debug!(target: "Client/Keepalive", "Sent message cleanup error: {e}");
+                                    }
+                                });
+                            }
                         }
                         KeepaliveResult::FatalFailure => {
                             debug!(target: "Client/Keepalive", "Fatal keepalive failure, exiting loop.");

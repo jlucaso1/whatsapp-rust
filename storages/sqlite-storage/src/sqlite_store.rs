@@ -2237,6 +2237,89 @@ impl ProtocolStore for SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
+
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat_jid = chat_jid.to_string();
+        let message_id = message_id.to_string();
+        let payload = payload.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::replace_into(sent_messages::table)
+                .values((
+                    sent_messages::chat_jid.eq(&chat_jid),
+                    sent_messages::message_id.eq(&message_id),
+                    sent_messages::payload.eq(&payload),
+                    sent_messages::device_id.eq(device_id),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat_jid = chat_jid.to_string();
+        let message_id = message_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let row: Option<Vec<u8>> = sent_messages::table
+                .select(sent_messages::payload)
+                .filter(sent_messages::chat_jid.eq(&chat_jid))
+                .filter(sent_messages::message_id.eq(&message_id))
+                .filter(sent_messages::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            if row.is_some() {
+                diesel::delete(
+                    sent_messages::table
+                        .filter(sent_messages::chat_jid.eq(&chat_jid))
+                        .filter(sent_messages::message_id.eq(&message_id))
+                        .filter(sent_messages::device_id.eq(device_id)),
+                )
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(row)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let deleted = diesel::delete(
+                sent_messages::table
+                    .filter(sent_messages::created_at.lt(cutoff_timestamp as i32))
+                    .filter(sent_messages::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(deleted as u32)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
 }
 
 #[async_trait]

@@ -152,6 +152,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    sent_messages (chat_jid, message_id, device_id) {
+        chat_jid -> Text,
+        message_id -> Text,
+        payload -> Binary,
+        device_id -> Integer,
+        created_at -> Integer,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     app_state_keys,
     app_state_mutation_macs,
@@ -164,6 +174,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     prekeys,
     sender_key_status,
     sender_keys,
+    sent_messages,
     sessions,
     signed_prekeys,
     skdm_recipients,

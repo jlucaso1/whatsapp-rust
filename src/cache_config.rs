@@ -49,17 +49,10 @@ impl CacheEntryConfig {
     }
 }
 
-/// Configuration for all client caches.
+/// Configuration for all client caches and resource pools.
 ///
 /// All fields default to WhatsApp Web behavior. Use `..Default::default()` to
-/// override only specific caches.
-///
-/// Note: coordination caches (`session_locks`, `message_queues`,
-/// `message_enqueue_locks`) are **not** configurable here because they hold
-/// live synchronisation primitives (mutexes and channel senders). Allowing
-/// TTL eviction on those caches would silently break Signal-session
-/// serialisation guarantees. They are always built with capacity-only eviction
-/// inside `Client`.
+/// override only specific settings.
 ///
 /// # Example
 ///
@@ -74,7 +67,7 @@ impl CacheEntryConfig {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
-    /// Group metadata cache (time_to_live). Default: 1h TTL, 1000 entries.
+    /// Group metadata cache (time_to_live). Default: 1h TTL, 250 entries.
     pub group_cache: CacheEntryConfig,
     /// Device list cache (time_to_live). Default: 1h TTL, 5000 entries.
     pub device_cache: CacheEntryConfig,
@@ -84,12 +77,33 @@ pub struct CacheConfig {
     pub lid_pn_cache: CacheEntryConfig,
     /// Retried group messages tracker (time_to_live). Default: 5m TTL, 2000 entries.
     pub retried_group_messages: CacheEntryConfig,
-    /// Recent messages for retry (time_to_live). Default: 5m TTL, 1000 entries.
+    /// Optional L1 in-memory cache for sent messages (retry support).
+    /// Default: capacity 0 (disabled — DB-only, matching WA Web).
+    /// Set capacity > 0 to enable a fast in-memory cache in front of the DB.
     pub recent_messages: CacheEntryConfig,
-    /// Message retry counts (time_to_live). Default: 5m TTL, 5000 entries.
+    /// Message retry counts (time_to_live). Default: 5m TTL, 1000 entries.
     pub message_retry_counts: CacheEntryConfig,
     /// PDO pending requests (time_to_live). Default: 30s TTL, 500 entries.
     pub pdo_pending_requests: CacheEntryConfig,
+
+    // --- Coordination caches (capacity-only, no TTL) ---
+    /// Per-device Signal session lock capacity. Default: 2000.
+    pub session_locks_capacity: u64,
+    /// Per-chat message processing queue capacity. Default: 2000.
+    pub message_queues_capacity: u64,
+    /// Per-chat message enqueue lock capacity. Default: 2000.
+    pub message_enqueue_locks_capacity: u64,
+
+    // --- Buffer pool ---
+    /// Max number of reusable plaintext marshal buffers. Default: 8.
+    pub max_pooled_buffers: usize,
+    /// Max byte capacity per pooled buffer. Default: 256 KiB.
+    pub max_pooled_buffer_capacity: usize,
+
+    // --- Sent message DB cleanup ---
+    /// TTL in seconds for sent messages in DB before periodic cleanup.
+    /// 0 = no automatic cleanup. Default: 300 (5 minutes).
+    pub sent_message_ttl_secs: u64,
 }
 
 impl Default for CacheConfig {
@@ -98,14 +112,20 @@ impl Default for CacheConfig {
         let five_min = Some(Duration::from_secs(300));
 
         Self {
-            group_cache: CacheEntryConfig::new(one_hour, 1_000),
+            group_cache: CacheEntryConfig::new(one_hour, 250),
             device_cache: CacheEntryConfig::new(one_hour, 5_000),
             device_registry_cache: CacheEntryConfig::new(one_hour, 5_000),
             lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
             retried_group_messages: CacheEntryConfig::new(five_min, 2_000),
-            recent_messages: CacheEntryConfig::new(five_min, 1_000),
-            message_retry_counts: CacheEntryConfig::new(five_min, 5_000),
+            recent_messages: CacheEntryConfig::new(five_min, 0),
+            message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
+            session_locks_capacity: 2_000,
+            message_queues_capacity: 2_000,
+            message_enqueue_locks_capacity: 2_000,
+            max_pooled_buffers: 8,
+            max_pooled_buffer_capacity: 256 * 1024,
+            sent_message_ttl_secs: 300,
         }
     }
 }
