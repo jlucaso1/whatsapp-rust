@@ -93,25 +93,23 @@ impl Client {
         let has_l1_cache = self.recent_messages.policy().max_capacity().unwrap_or(0) > 0;
 
         // L1 cache check (if capacity > 0)
-        if has_l1_cache {
-            if let Some(bytes) = self.recent_messages.remove(&key).await {
-                if let Ok(msg) = wa::Message::decode(bytes.as_slice()) {
-                    // Cache hit — also consume the DB row in the background to avoid orphans
-                    let backend = self.persistence_manager.backend();
-                    let cs = chat_str.clone();
-                    let mid = key.id.clone();
-                    tokio::spawn(async move {
-                        let _ = backend.take_sent_message(&cs, &mid).await;
-                    });
-                    return Some(msg);
-                }
-                // Cache decode failed — fall through to DB
-                log::warn!(
-                    "Failed to decode cached message for {}:{}, trying DB",
-                    to,
-                    id
-                );
+        if has_l1_cache && let Some(bytes) = self.recent_messages.remove(&key).await {
+            if let Ok(msg) = wa::Message::decode(bytes.as_slice()) {
+                // Cache hit — also consume the DB row in the background to avoid orphans
+                let backend = self.persistence_manager.backend();
+                let cs = chat_str.clone();
+                let mid = key.id.clone();
+                tokio::spawn(async move {
+                    let _ = backend.take_sent_message(&cs, &mid).await;
+                });
+                return Some(msg);
             }
+            // Cache decode failed — fall through to DB
+            log::warn!(
+                "Failed to decode cached message for {}:{}, trying DB",
+                to,
+                id
+            );
         }
 
         // DB path (primary when cache capacity = 0, fallback when cache misses)
