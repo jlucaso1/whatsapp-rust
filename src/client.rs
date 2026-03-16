@@ -850,14 +850,17 @@ impl Client {
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.server_has_prekeys.store(true, Ordering::Relaxed);
 
-        let version_future = crate::version::resolve_and_update_version(
-            &self.persistence_manager,
-            &self.http_client,
-            self.override_version,
-        );
-
         // WA Web: both MQTT and DGW transports use a 20s connect timeout.
         // Without this, a dead network blocks on the OS TCP SYN timeout (~60-75s).
+        // Version fetch is also wrapped so a hung HTTP request doesn't block connect().
+        let version_future = tokio::time::timeout(
+            TRANSPORT_CONNECT_TIMEOUT,
+            crate::version::resolve_and_update_version(
+                &self.persistence_manager,
+                &self.http_client,
+                self.override_version,
+            ),
+        );
         let transport_future = tokio::time::timeout(
             TRANSPORT_CONNECT_TIMEOUT,
             self.transport_factory.create_transport(),
@@ -866,7 +869,9 @@ impl Client {
         debug!("Connecting WebSocket and fetching latest client version in parallel...");
         let (version_result, transport_result) = tokio::join!(version_future, transport_future);
 
-        version_result.map_err(|e| anyhow!("Failed to resolve app version: {}", e))?;
+        version_result
+            .map_err(|_| anyhow!("Version fetch timed out after {TRANSPORT_CONNECT_TIMEOUT:?}"))?
+            .map_err(|e| anyhow!("Failed to resolve app version: {}", e))?;
         let (transport, mut transport_events) = transport_result.map_err(|_| {
             anyhow!("Transport connect timed out after {TRANSPORT_CONNECT_TIMEOUT:?}")
         })??;
