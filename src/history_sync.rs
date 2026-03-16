@@ -106,10 +106,16 @@ impl Client {
                 log::debug!("Aborting history sync {} before blob download", message_id);
                 return;
             }
-            match self.download(&notification).await {
-                Ok(data) => {
+            // Stream-decrypt: reads encrypted chunks (8KB) from the network and
+            // decrypts on the fly into a Vec, avoiding holding the full encrypted
+            // blob in memory alongside the decrypted one.
+            match self
+                .download_to_writer(&notification, std::io::Cursor::new(Vec::new()))
+                .await
+            {
+                Ok(cursor) => {
                     log::info!("Successfully downloaded history sync blob.");
-                    data
+                    cursor.into_inner()
                 }
                 Err(e) => {
                     log::error!("Failed to download history sync blob: {:?}", e);
@@ -129,7 +135,7 @@ impl Client {
 
         let parse_result = if has_listeners {
             // Use a bounded channel to stream raw conversation bytes as Bytes (zero-copy)
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(16);
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(4);
 
             // Run streaming parsing in blocking thread
             // own_user is moved directly, no clone needed
@@ -140,7 +146,7 @@ impl Client {
                 // No parsing happens here - just raw byte extraction
                 // Uses Bytes for zero-copy reference counting
                 process_history_sync(
-                    &compressed_data,
+                    compressed_data,
                     own_user_ref,
                     Some(|raw_bytes: Bytes| {
                         // Send Bytes through channel (zero-copy clone)
@@ -170,6 +176,12 @@ impl Client {
                 self.core.event_bus.dispatch(&Event::JoinedGroup(lazy_conv));
             }
 
+            // Drop receiver before awaiting the blocking task. If we broke out
+            // of the loop during shutdown, the sender may be blocked on
+            // tx.blocking_send() — dropping rx causes it to return Err and
+            // unblock, preventing a deadlock.
+            drop(rx);
+
             // Wait for parsing to complete
             parse_handle.await
         } else {
@@ -181,7 +193,7 @@ impl Client {
                 let own_user_ref = own_user.as_deref();
 
                 // Pass None for callback - conversations are skipped at protobuf level
-                process_history_sync::<fn(Bytes)>(&compressed_data, own_user_ref, None)
+                process_history_sync::<fn(Bytes)>(compressed_data, own_user_ref, None)
             })
             .await
         };

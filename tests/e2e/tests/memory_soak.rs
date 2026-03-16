@@ -57,10 +57,10 @@ fn rss_kib() -> usize {
         .is_ok()
     {
         for line in buf.lines() {
-            if let Some(rest) = line.strip_prefix("VmRSS:") {
-                if let Some(kb_str) = rest.trim().strip_suffix("kB").map(str::trim) {
-                    return kb_str.parse().unwrap_or(0);
-                }
+            if let Some(rest) = line.strip_prefix("VmRSS:")
+                && let Some(kb_str) = rest.trim().strip_suffix("kB").map(str::trim)
+            {
+                return kb_str.parse().unwrap_or(0);
             }
         }
     }
@@ -322,7 +322,7 @@ async fn send_and_recv(
                         .extended_text_message
                         .as_ref()
                         .and_then(|ext| ext.text.as_deref())
-                        .map_or(false, |txt| txt.starts_with(&t))
+                        .is_some_and(|txt| txt.starts_with(&t))
             }
             _ => false,
         })
@@ -345,7 +345,7 @@ async fn wait_for_group_msg(
                         .extended_text_message
                         .as_ref()
                         .and_then(|ext| ext.text.as_deref())
-                        .map_or(false, |txt| txt.starts_with(&text))
+                        .is_some_and(|txt| txt.starts_with(&text))
             }
             _ => false,
         })

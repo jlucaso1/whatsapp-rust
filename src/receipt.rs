@@ -10,6 +10,23 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::Node;
 
 impl Client {
+    fn should_send_delivery_receipt(info: &crate::types::message::MessageInfo) -> bool {
+        use wacore_binary::jid::STATUS_BROADCAST_USER;
+
+        if info.id.is_empty()
+            || info.source.chat.user == STATUS_BROADCAST_USER
+            || info.source.chat.is_newsletter()
+        {
+            return false;
+        }
+
+        // WA Web sends type="peer_msg" delivery receipts for self-synced
+        // messages (category="peer").  These tell the primary phone that
+        // this companion device received the message.
+        // For all other messages, skip receipts for our own messages.
+        info.category == "peer" || !info.source.is_from_me
+    }
+
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
@@ -76,24 +93,24 @@ impl Client {
     /// This function handles:
     /// - Direct messages (DMs) - sends receipt to the sender's JID.
     /// - Group messages - sends receipt to the group JID with the sender as a participant.
-    /// - It correctly skips sending receipts for self-sent messages, status broadcasts, or messages without an ID.
+    /// - Peer device messages (category="peer") - sends `type="peer_msg"` receipt to
+    ///   acknowledge self-synced messages from the primary phone.
+    /// - It correctly skips sending receipts for status broadcasts, newsletters,
+    ///   or messages without an ID.
     pub(crate) async fn send_delivery_receipt(&self, info: &crate::types::message::MessageInfo) {
-        use wacore_binary::jid::STATUS_BROADCAST_USER;
-
-        // Don't send receipts for our own messages, status broadcasts, or if ID is missing.
-        if info.source.is_from_me
-            || info.id.is_empty()
-            || info.source.chat.user == STATUS_BROADCAST_USER
-        {
+        if !Self::should_send_delivery_receipt(info) {
             return;
         }
 
         let mut attrs = HashMap::new();
         attrs.insert("id".to_string(), info.id.clone());
-        // The 'to' attribute is always the JID from which the message originated (the chat JID for groups).
         attrs.insert("to".to_string(), info.source.chat.to_string());
-        // WhatsApp Web omits the type attribute for delivery receipts (DROP_ATTR).
-        // The absence of type IS the delivery signal. Only read/played/etc. get explicit type.
+
+        // WA Web: peer device messages (category="peer") use type="peer_msg".
+        // Normal delivery receipts omit the type attribute (DROP_ATTR).
+        if info.category == "peer" {
+            attrs.insert("type".to_string(), "peer_msg".to_string());
+        }
 
         // For group messages, the 'participant' attribute is required to identify the sender.
         if info.source.is_group {
@@ -102,7 +119,9 @@ impl Client {
 
         let receipt_node = NodeBuilder::new("receipt").attrs(attrs).build();
 
-        info!(target: "Client/Receipt", "Sending delivery receipt for message {} to {}", info.id, info.source.sender);
+        info!(target: "Client/Receipt", "Sending {} receipt for message {} to {}",
+            if info.category == "peer" { "peer_msg" } else { "delivery" },
+            info.id, info.source.sender);
 
         if let Err(e) = self.send_node(receipt_node).await {
             log::warn!(target: "Client/Receipt", "Failed to send delivery receipt for message {}: {:?}", info.id, e);
@@ -351,5 +370,81 @@ mod tests {
 
         // Should return early without attempting to send for status broadcasts.
         client.send_delivery_receipt(&info).await;
+    }
+
+    #[test]
+    fn test_should_skip_delivery_receipt_for_newsletter() {
+        let info = MessageInfo {
+            id: "NEWSLETTER-MSG-ID".to_string(),
+            source: MessageSource {
+                chat: "120363173003902460@newsletter"
+                    .parse()
+                    .expect("newsletter JID should be valid"),
+                sender: "120363173003902460@newsletter"
+                    .parse()
+                    .expect("newsletter JID should be valid"),
+                is_from_me: false,
+                is_group: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            !Client::should_send_delivery_receipt(&info),
+            "generic delivery receipts must be skipped for newsletters"
+        );
+    }
+
+    #[test]
+    fn test_should_send_peer_msg_receipt_for_self_synced_messages() {
+        // Self-synced messages (category="peer") should get delivery receipts
+        // even though is_from_me is true.  WA Web sends type="peer_msg" for these.
+        let info = MessageInfo {
+            id: "PEER-MSG-ID".to_string(),
+            source: MessageSource {
+                chat: "155500012345@s.whatsapp.net"
+                    .parse()
+                    .expect("own PN JID should be valid"),
+                sender: "155500012345@s.whatsapp.net"
+                    .parse()
+                    .expect("own PN JID should be valid"),
+                is_from_me: true,
+                is_group: false,
+                ..Default::default()
+            },
+            category: "peer".to_string(),
+            ..Default::default()
+        };
+
+        assert!(
+            Client::should_send_delivery_receipt(&info),
+            "peer device messages must get delivery receipts even when is_from_me"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_non_peer_self_messages() {
+        // Normal self messages (no category) should still be skipped.
+        let info = MessageInfo {
+            id: "SELF-MSG-ID".to_string(),
+            source: MessageSource {
+                chat: "155500012345@s.whatsapp.net"
+                    .parse()
+                    .expect("own PN JID should be valid"),
+                sender: "155500012345@s.whatsapp.net"
+                    .parse()
+                    .expect("own PN JID should be valid"),
+                is_from_me: true,
+                is_group: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            !Client::should_send_delivery_receipt(&info),
+            "non-peer self messages must not get delivery receipts"
+        );
     }
 }

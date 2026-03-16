@@ -75,20 +75,28 @@ impl LazyConversation {
 
     /// Get the parsed conversation, parsing on first access.
     /// Returns None if parsing fails (empty id indicates invalid conversation).
+    ///
+    /// Messages are always stripped on first parse to reduce memory —
+    /// history sync conversations embed full `WebMessageInfo` arrays that
+    /// can be very large. Use the raw protobuf bytes if you need messages.
     pub fn get(&self) -> Option<&wa::Conversation> {
-        let conv = self
-            .parsed
-            .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default());
+        let conv = self.parsed.get_or_init(|| {
+            let mut conv = wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default();
+            conv.messages.clear();
+            conv.messages.shrink_to_fit();
+            conv
+        });
         if conv.id.is_empty() { None } else { Some(conv) }
     }
 
     /// Get the parsed conversation, parsing on first access.
     /// Panics if parsing fails (use `get()` for fallible access).
+    ///
+    /// Messages are always stripped on first parse to reduce memory.
     pub fn conversation(&self) -> &wa::Conversation {
         self.parsed.get_or_init(|| {
             let mut conv = wa::Conversation::decode(&self.raw_bytes[..])
                 .expect("Failed to decode conversation");
-            // Strip heavy fields after parsing to reduce memory
             conv.messages.clear();
             conv.messages.shrink_to_fit();
             conv
