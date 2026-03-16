@@ -7,6 +7,10 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "SQLite storage backend for whatsapp-rust"
 
+[features]
+default = ["bundled-sqlite"]
+bundled-sqlite = ["libsqlite3-sys/bundled"]
+
 [dependencies]
 async-trait = { workspace = true }
 bincode = { version = "2.0.1", features = ["serde"] }
@@ -18,6 +22,7 @@ diesel = { version = "2.3.5", default-features = false, features = [
 diesel_migrations = { version = "2.3.1", default-features = false, features = [
     "sqlite",
 ] }
+libsqlite3-sys = { version = "0.35", default-features = false, optional = true }
 log = { workspace = true }
 prost = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
