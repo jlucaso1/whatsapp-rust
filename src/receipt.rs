@@ -83,6 +83,41 @@ impl Client {
                     );
                 }
             });
+        } else if receipt_type == ReceiptType::EncRekeyRetry {
+            // WA Web: both "retry" and "enc_rekey_retry" route through
+            // handleMessageRetryRequest, but enc_rekey_retry branches to the
+            // VoIP stack's resendEncRekeyRetry(peerJid, retryCount).
+            // Since we don't have a VoIP stack yet, log and skip — matching
+            // WA Web's behavior when getVoipStackInterface() returns null.
+            let enc_rekey_child = node.get_optional_child("enc_rekey");
+            let (call_id, call_creator, count) = match &enc_rekey_child {
+                Some(child) => {
+                    let mut attrs = child.attrs();
+                    (
+                        attrs
+                            .optional_string("call-id")
+                            .unwrap_or_default()
+                            .to_string(),
+                        attrs
+                            .optional_string("call-creator")
+                            .unwrap_or_default()
+                            .to_string(),
+                        attrs
+                            .optional_string("count")
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .unwrap_or(1),
+                    )
+                }
+                None => (String::new(), String::new(), 1),
+            };
+            log::debug!(
+                "Received enc_rekey_retry receipt for call-id={} from {} (call-creator={}, count={}). \
+                 VoIP not implemented, skipping.",
+                call_id,
+                from,
+                call_creator,
+                count
+            );
         } else {
             self.core.event_bus.dispatch(&Event::Receipt(receipt));
         }
@@ -421,6 +456,80 @@ mod tests {
             Client::should_send_delivery_receipt(&info),
             "peer device messages must get delivery receipts even when is_from_me"
         );
+    }
+
+    /// Verify that enc_rekey_retry receipt is recognized and handled without panicking.
+    /// WA Web routes both "retry" and "enc_rekey_retry" to handleMessageRetryRequest,
+    /// then branches: enc_rekey_retry → VoIP stack, retry → message resend.
+    #[tokio::test]
+    async fn test_enc_rekey_retry_receipt_does_not_panic() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Build an enc_rekey_retry receipt node matching WA Web structure
+        let node = Arc::new(
+            NodeBuilder::new("receipt")
+                .attr("from", "5511999999999@s.whatsapp.net")
+                .attr("id", "3EB0AABBCCDD")
+                .attr("type", "enc_rekey_retry")
+                .children([
+                    NodeBuilder::new("enc_rekey")
+                        .attr("call-creator", "5511888888888@s.whatsapp.net")
+                        .attr("call-id", "CALL-123")
+                        .attr("count", "1")
+                        .build(),
+                    NodeBuilder::new("registration")
+                        .bytes(12345u32.to_be_bytes().to_vec())
+                        .build(),
+                ])
+                .build(),
+        );
+
+        // handle_receipt should complete without panicking.
+        // enc_rekey_retry is handled as a separate branch from "retry",
+        // matching WA Web's dispatch to VoIP stack (no-op when null).
+        client.handle_receipt(node).await;
+    }
+
+    /// Verify that enc_rekey_retry without <enc_rekey> child is handled gracefully.
+    #[tokio::test]
+    async fn test_enc_rekey_retry_receipt_without_child_does_not_panic() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Malformed: no <enc_rekey> child
+        let node = Arc::new(
+            NodeBuilder::new("receipt")
+                .attr("from", "5511999999999@s.whatsapp.net")
+                .attr("id", "3EB0AABBCCDD")
+                .attr("type", "enc_rekey_retry")
+                .build(),
+        );
+
+        // Should handle gracefully — log and skip, no panic
+        client.handle_receipt(node).await;
     }
 
     #[test]

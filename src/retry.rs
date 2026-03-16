@@ -774,6 +774,64 @@ impl Client {
         self.send_node(receipt_node).await?;
         Ok(())
     }
+
+    /// Sends an `enc_rekey_retry` receipt for VoIP call encryption re-keying.
+    ///
+    /// WA Web: When a peer fails to decrypt VoIP call encryption data (e.g.,
+    /// `<enc>` within a `<call>` stanza), the receiver sends this receipt asking
+    /// the sender to re-key.  The receipt uses `<enc_rekey>` child instead of
+    /// `<retry>`, carrying VoIP call context (`call-id`, `call-creator`).
+    ///
+    /// WA Web reference: `ENC_RETRY_RECEIPT_ATTRS.GROUP_CALL = "enc_rekey_retry"`,
+    /// constructed in `WAWebVoipSignalingEnums` module.
+    /// Sends an `enc_rekey_retry` receipt for VoIP call encryption re-keying.
+    ///
+    /// WA Web: When a peer fails to decrypt VoIP call encryption data (e.g.,
+    /// `<enc>` within a `<call>` stanza), the receiver sends this receipt asking
+    /// the sender to re-key.  The receipt uses `<enc_rekey>` child instead of
+    /// `<retry>`, carrying VoIP call context (`call-id`, `call-creator`).
+    ///
+    /// WA Web reference: `ENC_RETRY_RECEIPT_ATTRS.GROUP_CALL = "enc_rekey_retry"`,
+    /// constructed in `WAWebVoipSignalingEnums` module.
+    #[allow(dead_code)] // Will be used when call handling is implemented (#345)
+    pub(crate) async fn send_enc_rekey_retry_receipt(
+        &self,
+        stanza_id: &str,
+        peer_jid: &wacore_binary::jid::Jid,
+        call_id: &str,
+        call_creator: &wacore_binary::jid::Jid,
+        retry_count: u8,
+    ) -> Result<(), anyhow::Error> {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        let registration_id_bytes = device_snapshot.registration_id.to_be_bytes().to_vec();
+
+        // WA Web: <enc_rekey call-creator="JID" call-id="..." count="N"/>
+        let enc_rekey_node = NodeBuilder::new("enc_rekey")
+            .attr("call-creator", call_creator.to_string())
+            .attr("call-id", call_id)
+            .attr("count", retry_count.to_string())
+            .build();
+
+        let registration_node = NodeBuilder::new("registration")
+            .bytes(registration_id_bytes)
+            .build();
+
+        let receipt_node = NodeBuilder::new("receipt")
+            .attr("to", peer_jid.to_string())
+            .attr("id", stanza_id)
+            .attr("type", "enc_rekey_retry")
+            .children([enc_rekey_node, registration_node])
+            .build();
+
+        info!(
+            "Sending enc_rekey_retry receipt for call-id={} to {} (count={})",
+            call_id, peer_jid, retry_count
+        );
+
+        self.send_node(receipt_node).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1029,6 +1087,88 @@ mod tests {
         assert!(
             node.attrs().optional_string("recipient").is_none(),
             "DM from other should NOT have recipient"
+        );
+    }
+
+    /// Verify enc_rekey_retry receipt node structure matches WhatsApp Web:
+    /// <receipt to="peer" id="stanza_id" type="enc_rekey_retry">
+    ///   <enc_rekey call-creator="creator_jid" call-id="..." count="N"/>
+    ///   <registration>{4-byte big-endian reg id}</registration>
+    /// </receipt>
+    #[test]
+    fn enc_rekey_retry_receipt_node_structure() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let peer_jid: Jid = "5511999999999@s.whatsapp.net".parse().expect("peer JID");
+        let call_creator: Jid = "5511888888888@s.whatsapp.net".parse().expect("creator JID");
+        let call_id = "CALL-ABC-123";
+        let stanza_id = "3EB0AABBCCDD";
+        let retry_count: u8 = 2;
+        let registration_id: u32 = 12345;
+
+        // Build the receipt exactly as send_enc_rekey_retry_receipt does
+        let enc_rekey_node = NodeBuilder::new("enc_rekey")
+            .attr("call-creator", call_creator.to_string())
+            .attr("call-id", call_id)
+            .attr("count", retry_count.to_string())
+            .build();
+
+        let registration_node = NodeBuilder::new("registration")
+            .bytes(registration_id.to_be_bytes().to_vec())
+            .build();
+
+        let receipt_node = NodeBuilder::new("receipt")
+            .attr("to", peer_jid.to_string())
+            .attr("id", stanza_id)
+            .attr("type", "enc_rekey_retry")
+            .children([enc_rekey_node, registration_node])
+            .build();
+
+        // Verify top-level receipt attributes
+        assert_eq!(
+            receipt_node.attrs().optional_string("type"),
+            Some("enc_rekey_retry"),
+            "receipt type must be enc_rekey_retry"
+        );
+        assert_eq!(
+            receipt_node.attrs().optional_string("to"),
+            Some("5511999999999@s.whatsapp.net")
+        );
+        assert_eq!(
+            receipt_node.attrs().optional_string("id"),
+            Some("3EB0AABBCCDD")
+        );
+
+        // Verify <enc_rekey> child (NOT <retry>)
+        assert!(
+            receipt_node.get_optional_child("retry").is_none(),
+            "enc_rekey_retry must NOT contain <retry> child"
+        );
+        let enc_rekey = receipt_node
+            .get_optional_child("enc_rekey")
+            .expect("<enc_rekey> child must exist");
+        assert_eq!(
+            enc_rekey.attrs().optional_string("call-id"),
+            Some("CALL-ABC-123")
+        );
+        assert_eq!(
+            enc_rekey.attrs().optional_string("call-creator"),
+            Some("5511888888888@s.whatsapp.net")
+        );
+        assert_eq!(enc_rekey.attrs().optional_string("count"), Some("2"));
+
+        // Verify <registration> child
+        let registration = receipt_node
+            .get_optional_child("registration")
+            .expect("<registration> child must exist");
+        let reg_bytes = match &registration.content {
+            Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+            _ => panic!("registration must contain bytes"),
+        };
+        assert_eq!(
+            u32::from_be_bytes(reg_bytes.try_into().unwrap()),
+            12345,
+            "registration ID must be 4-byte big-endian"
         );
     }
 
