@@ -4852,6 +4852,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_build_ack_node_for_receipt_with_type_echoes_type() {
+        // Receipt acks should echo the type attribute when present (e.g. "read", "played").
+        let incoming = NodeBuilder::new("receipt")
+            .attr("from", "156535032389744@lid")
+            .attr("id", "RCPT-WITH-TYPE")
+            .attr("type", "read")
+            .build();
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("receipt ack should be buildable");
+
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("receipt")
+        );
+        assert_eq!(
+            ack.attrs.get("type").and_then(|v| v.as_str()),
+            Some("read"),
+            "receipt ACK must echo the type attribute when present"
+        );
+        assert!(
+            !ack.attrs.contains_key("from"),
+            "receipt ACKs should not include our device PN"
+        );
+    }
+
+    #[test]
+    fn test_build_ack_node_for_receipt_without_type_omits_type() {
+        // Delivery receipts have no type attribute — the ack must also omit it.
+        // Sending type="delivery" in the ack causes stream:error disconnections.
+        let incoming = NodeBuilder::new("receipt")
+            .attr("from", "156535032389744@lid")
+            .attr("id", "RCPT-NO-TYPE")
+            .build();
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("receipt ack should be buildable");
+
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("receipt")
+        );
+        assert!(
+            !ack.attrs.contains_key("type"),
+            "receipt ACK must NOT contain type when the incoming receipt has no type attribute"
+        );
+        assert!(
+            !ack.attrs.contains_key("from"),
+            "receipt ACKs should not include our device PN"
+        );
+    }
+
     /// Smoke test: server ping with xmlns but no id attribute is handled.
     #[tokio::test]
     async fn test_handle_iq_ping_without_id() {
