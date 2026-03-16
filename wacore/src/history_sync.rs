@@ -75,21 +75,14 @@ where
             2 if wire_type_raw == wire_type::LENGTH_DELIMITED => {
                 let (len, vlen) = read_varint(&buf[pos..])?;
                 pos += vlen;
-                let len = len as usize;
-
-                if pos + len > buf.len() {
-                    return Err(HistorySyncError::MalformedProtobuf(format!(
-                        "conversation field overflows buffer: pos={pos}, len={len}, buf={}",
-                        buf.len()
-                    )));
-                }
+                let end = checked_end(pos, len, buf.len(), "conversation")?;
 
                 if let Some(ref mut callback) = on_conversation_bytes {
                     // Zero-copy slice — just an Arc refcount increment.
-                    callback(buf.slice(pos..pos + len));
+                    callback(buf.slice(pos..end));
                     result.conversations_processed += 1;
                 }
-                pos += len;
+                pos = end;
             }
 
             // field 7 = pushnames (repeated, length-delimited)
@@ -99,23 +92,16 @@ where
             {
                 let (len, vlen) = read_varint(&buf[pos..])?;
                 pos += vlen;
-                let len = len as usize;
+                let end = checked_end(pos, len, buf.len(), "pushname")?;
 
-                if pos + len > buf.len() {
-                    return Err(HistorySyncError::MalformedProtobuf(format!(
-                        "pushname field overflows buffer: pos={pos}, len={len}, buf={}",
-                        buf.len()
-                    )));
-                }
-
-                if let Ok(pn) = wa::Pushname::decode(&buf[pos..pos + len])
+                if let Ok(pn) = wa::Pushname::decode(&buf[pos..end])
                     && let Some(ref id) = pn.id
                     && Some(id.as_str()) == own_user
                     && let Some(name) = pn.pushname
                 {
                     result.own_pushname = Some(name);
                 }
-                pos += len;
+                pos = end;
             }
 
             _ => {
@@ -125,6 +111,30 @@ where
     }
 
     Ok(result)
+}
+
+/// Compute `pos + len` with overflow and bounds checking.
+#[inline]
+fn checked_end(
+    pos: usize,
+    len: u64,
+    buf_len: usize,
+    field: &str,
+) -> Result<usize, HistorySyncError> {
+    let len = usize::try_from(len).map_err(|_| {
+        HistorySyncError::MalformedProtobuf(format!("{field} length overflows usize: {len}"))
+    })?;
+    let end = pos.checked_add(len).ok_or_else(|| {
+        HistorySyncError::MalformedProtobuf(format!(
+            "{field} field overflows: pos={pos}, len={len}"
+        ))
+    })?;
+    if end > buf_len {
+        return Err(HistorySyncError::MalformedProtobuf(format!(
+            "{field} field overflows buffer: pos={pos}, len={len}, buf={buf_len}"
+        )));
+    }
+    Ok(end)
 }
 
 /// Read a protobuf varint from `data`, returning (value, bytes_consumed).
@@ -157,12 +167,12 @@ fn skip_field(wire_type: u32, buf: &[u8], pos: usize) -> Result<usize, HistorySy
             let (_, vlen) = read_varint(&buf[pos..])?;
             Ok(pos + vlen)
         }
-        wire_type::FIXED64 => Ok(pos + 8),
+        wire_type::FIXED64 => checked_end(pos, 8, buf.len(), "fixed64"),
         wire_type::LENGTH_DELIMITED => {
             let (len, vlen) = read_varint(&buf[pos..])?;
-            Ok(pos + vlen + len as usize)
+            checked_end(pos + vlen, len, buf.len(), "length-delimited")
         }
-        wire_type::FIXED32 => Ok(pos + 4),
+        wire_type::FIXED32 => checked_end(pos, 4, buf.len(), "fixed32"),
         _ => {
             log::warn!("Unknown wire type {wire_type} in history sync, cannot skip");
             Err(HistorySyncError::MalformedProtobuf(format!(
