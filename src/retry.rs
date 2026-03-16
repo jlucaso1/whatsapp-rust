@@ -784,15 +784,6 @@ impl Client {
     ///
     /// WA Web reference: `ENC_RETRY_RECEIPT_ATTRS.GROUP_CALL = "enc_rekey_retry"`,
     /// constructed in `WAWebVoipSignalingEnums` module.
-    /// Sends an `enc_rekey_retry` receipt for VoIP call encryption re-keying.
-    ///
-    /// WA Web: When a peer fails to decrypt VoIP call encryption data (e.g.,
-    /// `<enc>` within a `<call>` stanza), the receiver sends this receipt asking
-    /// the sender to re-key.  The receipt uses `<enc_rekey>` child instead of
-    /// `<retry>`, carrying VoIP call context (`call-id`, `call-creator`).
-    ///
-    /// WA Web reference: `ENC_RETRY_RECEIPT_ATTRS.GROUP_CALL = "enc_rekey_retry"`,
-    /// constructed in `WAWebVoipSignalingEnums` module.
     #[allow(dead_code)] // Will be used when call handling is implemented (#345)
     pub(crate) async fn send_enc_rekey_retry_receipt(
         &self,

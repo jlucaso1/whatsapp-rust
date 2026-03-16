@@ -87,37 +87,24 @@ impl Client {
             // WA Web: both "retry" and "enc_rekey_retry" route through
             // handleMessageRetryRequest, but enc_rekey_retry branches to the
             // VoIP stack's resendEncRekeyRetry(peerJid, retryCount).
-            // Since we don't have a VoIP stack yet, log and skip — matching
-            // WA Web's behavior when getVoipStackInterface() returns null.
-            let enc_rekey_child = node.get_optional_child("enc_rekey");
-            let (call_id, call_creator, count) = match &enc_rekey_child {
-                Some(child) => {
-                    let mut attrs = child.attrs();
-                    (
-                        attrs
-                            .optional_string("call-id")
-                            .unwrap_or_default()
-                            .to_string(),
-                        attrs
-                            .optional_string("call-creator")
-                            .unwrap_or_default()
-                            .to_string(),
-                        attrs
-                            .optional_string("count")
-                            .and_then(|s| s.parse::<u8>().ok())
-                            .unwrap_or(1),
-                    )
-                }
-                None => (String::new(), String::new(), 1),
-            };
-            log::debug!(
-                "Received enc_rekey_retry receipt for call-id={} from {} (call-creator={}, count={}). \
-                 VoIP not implemented, skipping.",
-                call_id,
-                from,
-                call_creator,
-                count
-            );
+            // Since we don't have a VoIP stack yet, log and dispatch as a
+            // Receipt event so consumers can observe it. When VoIP is
+            // implemented (#345), this will route to the VoIP re-key handler.
+            if let Some(child) = node.get_optional_child("enc_rekey") {
+                let mut attrs = child.attrs();
+                log::debug!(
+                    "Received enc_rekey_retry receipt for call-id={} from {} \
+                     (call-creator={}, count={}). VoIP not implemented, forwarding as event.",
+                    attrs.optional_string("call-id").unwrap_or_default(),
+                    from,
+                    attrs.optional_string("call-creator").unwrap_or_default(),
+                    attrs
+                        .optional_string("count")
+                        .and_then(|s| s.parse::<u8>().ok())
+                        .unwrap_or(1),
+                );
+            }
+            self.core.event_bus.dispatch(&Event::Receipt(receipt));
         } else {
             self.core.event_bus.dispatch(&Event::Receipt(receipt));
         }
@@ -217,6 +204,31 @@ mod tests {
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
     use crate::types::message::{MessageInfo, MessageSource};
+    use std::sync::Mutex;
+    use wacore::types::events::EventHandler;
+
+    #[derive(Default)]
+    struct TestEventCollector {
+        events: Mutex<Vec<Event>>,
+    }
+
+    impl EventHandler for TestEventCollector {
+        fn handle_event(&self, event: &Event) {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .push(event.clone());
+        }
+    }
+
+    impl TestEventCollector {
+        fn events(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .clone()
+        }
+    }
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {
@@ -458,11 +470,10 @@ mod tests {
         );
     }
 
-    /// Verify that enc_rekey_retry receipt is recognized and handled without panicking.
-    /// WA Web routes both "retry" and "enc_rekey_retry" to handleMessageRetryRequest,
-    /// then branches: enc_rekey_retry → VoIP stack, retry → message resend.
+    /// Verify that enc_rekey_retry receipt is dispatched as a Receipt event
+    /// with EncRekeyRetry type so consumers can observe it.
     #[tokio::test]
-    async fn test_enc_rekey_retry_receipt_does_not_panic() {
+    async fn test_enc_rekey_retry_receipt_dispatches_event() {
         let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
@@ -476,6 +487,9 @@ mod tests {
             None,
         )
         .await;
+
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
 
         // Build an enc_rekey_retry receipt node matching WA Web structure
         let node = Arc::new(
@@ -496,15 +510,34 @@ mod tests {
                 .build(),
         );
 
-        // handle_receipt should complete without panicking.
-        // enc_rekey_retry is handled as a separate branch from "retry",
-        // matching WA Web's dispatch to VoIP stack (no-op when null).
         client.handle_receipt(node).await;
+
+        // Must dispatch exactly one Receipt event with EncRekeyRetry type
+        let events = collector.events();
+        let receipt_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Receipt(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            receipt_events.len(),
+            1,
+            "enc_rekey_retry must dispatch exactly one Receipt event"
+        );
+        assert_eq!(
+            receipt_events[0].r#type,
+            ReceiptType::EncRekeyRetry,
+            "dispatched receipt must have EncRekeyRetry type"
+        );
+        assert_eq!(receipt_events[0].message_ids, vec!["3EB0AABBCCDD"]);
     }
 
-    /// Verify that enc_rekey_retry without <enc_rekey> child is handled gracefully.
+    /// Verify that enc_rekey_retry without <enc_rekey> child still dispatches
+    /// the Receipt event (graceful degradation, no crash).
     #[tokio::test]
-    async fn test_enc_rekey_retry_receipt_without_child_does_not_panic() {
+    async fn test_enc_rekey_retry_receipt_without_child_still_dispatches() {
         let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
@@ -519,6 +552,9 @@ mod tests {
         )
         .await;
 
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
         // Malformed: no <enc_rekey> child
         let node = Arc::new(
             NodeBuilder::new("receipt")
@@ -528,8 +564,23 @@ mod tests {
                 .build(),
         );
 
-        // Should handle gracefully — log and skip, no panic
         client.handle_receipt(node).await;
+
+        // Should still dispatch the Receipt event even without <enc_rekey> child
+        let events = collector.events();
+        let receipt_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Receipt(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            receipt_events.len(),
+            1,
+            "malformed enc_rekey_retry must still dispatch Receipt event"
+        );
+        assert_eq!(receipt_events[0].r#type, ReceiptType::EncRekeyRetry);
     }
 
     #[test]
