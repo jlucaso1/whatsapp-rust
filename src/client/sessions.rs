@@ -18,9 +18,6 @@ impl Client {
         self.offline_sync_metrics
             .active
             .store(false, Ordering::Release);
-        self.offline_sync_metrics
-            .next_expected_sequence
-            .store(0, Ordering::Release);
         match self.offline_sync_metrics.start_time.lock() {
             Ok(mut guard) => *guard = None,
             Err(poison) => *poison.into_inner() = None,

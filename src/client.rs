@@ -238,7 +238,6 @@ pub(crate) struct OfflineSyncMetrics {
     pub active: AtomicBool,
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
-    pub next_expected_sequence: AtomicUsize,
     // Using simple std Mutex for timestamp as it's rarely contended and non-async
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
@@ -578,7 +577,6 @@ impl Client {
                 active: AtomicBool::new(false),
                 total_messages: AtomicUsize::new(0),
                 processed_messages: AtomicUsize::new(0),
-                next_expected_sequence: AtomicUsize::new(0),
                 start_time: std::sync::Mutex::new(None),
             }),
 
@@ -968,9 +966,6 @@ impl Client {
         self.offline_sync_metrics
             .processed_messages
             .store(0, Ordering::Release);
-        self.offline_sync_metrics
-            .next_expected_sequence
-            .store(0, Ordering::Release);
         match self.offline_sync_metrics.start_time.lock() {
             Ok(mut guard) => *guard = None,
             Err(poison) => *poison.into_inner() = None,
@@ -1224,9 +1219,6 @@ impl Client {
                         .processed_messages
                         .store(0, Ordering::Release);
                     self.offline_sync_metrics
-                        .next_expected_sequence
-                        .store(0, Ordering::Release);
-                    self.offline_sync_metrics
                         .active
                         .store(true, Ordering::Release);
                     match self.offline_sync_metrics.start_time.lock() {
@@ -1265,44 +1257,6 @@ impl Client {
                     .processed_messages
                     .fetch_add(1, Ordering::Release)
                     + 1;
-                match node
-                    .attrs
-                    .get("offline")
-                    .and_then(|v| v.as_str())
-                    .map(|value| value.parse::<usize>())
-                {
-                    Some(Ok(offline_sequence)) => {
-                        let expected = self
-                            .offline_sync_metrics
-                            .next_expected_sequence
-                            .load(Ordering::Acquire);
-                        if expected != 0 && offline_sequence != expected {
-                            log::warn!(
-                                target: "Client/OfflineSync",
-                                "Offline sync stanza arrived out of order: expected sequence {}, got {} (tag={}, from={:?}, id={:?})",
-                                expected,
-                                offline_sequence,
-                                node.tag,
-                                node.attrs.get("from").and_then(|v| v.as_str()),
-                                node.attrs.get("id").and_then(|v| v.as_str()),
-                            );
-                        }
-                        self.offline_sync_metrics
-                            .next_expected_sequence
-                            .store(offline_sequence.saturating_add(1), Ordering::Release);
-                    }
-                    Some(Err(_)) => {
-                        log::warn!(
-                            target: "Client/OfflineSync",
-                            "Offline sync stanza has non-numeric offline attribute (tag={}, from={:?}, id={:?}, offline={:?})",
-                            node.tag,
-                            node.attrs.get("from").and_then(|v| v.as_str()),
-                            node.attrs.get("id").and_then(|v| v.as_str()),
-                            node.attrs.get("offline").and_then(|v| v.as_str()),
-                        );
-                    }
-                    None => {}
-                }
                 let total = self
                     .offline_sync_metrics
                     .total_messages
@@ -4570,81 +4524,6 @@ mod tests {
                 .load(Ordering::Acquire),
             1,
             "offline message should increment processed count"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_offline_message_sequence_tracker_advances() {
-        let client = create_offline_sync_test_client().await;
-
-        let preview = NodeBuilder::new("ib")
-            .children([NodeBuilder::new("offline_preview")
-                .attr("count", "2")
-                .attr("message", "2")
-                .attr("notification", "0")
-                .attr("receipt", "0")
-                .attr("appdata", "0")
-                .build()])
-            .build();
-        client.process_node(Arc::new(preview)).await;
-
-        let first = NodeBuilder::new("message")
-            .attr("offline", "7")
-            .attr("from", "5551234567@s.whatsapp.net")
-            .attr("id", "TEST123")
-            .attr("t", "1772884671")
-            .attr("type", "text")
-            .build();
-        client.process_node(Arc::new(first)).await;
-        assert_eq!(
-            client
-                .offline_sync_metrics
-                .next_expected_sequence
-                .load(Ordering::Acquire),
-            8
-        );
-
-        let second = NodeBuilder::new("message")
-            .attr("offline", "8")
-            .attr("from", "5551234567@s.whatsapp.net")
-            .attr("id", "TEST124")
-            .attr("t", "1772884672")
-            .attr("type", "text")
-            .build();
-        client.process_node(Arc::new(second)).await;
-        assert_eq!(
-            client
-                .offline_sync_metrics
-                .next_expected_sequence
-                .load(Ordering::Acquire),
-            9
-        );
-    }
-
-    #[tokio::test]
-    async fn test_offline_sync_completion_resets_sequence_tracker() {
-        let client = create_offline_sync_test_client().await;
-        client
-            .offline_sync_metrics
-            .active
-            .store(true, Ordering::Release);
-        client
-            .offline_sync_metrics
-            .next_expected_sequence
-            .store(9, Ordering::Release);
-
-        let node = NodeBuilder::new("ib")
-            .children([NodeBuilder::new("offline").attr("count", "1").build()])
-            .build();
-
-        client.process_node(Arc::new(node)).await;
-        assert_eq!(
-            client
-                .offline_sync_metrics
-                .next_expected_sequence
-                .load(Ordering::Acquire),
-            0,
-            "offline sync completion should reset sequence tracking"
         );
     }
 
