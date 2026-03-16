@@ -202,6 +202,37 @@ impl fmt::Debug for PublicKey {
     }
 }
 
+impl serde::Serialize for PublicKey {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
+        let mut bytes = [0u8; 33];
+        bytes[0] = self.key_type().value();
+        bytes[1..].copy_from_slice(self.public_key_bytes());
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&hex::encode(bytes))
+        } else {
+            serializer.serialize_bytes(&bytes)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PublicKey {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> core::result::Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            let s: String = serde::Deserialize::deserialize(deserializer)?;
+            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+            Self::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
+        } else {
+            let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
+            Self::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::scalar::Scalar;
 use std::sync::OnceLock;
@@ -360,7 +391,36 @@ impl TryFrom<&[u8]> for PrivateKey {
     }
 }
 
-#[derive(Clone)]
+impl serde::Serialize for PrivateKey {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
+        let PrivateKeyData::DjbPrivateKey { key, .. } = &self.key;
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&hex::encode(key))
+        } else {
+            serializer.serialize_bytes(key)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PrivateKey {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> core::result::Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            let s: String = serde::Deserialize::deserialize(deserializer)?;
+            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+            Self::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
+        } else {
+            let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
+            Self::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct KeyPair {
     pub public_key: PublicKey,
     pub private_key: PrivateKey,
