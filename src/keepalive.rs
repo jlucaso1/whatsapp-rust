@@ -138,21 +138,7 @@ impl Client {
                         return;
                     }
 
-                    // Dead-socket check (WA Web: deadSocketTimer → softCloseSocket).
-                    // Armed on send, cancelled on receive. Fires when data was sent
-                    // but no reply arrived within DEAD_SOCKET_TIME.
-                    let last_sent = self.last_data_sent_ms.load(Ordering::Relaxed);
                     let last_recv = self.last_data_received_ms.load(Ordering::Relaxed);
-                    if is_dead_socket(last_sent, last_recv) {
-                        let elapsed = ms_since(last_sent).unwrap_or(0);
-                        warn!(
-                            target: "Client/Keepalive",
-                            "No data received for {:.1}s after send (dead socket), forcing reconnect.",
-                            elapsed as f64 / 1000.0
-                        );
-                        self.reconnect_immediately().await;
-                        return;
-                    }
 
                     // WA Web: maybeScheduleHealthCheck — only send ping when idle.
                     // If we recently received data, the connection is proven alive;
@@ -169,6 +155,12 @@ impl Client {
                         continue;
                     }
 
+                    // Probe the connection BEFORE checking dead-socket so that a
+                    // successful pong updates last_received_ms and prevents a
+                    // false-positive dead-socket trigger on an idle-but-healthy
+                    // connection.  WA Web uses a separate 20 s timer that is
+                    // cancelled on any receive; our periodic loop needs to send the
+                    // ping first to give the server a chance to prove it is alive.
                     match self.send_keepalive().await {
                         KeepaliveResult::Ok => {
                             if error_count > 0 {
@@ -200,6 +192,21 @@ impl Client {
                         KeepaliveResult::TransientFailure => {
                             error_count += 1;
                             warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {error_count}");
+
+                            // Dead-socket check after a failed ping.  Re-read
+                            // timestamps because send_keepalive updated last_sent.
+                            let last_sent = self.last_data_sent_ms.load(Ordering::Relaxed);
+                            let last_recv = self.last_data_received_ms.load(Ordering::Relaxed);
+                            if is_dead_socket(last_sent, last_recv) {
+                                let elapsed = ms_since(last_sent).unwrap_or(0);
+                                warn!(
+                                    target: "Client/Keepalive",
+                                    "No data received for {:.1}s after send (dead socket), forcing reconnect.",
+                                    elapsed as f64 / 1000.0
+                                );
+                                self.reconnect_immediately().await;
+                                return;
+                            }
                         }
                     }
                 },
