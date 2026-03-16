@@ -184,9 +184,10 @@ where
     // "syncd-version-check-error-local-version-{greater|less}-than-expected".
     // Skip this check when we have no prior state (version=0, empty hash),
     // since we don't have a baseline to validate against.
-    if !had_no_prior_state && patch_version != original_version + 1 {
+    let expected_version = original_version.saturating_add(1);
+    if !had_no_prior_state && patch_version != expected_version {
         return Err(AppStateError::PatchVersionMismatch {
-            expected: original_version + 1,
+            expected: expected_version,
             got: patch_version,
         });
     }
