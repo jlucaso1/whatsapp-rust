@@ -105,6 +105,10 @@ type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
+/// WA Web: MQTT connect timeout = 20s (guq1jQM2ICX.js:2298),
+/// DGW connectTimeoutMs default = 20s (guq1jQM2ICX.js:14892).
+const TRANSPORT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Snapshot of internal collection sizes for memory leak detection.
 ///
 /// All counts are approximate (moka caches may have pending evictions).
@@ -852,13 +856,21 @@ impl Client {
             self.override_version,
         );
 
-        let transport_future = self.transport_factory.create_transport();
+        // WA Web: both MQTT and DGW transports use a 20s connect timeout
+        // (guq1jQM2ICX.js:2298,2370 and 14892,15206). Without this, a dead
+        // network blocks on the OS TCP SYN timeout (~60-75s on Linux).
+        let transport_future = tokio::time::timeout(
+            TRANSPORT_CONNECT_TIMEOUT,
+            self.transport_factory.create_transport(),
+        );
 
         debug!("Connecting WebSocket and fetching latest client version in parallel...");
         let (version_result, transport_result) = tokio::join!(version_future, transport_future);
 
         version_result.map_err(|e| anyhow!("Failed to resolve app version: {}", e))?;
-        let (transport, mut transport_events) = transport_result?;
+        let (transport, mut transport_events) = transport_result.map_err(|_| {
+            anyhow!("Transport connect timed out after {TRANSPORT_CONNECT_TIMEOUT:?}")
+        })??;
         debug!("Version fetch and transport connection established.");
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
