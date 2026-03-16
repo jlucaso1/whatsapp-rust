@@ -1427,7 +1427,7 @@ impl Client {
             None => return Ok(()),
         };
         let participant = node.attrs.get("participant").cloned();
-        let typ = if node.tag != "message" {
+        let typ = if should_echo_type_in_ack(node) {
             node.attrs.get("type").cloned()
         } else {
             None
@@ -3158,6 +3158,18 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
     builder.build()
 }
 
+/// WA Web omits `type` when ACKing `notification type="encrypt"><identity/></notification`.
+/// Other notification ACKs continue to echo the notification type.
+fn should_echo_type_in_ack(node: &Node) -> bool {
+    if node.tag == "message" {
+        return false;
+    }
+
+    !(node.tag == "notification"
+        && node.attrs.get("type").and_then(|v| v.as_str()) == Some("encrypt")
+        && node.get_optional_child("identity").is_some())
+}
+
 /// Computes a reconnect delay matching WhatsApp Web's Fibonacci backoff:
 /// `{ algo: { type: "fibonacci", first: 1000, second: 1000 }, jitter: 0.1, max: 9e5 }`
 ///
@@ -4839,6 +4851,36 @@ mod tests {
         assert_eq!(
             pong.attrs.get("type").and_then(|v| v.as_str()),
             Some("result")
+        );
+    }
+
+    #[test]
+    fn test_should_echo_type_in_ack_for_identity_change_notification() {
+        let node = NodeBuilder::new("notification")
+            .attr("from", "186303081611421@lid")
+            .attr("id", "4128735301")
+            .attr("type", "encrypt")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+
+        assert!(
+            !should_echo_type_in_ack(&node),
+            "identity-change notification ACK must omit type to match WA Web"
+        );
+    }
+
+    #[test]
+    fn test_should_echo_type_in_ack_for_device_notification() {
+        let node = NodeBuilder::new("notification")
+            .attr("from", "186303081611421@lid")
+            .attr("id", "269488578")
+            .attr("type", "devices")
+            .children([NodeBuilder::new("remove").build()])
+            .build();
+
+        assert!(
+            should_echo_type_in_ack(&node),
+            "device notification ACK should continue echoing the notification type"
         );
     }
 

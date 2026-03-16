@@ -10,6 +10,17 @@ use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::Node;
 
 impl Client {
+    fn should_send_delivery_receipt(info: &crate::types::message::MessageInfo) -> bool {
+        use wacore_binary::jid::STATUS_BROADCAST_USER;
+
+        // Captured WA Web uses transport ACKs for incoming newsletters and keeps
+        // newsletter receipts on a separate read/view/played path.
+        !info.source.is_from_me
+            && !info.id.is_empty()
+            && info.source.chat.user != STATUS_BROADCAST_USER
+            && !info.source.chat.is_newsletter()
+    }
+
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
         let mut attrs = node.attrs();
         let from = attrs.jid("from");
@@ -76,15 +87,10 @@ impl Client {
     /// This function handles:
     /// - Direct messages (DMs) - sends receipt to the sender's JID.
     /// - Group messages - sends receipt to the group JID with the sender as a participant.
-    /// - It correctly skips sending receipts for self-sent messages, status broadcasts, or messages without an ID.
+    /// - It correctly skips sending receipts for self-sent messages, status broadcasts,
+    ///   newsletters, or messages without an ID.
     pub(crate) async fn send_delivery_receipt(&self, info: &crate::types::message::MessageInfo) {
-        use wacore_binary::jid::STATUS_BROADCAST_USER;
-
-        // Don't send receipts for our own messages, status broadcasts, or if ID is missing.
-        if info.source.is_from_me
-            || info.id.is_empty()
-            || info.source.chat.user == STATUS_BROADCAST_USER
-        {
+        if !Self::should_send_delivery_receipt(info) {
             return;
         }
 
@@ -351,5 +357,29 @@ mod tests {
 
         // Should return early without attempting to send for status broadcasts.
         client.send_delivery_receipt(&info).await;
+    }
+
+    #[test]
+    fn test_should_skip_delivery_receipt_for_newsletter() {
+        let info = MessageInfo {
+            id: "NEWSLETTER-MSG-ID".to_string(),
+            source: MessageSource {
+                chat: "120363173003902460@newsletter"
+                    .parse()
+                    .expect("newsletter JID should be valid"),
+                sender: "120363173003902460@newsletter"
+                    .parse()
+                    .expect("newsletter JID should be valid"),
+                is_from_me: false,
+                is_group: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            !Client::should_send_delivery_receipt(&info),
+            "generic delivery receipts must be skipped for newsletters"
+        );
     }
 }
