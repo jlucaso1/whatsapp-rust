@@ -28,7 +28,7 @@ hkdf = { workspace = true }
 hmac = { workspace = true }
 log = { workspace = true }
 md5 = "0.8.0"
-once_cell = { version = "1.19", default-features = false, features = ["std"] }
+once_cell = { version = "1.21", default-features = false, features = ["std"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 prost = { workspace = true }
 rand = { workspace = true }
