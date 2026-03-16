@@ -32,6 +32,8 @@ pub enum AppStateError {
     PatchSnapshotMACMismatch,
     #[error("patch MAC mismatch")]
     PatchMACMismatch,
+    #[error("patch version mismatch: expected {expected}, got {got}")]
+    PatchVersionMismatch { expected: u64, got: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, AppStateError>;
