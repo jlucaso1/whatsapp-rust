@@ -470,10 +470,8 @@ mod tests {
         );
     }
 
-    /// Verify that enc_rekey_retry receipt is dispatched as a Receipt event
-    /// with EncRekeyRetry type so consumers can observe it.
-    #[tokio::test]
-    async fn test_enc_rekey_retry_receipt_dispatches_event() {
+    /// Create a test client with an event collector registered.
+    async fn setup_client_with_collector() -> (Arc<Client>, Arc<TestEventCollector>) {
         let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
@@ -490,6 +488,14 @@ mod tests {
 
         let collector = Arc::new(TestEventCollector::default());
         client.register_handler(collector.clone());
+        (client, collector)
+    }
+
+    /// Verify that enc_rekey_retry receipt is dispatched as a Receipt event
+    /// with EncRekeyRetry type so consumers can observe it.
+    #[tokio::test]
+    async fn test_enc_rekey_retry_receipt_dispatches_event() {
+        let (client, collector) = setup_client_with_collector().await;
 
         // Build an enc_rekey_retry receipt node matching WA Web structure
         let node = Arc::new(
@@ -538,22 +544,7 @@ mod tests {
     /// the Receipt event (graceful degradation, no crash).
     #[tokio::test]
     async fn test_enc_rekey_retry_receipt_without_child_still_dispatches() {
-        let backend = crate::test_utils::create_test_backend().await;
-        let pm = Arc::new(
-            PersistenceManager::new(backend)
-                .await
-                .expect("persistence manager should initialize"),
-        );
-        let (client, _rx) = Client::new(
-            pm,
-            Arc::new(crate::transport::mock::MockTransportFactory::new()),
-            Arc::new(MockHttpClient),
-            None,
-        )
-        .await;
-
-        let collector = Arc::new(TestEventCollector::default());
-        client.register_handler(collector.clone());
+        let (client, collector) = setup_client_with_collector().await;
 
         // Malformed: no <enc_rekey> child
         let node = Arc::new(
