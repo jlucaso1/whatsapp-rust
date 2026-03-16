@@ -204,7 +204,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             handle_disappearing_mode_notification(client, node);
         }
         _ => {
-            warn!("TODO: Implement handler for <notification type='{notification_type}'>");
+            debug!("Unhandled notification type '{notification_type}', dispatching raw event");
             client
                 .core
                 .event_bus
@@ -898,7 +898,11 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &Node) {
     match child.tag.as_str() {
         "update" => {
             let Some(jid) = child.attrs().optional_jid("jid") else {
-                warn!(target: "Client/Contacts", "contacts update missing 'jid' attribute");
+                // WA Web: when no jid, tries hash-based lookup against local contacts
+                // (first 4 chars of contact userhash). If no match, it's a no-op.
+                // We don't maintain a userhash index, so just ack and move on.
+                debug!(target: "Client/Contacts", "contacts update with hash but no jid, ignoring (hash={:?})",
+                    child.attrs().optional_string("hash"));
                 return;
             };
 
@@ -1656,22 +1660,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_contacts_update_missing_jid_ignored() {
+    async fn test_contacts_update_hash_only_ignored() {
+        // WA Web sends <update hash="Quvc"/> without jid when using hash-based lookup.
+        // We don't maintain a userhash index, so this should be a no-op.
         let client = create_test_client().await;
         let collector = Arc::new(TestEventCollector::default());
         client.register_handler(collector.clone());
 
         let node = NodeBuilder::new("notification")
             .attr("type", "contacts")
-            .attr("from", "s.whatsapp.net")
-            .attr("id", "contacts-update-nojid")
-            .children([NodeBuilder::new("update").build()])
+            .attr("from", "551199887766@s.whatsapp.net")
+            .attr("id", "3251801952")
+            .attr("t", "1773668072")
+            .children([NodeBuilder::new("update").attr("hash", "Quvc").build()])
             .build();
         handle_notification_impl(&client, &node).await;
 
         assert!(
             collector.events().is_empty(),
-            "update without jid should not dispatch events"
+            "hash-only update without jid should not dispatch events"
         );
     }
 }

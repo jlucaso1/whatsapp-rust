@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_dual_addressing_pn_and_lid_are_independent() {
-        let pn_address = Jid::pn("559984726662").with_device(0);
+        let pn_address = Jid::pn("551199887766").with_device(0);
         let lid_address = Jid::lid("236395184570386").with_device(0);
 
         assert_ne!(pn_address.user, lid_address.user);
@@ -558,7 +558,7 @@ mod tests {
         let lid_signal_addr = lid_address.to_protocol_address();
 
         assert_ne!(pn_signal_addr.name(), lid_signal_addr.name());
-        assert_eq!(pn_signal_addr.name(), "559984726662@c.us");
+        assert_eq!(pn_signal_addr.name(), "551199887766@c.us");
         assert_eq!(lid_signal_addr.name(), "236395184570386@lid");
         assert_eq!(pn_address.device, 0);
         assert_eq!(lid_address.device, 0);

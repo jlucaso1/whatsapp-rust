@@ -185,7 +185,7 @@ mod tests {
                         },
                         "country_code": "BR",
                         "id": null,
-                        "jid": "559984726662@s.whatsapp.net",
+                        "jid": "551199887766@s.whatsapp.net",
                         "username_info": {
                             "__typename": "XWA2ResponseStatus",
                             "status": "EMPTY"
@@ -203,7 +203,7 @@ mod tests {
         let users = data["xwa2_fetch_wa_users"].as_array().unwrap();
         assert_eq!(users.len(), 1);
         assert_eq!(users[0]["country_code"], "BR");
-        assert_eq!(users[0]["jid"], "559984726662@s.whatsapp.net");
+        assert_eq!(users[0]["jid"], "551199887766@s.whatsapp.net");
     }
 
     #[test]
