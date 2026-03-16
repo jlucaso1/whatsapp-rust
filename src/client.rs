@@ -3088,12 +3088,26 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
     builder.build()
 }
 
+/// Build an `<ack/>` for the given stanza, matching WA Web / whatsmeow behavior:
+///
+/// - `class` = original stanza tag
+/// - `id`, `to` (flipped from `from`), `participant` copied from original
+/// - `from` = own device PN, only for message acks
+/// - `type` echoed for non-message stanzas (whatsmeow: `node.Tag != "message"`),
+///   except `notification type="encrypt"` with `<identity/>` child (WA Web drops type there).
+///
+/// For receipt acks, WA Web uses `MAYBE_CUSTOM_STRING(ackString)` where
+/// `ackString = maybeAttrString("type")` — so `type` is only included when
+/// explicitly present on the incoming receipt (delivery receipts normally
+/// have no type attribute, meaning the ack also has no type).
 fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     let id = node.attrs.get("id")?.clone();
     let from = node.attrs.get("from")?.clone();
     let participant = node.attrs.get("participant").cloned();
 
-    let typ = if node.tag == "message" || should_echo_type_in_ack(node) {
+    // Whatsmeow: echo type for all stanza tags EXCEPT "message".
+    // WA Web additionally omits type for notification type="encrypt" with <identity/> child.
+    let typ = if node.tag != "message" && !is_encrypt_identity_notification(node) {
         node.attrs.get("type").cloned()
     } else {
         None
@@ -3123,12 +3137,11 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     })
 }
 
-/// WA Web omits `type` when ACKing `notification type="encrypt"><identity/></notification`.
-/// Other notification ACKs continue to echo the notification type.
-fn should_echo_type_in_ack(node: &Node) -> bool {
-    !(node.tag == "notification"
+/// WA Web omits `type` when ACKing `<notification type="encrypt"><identity/></notification>`.
+fn is_encrypt_identity_notification(node: &Node) -> bool {
+    node.tag == "notification"
         && node.attrs.get("type").and_then(|v| v.as_str()) == Some("encrypt")
-        && node.get_optional_child("identity").is_some())
+        && node.get_optional_child("identity").is_some()
 }
 
 /// Computes a reconnect delay matching WhatsApp Web's Fibonacci backoff:
@@ -4741,7 +4754,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_echo_type_in_ack_for_identity_change_notification() {
+    fn test_encrypt_identity_notification_omits_type() {
         let node = NodeBuilder::new("notification")
             .attr("from", "186303081611421@lid")
             .attr("id", "4128735301")
@@ -4750,13 +4763,13 @@ mod tests {
             .build();
 
         assert!(
-            !should_echo_type_in_ack(&node),
+            is_encrypt_identity_notification(&node),
             "identity-change notification ACK must omit type to match WA Web"
         );
     }
 
     #[test]
-    fn test_should_echo_type_in_ack_for_device_notification() {
+    fn test_device_notification_is_not_encrypt_identity() {
         let node = NodeBuilder::new("notification")
             .attr("from", "186303081611421@lid")
             .attr("id", "269488578")
@@ -4765,13 +4778,15 @@ mod tests {
             .build();
 
         assert!(
-            should_echo_type_in_ack(&node),
-            "device notification ACK should continue echoing the notification type"
+            !is_encrypt_identity_notification(&node),
+            "device notification is not an encrypt+identity notification"
         );
     }
 
     #[test]
-    fn test_build_ack_node_for_message_includes_from_and_type() {
+    fn test_build_ack_node_for_message_omits_type_includes_from() {
+        // Whatsmeow: message acks do NOT echo type (node.Tag != "message" guard).
+        // They DO include `from` with own device PN.
         let incoming = NodeBuilder::new("message")
             .attr("from", "120363161500776365@g.us")
             .attr("id", "A5791A5392EF60E3FB0670098DE010D4")
@@ -4802,7 +4817,10 @@ mod tests {
             ack.attrs.get("participant").and_then(|v| v.as_str()),
             Some("181531758878822@lid")
         );
-        assert_eq!(ack.attrs.get("type").and_then(|v| v.as_str()), Some("text"));
+        assert!(
+            !ack.attrs.contains_key("type"),
+            "message ACK must NOT echo type (matches whatsmeow behavior)"
+        );
     }
 
     #[test]
@@ -4831,6 +4849,65 @@ mod tests {
         assert!(
             !ack.attrs.contains_key("from"),
             "notification ACKs should not include our device PN"
+        );
+    }
+
+    #[test]
+    fn test_build_ack_node_for_receipt_with_type_echoes_type() {
+        // Receipt acks should echo the type attribute when present (e.g. "read", "played").
+        let incoming = NodeBuilder::new("receipt")
+            .attr("from", "156535032389744@lid")
+            .attr("id", "RCPT-WITH-TYPE")
+            .attr("type", "read")
+            .build();
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("receipt ack should be buildable");
+
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("receipt")
+        );
+        assert_eq!(
+            ack.attrs.get("type").and_then(|v| v.as_str()),
+            Some("read"),
+            "receipt ACK must echo the type attribute when present"
+        );
+        assert!(
+            !ack.attrs.contains_key("from"),
+            "receipt ACKs should not include our device PN"
+        );
+    }
+
+    #[test]
+    fn test_build_ack_node_for_receipt_without_type_omits_type() {
+        // Delivery receipts have no type attribute — the ack must also omit it.
+        // Sending type="delivery" in the ack causes stream:error disconnections.
+        let incoming = NodeBuilder::new("receipt")
+            .attr("from", "156535032389744@lid")
+            .attr("id", "RCPT-NO-TYPE")
+            .build();
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("receipt ack should be buildable");
+
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("receipt")
+        );
+        assert!(
+            !ack.attrs.contains_key("type"),
+            "receipt ACK must NOT contain type when the incoming receipt has no type attribute"
+        );
+        assert!(
+            !ack.attrs.contains_key("from"),
+            "receipt ACKs should not include our device PN"
         );
     }
 
