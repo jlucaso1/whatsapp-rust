@@ -4899,7 +4899,7 @@ mod tests {
             .attr("type", "text")
             .attr("participant", "181531758878822@lid")
             .build();
-        let own_device_pn: Jid = "559984726662:48@s.whatsapp.net"
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
             .parse()
             .expect("own device PN JID should parse");
 
@@ -4917,7 +4917,7 @@ mod tests {
         );
         assert_eq!(
             ack.attrs.get("from").and_then(|v| v.as_str()),
-            Some("559984726662:48@s.whatsapp.net")
+            Some("155500012345:48@s.whatsapp.net")
         );
         assert_eq!(
             ack.attrs.get("participant").and_then(|v| v.as_str()),
@@ -4934,7 +4934,7 @@ mod tests {
             .attr("type", "encrypt")
             .children([NodeBuilder::new("identity").build()])
             .build();
-        let own_device_pn: Jid = "559984726662:48@s.whatsapp.net"
+        let own_device_pn: Jid = "155500012345:48@s.whatsapp.net"
             .parse()
             .expect("own device PN JID should parse");
 
