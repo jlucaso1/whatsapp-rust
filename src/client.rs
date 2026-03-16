@@ -1418,34 +1418,10 @@ impl Client {
         if !self.is_connected() || self.expected_disconnect.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let id = match node.attrs.get("id") {
-            Some(v) => v.clone(),
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let ack = match build_ack_node(node, device_snapshot.pn.as_ref()) {
+            Some(ack) => ack,
             None => return Ok(()),
-        };
-        let from = match node.attrs.get("from") {
-            Some(v) => v.clone(),
-            None => return Ok(()),
-        };
-        let participant = node.attrs.get("participant").cloned();
-        let typ = if should_echo_type_in_ack(node) {
-            node.attrs.get("type").cloned()
-        } else {
-            None
-        };
-        let mut attrs = Attrs::new();
-        attrs.insert("class".to_string(), node.tag.clone());
-        attrs.insert("id".to_string(), id);
-        attrs.insert("to".to_string(), from);
-        if let Some(p) = participant {
-            attrs.insert("participant".to_string(), p);
-        }
-        if let Some(t) = typ {
-            attrs.insert("type".to_string(), t);
-        }
-        let ack = Node {
-            tag: "ack".to_string(),
-            attrs,
-            content: None,
         };
         self.send_node(ack).await
     }
@@ -3158,13 +3134,44 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
     builder.build()
 }
 
+fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
+    let id = node.attrs.get("id")?.clone();
+    let from = node.attrs.get("from")?.clone();
+    let participant = node.attrs.get("participant").cloned();
+
+    let typ = if node.tag == "message" || should_echo_type_in_ack(node) {
+        node.attrs.get("type").cloned()
+    } else {
+        None
+    };
+
+    let mut attrs = Attrs::new();
+    attrs.insert("class".to_string(), node.tag.clone());
+    attrs.insert("id".to_string(), id);
+    attrs.insert("to".to_string(), from);
+
+    if node.tag == "message"
+        && let Some(own_device_pn) = own_device_pn
+    {
+        attrs.insert("from".to_string(), own_device_pn.to_string());
+    }
+    if let Some(p) = participant {
+        attrs.insert("participant".to_string(), p);
+    }
+    if let Some(t) = typ {
+        attrs.insert("type".to_string(), t);
+    }
+
+    Some(Node {
+        tag: "ack".to_string(),
+        attrs,
+        content: None,
+    })
+}
+
 /// WA Web omits `type` when ACKing `notification type="encrypt"><identity/></notification`.
 /// Other notification ACKs continue to echo the notification type.
 fn should_echo_type_in_ack(node: &Node) -> bool {
-    if node.tag == "message" {
-        return false;
-    }
-
     !(node.tag == "notification"
         && node.attrs.get("type").and_then(|v| v.as_str()) == Some("encrypt")
         && node.get_optional_child("identity").is_some())
@@ -4881,6 +4888,70 @@ mod tests {
         assert!(
             should_echo_type_in_ack(&node),
             "device notification ACK should continue echoing the notification type"
+        );
+    }
+
+    #[test]
+    fn test_build_ack_node_for_message_includes_from_and_type() {
+        let incoming = NodeBuilder::new("message")
+            .attr("from", "120363161500776365@g.us")
+            .attr("id", "A5791A5392EF60E3FB0670098DE010D4")
+            .attr("type", "text")
+            .attr("participant", "181531758878822@lid")
+            .build();
+        let own_device_pn: Jid = "559984726662:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("message ack should be buildable");
+
+        assert_eq!(ack.tag, "ack");
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("message")
+        );
+        assert_eq!(
+            ack.attrs.get("to").and_then(|v| v.as_str()),
+            Some("120363161500776365@g.us")
+        );
+        assert_eq!(
+            ack.attrs.get("from").and_then(|v| v.as_str()),
+            Some("559984726662:48@s.whatsapp.net")
+        );
+        assert_eq!(
+            ack.attrs.get("participant").and_then(|v| v.as_str()),
+            Some("181531758878822@lid")
+        );
+        assert_eq!(ack.attrs.get("type").and_then(|v| v.as_str()), Some("text"));
+    }
+
+    #[test]
+    fn test_build_ack_node_for_identity_change_omits_type_and_from() {
+        let incoming = NodeBuilder::new("notification")
+            .attr("from", "186303081611421@lid")
+            .attr("id", "4128735301")
+            .attr("type", "encrypt")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        let own_device_pn: Jid = "559984726662:48@s.whatsapp.net"
+            .parse()
+            .expect("own device PN JID should parse");
+
+        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+            .expect("notification ack should be buildable");
+
+        assert_eq!(
+            ack.attrs.get("class").and_then(|v| v.as_str()),
+            Some("notification")
+        );
+        assert!(
+            !ack.attrs.contains_key("type"),
+            "identity-change notification ACK must omit type"
+        );
+        assert!(
+            !ack.attrs.contains_key("from"),
+            "notification ACKs should not include our device PN"
         );
     }
 
