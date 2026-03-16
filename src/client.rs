@@ -105,8 +105,8 @@ type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
-/// WA Web: MQTT connect timeout = 20s (guq1jQM2ICX.js:2298),
-/// DGW connectTimeoutMs default = 20s (guq1jQM2ICX.js:14892).
+/// WA Web: MQTT `MqttProtocolClient.connect()` uses `CONNECT_TIMEOUT = 20s`,
+/// DGW `connectTimeoutMs` defaults to `20000ms`.
 const TRANSPORT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Snapshot of internal collection sizes for memory leak detection.
@@ -856,9 +856,8 @@ impl Client {
             self.override_version,
         );
 
-        // WA Web: both MQTT and DGW transports use a 20s connect timeout
-        // (guq1jQM2ICX.js:2298,2370 and 14892,15206). Without this, a dead
-        // network blocks on the OS TCP SYN timeout (~60-75s on Linux).
+        // WA Web: both MQTT and DGW transports use a 20s connect timeout.
+        // Without this, a dead network blocks on the OS TCP SYN timeout (~60-75s).
         let transport_future = tokio::time::timeout(
             TRANSPORT_CONNECT_TIMEOUT,
             self.transport_factory.create_transport(),
