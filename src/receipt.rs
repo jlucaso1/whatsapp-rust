@@ -83,6 +83,28 @@ impl Client {
                     );
                 }
             });
+        } else if receipt_type == ReceiptType::EncRekeyRetry {
+            // WA Web: both "retry" and "enc_rekey_retry" route through
+            // handleMessageRetryRequest, but enc_rekey_retry branches to the
+            // VoIP stack's resendEncRekeyRetry(peerJid, retryCount).
+            // Since we don't have a VoIP stack yet, log and dispatch as a
+            // Receipt event so consumers can observe it. When VoIP is
+            // implemented (#345), this will route to the VoIP re-key handler.
+            if let Some(child) = node.get_optional_child("enc_rekey") {
+                let mut attrs = child.attrs();
+                log::debug!(
+                    "Received enc_rekey_retry receipt for call-id={} from {} \
+                     (call-creator={}, count={}). VoIP not implemented, forwarding as event.",
+                    attrs.optional_string("call-id").unwrap_or_default(),
+                    from,
+                    attrs.optional_string("call-creator").unwrap_or_default(),
+                    attrs
+                        .optional_string("count")
+                        .and_then(|s| s.parse::<u8>().ok())
+                        .unwrap_or(1),
+                );
+            }
+            self.core.event_bus.dispatch(&Event::Receipt(receipt));
         } else {
             self.core.event_bus.dispatch(&Event::Receipt(receipt));
         }
@@ -182,6 +204,31 @@ mod tests {
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
     use crate::types::message::{MessageInfo, MessageSource};
+    use std::sync::Mutex;
+    use wacore::types::events::EventHandler;
+
+    #[derive(Default)]
+    struct TestEventCollector {
+        events: Mutex<Vec<Event>>,
+    }
+
+    impl EventHandler for TestEventCollector {
+        fn handle_event(&self, event: &Event) {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .push(event.clone());
+        }
+    }
+
+    impl TestEventCollector {
+        fn events(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .expect("collector mutex should not be poisoned")
+                .clone()
+        }
+    }
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {
@@ -421,6 +468,110 @@ mod tests {
             Client::should_send_delivery_receipt(&info),
             "peer device messages must get delivery receipts even when is_from_me"
         );
+    }
+
+    /// Create a test client with an event collector registered.
+    async fn setup_client_with_collector() -> (Arc<Client>, Arc<TestEventCollector>) {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+        (client, collector)
+    }
+
+    /// Verify that enc_rekey_retry receipt is dispatched as a Receipt event
+    /// with EncRekeyRetry type so consumers can observe it.
+    #[tokio::test]
+    async fn test_enc_rekey_retry_receipt_dispatches_event() {
+        let (client, collector) = setup_client_with_collector().await;
+
+        // Build an enc_rekey_retry receipt node matching WA Web structure
+        let node = Arc::new(
+            NodeBuilder::new("receipt")
+                .attr("from", "5511999999999@s.whatsapp.net")
+                .attr("id", "3EB0AABBCCDD")
+                .attr("type", "enc_rekey_retry")
+                .children([
+                    NodeBuilder::new("enc_rekey")
+                        .attr("call-creator", "5511888888888@s.whatsapp.net")
+                        .attr("call-id", "CALL-123")
+                        .attr("count", "1")
+                        .build(),
+                    NodeBuilder::new("registration")
+                        .bytes(12345u32.to_be_bytes().to_vec())
+                        .build(),
+                ])
+                .build(),
+        );
+
+        client.handle_receipt(node).await;
+
+        // Must dispatch exactly one Receipt event with EncRekeyRetry type
+        let events = collector.events();
+        let receipt_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Receipt(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            receipt_events.len(),
+            1,
+            "enc_rekey_retry must dispatch exactly one Receipt event"
+        );
+        assert_eq!(
+            receipt_events[0].r#type,
+            ReceiptType::EncRekeyRetry,
+            "dispatched receipt must have EncRekeyRetry type"
+        );
+        assert_eq!(receipt_events[0].message_ids, vec!["3EB0AABBCCDD"]);
+    }
+
+    /// Verify that enc_rekey_retry without <enc_rekey> child still dispatches
+    /// the Receipt event (graceful degradation, no crash).
+    #[tokio::test]
+    async fn test_enc_rekey_retry_receipt_without_child_still_dispatches() {
+        let (client, collector) = setup_client_with_collector().await;
+
+        // Malformed: no <enc_rekey> child
+        let node = Arc::new(
+            NodeBuilder::new("receipt")
+                .attr("from", "5511999999999@s.whatsapp.net")
+                .attr("id", "3EB0AABBCCDD")
+                .attr("type", "enc_rekey_retry")
+                .build(),
+        );
+
+        client.handle_receipt(node).await;
+
+        // Should still dispatch the Receipt event even without <enc_rekey> child
+        let events = collector.events();
+        let receipt_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Receipt(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            receipt_events.len(),
+            1,
+            "malformed enc_rekey_retry must still dispatch Receipt event"
+        );
+        assert_eq!(receipt_events[0].r#type, ReceiptType::EncRekeyRetry);
     }
 
     #[test]

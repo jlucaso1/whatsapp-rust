@@ -29,6 +29,13 @@ pub enum ReceiptType {
     Delivered,
     Sender,
     Retry,
+    /// VoIP call encryption re-keying retry.
+    ///
+    /// WA Web: `ENC_RETRY_RECEIPT_ATTRS.GROUP_CALL = "enc_rekey_retry"`.
+    /// Sent when a peer fails to decrypt VoIP call encryption data and
+    /// needs the sender to re-key.  Uses `<enc_rekey>` child (with
+    /// `call-creator`, `call-id`, `count`) instead of `<retry>`.
+    EncRekeyRetry,
     Read,
     ReadSelf,
     Played,
@@ -46,6 +53,7 @@ impl From<String> for ReceiptType {
             "" | "delivery" => Self::Delivered,
             "sender" => Self::Sender,
             "retry" => Self::Retry,
+            "enc_rekey_retry" => Self::EncRekeyRetry,
             "read" => Self::Read,
             "read-self" => Self::ReadSelf,
             "played" => Self::Played,
@@ -69,6 +77,15 @@ mod tests {
         assert_eq!(
             ReceiptType::from("delivery".to_string()),
             ReceiptType::Delivered
+        );
+    }
+
+    #[test]
+    fn receipt_type_maps_retry_variants() {
+        assert_eq!(ReceiptType::from("retry".to_string()), ReceiptType::Retry);
+        assert_eq!(
+            ReceiptType::from("enc_rekey_retry".to_string()),
+            ReceiptType::EncRekeyRetry
         );
     }
 }

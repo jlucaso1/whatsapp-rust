@@ -3071,6 +3071,7 @@ impl Client {
                 crate::types::presence::ReceiptType::Sender => "sender",
                 crate::types::presence::ReceiptType::ServerError => "server-error",
                 crate::types::presence::ReceiptType::Retry => "retry",
+                crate::types::presence::ReceiptType::EncRekeyRetry => "enc_rekey_retry",
                 crate::types::presence::ReceiptType::Other(ref s) => s.as_str(),
             };
 
