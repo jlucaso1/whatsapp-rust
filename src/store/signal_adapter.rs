@@ -103,24 +103,14 @@ impl SessionStore for SessionAdapter {
                 let new_base_key = new_state.alice_base_key();
 
                 if old_base_key != new_base_key {
-                    let backtrace = std::backtrace::Backtrace::force_capture();
-                    log::warn!(
+                    log::debug!(
                         target: "signal_session_store",
-                        "⚠️ SESSION BASE KEY CHANGED for {}!\n\
-                         Old base_key: {}\n\
-                         New base_key: {}\n\
-                         Old version: {:?}, New version: {:?}\n\
-                         Old prev_sessions: {}, New prev_sessions: {}\n\
-                         This will cause MAC verification failures on future messages!\n\
-                         Backtrace:\n{}",
+                        "Session base key changed for {} (old_version={:?}, new_version={:?}, prev_sessions: {} -> {})",
                         addr_str,
-                        hex::encode(old_base_key),
-                        hex::encode(new_base_key),
                         existing_state.session_version(),
                         new_state.session_version(),
                         existing.previous_session_count(),
                         record.previous_session_count(),
-                        backtrace
                     );
                 }
             }
