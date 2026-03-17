@@ -587,7 +587,7 @@ impl Client {
             // Peer messages are only valid for individual users, not groups
             // Resolve encryption JID and acquire lock ONLY for encryption
             let encryption_jid = self.resolve_encryption_jid(&to).await;
-            let signal_addr_str = encryption_jid.to_protocol_address().to_string();
+            let signal_addr_str = encryption_jid.to_protocol_address_string();
 
             let session_mutex = self
                 .session_locks
@@ -882,7 +882,7 @@ impl Client {
 
             // Resolve encryption JID and prepare lock acquisition
             let encryption_jid = self.resolve_encryption_jid(&to).await;
-            let signal_addr_str = encryption_jid.to_protocol_address().to_string();
+            let signal_addr_str = encryption_jid.to_protocol_address_string();
 
             // Store serialized message bytes for retry (lightweight)
             self.add_recent_message(to.clone(), request_id.clone(), message)
