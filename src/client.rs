@@ -972,7 +972,6 @@ impl Client {
     async fn cleanup_connection_state(&self) {
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
-        self.is_connected.store(false, Ordering::Release);
         // Signal the keepalive loop (and any other tasks) to exit promptly.
         // Without this, a stale keepalive loop can overlap with the next one
         // after reconnect, causing duplicate pings.
@@ -980,6 +979,10 @@ impl Client {
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
+        // Clear is_connected AFTER noise_socket is None, so no task can see
+        // is_connected==true with a cleared socket. send_node() independently
+        // checks the socket, but this ordering avoids a confusing state window.
+        self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
         // Clear signal cache so stale state doesn't leak across connections
         self.signal_cache.clear().await;
@@ -5113,8 +5116,15 @@ mod tests {
     /// contention. Before the fix, `try_lock()` would fail when another task held
     /// the noise_socket mutex, causing `is_connected()` to return `false` even
     /// though the connection was alive — silently dropping receipt acks.
+    ///
+    /// This test sets up a real NoiseSocket (same as socket unit tests) so it
+    /// accurately models the pre-fix scenario: socket is Some + mutex is held
+    /// by another task = old is_connected() returned false.
     #[tokio::test]
     async fn test_is_connected_not_affected_by_mutex_contention() {
+        use crate::socket::NoiseSocket;
+        use wacore::handshake::NoiseCipher;
+
         let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(
             PersistenceManager::new(backend)
@@ -5132,11 +5142,20 @@ mod tests {
         // Initially not connected
         assert!(!client.is_connected(), "should start disconnected");
 
-        // Simulate connection: set the AtomicBool
+        // Simulate a real connection: create a NoiseSocket and store it
+        let transport: Arc<dyn crate::transport::Transport> =
+            Arc::new(crate::transport::mock::MockTransport);
+        let key = [0u8; 32];
+        let write_key = NoiseCipher::new(&key).expect("valid key");
+        let read_key = NoiseCipher::new(&key).expect("valid key");
+        let noise_socket = NoiseSocket::new(transport, write_key, read_key);
+        *client.noise_socket.lock().await = Some(Arc::new(noise_socket));
         client.is_connected.store(true, Ordering::Release);
+
         assert!(client.is_connected(), "should report connected");
 
-        // Hold the noise_socket mutex — this used to make is_connected() return false
+        // Hold the noise_socket mutex — this used to make is_connected() return
+        // false via try_lock() even though the socket was Some(...)
         let _guard = client.noise_socket.lock().await;
         assert!(
             client.is_connected(),
@@ -5172,8 +5191,8 @@ mod tests {
 
         let result = client.send_ack_for(&receipt).await;
         assert!(
-            result.is_err(),
-            "send_ack_for must return Err when disconnected, not silently succeed"
+            matches!(result, Err(ClientError::NotConnected)),
+            "send_ack_for must return Err(NotConnected) when disconnected, got: {result:?}"
         );
     }
 
