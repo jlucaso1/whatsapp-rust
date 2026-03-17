@@ -231,7 +231,22 @@ impl<'a> Groups<'a> {
             .client
             .execute(AddParticipantsIq::new(jid, participants))
             .await?;
-        self.client.get_group_cache().await.invalidate(jid).await;
+        // Patch cache with only the participants the server accepted (status 200).
+        // Note: the get→mutate→insert is not atomic; a concurrent notification
+        // for the same group could race.  This is acceptable — the cache is
+        // best-effort and a full refetch on next query_info() corrects it.
+        let accepted: Vec<_> = result
+            .iter()
+            .filter(|r| r.status.as_deref() == Some("200"))
+            .map(|r| (r.jid.clone(), None))
+            .collect();
+        if !accepted.is_empty() {
+            let group_cache = self.client.get_group_cache().await;
+            if let Some(mut info) = group_cache.get(jid).await {
+                info.add_participants(&accepted);
+                group_cache.insert(jid.clone(), info).await;
+            }
+        }
         Ok(result)
     }
 
@@ -244,7 +259,19 @@ impl<'a> Groups<'a> {
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
             .await?;
-        self.client.get_group_cache().await.invalidate(jid).await;
+        // Patch cache with only the participants the server accepted.
+        let accepted: Vec<&str> = result
+            .iter()
+            .filter(|r| r.status.as_deref() == Some("200"))
+            .map(|r| r.jid.user.as_str())
+            .collect();
+        if !accepted.is_empty() {
+            let group_cache = self.client.get_group_cache().await;
+            if let Some(mut info) = group_cache.get(jid).await {
+                info.remove_participants(&accepted);
+                group_cache.insert(jid.clone(), info).await;
+            }
+        }
         Ok(result)
     }
 

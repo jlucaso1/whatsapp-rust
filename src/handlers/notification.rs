@@ -312,7 +312,9 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
         warn!("Failed to add LID-PN mapping from device notification: {e}");
     }
 
-    // Process the single operation (per WhatsApp Web: one operation per notification)
+    // Process the single operation (per WhatsApp Web: one operation per notification).
+    // Granularly patch caches instead of invalidating — matches WA Web's
+    // bulkCreateOrReplace pattern and avoids a usync IQ round-trip.
     let op = &notification.operation;
     debug!(
         "Device notification: user={}, type={:?}, devices={:?}",
@@ -321,7 +323,39 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
         op.device_ids()
     );
 
-    client.invalidate_device_cache(notification.user()).await;
+    match op.operation_type {
+        wacore::stanza::devices::DeviceNotificationType::Add => {
+            for device in &op.devices {
+                client
+                    .patch_device_add(notification.user(), &notification.from, device)
+                    .await;
+            }
+        }
+        wacore::stanza::devices::DeviceNotificationType::Remove => {
+            for device in &op.devices {
+                client
+                    .patch_device_remove(
+                        notification.user(),
+                        &notification.from,
+                        device.device_id(),
+                    )
+                    .await;
+            }
+        }
+        wacore::stanza::devices::DeviceNotificationType::Update => {
+            if op.devices.is_empty() {
+                // Hash-only update without device list — fall back to
+                // invalidation so the next read rehydrates from the server.
+                client.invalidate_device_cache(notification.user()).await;
+            } else {
+                for device in &op.devices {
+                    client
+                        .patch_device_update(notification.user(), device)
+                        .await;
+                }
+            }
+        }
+    }
 
     // Dispatch event to notify application layer
     let event = Event::DeviceListUpdate(DeviceListUpdate {
@@ -1008,21 +1042,45 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
         .unwrap_or_else(chrono::Utc::now);
 
     for action in notification.actions {
-        // Cache invalidation for participant list changes
-        if matches!(
-            action,
-            GroupNotificationAction::Add { .. } | GroupNotificationAction::Remove { .. }
-        ) {
-            client
-                .get_group_cache()
-                .await
-                .invalidate(&notification.group_jid)
-                .await;
-            debug!(
-                target: "Client/Group",
-                "Invalidated group cache for {} after participant change",
-                notification.group_jid
-            );
+        // Granularly patch group cache instead of invalidating — matches WA Web's
+        // addParticipantInfo / removeParticipantInfo pattern and avoids a
+        // group metadata IQ round-trip.
+        match &action {
+            GroupNotificationAction::Add { participants, .. } => {
+                let group_cache = client.get_group_cache().await;
+                if let Some(mut info) = group_cache.get(&notification.group_jid).await {
+                    let new: Vec<_> = participants
+                        .iter()
+                        .map(|p| (p.jid.clone(), p.phone_number.clone()))
+                        .collect();
+                    info.add_participants(&new);
+                    group_cache
+                        .insert(notification.group_jid.clone(), info)
+                        .await;
+                    debug!(
+                        target: "Client/Group",
+                        "Patched group cache for {}: added {} participants",
+                        notification.group_jid, participants.len()
+                    );
+                }
+            }
+            GroupNotificationAction::Remove { participants, .. } => {
+                let group_cache = client.get_group_cache().await;
+                if let Some(mut info) = group_cache.get(&notification.group_jid).await {
+                    let users: Vec<&str> =
+                        participants.iter().map(|p| p.jid.user.as_str()).collect();
+                    info.remove_participants(&users);
+                    group_cache
+                        .insert(notification.group_jid.clone(), info)
+                        .await;
+                    debug!(
+                        target: "Client/Group",
+                        "Patched group cache for {}: removed {} participants",
+                        notification.group_jid, participants.len()
+                    );
+                }
+            }
+            _ => {}
         }
 
         debug!(
