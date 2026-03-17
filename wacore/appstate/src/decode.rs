@@ -118,7 +118,10 @@ pub fn collect_key_ids_from_patch_list(
         if let Some(k) = key_id
             && !seen.contains(k.as_slice())
         {
-            // Clone once; the same clone goes into both seen set and result vec.
+            // Unique key ID: two owned buffers are allocated via k.clone() and
+            // owned.clone() — one stored in `seen` for future dedup checks, one
+            // pushed to `key_ids` as the result. Duplicate key IDs are skipped
+            // by the seen.contains() check above, avoiding any allocation.
             let owned = k.clone();
             seen.insert(owned.clone());
             key_ids.push(owned);

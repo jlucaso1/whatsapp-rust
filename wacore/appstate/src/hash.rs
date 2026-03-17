@@ -240,9 +240,10 @@ mod tests {
         assert!(result.is_ok());
         assert!(!hash_result.has_missing_remove);
 
+        const EMPTY: &[Vec<u8>] = &[];
         let expected_hash_after_add = WAPATCH_INTEGRITY.subtract_then_add(
             &[0; 128],
-            &[],
+            EMPTY,
             &[VALUE_MAC_1.to_vec(), VALUE_MAC_2.to_vec()],
         );
         assert_eq!(state.hash.as_slice(), expected_hash_after_add.as_slice());
@@ -280,6 +281,67 @@ mod tests {
             state.hash.as_slice(),
             expected_final_hash.as_slice(),
             "The final hash state after overwrite and remove is incorrect."
+        );
+    }
+
+    /// Known-answer test for generate_patch_mac to guard byte ordering and input
+    /// concatenation.  The expected MAC was computed by feeding:
+    ///   snapshot_mac ‖ mutation1_tail(32) ‖ mutation2_tail(32)
+    ///   ‖ u64_to_be(42) ‖ b"regular_high"
+    /// into HMAC-SHA256 with key = [0xAA; 32].
+    #[test]
+    fn test_generate_patch_mac_known_answer() {
+        let key = [0xAAu8; 32];
+        let name = "regular_high";
+        let version: u64 = 42;
+
+        // Build a patch with snapshot_mac and two mutations with >=32 byte blobs.
+        let snapshot_mac = vec![0x11u8; 32];
+        let mut blob1 = vec![0u8; 16]; // 16 prefix bytes
+        blob1.extend_from_slice(&[0x22u8; 32]); // 32-byte tail taken by generate_patch_mac
+        let mut blob2 = vec![0u8; 16];
+        blob2.extend_from_slice(&[0x33u8; 32]);
+
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion {
+                version: Some(version),
+            }),
+            snapshot_mac: Some(snapshot_mac.clone()),
+            mutations: vec![
+                wa::SyncdMutation {
+                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                    record: Some(wa::SyncdRecord {
+                        index: None,
+                        value: Some(wa::SyncdValue { blob: Some(blob1) }),
+                        key_id: None,
+                    }),
+                },
+                wa::SyncdMutation {
+                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                    record: Some(wa::SyncdRecord {
+                        index: None,
+                        value: Some(wa::SyncdValue { blob: Some(blob2) }),
+                        key_id: None,
+                    }),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Compute expected MAC manually using the same HMAC-SHA256 inputs.
+        let mut expected_mac =
+            CryptographicMac::new("HmacSha256", &key).expect("HmacSha256 is a valid algorithm");
+        expected_mac.update(&snapshot_mac); // snapshot_mac
+        expected_mac.update(&[0x22u8; 32]); // mutation 1 tail
+        expected_mac.update(&[0x33u8; 32]); // mutation 2 tail
+        expected_mac.update(&42u64.to_be_bytes()); // version
+        expected_mac.update(b"regular_high"); // name
+        let expected = expected_mac.finalize();
+
+        let actual = generate_patch_mac(&patch, name, &key, version);
+        assert_eq!(
+            actual, expected,
+            "generate_patch_mac output must match manual HMAC-SHA256 computation"
         );
     }
 }
