@@ -43,15 +43,18 @@ pub fn process_history_sync<F>(
     compressed_data: Vec<u8>,
     own_user: Option<&str>,
     mut on_conversation_bytes: Option<F>,
-    decompressed_size_hint: Option<u64>,
+    compressed_size_hint: Option<u64>,
 ) -> Result<HistorySyncResult, HistorySyncError>
 where
     F: FnMut(Bytes),
 {
     // Decompress into a single contiguous buffer.
-    // Use the known decompressed size if available, otherwise estimate 4x ratio.
-    let estimated = decompressed_size_hint
+    // If the compressed (post-decrypt) size is known from the notification's
+    // file_length, use it with the 4x multiplier for a better estimate than
+    // guessing from the encrypted input (which includes MAC/padding overhead).
+    let estimated = compressed_size_hint
         .and_then(|s| usize::try_from(s).ok())
+        .map(|s| s * 4)
         .unwrap_or_else(|| compressed_data.len() * 4)
         .clamp(256, 8 * 1024 * 1024);
     let mut decompressed = Vec::with_capacity(estimated);

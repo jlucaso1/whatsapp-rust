@@ -50,6 +50,11 @@ impl<T: Serialize> Serialize for SharedData<T> {
 /// Clones get their own `OnceLock` (no `Arc` overhead). This is correct
 /// because the original is dropped right after event dispatch — only the
 /// cloned copy in the spawned handler task ever calls `.get()`.
+///
+/// **Multi-handler note**: if the event bus fans out to N handlers, each
+/// clone parses independently. This is acceptable because parsing is
+/// idempotent and the common case is a single handler. If multi-handler
+/// parsing cost becomes an issue, wrap `parsed` in `Arc<OnceLock<T>>`.
 #[derive(Clone)]
 pub struct LazyConversation {
     /// Raw protobuf bytes using Bytes for zero-copy cloning.
