@@ -12,8 +12,8 @@ impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         debug!("get_user_devices: Using normal mode for {jids:?}");
 
-        let mut jids_to_fetch: HashSet<Jid> = HashSet::new();
-        let mut all_devices = Vec::new();
+        let mut jids_to_fetch: HashSet<Jid> = HashSet::with_capacity(jids.len());
+        let mut all_devices = Vec::with_capacity(jids.len() * 2);
 
         for jid in jids.iter().map(|j| j.to_non_ad()) {
             if let Some(cached_devices) = self.get_device_cache().await.get(&jid).await {

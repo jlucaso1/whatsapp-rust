@@ -16,25 +16,30 @@ pub const WAPATCH_INTEGRITY: LTHash = LTHash {
 };
 
 impl LTHash {
-    pub fn subtract_then_add(&self, base: &[u8], subtract: &[Vec<u8>], add: &[Vec<u8>]) -> Vec<u8> {
+    pub fn subtract_then_add<S: AsRef<[u8]>, A: AsRef<[u8]>>(
+        &self,
+        base: &[u8],
+        subtract: &[S],
+        add: &[A],
+    ) -> Vec<u8> {
         let mut output = base.to_vec();
         self.subtract_then_add_in_place(&mut output, subtract, add);
         output
     }
 
-    pub fn subtract_then_add_in_place(
+    pub fn subtract_then_add_in_place<S: AsRef<[u8]>, A: AsRef<[u8]>>(
         &self,
         base: &mut [u8],
-        subtract: &[Vec<u8>],
-        add: &[Vec<u8>],
+        subtract: &[S],
+        add: &[A],
     ) {
         self.multiple_op(base, subtract, true);
         self.multiple_op(base, add, false);
     }
 
-    fn multiple_op(&self, base: &mut [u8], input: &[Vec<u8>], subtract: bool) {
+    fn multiple_op<T: AsRef<[u8]>>(&self, base: &mut [u8], input: &[T], subtract: bool) {
         for item in input {
-            let derived = hkdf_sha256(item, None, self.hkdf_info, self.hkdf_size);
+            let derived = hkdf_sha256(item.as_ref(), None, self.hkdf_info, self.hkdf_size);
             perform_pointwise_with_overflow(base, &derived, subtract);
         }
     }
@@ -109,15 +114,17 @@ fn hkdf_sha256(key: &[u8], salt: Option<&[u8]>, info: &[u8], length: u8) -> Vec<
 mod tests {
     use super::*;
 
+    const EMPTY: &[Vec<u8>] = &[];
+
     #[test]
     fn pointwise_add_and_subtract() {
         let mut base = vec![0u8; 128];
         let item = vec![1u8, 2, 3];
         let lth = WAPATCH_INTEGRITY;
-        lth.subtract_then_add_in_place(&mut base, &[], std::slice::from_ref(&item));
+        lth.subtract_then_add_in_place(&mut base, EMPTY, std::slice::from_ref(&item));
         let after_add = base.clone();
         assert_ne!(after_add, vec![0u8; 128]);
-        lth.subtract_then_add_in_place(&mut base, &[item], &[]);
+        lth.subtract_then_add_in_place(&mut base, &[item], EMPTY);
         assert_eq!(base, vec![0u8; 128]);
     }
 
@@ -169,13 +176,13 @@ mod tests {
             vec![9u8, 10, 11, 12],
         ];
 
-        lth.subtract_then_add_in_place(&mut base, &[], &items);
+        lth.subtract_then_add_in_place(&mut base, EMPTY, &items);
         let after_add = base.clone();
         assert_ne!(after_add, vec![0u8; 128]);
 
         let mut reverse_items = items.clone();
         reverse_items.reverse();
-        lth.subtract_then_add_in_place(&mut base, &reverse_items, &[]);
+        lth.subtract_then_add_in_place(&mut base, &reverse_items, EMPTY);
         assert_eq!(base, vec![0u8; 128]);
     }
 
@@ -188,10 +195,10 @@ mod tests {
 
         for item in items {
             let mut test_base = base.clone();
-            lth.subtract_then_add_in_place(&mut test_base, &[], std::slice::from_ref(&item));
+            lth.subtract_then_add_in_place(&mut test_base, EMPTY, std::slice::from_ref(&item));
             assert_ne!(test_base, vec![0u8; 128]);
 
-            lth.subtract_then_add_in_place(&mut test_base, &[item], &[]);
+            lth.subtract_then_add_in_place(&mut test_base, &[item], EMPTY);
             assert_eq!(test_base, vec![0u8; 128]);
         }
     }
@@ -206,10 +213,10 @@ mod tests {
 
         let subtract_items = vec![vec![1u8, 2, 3], vec![4u8, 5], vec![6u8, 7, 8, 9]];
 
-        lth.subtract_then_add_in_place(&mut base, &[], &add_items);
+        lth.subtract_then_add_in_place(&mut base, EMPTY, &add_items);
         assert_ne!(base, original);
 
-        lth.subtract_then_add_in_place(&mut base, &subtract_items, &[]);
+        lth.subtract_then_add_in_place(&mut base, &subtract_items, EMPTY);
         assert_eq!(base, original);
     }
 
@@ -219,7 +226,7 @@ mod tests {
         let original = base.clone();
         let lth = WAPATCH_INTEGRITY;
 
-        lth.subtract_then_add_in_place(&mut base, &[], &[]);
+        lth.subtract_then_add_in_place::<Vec<u8>, Vec<u8>>(&mut base, &[], &[]);
         assert_eq!(base, original);
     }
 

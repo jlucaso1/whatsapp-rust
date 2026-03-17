@@ -529,7 +529,7 @@ mod tests {
         };
 
         // Apply filter logic (matching ensure_e2e_sessions behavior)
-        let mut jids_needing_sessions = Vec::new();
+        let mut jids_needing_sessions = Vec::with_capacity(jids.len());
         for jid in &jids {
             match session_exists(jid) {
                 Ok(true) => {}                                        // Skip - session exists

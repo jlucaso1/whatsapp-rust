@@ -157,8 +157,11 @@ fn test_lthash_diverges_on_missing_remove() {
     assert!(err.is_ok());
 
     // Compute expected hash with the entry
-    let expected_hash_with_entry =
-        WAPATCH_INTEGRITY.subtract_then_add(&[0u8; 128], &[], std::slice::from_ref(&value_mac_1));
+    let expected_hash_with_entry = WAPATCH_INTEGRITY.subtract_then_add(
+        &[0u8; 128],
+        &[] as &[Vec<u8>],
+        std::slice::from_ref(&value_mac_1),
+    );
 
     assert_eq!(state.hash.as_slice(), expected_hash_with_entry.as_slice());
 

@@ -118,8 +118,8 @@ where
     // This handles the case where a session was established via a message with sender_lid,
     // and now we're sending a reply using the phone number address.
     let mut jid_to_encryption_jid: std::collections::HashMap<Jid, Jid> =
-        std::collections::HashMap::new();
-    let mut jids_needing_prekeys = Vec::new();
+        std::collections::HashMap::with_capacity(devices.len());
+    let mut jids_needing_prekeys = Vec::with_capacity(devices.len());
 
     for device_jid in devices {
         // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
