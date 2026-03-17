@@ -316,7 +316,7 @@ impl Jid {
     pub fn new(user: &str, server: &str) -> Self {
         Self {
             user: user.to_string(),
-            server: Cow::Owned(server.to_string()),
+            server: cow_server_from_str(server),
             ..Default::default()
         }
     }
