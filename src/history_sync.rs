@@ -91,6 +91,12 @@ impl Client {
             return;
         }
 
+        // file_length is the decrypted (but still zlib-compressed) blob size, not
+        // the final decompressed size. We still pass it as a hint — the decompressor
+        // uses it with a 4x multiplier, which is a better estimate than guessing
+        // from the encrypted size (which includes MAC/padding overhead).
+        let compressed_size_hint = notification.file_length.filter(|&s| s > 0);
+
         // Use take() to avoid cloning large payloads - moves ownership instead
         let compressed_data = if let Some(inline_payload) =
             notification.initial_hist_bootstrap_inline_payload.take()
@@ -152,6 +158,7 @@ impl Client {
                         // Send Bytes through channel (zero-copy clone)
                         let _ = tx.blocking_send(raw_bytes);
                     }),
+                    compressed_size_hint,
                 )
                 // tx dropped here, closing channel
             });
@@ -193,7 +200,12 @@ impl Client {
                 let own_user_ref = own_user.as_deref();
 
                 // Pass None for callback - conversations are skipped at protobuf level
-                process_history_sync::<fn(Bytes)>(compressed_data, own_user_ref, None)
+                process_history_sync::<fn(Bytes)>(
+                    compressed_data,
+                    own_user_ref,
+                    None,
+                    compressed_size_hint,
+                )
             })
             .await
         };

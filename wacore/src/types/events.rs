@@ -46,13 +46,22 @@ impl<T: Serialize> Serialize for SharedData<T> {
 ///
 /// Uses `bytes::Bytes` for zero-copy reference counting. Cloning is O(1)
 /// and parsing only happens once on first access.
+///
+/// Clones get their own `OnceLock` (no `Arc` overhead). This is correct
+/// because the original is dropped right after event dispatch — only the
+/// cloned copy in the spawned handler task ever calls `.get()`.
+///
+/// **Multi-handler note**: if the event bus fans out to N handlers, each
+/// clone parses independently. This is acceptable because parsing is
+/// idempotent and the common case is a single handler. If multi-handler
+/// parsing cost becomes an issue, wrap `parsed` in `Arc<OnceLock<T>>`.
 #[derive(Clone)]
 pub struct LazyConversation {
     /// Raw protobuf bytes using Bytes for zero-copy cloning.
     /// Bytes is reference-counted internally, so clones share the same data.
     raw_bytes: Bytes,
     /// Cached parsed result, initialized on first access.
-    parsed: Arc<OnceLock<wa::Conversation>>,
+    parsed: OnceLock<wa::Conversation>,
 }
 
 impl LazyConversation {
@@ -61,7 +70,7 @@ impl LazyConversation {
     pub fn new(raw_bytes: Vec<u8>) -> Self {
         Self {
             raw_bytes: Bytes::from(raw_bytes),
-            parsed: Arc::new(OnceLock::new()),
+            parsed: OnceLock::new(),
         }
     }
 
@@ -69,7 +78,7 @@ impl LazyConversation {
     pub fn from_bytes(raw_bytes: Bytes) -> Self {
         Self {
             raw_bytes,
-            parsed: Arc::new(OnceLock::new()),
+            parsed: OnceLock::new(),
         }
     }
 
