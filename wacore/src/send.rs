@@ -315,7 +315,7 @@ where
         }
     }
 
-    let mut participant_nodes = Vec::new();
+    let mut participant_nodes = Vec::with_capacity(devices.len());
     let mut includes_prekey_message = false;
 
     for device_jid in devices {
@@ -343,22 +343,20 @@ where
                     _ => continue,
                 };
 
-                let mut enc_attrs = Attrs::new();
-                enc_attrs.insert("v".to_string(), "2".to_string());
-                enc_attrs.insert("type".to_string(), enc_type.to_string());
-                for (k, v) in enc_extra_attrs.iter() {
-                    enc_attrs.insert(k.clone(), v.clone());
-                }
-
+                // Build enc attrs using NodeBuilder chaining — avoids per-device
+                // String allocations for constant keys "v" and "type".
                 let enc_node = NodeBuilder::new("enc")
-                    .attrs(enc_attrs)
+                    .attr("v", "2")
+                    .attr("type", enc_type)
+                    .attrs(enc_extra_attrs.iter().map(|(k, v)| (k.clone(), v.clone())))
                     .bytes(serialized_bytes)
                     .build();
-                // Use the original device_jid for the `to` attribute (what the server expects),
-                // but we encrypted using the encryption_jid's session
+
+                // Use jid_attr to avoid device_jid.to_string() allocation —
+                // the encoder writes the JID directly in binary format.
                 participant_nodes.push(
                     NodeBuilder::new("to")
-                        .attr("jid", device_jid.to_string())
+                        .jid_attr("jid", device_jid.clone())
                         .children([enc_node])
                         .build(),
                 );
@@ -497,21 +495,18 @@ pub async fn prepare_dm_stanza<
     // Add any extra stanza nodes provided by the caller
     message_content_nodes.extend(extra_stanza_nodes);
 
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
+    let mut stanza_builder = NodeBuilder::new("message")
+        .jid_attr("to", to_jid)
+        .attr("id", request_id)
+        .attr("type", "text");
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
     {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_content_nodes)
-        .build();
+    let stanza = stanza_builder.children(message_content_nodes).build();
 
     Ok(stanza)
 }
@@ -546,12 +541,10 @@ where
         .build();
 
     let stanza = NodeBuilder::new("message")
-        .attrs([
-            ("to", transport_jid.to_string()),
-            ("id", request_id),
-            ("type", "text".to_string()),
-            ("category", "peer".to_string()),
-        ])
+        .jid_attr("to", transport_jid)
+        .attr("id", request_id)
+        .attr("type", "text")
+        .attr("category", "peer")
         .children([enc_node])
         .build();
 
@@ -791,35 +784,32 @@ pub async fn prepare_group_stanza<
 
     // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
     // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
-    let mut sk_enc_attrs = Attrs::new();
-    sk_enc_attrs.insert("v".to_string(), "2".to_string());
-    sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", "2")
+        .attr("type", "skmsg")
+        .bytes(skmsg_ciphertext);
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
         && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
     {
-        sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+        enc_builder = enc_builder.attr("decrypt-fail", "hide");
     }
+    let content_node = enc_builder.build();
 
-    let content_node = NodeBuilder::new("enc")
-        .attrs(sk_enc_attrs)
-        .bytes(skmsg_ciphertext)
-        .build();
-
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
+    let mut stanza_builder = NodeBuilder::new("message")
+        .jid_attr("to", to_jid.clone())
+        .attr("id", request_id)
+        .attr("type", "text");
 
     // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
     if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
-        stanza_attrs.insert("addressing_mode".to_string(), "lid".to_string());
+        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
     }
 
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
     {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
     // NOTE: WhatsApp Web does NOT include participant attribute on initial admin revoke send
     // The participant attribute only appears on retry/fanout messages
@@ -835,7 +825,7 @@ pub async fn prepare_group_stanza<
     if let Some(devices) = &resolved_devices_for_phash {
         match MessageUtils::participant_list_hash(devices) {
             Ok(phash) => {
-                stanza_attrs.insert("phash".to_string(), phash);
+                stanza_builder = stanza_builder.attr("phash", phash);
             }
             Err(e) => {
                 log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
@@ -846,10 +836,7 @@ pub async fn prepare_group_stanza<
     // Add any extra stanza nodes provided by the caller
     message_children.extend(extra_stanza_nodes);
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_children)
-        .build();
+    let stanza = stanza_builder.children(message_children).build();
 
     Ok(stanza)
 }

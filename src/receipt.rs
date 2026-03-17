@@ -2,7 +2,6 @@ use crate::client::Client;
 use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
 use log::info;
-use std::collections::HashMap;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -124,22 +123,22 @@ impl Client {
             return;
         }
 
-        let mut attrs = HashMap::with_capacity(5);
-        attrs.insert("id".to_string(), info.id.clone());
-        attrs.insert("to".to_string(), info.source.chat.to_string());
+        let mut builder = NodeBuilder::new("receipt")
+            .attr("id", &info.id)
+            .jid_attr("to", info.source.chat.clone());
 
         // WA Web: peer device messages (category="peer") use type="peer_msg".
         // Normal delivery receipts omit the type attribute (DROP_ATTR).
         if info.category == "peer" {
-            attrs.insert("type".to_string(), "peer_msg".to_string());
+            builder = builder.attr("type", "peer_msg");
         }
 
         // For group messages, the 'participant' attribute is required to identify the sender.
         if info.source.is_group {
-            attrs.insert("participant".to_string(), info.source.sender.to_string());
+            builder = builder.jid_attr("participant", info.source.sender.clone());
         }
 
-        let receipt_node = NodeBuilder::new("receipt").attrs(attrs).build();
+        let receipt_node = builder.build();
 
         info!(target: "Client/Receipt", "Sending {} receipt for message {} to {}",
             if info.category == "peer" { "peer_msg" } else { "delivery" },
