@@ -14,7 +14,7 @@ fn build_pn_to_lid_map(lid_to_pn_map: &HashMap<String, Jid>) -> HashMap<String, 
         .collect()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GroupInfo {
     pub participants: Vec<Jid>,
     pub addressing_mode: AddressingMode,

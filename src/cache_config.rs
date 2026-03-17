@@ -1,5 +1,12 @@
-use moka::future::Cache;
+use std::fmt::Display;
+use std::sync::Arc;
 use std::time::Duration;
+
+use moka::future::Cache;
+use serde::{Serialize, de::DeserializeOwned};
+
+use crate::cache_store::TypedCache;
+pub use wacore::store::cache::CacheStore;
 
 /// Configuration for a single cache instance.
 ///
@@ -35,6 +42,23 @@ impl CacheEntryConfig {
         builder.build()
     }
 
+    /// Build a [`TypedCache`] with TTL semantics, using the custom store if
+    /// provided or falling back to an in-process moka cache.
+    pub(crate) fn build_typed_ttl<K, V>(
+        &self,
+        store: Option<Arc<dyn CacheStore>>,
+        namespace: &'static str,
+    ) -> TypedCache<K, V>
+    where
+        K: std::hash::Hash + Eq + Display + Send + Sync + 'static,
+        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        match store {
+            Some(s) => TypedCache::from_store(s, namespace, self.timeout),
+            None => TypedCache::from_moka(self.build_with_ttl()),
+        }
+    }
+
     /// Build a moka Cache using time_to_idle semantics.
     pub(crate) fn build_with_tti<K, V>(&self) -> Cache<K, V>
     where
@@ -49,12 +73,64 @@ impl CacheEntryConfig {
     }
 }
 
+/// Per-cache custom store overrides.
+///
+/// Each field is an optional [`CacheStore`] for that specific cache. When
+/// `None`, the default in-process moka cache is used.
+///
+/// # Example — only group and device on Redis
+///
+/// ```rust,ignore
+/// let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
+/// let config = CacheConfig {
+///     cache_stores: CacheStores {
+///         group_cache: Some(redis.clone()),
+///         device_cache: Some(redis.clone()),
+///         ..Default::default()
+///     },
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Default, Clone)]
+pub struct CacheStores {
+    /// Custom store for group metadata cache.
+    pub group_cache: Option<Arc<dyn CacheStore>>,
+    /// Custom store for device list cache.
+    pub device_cache: Option<Arc<dyn CacheStore>>,
+    /// Custom store for device registry cache.
+    pub device_registry_cache: Option<Arc<dyn CacheStore>>,
+    /// Custom store for LID-PN bidirectional mapping cache.
+    pub lid_pn_cache: Option<Arc<dyn CacheStore>>,
+}
+
+impl CacheStores {
+    /// Set the same [`CacheStore`] for all pluggable caches at once.
+    ///
+    /// Coordination caches (`session_locks`, `message_queues`, etc.) and the
+    /// signal write-behind cache always remain in-process regardless of this
+    /// setting.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let stores = CacheStores::all(Arc::new(MyRedisCacheStore::new("redis://localhost:6379")));
+    /// ```
+    pub fn all(store: Arc<dyn CacheStore>) -> Self {
+        Self {
+            group_cache: Some(store.clone()),
+            device_cache: Some(store.clone()),
+            device_registry_cache: Some(store.clone()),
+            lid_pn_cache: Some(store),
+        }
+    }
+}
+
 /// Configuration for all client caches and resource pools.
 ///
 /// All fields default to WhatsApp Web behavior. Use `..Default::default()` to
 /// override only specific settings.
 ///
-/// # Example
+/// # Example — tune TTL/capacity
 ///
 /// ```rust,ignore
 /// use whatsapp_rust::{CacheConfig, CacheEntryConfig};
@@ -65,7 +141,24 @@ impl CacheEntryConfig {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone)]
+///
+/// # Example — Redis for group and device caches only
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use whatsapp_rust::{CacheConfig, CacheStores};
+///
+/// let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
+/// let config = CacheConfig {
+///     cache_stores: CacheStores {
+///         group_cache: Some(redis.clone()),
+///         device_cache: Some(redis.clone()),
+///         ..Default::default()
+///     },
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Clone)]
 pub struct CacheConfig {
     /// Group metadata cache (time_to_live). Default: 1h TTL, 250 entries.
     pub group_cache: CacheEntryConfig,
@@ -104,6 +197,63 @@ pub struct CacheConfig {
     /// TTL in seconds for sent messages in DB before periodic cleanup.
     /// 0 = no automatic cleanup. Default: 300 (5 minutes).
     pub sent_message_ttl_secs: u64,
+
+    // --- Custom store overrides ---
+    /// Per-cache custom store overrides.
+    ///
+    /// For each field set to `Some(store)`, the corresponding cache uses that
+    /// backend instead of the default in-process moka cache. Fields left as
+    /// `None` keep the default moka behaviour.
+    ///
+    /// Coordination caches (`session_locks`, `message_queues`,
+    /// `message_enqueue_locks`), the signal write-behind cache, and
+    /// `pdo_pending_requests` always stay in-process — they hold live Rust
+    /// objects (mutexes, channel senders, oneshot senders) that cannot be
+    /// serialised to an external store.
+    pub cache_stores: CacheStores,
+}
+
+impl std::fmt::Debug for CacheConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CacheConfig")
+            .field("group_cache", &self.group_cache)
+            .field("device_cache", &self.device_cache)
+            .field("device_registry_cache", &self.device_registry_cache)
+            .field("lid_pn_cache", &self.lid_pn_cache)
+            .field("retried_group_messages", &self.retried_group_messages)
+            .field("recent_messages", &self.recent_messages)
+            .field("message_retry_counts", &self.message_retry_counts)
+            .field("pdo_pending_requests", &self.pdo_pending_requests)
+            .field("session_locks_capacity", &self.session_locks_capacity)
+            .field("message_queues_capacity", &self.message_queues_capacity)
+            .field(
+                "message_enqueue_locks_capacity",
+                &self.message_enqueue_locks_capacity,
+            )
+            .field("max_pooled_buffers", &self.max_pooled_buffers)
+            .field(
+                "max_pooled_buffer_capacity",
+                &self.max_pooled_buffer_capacity,
+            )
+            .field("sent_message_ttl_secs", &self.sent_message_ttl_secs)
+            .field(
+                "cache_stores.group_cache",
+                &self.cache_stores.group_cache.is_some(),
+            )
+            .field(
+                "cache_stores.device_cache",
+                &self.cache_stores.device_cache.is_some(),
+            )
+            .field(
+                "cache_stores.device_registry_cache",
+                &self.cache_stores.device_registry_cache.is_some(),
+            )
+            .field(
+                "cache_stores.lid_pn_cache",
+                &self.cache_stores.lid_pn_cache.is_some(),
+            )
+            .finish()
+    }
 }
 
 impl Default for CacheConfig {
@@ -126,6 +276,7 @@ impl Default for CacheConfig {
             max_pooled_buffers: 8,
             max_pooled_buffer_capacity: 256 * 1024,
             sent_message_ttl_secs: 300,
+            cache_stores: CacheStores::default(),
         }
     }
 }

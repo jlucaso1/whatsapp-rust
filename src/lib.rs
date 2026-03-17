@@ -4,7 +4,9 @@ pub use wacore_binary::jid::Jid;
 pub use waproto;
 
 pub mod cache_config;
-pub use cache_config::{CacheConfig, CacheEntryConfig};
+pub use cache_config::{CacheConfig, CacheEntryConfig, CacheStores};
+pub mod cache_store;
+pub use cache_store::CacheStore;
 pub mod http;
 pub mod types;
 

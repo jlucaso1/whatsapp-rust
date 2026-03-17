@@ -14,10 +14,15 @@
 //! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
 //! memory growth in long-running sessions.
 
-use moka::future::Cache;
+use std::sync::Arc;
 
 use crate::cache_config::{CacheConfig, CacheEntryConfig};
+use crate::cache_store::TypedCache;
 pub use wacore::types::{LearningSource, LidPnEntry};
+
+/// Namespaces used in the custom store.
+const NS_LID: &str = "lid_pn_by_lid";
+const NS_PN: &str = "lid_pn_by_pn";
 
 /// Cache for LID to Phone Number mappings.
 ///
@@ -28,9 +33,9 @@ pub use wacore::types::{LearningSource, LidPnEntry};
 /// The cache is thread-safe and can be shared across async tasks.
 pub struct LidPnCache {
     /// LID -> Entry mapping
-    lid_to_entry: Cache<String, LidPnEntry>,
+    lid_to_entry: TypedCache<String, LidPnEntry>,
     /// Phone number -> Entry mapping (stores the most recent LID for that PN)
-    pn_to_entry: Cache<String, LidPnEntry>,
+    pn_to_entry: TypedCache<String, LidPnEntry>,
 }
 
 impl Default for LidPnCache {
@@ -42,14 +47,26 @@ impl Default for LidPnCache {
 impl LidPnCache {
     /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
     pub fn new() -> Self {
-        Self::with_config(&CacheConfig::default().lid_pn_cache)
+        Self::with_config(&CacheConfig::default().lid_pn_cache, None)
     }
 
     /// Create a new cache with custom configuration (uses time_to_idle semantics).
-    pub fn with_config(config: &CacheEntryConfig) -> Self {
-        Self {
-            lid_to_entry: config.build_with_tti(),
-            pn_to_entry: config.build_with_tti(),
+    ///
+    /// When `store` is `Some`, both internal maps use the custom backend.
+    /// When `store` is `None`, both maps use in-process moka caches.
+    pub fn with_config(
+        config: &CacheEntryConfig,
+        store: Option<Arc<dyn wacore::store::CacheStore>>,
+    ) -> Self {
+        match store {
+            Some(s) => Self {
+                lid_to_entry: TypedCache::from_store(s.clone(), NS_LID, config.timeout),
+                pn_to_entry: TypedCache::from_store(s, NS_PN, config.timeout),
+            },
+            None => Self {
+                lid_to_entry: TypedCache::from_moka(config.build_with_tti()),
+                pn_to_entry: TypedCache::from_moka(config.build_with_tti()),
+            },
         }
     }
 
@@ -94,9 +111,14 @@ impl LidPnCache {
     /// For the LID -> Entry map, this always updates.
     /// For the PN -> Entry map, this only updates if the new entry has a
     /// newer or equal `created_at` timestamp (matching WhatsApp Web behavior).
+    ///
+    /// Note: the get-then-insert on the PN map is not atomic. With external
+    /// backends (e.g., Redis), concurrent `add()` calls for the same phone
+    /// number can race. This is acceptable because the cache is best-effort
+    /// and backed by persistent storage for correctness.
     pub async fn add(&self, entry: LidPnEntry) {
         // Check if PN map needs update first
-        let should_update_pn = match self.pn_to_entry.get(&entry.phone_number).await {
+        let should_update_pn = match self.pn_to_entry.get(entry.phone_number.as_str()).await {
             Some(existing) => existing.created_at <= entry.created_at,
             None => true,
         };
@@ -135,9 +157,12 @@ impl LidPnCache {
     }
 
     /// Clear all entries from the cache.
+    ///
+    /// Awaits the actual clear operation on custom backends (unlike
+    /// `invalidate_all` which is fire-and-forget).
     pub async fn clear(&self) {
-        self.lid_to_entry.invalidate_all();
-        self.pn_to_entry.invalidate_all();
+        self.lid_to_entry.clear().await;
+        self.pn_to_entry.clear().await;
     }
 
     /// Get the number of LID entries in the cache.
@@ -307,7 +332,6 @@ mod tests {
         assert_eq!(cache.pn_count().await, 1);
 
         cache.clear().await;
-        // run_pending_tasks is called inside lid_count/pn_count
         assert_eq!(cache.lid_count().await, 0);
         assert_eq!(cache.pn_count().await, 0);
         assert!(cache.get_current_lid("559980000001").await.is_none());
