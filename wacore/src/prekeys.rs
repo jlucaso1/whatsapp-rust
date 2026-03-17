@@ -1,6 +1,5 @@
 use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use crate::xml::DisplayableNode;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
@@ -282,6 +281,7 @@ mod tests {
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
     use crate::protocol::ProtocolNode;
     use rand::TryRngCore;
+    use std::borrow::Cow;
     use wacore_binary::node::NodeValue;
 
     fn create_mock_bundle(device_id: u32) -> PreKeyBundle {

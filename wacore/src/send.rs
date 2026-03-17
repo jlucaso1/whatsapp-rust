@@ -690,9 +690,12 @@ pub async fn prepare_group_stanza<
         // Dedup AFTER LID conversion to avoid duplicates when both phone and LID
         // queries return the same user (e.g., 559980000003:33 and 100000037037034:33
         // both convert to 100000037037034:33@lid).
-        // Uses Jid's derived Hash/Eq directly instead of allocating via to_string().
+        // Key on (user, server, agent, device) — excludes `integrator` which is not
+        // part of the wire JID identity used in <to jid> and phash.
         let mut seen = HashSet::new();
-        resolved_list.retain(|jid| seen.insert(jid.clone()));
+        resolved_list.retain(|jid| {
+            seen.insert((jid.user.clone(), jid.server.clone(), jid.agent, jid.device))
+        });
 
         // Filter devices for SKDM distribution:
         // - Exclude the exact sending device (own_sending_jid) - we already have our own sender key
