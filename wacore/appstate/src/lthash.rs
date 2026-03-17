@@ -16,25 +16,30 @@ pub const WAPATCH_INTEGRITY: LTHash = LTHash {
 };
 
 impl LTHash {
-    pub fn subtract_then_add(&self, base: &[u8], subtract: &[Vec<u8>], add: &[Vec<u8>]) -> Vec<u8> {
+    pub fn subtract_then_add<T: AsRef<[u8]>>(
+        &self,
+        base: &[u8],
+        subtract: &[T],
+        add: &[T],
+    ) -> Vec<u8> {
         let mut output = base.to_vec();
         self.subtract_then_add_in_place(&mut output, subtract, add);
         output
     }
 
-    pub fn subtract_then_add_in_place(
+    pub fn subtract_then_add_in_place<T: AsRef<[u8]>>(
         &self,
         base: &mut [u8],
-        subtract: &[Vec<u8>],
-        add: &[Vec<u8>],
+        subtract: &[T],
+        add: &[T],
     ) {
         self.multiple_op(base, subtract, true);
         self.multiple_op(base, add, false);
     }
 
-    fn multiple_op(&self, base: &mut [u8], input: &[Vec<u8>], subtract: bool) {
+    fn multiple_op<T: AsRef<[u8]>>(&self, base: &mut [u8], input: &[T], subtract: bool) {
         for item in input {
-            let derived = hkdf_sha256(item, None, self.hkdf_info, self.hkdf_size);
+            let derived = hkdf_sha256(item.as_ref(), None, self.hkdf_info, self.hkdf_size);
             perform_pointwise_with_overflow(base, &derived, subtract);
         }
     }
@@ -219,7 +224,7 @@ mod tests {
         let original = base.clone();
         let lth = WAPATCH_INTEGRITY;
 
-        lth.subtract_then_add_in_place(&mut base, &[], &[]);
+        lth.subtract_then_add_in_place(&mut base, &[] as &[Vec<u8>], &[]);
         assert_eq!(base, original);
     }
 

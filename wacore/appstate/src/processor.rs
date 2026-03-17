@@ -239,8 +239,8 @@ where
 
     // Decode all mutations and collect MACs in a single pass
     let mut mutations = Vec::with_capacity(patch.mutations.len());
-    let mut added_macs = Vec::new();
-    let mut removed_index_macs = Vec::new();
+    let mut added_macs = Vec::with_capacity(patch.mutations.len());
+    let mut removed_index_macs = Vec::with_capacity(patch.mutations.len());
 
     for m in &patch.mutations {
         if let Some(rec) = &m.record {

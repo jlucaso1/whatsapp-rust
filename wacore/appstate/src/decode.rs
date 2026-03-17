@@ -116,9 +116,12 @@ pub fn collect_key_ids_from_patch_list(
 
     let mut check = |key_id: Option<&Vec<u8>>| {
         if let Some(k) = key_id
-            && seen.insert(k.clone())
+            && !seen.contains(k.as_slice())
         {
-            key_ids.push(k.clone());
+            // Clone once; the same clone goes into both seen set and result vec.
+            let owned = k.clone();
+            seen.insert(owned.clone());
+            key_ids.push(owned);
         }
     };
 

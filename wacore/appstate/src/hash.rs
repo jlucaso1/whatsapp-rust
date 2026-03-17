@@ -43,8 +43,8 @@ impl HashState {
     where
         F: FnMut(&[u8], usize) -> anyhow::Result<Option<Vec<u8>>>,
     {
-        let mut added: Vec<Vec<u8>> = Vec::new();
-        let mut removed: Vec<Vec<u8>> = Vec::new();
+        let mut added: Vec<Vec<u8>> = Vec::with_capacity(mutations.len());
+        let mut removed: Vec<Vec<u8>> = Vec::with_capacity(mutations.len());
         let mut result = HashUpdateResult::default();
 
         for (i, mutation) in mutations.iter().enumerate() {
@@ -88,7 +88,8 @@ impl HashState {
     /// This is an optimized version for snapshots where all operations are SET
     /// and there are no previous values to look up.
     pub fn update_hash_from_records(&mut self, records: &[wa::SyncdRecord]) {
-        let added: Vec<Vec<u8>> = records
+        // Collect slices directly — no Vec<u8> allocation per MAC.
+        let added: Vec<&[u8]> = records
             .iter()
             .filter_map(|record| {
                 record
@@ -96,11 +97,11 @@ impl HashState {
                     .as_ref()
                     .and_then(|v| v.blob.as_ref())
                     .filter(|blob| blob.len() >= 32)
-                    .map(|blob| blob[blob.len() - 32..].to_vec())
+                    .map(|blob| &blob[blob.len() - 32..])
             })
             .collect();
 
-        WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &[], &added);
+        WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &[] as &[&[u8]], &added);
     }
 
     pub fn generate_snapshot_mac(&self, name: &str, key: &[u8]) -> Vec<u8> {
@@ -115,9 +116,12 @@ impl HashState {
 }
 
 pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], version: u64) -> Vec<u8> {
-    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut mac =
+        CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
+
+    // Feed directly to HMAC without collecting into Vec<Vec<u8>>
     if let Some(sm) = &patch.snapshot_mac {
-        parts.push(sm.clone());
+        mac.update(sm);
     }
     for m in &patch.mutations {
         if let Some(record) = &m.record
@@ -125,16 +129,12 @@ pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], versio
             && let Some(blob) = &val.blob
             && blob.len() >= 32
         {
-            parts.push(blob[blob.len() - 32..].to_vec());
+            mac.update(&blob[blob.len() - 32..]);
         }
     }
-    parts.push(u64_to_be(version).to_vec());
-    parts.push(name.as_bytes().to_vec());
-    let mut mac =
-        CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
-    for p in parts.iter() {
-        mac.update(p);
-    }
+    mac.update(&u64_to_be(version));
+    mac.update(name.as_bytes());
+
     mac.finalize()
 }
 

@@ -124,7 +124,7 @@ impl Client {
             return;
         }
 
-        let mut attrs = HashMap::new();
+        let mut attrs = HashMap::with_capacity(5);
         attrs.insert("id".to_string(), info.id.clone());
         attrs.insert("to".to_string(), info.source.chat.to_string());
 
