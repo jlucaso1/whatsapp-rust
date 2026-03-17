@@ -9,6 +9,12 @@ pub trait JidExt {
     /// - Device part `:device` only included when `device != 0`
     /// - Examples: `123456789@lid`, `123456789:33@lid`, `5511999887766@c.us`
     fn to_signal_address_string(&self) -> String;
+
+    /// Returns the full protocol address string including the device_id suffix.
+    /// Format: `{signal_address_string}.0`
+    /// This is equivalent to `to_protocol_address().to_string()` but avoids
+    /// the intermediate ProtocolAddress allocation — one String instead of two.
+    fn to_protocol_address_string(&self) -> String;
 }
 
 impl JidExt for Jid {
@@ -35,25 +41,29 @@ impl JidExt for Jid {
     }
 
     fn to_protocol_address(&self) -> ProtocolAddress {
-        // WhatsApp Web's createSignalLikeAddress format:
-        // ```javascript
-        // function g(e){
-        //   var t=0,  // <-- always 0 for the device_id portion
-        //   n=new(o("WAWebSignalAddress")).SignalAddress(e),
-        //   r=n.toString();
-        //   return r+"."+t  // Signal address + ".0"
-        // }
-        // ```
-        //
-        // The full session key format is: {SignalAddress.toString()}.0
-        // Examples:
-        // - 123456789@lid.0 (LID user, device 0)
-        // - 123456789:33@lid.0 (LID user with device 33)
-        // - 5511999887766@c.us.0 (Phone number, device 0)
-        //
-        // The device is encoded in the name, and device_id is always 0.
         let name = self.to_signal_address_string();
         ProtocolAddress::new(name, 0.into())
+    }
+
+    fn to_protocol_address_string(&self) -> String {
+        use std::fmt::Write;
+
+        let server = match &*self.server {
+            "s.whatsapp.net" => "c.us",
+            other => other,
+        };
+
+        // Pre-size: user + ":" + device(max 5) + "@" + server + ".0"
+        let mut result = String::with_capacity(self.user.len() + 9 + server.len());
+        result.push_str(&self.user);
+        if self.device != 0 {
+            result.push(':');
+            let _ = write!(result, "{}", self.device);
+        }
+        result.push('@');
+        result.push_str(server);
+        result.push_str(".0");
+        result
     }
 }
 
@@ -125,5 +135,26 @@ mod tests {
         assert_eq!(addr.name(), "5511999887766@c.us");
         assert_eq!(u32::from(addr.device_id()), 0);
         assert_eq!(addr.to_string(), "5511999887766@c.us.0");
+    }
+
+    #[test]
+    fn test_protocol_address_string_matches_to_string() {
+        // to_protocol_address_string() must produce the same output as
+        // to_protocol_address().to_string() for all JID types.
+        let jids = [
+            "123456789@lid",
+            "123456789:33@lid",
+            "100000000000001.1:75@lid",
+            "5511999887766@s.whatsapp.net",
+            "5511999887766:33@s.whatsapp.net",
+        ];
+        for jid_str in &jids {
+            let jid = Jid::from_str(jid_str).expect("test JID should be valid");
+            assert_eq!(
+                jid.to_protocol_address_string(),
+                jid.to_protocol_address().to_string(),
+                "mismatch for JID: {jid_str}"
+            );
+        }
     }
 }

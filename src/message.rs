@@ -686,7 +686,7 @@ impl Client {
         // multiple messages from the same sender are processed concurrently.
         // Use the full Signal protocol address string as the lock key so it matches
         // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
-        let signal_addr_str = sender_encryption_jid.to_protocol_address().to_string();
+        let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
 
         let session_mutex = self
             .session_locks
