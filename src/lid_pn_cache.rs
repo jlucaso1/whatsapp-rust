@@ -83,10 +83,7 @@ impl LidPnCache {
     ///
     /// Returns the LID user part if a mapping exists, None otherwise.
     pub async fn get_current_lid(&self, phone: &str) -> Option<String> {
-        self.pn_to_entry
-            .get(&phone.to_owned())
-            .await
-            .map(|e| e.lid.clone())
+        self.pn_to_entry.get(phone).await.map(|e| e.lid.clone())
     }
 
     /// Get the phone number for a LID.
@@ -94,19 +91,19 @@ impl LidPnCache {
     /// Returns the phone number user part if a mapping exists, None otherwise.
     pub async fn get_phone_number(&self, lid: &str) -> Option<String> {
         self.lid_to_entry
-            .get(&lid.to_owned())
+            .get(lid)
             .await
             .map(|e| e.phone_number.clone())
     }
 
     /// Get the full entry for a LID.
     pub async fn get_entry_by_lid(&self, lid: &str) -> Option<LidPnEntry> {
-        self.lid_to_entry.get(&lid.to_owned()).await
+        self.lid_to_entry.get(lid).await
     }
 
     /// Get the full entry for a phone number.
     pub async fn get_entry_by_phone(&self, phone: &str) -> Option<LidPnEntry> {
-        self.pn_to_entry.get(&phone.to_owned()).await
+        self.pn_to_entry.get(phone).await
     }
 
     /// Add or update a mapping in the cache.
@@ -114,9 +111,14 @@ impl LidPnCache {
     /// For the LID -> Entry map, this always updates.
     /// For the PN -> Entry map, this only updates if the new entry has a
     /// newer or equal `created_at` timestamp (matching WhatsApp Web behavior).
+    ///
+    /// Note: the get-then-insert on the PN map is not atomic. With external
+    /// backends (e.g., Redis), concurrent `add()` calls for the same phone
+    /// number can race. This is acceptable because the cache is best-effort
+    /// and backed by persistent storage for correctness.
     pub async fn add(&self, entry: LidPnEntry) {
         // Check if PN map needs update first
-        let should_update_pn = match self.pn_to_entry.get(&entry.phone_number).await {
+        let should_update_pn = match self.pn_to_entry.get(entry.phone_number.as_str()).await {
             Some(existing) => existing.created_at <= entry.created_at,
             None => true,
         };
@@ -155,9 +157,12 @@ impl LidPnCache {
     }
 
     /// Clear all entries from the cache.
+    ///
+    /// Awaits the actual clear operation on custom backends (unlike
+    /// `invalidate_all` which is fire-and-forget).
     pub async fn clear(&self) {
-        self.lid_to_entry.invalidate_all();
-        self.pn_to_entry.invalidate_all();
+        self.lid_to_entry.clear().await;
+        self.pn_to_entry.clear().await;
     }
 
     /// Get the number of LID entries in the cache.

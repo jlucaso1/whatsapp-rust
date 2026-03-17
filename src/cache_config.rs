@@ -1,7 +1,11 @@
-use moka::future::Cache;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
+use moka::future::Cache;
+use serde::{Serialize, de::DeserializeOwned};
+
+use crate::cache_store::TypedCache;
 pub use wacore::store::cache::CacheStore;
 
 /// Configuration for a single cache instance.
@@ -36,6 +40,23 @@ impl CacheEntryConfig {
             builder = builder.time_to_live(timeout);
         }
         builder.build()
+    }
+
+    /// Build a [`TypedCache`] with TTL semantics, using the custom store if
+    /// provided or falling back to an in-process moka cache.
+    pub(crate) fn build_typed_ttl<K, V>(
+        &self,
+        store: Option<Arc<dyn CacheStore>>,
+        namespace: &'static str,
+    ) -> TypedCache<K, V>
+    where
+        K: std::hash::Hash + Eq + Display + Send + Sync + 'static,
+        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        match store {
+            Some(s) => TypedCache::from_store(s, namespace, self.timeout),
+            None => TypedCache::from_moka(self.build_with_ttl()),
+        }
     }
 
     /// Build a moka Cache using time_to_idle semantics.

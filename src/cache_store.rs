@@ -160,8 +160,12 @@ where
         }
     }
 
-    /// Remove all entries.  For the custom backend this spawns a fire-and-forget
-    /// task (mirrors moka's non-`async` `invalidate_all`).
+    /// Remove all entries.
+    ///
+    /// For the moka backend this is synchronous (matching moka's API).
+    /// For the custom backend this spawns a fire-and-forget task via
+    /// [`tokio::runtime::Handle::try_current`] to avoid panicking if
+    /// called outside a Tokio runtime.
     pub fn invalidate_all(&self) {
         match &self.inner {
             Inner::Moka(cache) => cache.invalidate_all(),
@@ -170,11 +174,32 @@ where
             } => {
                 let store = store.clone();
                 let ns = *namespace;
-                tokio::spawn(async move {
-                    if let Err(e) = store.clear(ns).await {
-                        log::warn!("TypedCache[{ns}]: clear() error: {e}");
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.spawn(async move {
+                            if let Err(e) = store.clear(ns).await {
+                                log::warn!("TypedCache[{ns}]: clear() error: {e}");
+                            }
+                        });
                     }
-                });
+                    Err(_) => {
+                        log::warn!("TypedCache[{ns}]: clear() skipped: no Tokio runtime");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove all entries, awaiting completion for custom backends.
+    pub async fn clear(&self) {
+        match &self.inner {
+            Inner::Moka(cache) => cache.invalidate_all(),
+            Inner::Custom {
+                store, namespace, ..
+            } => {
+                if let Err(e) = store.clear(namespace).await {
+                    log::warn!("TypedCache[{namespace}]: clear() error: {e}");
+                }
             }
         }
     }
@@ -190,12 +215,24 @@ where
         }
     }
 
-    /// Approximate number of cached entries (for diagnostics; always `0` for
-    /// custom backends that don't support cheap counts).
+    /// Approximate entry count (sync). Returns `0` for custom backends.
+    ///
+    /// For diagnostics that need custom backend counts, use
+    /// [`entry_count_async`](Self::entry_count_async) instead.
     pub fn entry_count(&self) -> u64 {
         match &self.inner {
             Inner::Moka(cache) => cache.entry_count(),
             Inner::Custom { .. } => 0,
+        }
+    }
+
+    /// Approximate entry count, delegating to the custom backend if available.
+    pub async fn entry_count_async(&self) -> u64 {
+        match &self.inner {
+            Inner::Moka(cache) => cache.entry_count(),
+            Inner::Custom {
+                store, namespace, ..
+            } => store.entry_count(namespace).await.unwrap_or(0),
         }
     }
 }

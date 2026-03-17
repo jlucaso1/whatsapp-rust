@@ -618,14 +618,10 @@ impl Client {
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
-            device_registry_cache: match cache_config.cache_stores.device_registry_cache.clone() {
-                Some(store) => TypedCache::from_store(
-                    store,
-                    "device_registry",
-                    cache_config.device_registry_cache.timeout,
-                ),
-                None => TypedCache::from_moka(cache_config.device_registry_cache.build_with_ttl()),
-            },
+            device_registry_cache: cache_config.device_registry_cache.build_typed_ttl(
+                cache_config.cache_stores.device_registry_cache.clone(),
+                "device_registry",
+            ),
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
@@ -657,14 +653,9 @@ impl Client {
         self.group_cache
             .get_or_init(|| async {
                 debug!("Initializing Group Cache for the first time.");
-                match self.cache_config.cache_stores.group_cache.clone() {
-                    Some(store) => TypedCache::from_store(
-                        store,
-                        "group",
-                        self.cache_config.group_cache.timeout,
-                    ),
-                    None => TypedCache::from_moka(self.cache_config.group_cache.build_with_ttl()),
-                }
+                self.cache_config
+                    .group_cache
+                    .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group")
             })
             .await
     }
@@ -673,14 +664,10 @@ impl Client {
         self.device_cache
             .get_or_init(|| async {
                 debug!("Initializing Device Cache for the first time.");
-                match self.cache_config.cache_stores.device_cache.clone() {
-                    Some(store) => TypedCache::from_store(
-                        store,
-                        "device",
-                        self.cache_config.device_cache.timeout,
-                    ),
-                    None => TypedCache::from_moka(self.cache_config.device_cache.build_with_ttl()),
-                }
+                self.cache_config.device_cache.build_typed_ttl(
+                    self.cache_config.cache_stores.device_cache.clone(),
+                    "device",
+                )
             })
             .await
     }
