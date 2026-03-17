@@ -40,28 +40,18 @@ impl JidExt for Jid {
         result
     }
 
+    /// Build a `ProtocolAddress` for Signal session store lookups.
+    /// The device_id is always 0 — WhatsApp encodes the device in the name.
     fn to_protocol_address(&self) -> ProtocolAddress {
         let name = self.to_signal_address_string();
         ProtocolAddress::new(name, 0.into())
     }
 
     fn to_protocol_address_string(&self) -> String {
-        use std::fmt::Write;
-
-        let server = match &*self.server {
-            "s.whatsapp.net" => "c.us",
-            other => other,
-        };
-
-        // Pre-size: user + ":" + device(max 5) + "@" + server + ".0"
-        let mut result = String::with_capacity(self.user.len() + 9 + server.len());
-        result.push_str(&self.user);
-        if self.device != 0 {
-            result.push(':');
-            let _ = write!(result, "{}", self.device);
-        }
-        result.push('@');
-        result.push_str(server);
+        // Reuse to_signal_address_string() and append the fixed ".0" suffix.
+        // Reserves 2 extra bytes so the append doesn't reallocate.
+        let mut result = self.to_signal_address_string();
+        result.reserve(2);
         result.push_str(".0");
         result
     }
