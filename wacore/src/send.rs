@@ -16,7 +16,7 @@ use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
-use wacore_binary::node::{Attrs, Node};
+use wacore_binary::node::Node;
 use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
@@ -105,7 +105,7 @@ async fn encrypt_for_devices<'a, S, I, P, SP>(
     resolver: &dyn SendContextResolver,
     devices: &[Jid],
     plaintext_to_encrypt: &[u8],
-    enc_extra_attrs: &Attrs,
+    hide_decrypt_fail: bool,
 ) -> Result<(Vec<Node>, bool)>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -315,7 +315,7 @@ where
         }
     }
 
-    let mut participant_nodes = Vec::new();
+    let mut participant_nodes = Vec::with_capacity(devices.len());
     let mut includes_prekey_message = false;
 
     for device_jid in devices {
@@ -343,22 +343,19 @@ where
                     _ => continue,
                 };
 
-                let mut enc_attrs = Attrs::new();
-                enc_attrs.insert("v".to_string(), "2".to_string());
-                enc_attrs.insert("type".to_string(), enc_type.to_string());
-                for (k, v) in enc_extra_attrs.iter() {
-                    enc_attrs.insert(k.clone(), v.clone());
+                let mut enc_builder = NodeBuilder::new("enc")
+                    .attr("v", "2")
+                    .attr("type", enc_type);
+                if hide_decrypt_fail {
+                    enc_builder = enc_builder.attr("decrypt-fail", "hide");
                 }
+                let enc_node = enc_builder.bytes(serialized_bytes).build();
 
-                let enc_node = NodeBuilder::new("enc")
-                    .attrs(enc_attrs)
-                    .bytes(serialized_bytes)
-                    .build();
-                // Use the original device_jid for the `to` attribute (what the server expects),
-                // but we encrypted using the encryption_jid's session
+                // Use jid_attr to avoid device_jid.to_string() allocation —
+                // the encoder writes the JID directly in binary format.
                 participant_nodes.push(
                     NodeBuilder::new("to")
-                        .attr("jid", device_jid.to_string())
+                        .jid_attr("jid", device_jid.clone())
                         .children([enc_node])
                         .build(),
                 );
@@ -441,12 +438,9 @@ pub async fn prepare_dm_stanza<
     let mut includes_prekey_message = false;
 
     // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
-    let mut enc_extra_attrs = Attrs::new();
-    if let Some(edit_attr) = &edit
-        && *edit_attr != crate::types::message::EditAttribute::Empty
-    {
-        enc_extra_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
-    }
+    let hide_decrypt_fail = edit
+        .as_ref()
+        .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty);
 
     if !recipient_devices.is_empty() {
         let (nodes, inc) = encrypt_for_devices(
@@ -454,7 +448,7 @@ pub async fn prepare_dm_stanza<
             resolver,
             &recipient_devices,
             &recipient_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -467,7 +461,7 @@ pub async fn prepare_dm_stanza<
             resolver,
             &own_other_devices,
             &own_devices_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -497,21 +491,18 @@ pub async fn prepare_dm_stanza<
     // Add any extra stanza nodes provided by the caller
     message_content_nodes.extend(extra_stanza_nodes);
 
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
+    let mut stanza_builder = NodeBuilder::new("message")
+        .jid_attr("to", to_jid)
+        .attr("id", request_id)
+        .attr("type", "text");
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
     {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_content_nodes)
-        .build();
+    let stanza = stanza_builder.children(message_content_nodes).build();
 
     Ok(stanza)
 }
@@ -546,12 +537,10 @@ where
         .build();
 
     let stanza = NodeBuilder::new("message")
-        .attrs([
-            ("to", transport_jid.to_string()),
-            ("id", request_id),
-            ("type", "text".to_string()),
-            ("category", "peer".to_string()),
-        ])
+        .jid_attr("to", transport_jid)
+        .attr("id", request_id)
+        .attr("type", "text")
+        .attr("category", "peer")
         .children([enc_node])
         .build();
 
@@ -750,14 +739,13 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        // For SKDM distribution we don't set decrypt-fail; use empty attrs
-        let empty_attrs = Attrs::new();
+        // SKDM distribution never sets decrypt-fail
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
             &skdm_plaintext_to_encrypt,
-            &empty_attrs,
+            false,
         )
         .await?;
         includes_prekey_message = includes_prekey_message || inc;
@@ -791,35 +779,32 @@ pub async fn prepare_group_stanza<
 
     // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
     // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
-    let mut sk_enc_attrs = Attrs::new();
-    sk_enc_attrs.insert("v".to_string(), "2".to_string());
-    sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", "2")
+        .attr("type", "skmsg")
+        .bytes(skmsg_ciphertext);
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
         && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
     {
-        sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
+        enc_builder = enc_builder.attr("decrypt-fail", "hide");
     }
+    let content_node = enc_builder.build();
 
-    let content_node = NodeBuilder::new("enc")
-        .attrs(sk_enc_attrs)
-        .bytes(skmsg_ciphertext)
-        .build();
-
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
+    let mut stanza_builder = NodeBuilder::new("message")
+        .jid_attr("to", to_jid.clone())
+        .attr("id", request_id)
+        .attr("type", "text");
 
     // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
     if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
-        stanza_attrs.insert("addressing_mode".to_string(), "lid".to_string());
+        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
     }
 
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
     {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
     // NOTE: WhatsApp Web does NOT include participant attribute on initial admin revoke send
     // The participant attribute only appears on retry/fanout messages
@@ -835,7 +820,7 @@ pub async fn prepare_group_stanza<
     if let Some(devices) = &resolved_devices_for_phash {
         match MessageUtils::participant_list_hash(devices) {
             Ok(phash) => {
-                stanza_attrs.insert("phash".to_string(), phash);
+                stanza_builder = stanza_builder.attr("phash", phash);
             }
             Err(e) => {
                 log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
@@ -846,10 +831,7 @@ pub async fn prepare_group_stanza<
     // Add any extra stanza nodes provided by the caller
     message_children.extend(extra_stanza_nodes);
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_children)
-        .build();
+    let stanza = stanza_builder.children(message_children).build();
 
     Ok(stanza)
 }
