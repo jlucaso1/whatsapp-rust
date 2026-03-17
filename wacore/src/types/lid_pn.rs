@@ -13,7 +13,10 @@
 
 /// The source from which a LID-PN mapping was learned.
 /// Different sources have different trust levels and handling for identity changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::StringEnum,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum LearningSource {
     /// Mapping learned from usync (device sync) query response
     #[str = "usync"]
@@ -59,7 +62,7 @@ impl LearningSource {
 }
 
 /// An entry in the LID-PN cache containing the full mapping information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LidPnEntry {
     /// The LID user part (e.g., "100000012345678")
     pub lid: String,

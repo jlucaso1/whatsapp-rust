@@ -14,10 +14,15 @@
 //! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
 //! memory growth in long-running sessions.
 
-use moka::future::Cache;
+use std::sync::Arc;
 
 use crate::cache_config::{CacheConfig, CacheEntryConfig};
+use crate::cache_store::TypedCache;
 pub use wacore::types::{LearningSource, LidPnEntry};
+
+/// Namespaces used in the custom store.
+const NS_LID: &str = "lid_pn_by_lid";
+const NS_PN: &str = "lid_pn_by_pn";
 
 /// Cache for LID to Phone Number mappings.
 ///
@@ -28,9 +33,9 @@ pub use wacore::types::{LearningSource, LidPnEntry};
 /// The cache is thread-safe and can be shared across async tasks.
 pub struct LidPnCache {
     /// LID -> Entry mapping
-    lid_to_entry: Cache<String, LidPnEntry>,
+    lid_to_entry: TypedCache<String, LidPnEntry>,
     /// Phone number -> Entry mapping (stores the most recent LID for that PN)
-    pn_to_entry: Cache<String, LidPnEntry>,
+    pn_to_entry: TypedCache<String, LidPnEntry>,
 }
 
 impl Default for LidPnCache {
@@ -42,14 +47,26 @@ impl Default for LidPnCache {
 impl LidPnCache {
     /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
     pub fn new() -> Self {
-        Self::with_config(&CacheConfig::default().lid_pn_cache)
+        Self::with_config(&CacheConfig::default().lid_pn_cache, None)
     }
 
     /// Create a new cache with custom configuration (uses time_to_idle semantics).
-    pub fn with_config(config: &CacheEntryConfig) -> Self {
-        Self {
-            lid_to_entry: config.build_with_tti(),
-            pn_to_entry: config.build_with_tti(),
+    ///
+    /// When `store` is `Some`, both internal maps use the custom backend.
+    /// When `store` is `None`, both maps use in-process moka caches.
+    pub fn with_config(
+        config: &CacheEntryConfig,
+        store: Option<Arc<dyn wacore::store::CacheStore>>,
+    ) -> Self {
+        match store {
+            Some(s) => Self {
+                lid_to_entry: TypedCache::from_store(s.clone(), NS_LID, config.timeout),
+                pn_to_entry: TypedCache::from_store(s, NS_PN, config.timeout),
+            },
+            None => Self {
+                lid_to_entry: TypedCache::from_moka(config.build_with_tti()),
+                pn_to_entry: TypedCache::from_moka(config.build_with_tti()),
+            },
         }
     }
 
@@ -66,7 +83,10 @@ impl LidPnCache {
     ///
     /// Returns the LID user part if a mapping exists, None otherwise.
     pub async fn get_current_lid(&self, phone: &str) -> Option<String> {
-        self.pn_to_entry.get(phone).await.map(|e| e.lid.clone())
+        self.pn_to_entry
+            .get(&phone.to_owned())
+            .await
+            .map(|e| e.lid.clone())
     }
 
     /// Get the phone number for a LID.
@@ -74,19 +94,19 @@ impl LidPnCache {
     /// Returns the phone number user part if a mapping exists, None otherwise.
     pub async fn get_phone_number(&self, lid: &str) -> Option<String> {
         self.lid_to_entry
-            .get(lid)
+            .get(&lid.to_owned())
             .await
             .map(|e| e.phone_number.clone())
     }
 
     /// Get the full entry for a LID.
     pub async fn get_entry_by_lid(&self, lid: &str) -> Option<LidPnEntry> {
-        self.lid_to_entry.get(lid).await
+        self.lid_to_entry.get(&lid.to_owned()).await
     }
 
     /// Get the full entry for a phone number.
     pub async fn get_entry_by_phone(&self, phone: &str) -> Option<LidPnEntry> {
-        self.pn_to_entry.get(phone).await
+        self.pn_to_entry.get(&phone.to_owned()).await
     }
 
     /// Add or update a mapping in the cache.
@@ -307,7 +327,6 @@ mod tests {
         assert_eq!(cache.pn_count().await, 1);
 
         cache.clear().await;
-        // run_pending_tasks is called inside lid_count/pn_count
         assert_eq!(cache.lid_count().await, 0);
         assert_eq!(cache.pn_count().await, 0);
         assert!(cache.get_current_lid("559980000001").await.is_none());

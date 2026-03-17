@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
@@ -19,7 +18,7 @@ impl StanzaKey {
 }
 
 /// Addressing mode for a group (phone number vs LID).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crate::StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, crate::StringEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum AddressingMode {
     #[string_default]

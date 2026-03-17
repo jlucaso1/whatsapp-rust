@@ -4,6 +4,7 @@ mod lid_pn;
 mod sender_keys;
 mod sessions;
 
+use crate::cache_store::TypedCache;
 use crate::handshake;
 use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
@@ -319,8 +320,8 @@ pub struct Client {
     /// preventing race conditions during queue initialization.
     pub(crate) message_enqueue_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
 
-    pub group_cache: OnceCell<Cache<Jid, GroupInfo>>,
-    pub device_cache: OnceCell<Cache<Jid, Vec<Jid>>>,
+    pub group_cache: OnceCell<TypedCache<Jid, GroupInfo>>,
+    pub device_cache: OnceCell<TypedCache<Jid, Vec<Jid>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -408,7 +409,7 @@ pub struct Client {
     /// LRU cache for device registry (matches WhatsApp Web's 5000 entry limit).
     /// Maps user ID to DeviceListRecord for fast device existence checks.
     /// Backed by persistent storage.
-    pub(crate) device_registry_cache: Cache<String, wacore::store::traits::DeviceListRecord>,
+    pub(crate) device_registry_cache: TypedCache<String, wacore::store::traits::DeviceListRecord>,
 
     /// Router for dispatching stanzas to their appropriate handlers
     pub(crate) stanza_router: crate::handlers::router::StanzaRouter,
@@ -560,7 +561,10 @@ impl Client {
             message_queues: Cache::builder()
                 .max_capacity(cache_config.message_queues_capacity.max(1))
                 .build(),
-            lid_pn_cache: Arc::new(LidPnCache::with_config(&cache_config.lid_pn_cache)),
+            lid_pn_cache: Arc::new(LidPnCache::with_config(
+                &cache_config.lid_pn_cache,
+                cache_config.cache_stores.lid_pn_cache.clone(),
+            )),
             message_enqueue_locks: Cache::builder()
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
@@ -614,7 +618,14 @@ impl Client {
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
-            device_registry_cache: cache_config.device_registry_cache.build_with_ttl(),
+            device_registry_cache: match cache_config.cache_stores.device_registry_cache.clone() {
+                Some(store) => TypedCache::from_store(
+                    store,
+                    "device_registry",
+                    cache_config.device_registry_cache.timeout,
+                ),
+                None => TypedCache::from_moka(cache_config.device_registry_cache.build_with_ttl()),
+            },
             stanza_router: Self::create_stanza_router(),
             synchronous_ack: false,
             http_client,
@@ -642,20 +653,34 @@ impl Client {
         (arc, rx)
     }
 
-    pub(crate) async fn get_group_cache(&self) -> &Cache<Jid, GroupInfo> {
+    pub(crate) async fn get_group_cache(&self) -> &TypedCache<Jid, GroupInfo> {
         self.group_cache
             .get_or_init(|| async {
                 debug!("Initializing Group Cache for the first time.");
-                self.cache_config.group_cache.build_with_ttl()
+                match self.cache_config.cache_stores.group_cache.clone() {
+                    Some(store) => TypedCache::from_store(
+                        store,
+                        "group",
+                        self.cache_config.group_cache.timeout,
+                    ),
+                    None => TypedCache::from_moka(self.cache_config.group_cache.build_with_ttl()),
+                }
             })
             .await
     }
 
-    pub(crate) async fn get_device_cache(&self) -> &Cache<Jid, Vec<Jid>> {
+    pub(crate) async fn get_device_cache(&self) -> &TypedCache<Jid, Vec<Jid>> {
         self.device_cache
             .get_or_init(|| async {
                 debug!("Initializing Device Cache for the first time.");
-                self.cache_config.device_cache.build_with_ttl()
+                match self.cache_config.cache_stores.device_cache.clone() {
+                    Some(store) => TypedCache::from_store(
+                        store,
+                        "device",
+                        self.cache_config.device_cache.timeout,
+                    ),
+                    None => TypedCache::from_moka(self.cache_config.device_cache.build_with_ttl()),
+                }
             })
             .await
     }
