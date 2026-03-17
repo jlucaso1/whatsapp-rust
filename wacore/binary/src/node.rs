@@ -71,9 +71,37 @@ impl PartialEq<str> for NodeValue {
     fn eq(&self, other: &str) -> bool {
         match self {
             NodeValue::String(s) => s == other,
-            // For JID, format and compare. This is rare since JIDs are typically
-            // accessed via optional_jid() or to_jid(), not string comparison.
-            NodeValue::Jid(j) => j.to_string() == other,
+            // Compare JID to string without heap allocation by streaming the
+            // Display output through a writer that checks byte-by-byte.
+            NodeValue::Jid(j) => {
+                use std::fmt::Write;
+                struct EqCheck<'a> {
+                    target: &'a [u8],
+                    pos: usize,
+                    matches: bool,
+                }
+                impl fmt::Write for EqCheck<'_> {
+                    fn write_str(&mut self, s: &str) -> fmt::Result {
+                        if !self.matches {
+                            return Ok(());
+                        }
+                        let bytes = s.as_bytes();
+                        let end = self.pos + bytes.len();
+                        if end > self.target.len() || self.target[self.pos..end] != *bytes {
+                            self.matches = false;
+                        }
+                        self.pos = end;
+                        Ok(())
+                    }
+                }
+                let mut check = EqCheck {
+                    target: other.as_bytes(),
+                    pos: 0,
+                    matches: true,
+                };
+                let _ = write!(check, "{}", j);
+                check.matches && check.pos == other.len()
+            }
         }
     }
 }

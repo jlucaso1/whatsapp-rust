@@ -103,12 +103,15 @@ impl SessionManager {
             return Ok(());
         }
 
-        // Step 2: Determine which JIDs we need to process vs wait for
+        // Step 2: Determine which JIDs we need to process vs wait for.
+        // Store (Jid, String) pairs so the string key computed here can be
+        // reused in step 3 cleanup, avoiding a redundant second to_string() pass.
         let (to_process, to_wait) = {
             let mut processing = self.processing.lock().await;
             let mut pending = self.pending.lock().await;
 
-            let mut to_process = Vec::with_capacity(jids_needing_sessions.len());
+            let mut to_process: Vec<(Jid, String)> =
+                Vec::with_capacity(jids_needing_sessions.len());
             let mut to_wait = Vec::with_capacity(jids_needing_sessions.len());
 
             for jid in jids_needing_sessions {
@@ -121,8 +124,8 @@ impl SessionManager {
                     to_wait.push(rx);
                 } else {
                     // Not being processed - we'll handle it
-                    processing.insert(jid_str);
-                    to_process.push(jid);
+                    processing.insert(jid_str.clone());
+                    to_process.push((jid, jid_str));
                 }
             }
 
@@ -135,8 +138,7 @@ impl SessionManager {
         if !to_process.is_empty() {
             // Process in batches of SESSION_CHECK_BATCH_SIZE
             for batch in to_process.chunks(SESSION_CHECK_BATCH_SIZE) {
-                let batch_jids: Vec<Jid> = batch.to_vec();
-                let batch_strs: Vec<String> = batch_jids.iter().map(|j| j.to_string()).collect();
+                let batch_jids: Vec<Jid> = batch.iter().map(|(jid, _)| jid.clone()).collect();
 
                 let result = fetch_and_establish(batch_jids).await;
 
@@ -151,14 +153,15 @@ impl SessionManager {
                 }
 
                 // Clean up processing set and notify waiters
+                // Reuse the string keys stored alongside each JID in step 2.
                 {
                     let mut processing = self.processing.lock().await;
                     let mut pending = self.pending.lock().await;
 
-                    for jid_str in batch_strs {
-                        processing.remove(&jid_str);
+                    for (_, jid_str) in batch {
+                        processing.remove(jid_str);
 
-                        if let Some(waiters) = pending.remove(&jid_str) {
+                        if let Some(waiters) = pending.remove(jid_str) {
                             for waiter in waiters {
                                 let _ = waiter.send(notify_result.clone());
                             }

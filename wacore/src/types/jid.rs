@@ -13,32 +13,25 @@ pub trait JidExt {
 
 impl JidExt for Jid {
     fn to_signal_address_string(&self) -> String {
-        // WhatsApp Web's SignalAddress.toString() format:
-        // - Device part `:device` only included when device != 0
-        // - Full format: {user}[:device]@{server}
-        //
-        // From WAWebSignalAddress module:
-        // ```javascript
-        // toString=function(){
-        //   var t=this.wid.device!=null&&this.wid.device!==0?":"+this.wid.device:"";
-        //   // ...
-        //   return [i.user,t,"@lid"].join("")
-        // }
-        // ```
-        let device_part = if self.device != 0 {
-            format!(":{}", self.device)
-        } else {
-            String::new()
-        };
+        use std::fmt::Write;
 
         // Map server names to WhatsApp Web's internal format
         // WhatsApp Web uses @c.us for phone numbers, @lid for LID
-        let server = match self.server.as_str() {
+        let server = match &*self.server {
             "s.whatsapp.net" => "c.us",
             other => other,
         };
 
-        format!("{}{device_part}@{server}", self.user)
+        // Pre-size the output: user + ":" + device(max 5 digits) + "@" + server
+        let mut result = String::with_capacity(self.user.len() + 7 + server.len());
+        result.push_str(&self.user);
+        if self.device != 0 {
+            result.push(':');
+            let _ = write!(result, "{}", self.device);
+        }
+        result.push('@');
+        result.push_str(server);
+        result
     }
 
     fn to_protocol_address(&self) -> ProtocolAddress {

@@ -281,6 +281,7 @@ mod tests {
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
     use crate::protocol::ProtocolNode;
     use rand::TryRngCore;
+    use std::borrow::Cow;
     use wacore_binary::node::NodeValue;
 
     fn create_mock_bundle(device_id: u32) -> PreKeyBundle {
@@ -311,7 +312,7 @@ mod tests {
 
         let raw_jid = Jid {
             user: "100000012345678:33".to_string(),
-            server: "lid".to_string(),
+            server: Cow::Borrowed("lid"),
             agent: 1,
             device: 0,
             integrator: 0,
