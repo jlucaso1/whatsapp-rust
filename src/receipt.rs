@@ -597,4 +597,46 @@ mod tests {
             "non-peer self messages must not get delivery receipts"
         );
     }
+
+    /// Verify that receipt nodes use JID-typed attrs for `to` and `participant`,
+    /// ensuring the jid_attr optimization is not accidentally regressed to to_string.
+    #[test]
+    fn test_receipt_node_uses_jid_attrs() {
+        use wacore_binary::node::NodeValue;
+
+        let chat_jid: Jid = "120363021033254949@g.us"
+            .parse()
+            .expect("test JID should be valid");
+        let sender_jid: Jid = "15551234567@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+
+        // Build a group receipt node using the same pattern as send_delivery_receipt
+        let node = NodeBuilder::new("receipt")
+            .attr("id", "MSG-123")
+            .jid_attr("to", chat_jid.clone())
+            .jid_attr("participant", sender_jid.clone())
+            .build();
+
+        // "to" must be stored as NodeValue::Jid, not NodeValue::String
+        let to_attr = node.attrs.get("to").expect("receipt must have 'to' attr");
+        assert!(
+            matches!(to_attr, NodeValue::Jid(_)),
+            "'to' attr should be JID-typed, got: {:?}",
+            to_attr
+        );
+        assert_eq!(to_attr.as_jid().unwrap(), &chat_jid);
+
+        // "participant" must also be JID-typed
+        let participant_attr = node
+            .attrs
+            .get("participant")
+            .expect("group receipt must have 'participant' attr");
+        assert!(
+            matches!(participant_attr, NodeValue::Jid(_)),
+            "'participant' attr should be JID-typed, got: {:?}",
+            participant_attr
+        );
+        assert_eq!(participant_attr.as_jid().unwrap(), &sender_jid);
+    }
 }

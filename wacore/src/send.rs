@@ -16,7 +16,7 @@ use rand::{CryptoRng, Rng, TryRngCore as _};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
-use wacore_binary::node::{Attrs, Node};
+use wacore_binary::node::Node;
 use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
@@ -105,7 +105,7 @@ async fn encrypt_for_devices<'a, S, I, P, SP>(
     resolver: &dyn SendContextResolver,
     devices: &[Jid],
     plaintext_to_encrypt: &[u8],
-    enc_extra_attrs: &Attrs,
+    hide_decrypt_fail: bool,
 ) -> Result<(Vec<Node>, bool)>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -343,14 +343,13 @@ where
                     _ => continue,
                 };
 
-                // Build enc attrs using NodeBuilder chaining — avoids per-device
-                // String allocations for constant keys "v" and "type".
-                let enc_node = NodeBuilder::new("enc")
+                let mut enc_builder = NodeBuilder::new("enc")
                     .attr("v", "2")
-                    .attr("type", enc_type)
-                    .attrs(enc_extra_attrs.iter().map(|(k, v)| (k.clone(), v.clone())))
-                    .bytes(serialized_bytes)
-                    .build();
+                    .attr("type", enc_type);
+                if hide_decrypt_fail {
+                    enc_builder = enc_builder.attr("decrypt-fail", "hide");
+                }
+                let enc_node = enc_builder.bytes(serialized_bytes).build();
 
                 // Use jid_attr to avoid device_jid.to_string() allocation —
                 // the encoder writes the JID directly in binary format.
@@ -439,12 +438,9 @@ pub async fn prepare_dm_stanza<
     let mut includes_prekey_message = false;
 
     // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
-    let mut enc_extra_attrs = Attrs::new();
-    if let Some(edit_attr) = &edit
-        && *edit_attr != crate::types::message::EditAttribute::Empty
-    {
-        enc_extra_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
-    }
+    let hide_decrypt_fail = edit
+        .as_ref()
+        .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty);
 
     if !recipient_devices.is_empty() {
         let (nodes, inc) = encrypt_for_devices(
@@ -452,7 +448,7 @@ pub async fn prepare_dm_stanza<
             resolver,
             &recipient_devices,
             &recipient_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -465,7 +461,7 @@ pub async fn prepare_dm_stanza<
             resolver,
             &own_other_devices,
             &own_devices_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -743,14 +739,13 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        // For SKDM distribution we don't set decrypt-fail; use empty attrs
-        let empty_attrs = Attrs::new();
+        // SKDM distribution never sets decrypt-fail
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
             &skdm_plaintext_to_encrypt,
-            &empty_attrs,
+            false,
         )
         .await?;
         includes_prekey_message = includes_prekey_message || inc;
