@@ -145,7 +145,7 @@ impl Client {
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
                 let lid_jid = Jid {
                     user: lid_user,
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: target.device,
                     agent: target.agent,
                     integrator: target.integrator,

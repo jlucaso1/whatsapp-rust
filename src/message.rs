@@ -355,7 +355,7 @@ impl Client {
 
                     Jid {
                         user: alt_jid.user.clone(),
-                        server: lid_server.to_string(),
+                        server: wacore_binary::jid::cow_server_from_str(lid_server),
                         device: sender.device,
                         agent: sender.agent,
                         integrator: sender.integrator,
@@ -364,7 +364,7 @@ impl Client {
                 {
                     Jid {
                         user: lid_user.clone(),
-                        server: lid_server.to_string(),
+                        server: wacore_binary::jid::cow_server_from_str(lid_server),
                         device: sender.device,
                         agent: sender.agent,
                         integrator: sender.integrator,
@@ -3374,7 +3374,7 @@ mod tests {
                 // Use the LID from the message attribute
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3383,7 +3383,7 @@ mod tests {
                 // Use the cached LID
                 Jid {
                     user: lid_user,
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3484,7 +3484,7 @@ mod tests {
             {
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3493,7 +3493,7 @@ mod tests {
                 // This is the path we're testing - fallback to cached LID
                 Jid {
                     user: lid_user,
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3580,7 +3580,7 @@ mod tests {
             {
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3588,7 +3588,7 @@ mod tests {
             } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
                 Jid {
                     user: lid_user,
-                    server: lid_server.to_string(),
+                    server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,

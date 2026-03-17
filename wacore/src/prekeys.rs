@@ -1,5 +1,6 @@
 use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use crate::xml::DisplayableNode;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
@@ -311,7 +312,7 @@ mod tests {
 
         let raw_jid = Jid {
             user: "100000012345678:33".to_string(),
-            server: "lid".to_string(),
+            server: Cow::Borrowed("lid"),
             agent: 1,
             device: 0,
             integrator: 0,
