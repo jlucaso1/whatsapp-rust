@@ -82,13 +82,14 @@ impl GroupInfo {
     /// Append participants that are not already present.
     ///
     /// For LID-addressed groups, also updates the LID-to-PN and PN-to-LID maps
-    /// using the `phone_number` field from each participant.
+    /// using the `phone_number` field from each participant.  Maps are updated
+    /// even for already-present participants so that a later call with
+    /// `Some(phone_number)` backfills a previous `None` entry.
     pub fn add_participants(&mut self, new: &[(Jid, Option<Jid>)]) {
         for (jid, phone_number) in new {
-            if self.participants.iter().any(|p| p.user == jid.user) {
-                continue;
-            }
-            self.participants.push(jid.clone());
+            // Always backfill LID maps — a re-add with phone_number fills a
+            // previous None (e.g., client-initiated add followed by server
+            // notification that carries the phone number).
             if self.addressing_mode == AddressingMode::Lid
                 && let Some(pn) = phone_number
             {
@@ -96,6 +97,11 @@ impl GroupInfo {
                     .insert(pn.user.clone(), Jid::lid(&jid.user));
                 self.lid_to_pn_map.insert(jid.user.clone(), pn.clone());
             }
+
+            if self.participants.iter().any(|p| p.user == jid.user) {
+                continue;
+            }
+            self.participants.push(jid.clone());
         }
     }
 
@@ -239,5 +245,27 @@ mod tests {
         let mut info = GroupInfo::new(vec![pn("alice")], AddressingMode::Pn);
         info.remove_participants(&["nobody"]);
         assert_eq!(info.participants.len(), 1);
+    }
+
+    #[test]
+    fn add_participants_backfills_lid_map_for_existing() {
+        let mut info = GroupInfo::new(vec![lid("lid_bob")], AddressingMode::Lid);
+        // First add without phone_number (simulates client-initiated add)
+        info.add_participants(&[(lid("lid_bob"), None)]);
+        assert!(info.phone_jid_for_lid_user("lid_bob").is_none());
+
+        // Second add with phone_number (simulates server notification backfill)
+        info.add_participants(&[(lid("lid_bob"), Some(pn("bob_pn")))]);
+        assert_eq!(info.participants.len(), 1); // not duplicated
+        assert_eq!(
+            info.phone_jid_for_lid_user("lid_bob")
+                .map(|j| j.user.as_str()),
+            Some("bob_pn")
+        );
+        assert_eq!(
+            info.lid_jid_for_phone_user("bob_pn")
+                .map(|j| j.user.as_str()),
+            Some("lid_bob")
+        );
     }
 }

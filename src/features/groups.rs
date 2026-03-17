@@ -231,7 +231,11 @@ impl<'a> Groups<'a> {
             .client
             .execute(AddParticipantsIq::new(jid, participants))
             .await?;
-        // Patch cache with the participants we just added (no phone_number known here)
+        // Patch cache with the participants we just added (no phone_number
+        // known here — the server notification will backfill the LID map).
+        // Note: the get→mutate→insert is not atomic; a concurrent notification
+        // for the same group could race.  This is acceptable — the cache is
+        // best-effort and a full refetch on next query_info() corrects it.
         let group_cache = self.client.get_group_cache().await;
         if let Some(mut info) = group_cache.get(jid).await {
             let new: Vec<_> = participants.iter().map(|p| (p.clone(), None)).collect();
@@ -250,7 +254,8 @@ impl<'a> Groups<'a> {
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
             .await?;
-        // Patch cache by filtering out removed participants
+        // Patch cache by filtering out removed participants (see add_participants
+        // for race-condition note — same applies here).
         let group_cache = self.client.get_group_cache().await;
         if let Some(mut info) = group_cache.get(jid).await {
             let users: Vec<&str> = participants.iter().map(|p| p.user.as_str()).collect();

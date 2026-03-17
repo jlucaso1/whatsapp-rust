@@ -343,10 +343,16 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
             }
         }
         wacore::stanza::devices::DeviceNotificationType::Update => {
-            for device in &op.devices {
-                client
-                    .patch_device_update(notification.user(), device)
-                    .await;
+            if op.devices.is_empty() {
+                // Hash-only update without device list — fall back to
+                // invalidation so the next read rehydrates from the server.
+                client.invalidate_device_cache(notification.user()).await;
+            } else {
+                for device in &op.devices {
+                    client
+                        .patch_device_update(notification.user(), device)
+                        .await;
+                }
             }
         }
     }

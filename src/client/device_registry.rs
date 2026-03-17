@@ -209,8 +209,12 @@ impl Client {
     /// Granularly patch device caches after a device notification.
     ///
     /// Matches WA Web's approach: read current → apply diff → write back.
-    /// If the entry is not cached, the patch is a no-op — the next read
-    /// will fetch fresh from the backend.
+    /// Patches **all** cached PN/LID aliases so stale alternate-key lookups
+    /// are avoided.  Also persists the patched `DeviceListRecord` to the
+    /// backend so the change survives cache eviction / restart.
+    ///
+    /// If no entry is cached, the patch is a no-op — the next read will
+    /// fetch fresh from the backend.
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
@@ -218,25 +222,26 @@ impl Client {
         device: &wacore::stanza::devices::DeviceElement,
     ) {
         let device_id = device.device_id();
-        let device_jid = Jid {
-            user: from_jid.user.clone(),
-            server: from_jid.server.clone(),
-            device: device_id as u16,
-            ..Default::default()
-        };
+        let device_hw = device_id as u16;
 
-        // Patch device_cache (Vec<Jid>)
+        // Patch device_cache — all PN/LID aliases
         let device_cache = self.get_device_cache().await;
-        let non_ad = from_jid.to_non_ad();
-        if let Some(mut devices) = device_cache.get(&non_ad).await
-            && !devices.iter().any(|d| d.device == device_jid.device)
-        {
-            devices.push(device_jid);
-            device_cache.insert(non_ad, devices).await;
+        let lookup = self.resolve_lookup_keys(user).await;
+        for jid in self.jids_for_lookup(&lookup, from_jid) {
+            if let Some(mut devices) = device_cache.get(&jid).await
+                && !devices.iter().any(|d| d.device == device_hw)
+            {
+                devices.push(Jid {
+                    user: jid.user.clone(),
+                    server: jid.server.clone(),
+                    device: device_hw,
+                    ..Default::default()
+                });
+                device_cache.insert(jid, devices).await;
+            }
         }
 
-        // Patch device_registry_cache (DeviceListRecord)
-        let lookup = self.resolve_lookup_keys(user).await;
+        // Patch device_registry_cache + persist
         for key in lookup.all_keys() {
             if let Some(mut record) = self.device_registry_cache.get(key).await {
                 if !record.devices.iter().any(|d| d.device_id == device_id) {
@@ -244,9 +249,9 @@ impl Client {
                         device_id,
                         key_index: device.key_index,
                     });
-                    self.device_registry_cache
-                        .insert(key.to_string(), record)
-                        .await;
+                    if let Err(e) = self.update_device_list(record).await {
+                        warn!("patch_device_add: failed to persist: {e}");
+                    }
                 }
                 return;
             }
@@ -255,34 +260,37 @@ impl Client {
 
     /// Remove a device from both caches after a device remove notification.
     pub(crate) async fn patch_device_remove(&self, user: &str, from_jid: &Jid, device_id: u32) {
-        // Patch device_cache
+        let device_hw = device_id as u16;
+
+        // Patch device_cache — all PN/LID aliases
         let device_cache = self.get_device_cache().await;
-        let non_ad = from_jid.to_non_ad();
-        if let Some(mut devices) = device_cache.get(&non_ad).await {
-            let before = devices.len();
-            devices.retain(|d| d.device != device_id as u16);
-            if devices.len() != before {
-                device_cache.insert(non_ad, devices).await;
+        let lookup = self.resolve_lookup_keys(user).await;
+        for jid in self.jids_for_lookup(&lookup, from_jid) {
+            if let Some(mut devices) = device_cache.get(&jid).await {
+                let before = devices.len();
+                devices.retain(|d| d.device != device_hw);
+                if devices.len() != before {
+                    device_cache.insert(jid, devices).await;
+                }
             }
         }
 
-        // Patch device_registry_cache
-        let lookup = self.resolve_lookup_keys(user).await;
+        // Patch device_registry_cache + persist
         for key in lookup.all_keys() {
             if let Some(mut record) = self.device_registry_cache.get(key).await {
                 let before = record.devices.len();
                 record.devices.retain(|d| d.device_id != device_id);
-                if record.devices.len() != before {
-                    self.device_registry_cache
-                        .insert(key.to_string(), record)
-                        .await;
+                if record.devices.len() != before
+                    && let Err(e) = self.update_device_list(record).await
+                {
+                    warn!("patch_device_remove: failed to persist: {e}");
                 }
                 return;
             }
         }
     }
 
-    /// Update key_index for a device in the registry cache.
+    /// Update key_index for a device in the registry cache + backend.
     pub(crate) async fn patch_device_update(
         &self,
         user: &str,
@@ -294,11 +302,24 @@ impl Client {
             if let Some(mut record) = self.device_registry_cache.get(key).await {
                 if let Some(d) = record.devices.iter_mut().find(|d| d.device_id == device_id) {
                     d.key_index = device.key_index;
-                    self.device_registry_cache
-                        .insert(key.to_string(), record)
-                        .await;
+                    if let Err(e) = self.update_device_list(record).await {
+                        warn!("patch_device_update: failed to persist: {e}");
+                    }
                 }
                 return;
+            }
+        }
+    }
+
+    /// Resolve all JID forms (PN + LID) that might be cached in `device_cache`.
+    fn jids_for_lookup(&self, lookup: &UserLookupKeys, from_jid: &Jid) -> Vec<Jid> {
+        match lookup {
+            UserLookupKeys::LidWithPn { lid, pn } | UserLookupKeys::PnWithLid { lid, pn } => {
+                vec![Jid::lid(lid), Jid::pn(pn)]
+            }
+            UserLookupKeys::Unknown { .. } => {
+                // Unknown — use from_jid's non-AD form only
+                vec![from_jid.to_non_ad()]
             }
         }
     }
