@@ -13,6 +13,9 @@ use wacore::store::traits::SignalStore;
 ///
 /// Values are stored as `Arc<[u8]>` so cache reads are O(1) clones (reference count bump)
 /// instead of O(n) byte copies.
+///
+/// Keys use `Arc<str>` so that cloning a key (needed for both cache and dirty/deleted sets)
+/// is an O(1) refcount bump instead of an O(n) heap allocation.
 pub struct SignalStoreCache {
     sessions: Mutex<StoreState>,
     identities: Mutex<StoreState>,
@@ -21,11 +24,11 @@ pub struct SignalStoreCache {
 
 struct StoreState {
     /// Cached entries. `None` value = known-absent (negative cache).
-    cache: HashMap<String, Option<Arc<[u8]>>>,
+    cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,
     /// Keys that have been modified and need flushing to the backend.
-    dirty: HashSet<String>,
+    dirty: HashSet<Arc<str>>,
     /// Keys that have been deleted and need flushing to the backend.
-    deleted: HashSet<String>,
+    deleted: HashSet<Arc<str>>,
 }
 
 impl StoreState {
@@ -37,11 +40,11 @@ impl StoreState {
         }
     }
 
-    /// Clear all cached state and release backing storage.
+    /// Clear all cached state, retaining allocated capacity for reuse.
     fn clear(&mut self) {
-        self.cache = HashMap::new();
-        self.dirty = HashSet::new();
-        self.deleted = HashSet::new();
+        self.cache.clear();
+        self.dirty.clear();
+        self.deleted.clear();
     }
 }
 
@@ -73,24 +76,24 @@ impl SignalStoreCache {
         }
         let data = backend.get_session(address).await?;
         let arc_data = data.map(Arc::from);
-        state.cache.insert(address.to_string(), arc_data.clone());
+        state.cache.insert(Arc::from(address), arc_data.clone());
         Ok(arc_data)
     }
 
     pub async fn put_session(&self, address: &str, data: &[u8]) {
         let mut state = self.sessions.lock().await;
-        let addr = address.to_string();
+        let addr: Arc<str> = Arc::from(address);
         state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr);
-        state.deleted.remove(address);
+        state.dirty.insert(addr.clone());
+        state.deleted.remove(&addr);
     }
 
     pub async fn delete_session(&self, address: &str) {
         let mut state = self.sessions.lock().await;
-        let addr = address.to_string();
+        let addr: Arc<str> = Arc::from(address);
         state.cache.insert(addr.clone(), None);
-        state.deleted.insert(addr);
-        state.dirty.remove(address);
+        state.deleted.insert(addr.clone());
+        state.dirty.remove(&addr);
     }
 
     pub async fn has_session(&self, address: &str, backend: &dyn SignalStore) -> Result<bool> {
@@ -110,24 +113,24 @@ impl SignalStoreCache {
         }
         let data = backend.load_identity(address).await?;
         let arc_data = data.map(Arc::from);
-        state.cache.insert(address.to_string(), arc_data.clone());
+        state.cache.insert(Arc::from(address), arc_data.clone());
         Ok(arc_data)
     }
 
     pub async fn put_identity(&self, address: &str, data: &[u8]) {
         let mut state = self.identities.lock().await;
-        let addr = address.to_string();
+        let addr: Arc<str> = Arc::from(address);
         state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr);
-        state.deleted.remove(address);
+        state.dirty.insert(addr.clone());
+        state.deleted.remove(&addr);
     }
 
     pub async fn delete_identity(&self, address: &str) {
         let mut state = self.identities.lock().await;
-        let addr = address.to_string();
+        let addr: Arc<str> = Arc::from(address);
         state.cache.insert(addr.clone(), None);
-        state.deleted.insert(addr);
-        state.dirty.remove(address);
+        state.deleted.insert(addr.clone());
+        state.dirty.remove(&addr);
     }
 
     // === Sender Keys ===
@@ -143,16 +146,16 @@ impl SignalStoreCache {
         }
         let data = backend.get_sender_key(address).await?;
         let arc_data = data.map(Arc::from);
-        state.cache.insert(address.to_string(), arc_data.clone());
+        state.cache.insert(Arc::from(address), arc_data.clone());
         Ok(arc_data)
     }
 
     pub async fn put_sender_key(&self, address: &str, data: &[u8]) {
         let mut state = self.sender_keys.lock().await;
-        let addr = address.to_string();
+        let addr: Arc<str> = Arc::from(address);
         state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr);
-        state.deleted.remove(address);
+        state.dirty.insert(addr.clone());
+        state.deleted.remove(&addr);
     }
 
     // === Flush ===
@@ -177,7 +180,7 @@ impl SignalStoreCache {
 
         // Persist all dirty state
         for address in &session_dirty {
-            if let Some(Some(data)) = sessions.cache.get(address) {
+            if let Some(Some(data)) = sessions.cache.get(address.as_ref()) {
                 backend.put_session(address, data).await?;
             }
         }
@@ -186,7 +189,7 @@ impl SignalStoreCache {
         }
 
         for address in &identity_dirty {
-            if let Some(Some(data)) = identities.cache.get(address) {
+            if let Some(Some(data)) = identities.cache.get(address.as_ref()) {
                 let key: [u8; 32] = data.as_ref().try_into().map_err(|_| {
                     anyhow::anyhow!(
                         "Corrupted identity key for {address}: expected 32 bytes, got {}",
@@ -201,7 +204,7 @@ impl SignalStoreCache {
         }
 
         for name in &sender_key_dirty {
-            if let Some(Some(data)) = sender_keys.cache.get(name) {
+            if let Some(Some(data)) = sender_keys.cache.get(name.as_ref()) {
                 backend.put_sender_key(name, data).await?;
             }
         }
@@ -226,7 +229,7 @@ impl SignalStoreCache {
     }
 
     /// Clear all cached state (used on disconnect/reconnect).
-    /// Releases backing storage by replacing with new empty collections.
+    /// Retains allocated capacity for reuse on reconnect.
     pub async fn clear(&self) {
         self.sessions.lock().await.clear();
         self.identities.lock().await.clear();

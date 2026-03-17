@@ -1981,7 +1981,7 @@ impl Client {
             let iq = crate::request::InfoQuery {
                 namespace: "w:sync:app:state",
                 query_type: crate::request::InfoQueryType::Set,
-                to: server_jid(),
+                to: server_jid().clone(),
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
@@ -2210,7 +2210,7 @@ impl Client {
             let iq = crate::request::InfoQuery {
                 namespace: "w:sync:app:state",
                 query_type: crate::request::InfoQueryType::Set,
-                to: server_jid(),
+                to: server_jid().clone(),
                 target: None,
                 id: None,
                 content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
@@ -2404,7 +2404,7 @@ impl Client {
         let iq = crate::request::InfoQuery {
             namespace: "w:sync:app:state",
             query_type: crate::request::InfoQueryType::Set,
-            to: server_jid(),
+            to: server_jid().clone(),
             target: None,
             id: None,
             content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
