@@ -79,6 +79,43 @@ impl GroupInfo {
         self.pn_to_lid_map.get(phone_user)
     }
 
+    /// Append participants that are not already present.
+    ///
+    /// For LID-addressed groups, also updates the LID-to-PN and PN-to-LID maps
+    /// using the `phone_number` field from each participant.
+    pub fn add_participants(&mut self, new: &[(Jid, Option<Jid>)]) {
+        for (jid, phone_number) in new {
+            if self.participants.iter().any(|p| p.user == jid.user) {
+                continue;
+            }
+            self.participants.push(jid.clone());
+            if self.addressing_mode == AddressingMode::Lid
+                && let Some(pn) = phone_number
+            {
+                self.pn_to_lid_map
+                    .insert(pn.user.clone(), Jid::lid(&jid.user));
+                self.lid_to_pn_map.insert(jid.user.clone(), pn.clone());
+            }
+        }
+    }
+
+    /// Remove participants whose user part is in `users_to_remove`.
+    ///
+    /// Also cleans up the LID-to-PN and PN-to-LID maps.
+    pub fn remove_participants(&mut self, users_to_remove: &[&str]) {
+        self.participants
+            .retain(|p| !users_to_remove.iter().any(|u| *u == p.user));
+        for user in users_to_remove {
+            if let Some(pn_jid) = self.lid_to_pn_map.remove(*user) {
+                self.pn_to_lid_map.remove(&pn_jid.user);
+            }
+            // Also try reverse: user might be a PN
+            if let Some(lid_jid) = self.pn_to_lid_map.remove(*user) {
+                self.lid_to_pn_map.remove(&lid_jid.user);
+            }
+        }
+    }
+
     /// Convert a phone-based device JID to a LID-based device JID using the mapping.
     /// If no mapping exists, returns the original JID unchanged.
     pub fn phone_device_jid_to_lid(&self, phone_device_jid: &Jid) -> Jid {
@@ -116,5 +153,91 @@ pub trait SendContextResolver: Send + Sync {
         // Default implementation returns None - subclasses can override
         let _ = phone_user;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pn(user: &str) -> Jid {
+        Jid::pn(user)
+    }
+    fn lid(user: &str) -> Jid {
+        Jid::lid(user)
+    }
+
+    #[test]
+    fn add_participants_pn_mode() {
+        let mut info = GroupInfo::new(vec![pn("alice")], AddressingMode::Pn);
+        info.add_participants(&[(pn("bob"), None), (pn("carol"), None)]);
+        assert_eq!(info.participants.len(), 3);
+        assert!(info.participants.iter().any(|p| p.user == "bob"));
+    }
+
+    #[test]
+    fn add_participants_deduplicates() {
+        let mut info = GroupInfo::new(vec![pn("alice"), pn("bob")], AddressingMode::Pn);
+        info.add_participants(&[(pn("bob"), None), (pn("carol"), None)]);
+        assert_eq!(info.participants.len(), 3); // bob not duplicated
+    }
+
+    #[test]
+    fn add_participants_lid_mode_updates_maps() {
+        let mut info = GroupInfo::new(vec![lid("lid_alice")], AddressingMode::Lid);
+        info.add_participants(&[(lid("lid_bob"), Some(pn("bob_pn")))]);
+
+        assert_eq!(info.participants.len(), 2);
+        assert_eq!(
+            info.phone_jid_for_lid_user("lid_bob")
+                .map(|j| j.user.as_str()),
+            Some("bob_pn")
+        );
+        assert_eq!(
+            info.lid_jid_for_phone_user("bob_pn")
+                .map(|j| j.user.as_str()),
+            Some("lid_bob")
+        );
+    }
+
+    #[test]
+    fn remove_participants_basic() {
+        let mut info = GroupInfo::new(
+            vec![pn("alice"), pn("bob"), pn("carol")],
+            AddressingMode::Pn,
+        );
+        info.remove_participants(&["bob"]);
+        assert_eq!(info.participants.len(), 2);
+        assert!(!info.participants.iter().any(|p| p.user == "bob"));
+    }
+
+    #[test]
+    fn remove_participants_cleans_lid_maps() {
+        let lid_to_pn = HashMap::from([
+            ("lid_alice".to_string(), pn("alice_pn")),
+            ("lid_bob".to_string(), pn("bob_pn")),
+        ]);
+        let mut info = GroupInfo::with_lid_to_pn_map(
+            vec![lid("lid_alice"), lid("lid_bob")],
+            AddressingMode::Lid,
+            lid_to_pn,
+        );
+
+        assert!(info.phone_jid_for_lid_user("lid_bob").is_some());
+        assert!(info.lid_jid_for_phone_user("bob_pn").is_some());
+
+        info.remove_participants(&["lid_bob"]);
+
+        assert_eq!(info.participants.len(), 1);
+        assert!(info.phone_jid_for_lid_user("lid_bob").is_none());
+        assert!(info.lid_jid_for_phone_user("bob_pn").is_none());
+        assert!(info.phone_jid_for_lid_user("lid_alice").is_some());
+    }
+
+    #[test]
+    fn remove_nonexistent_is_noop() {
+        let mut info = GroupInfo::new(vec![pn("alice")], AddressingMode::Pn);
+        info.remove_participants(&["nobody"]);
+        assert_eq!(info.participants.len(), 1);
     }
 }

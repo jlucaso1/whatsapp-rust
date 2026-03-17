@@ -206,6 +206,103 @@ impl Client {
         debug!("Invalidated device cache for user: {} ({:?})", user, lookup);
     }
 
+    /// Granularly patch device caches after a device notification.
+    ///
+    /// Matches WA Web's approach: read current → apply diff → write back.
+    /// If the entry is not cached, the patch is a no-op — the next read
+    /// will fetch fresh from the backend.
+    pub(crate) async fn patch_device_add(
+        &self,
+        user: &str,
+        from_jid: &Jid,
+        device: &wacore::stanza::devices::DeviceElement,
+    ) {
+        let device_id = device.device_id();
+        let device_jid = Jid {
+            user: from_jid.user.clone(),
+            server: from_jid.server.clone(),
+            device: device_id as u16,
+            ..Default::default()
+        };
+
+        // Patch device_cache (Vec<Jid>)
+        let device_cache = self.get_device_cache().await;
+        let non_ad = from_jid.to_non_ad();
+        if let Some(mut devices) = device_cache.get(&non_ad).await
+            && !devices.iter().any(|d| d.device == device_jid.device)
+        {
+            devices.push(device_jid);
+            device_cache.insert(non_ad, devices).await;
+        }
+
+        // Patch device_registry_cache (DeviceListRecord)
+        let lookup = self.resolve_lookup_keys(user).await;
+        for key in lookup.all_keys() {
+            if let Some(mut record) = self.device_registry_cache.get(key).await {
+                if !record.devices.iter().any(|d| d.device_id == device_id) {
+                    record.devices.push(wacore::store::traits::DeviceInfo {
+                        device_id,
+                        key_index: device.key_index,
+                    });
+                    self.device_registry_cache
+                        .insert(key.to_string(), record)
+                        .await;
+                }
+                return;
+            }
+        }
+    }
+
+    /// Remove a device from both caches after a device remove notification.
+    pub(crate) async fn patch_device_remove(&self, user: &str, from_jid: &Jid, device_id: u32) {
+        // Patch device_cache
+        let device_cache = self.get_device_cache().await;
+        let non_ad = from_jid.to_non_ad();
+        if let Some(mut devices) = device_cache.get(&non_ad).await {
+            let before = devices.len();
+            devices.retain(|d| d.device != device_id as u16);
+            if devices.len() != before {
+                device_cache.insert(non_ad, devices).await;
+            }
+        }
+
+        // Patch device_registry_cache
+        let lookup = self.resolve_lookup_keys(user).await;
+        for key in lookup.all_keys() {
+            if let Some(mut record) = self.device_registry_cache.get(key).await {
+                let before = record.devices.len();
+                record.devices.retain(|d| d.device_id != device_id);
+                if record.devices.len() != before {
+                    self.device_registry_cache
+                        .insert(key.to_string(), record)
+                        .await;
+                }
+                return;
+            }
+        }
+    }
+
+    /// Update key_index for a device in the registry cache.
+    pub(crate) async fn patch_device_update(
+        &self,
+        user: &str,
+        device: &wacore::stanza::devices::DeviceElement,
+    ) {
+        let device_id = device.device_id();
+        let lookup = self.resolve_lookup_keys(user).await;
+        for key in lookup.all_keys() {
+            if let Some(mut record) = self.device_registry_cache.get(key).await {
+                if let Some(d) = record.devices.iter_mut().find(|d| d.device_id == device_id) {
+                    d.key_index = device.key_index;
+                    self.device_registry_cache
+                        .insert(key.to_string(), record)
+                        .await;
+                }
+                return;
+            }
+        }
+    }
+
     /// Background loop placeholder for device registry cleanup.
     /// Note: Cleanup functionality was removed as part of trait simplification.
     /// Device registry entries are managed through normal update/get operations.
@@ -581,5 +678,194 @@ mod tests {
             device_cache.get(&pn_jid2).await.is_none(),
             "Device cache should be invalidated for PN JID (unknown PN user)"
         );
+    }
+
+    // ── Granular patch tests ──────────────────────────────────────────────
+
+    fn make_device_element(
+        device_id: u16,
+        key_index: Option<u32>,
+    ) -> wacore::stanza::devices::DeviceElement {
+        wacore::stanza::devices::DeviceElement {
+            jid: Jid {
+                user: "15551234567".into(),
+                server: "s.whatsapp.net".into(),
+                device: device_id,
+                ..Default::default()
+            },
+            key_index,
+            lid: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_add_to_existing_cache() {
+        let client = create_test_client().await;
+        let from_jid = Jid::pn("15551234567");
+        let non_ad = from_jid.to_non_ad();
+
+        // Pre-populate device_cache with device 0
+        let device_cache = client.get_device_cache().await;
+        let dev0 = Jid {
+            user: "15551234567".into(),
+            server: "s.whatsapp.net".into(),
+            device: 0,
+            ..Default::default()
+        };
+        device_cache.insert(non_ad.clone(), vec![dev0]).await;
+
+        // Patch: add device 3
+        let elem = make_device_element(3, Some(5));
+        client
+            .patch_device_add("15551234567", &from_jid, &elem)
+            .await;
+
+        let devices = device_cache.get(&non_ad).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.iter().any(|d| d.device == 3));
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_add_deduplicates() {
+        let client = create_test_client().await;
+        let from_jid = Jid::pn("15551234567");
+        let non_ad = from_jid.to_non_ad();
+
+        let dev3 = Jid {
+            user: "15551234567".into(),
+            server: "s.whatsapp.net".into(),
+            device: 3,
+            ..Default::default()
+        };
+        let device_cache = client.get_device_cache().await;
+        device_cache.insert(non_ad.clone(), vec![dev3]).await;
+
+        // Patch: add device 3 again — should not duplicate
+        let elem = make_device_element(3, None);
+        client
+            .patch_device_add("15551234567", &from_jid, &elem)
+            .await;
+
+        let devices = device_cache.get(&non_ad).await.unwrap();
+        assert_eq!(devices.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_add_noop_on_miss() {
+        let client = create_test_client().await;
+        let from_jid = Jid::pn("15551234567");
+
+        // No pre-populated cache — patch should be a no-op
+        let elem = make_device_element(3, None);
+        client
+            .patch_device_add("15551234567", &from_jid, &elem)
+            .await;
+
+        let device_cache = client.get_device_cache().await;
+        assert!(device_cache.get(&from_jid.to_non_ad()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_remove() {
+        let client = create_test_client().await;
+        let from_jid = Jid::pn("15551234567");
+        let non_ad = from_jid.to_non_ad();
+
+        let dev0 = Jid {
+            user: "15551234567".into(),
+            server: "s.whatsapp.net".into(),
+            device: 0,
+            ..Default::default()
+        };
+        let dev3 = Jid {
+            user: "15551234567".into(),
+            server: "s.whatsapp.net".into(),
+            device: 3,
+            ..Default::default()
+        };
+        let device_cache = client.get_device_cache().await;
+        device_cache.insert(non_ad.clone(), vec![dev0, dev3]).await;
+
+        client
+            .patch_device_remove("15551234567", &from_jid, 3)
+            .await;
+
+        let devices = device_cache.get(&non_ad).await.unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device, 0);
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_update_key_index() {
+        let client = create_test_client().await;
+
+        // Pre-populate registry cache
+        let record = wacore::store::traits::DeviceListRecord {
+            user: "15551234567".to_string(),
+            devices: vec![
+                wacore::store::traits::DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                wacore::store::traits::DeviceInfo {
+                    device_id: 3,
+                    key_index: Some(1),
+                },
+            ],
+            timestamp: 1000,
+            phash: None,
+        };
+        client
+            .device_registry_cache
+            .insert("15551234567".to_string(), record)
+            .await;
+
+        // Patch: update device 3 key_index to 5
+        let elem = make_device_element(3, Some(5));
+        client.patch_device_update("15551234567", &elem).await;
+
+        let updated = client
+            .device_registry_cache
+            .get("15551234567")
+            .await
+            .unwrap();
+        let dev3 = updated.devices.iter().find(|d| d.device_id == 3).unwrap();
+        assert_eq!(dev3.key_index, Some(5));
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_add_updates_registry() {
+        let client = create_test_client().await;
+        let from_jid = Jid::pn("15551234567");
+
+        // Pre-populate registry cache
+        let record = wacore::store::traits::DeviceListRecord {
+            user: "15551234567".to_string(),
+            devices: vec![wacore::store::traits::DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: 1000,
+            phash: None,
+        };
+        client
+            .device_registry_cache
+            .insert("15551234567".to_string(), record)
+            .await;
+
+        // Patch: add device 3
+        let elem = make_device_element(3, Some(2));
+        client
+            .patch_device_add("15551234567", &from_jid, &elem)
+            .await;
+
+        let updated = client
+            .device_registry_cache
+            .get("15551234567")
+            .await
+            .unwrap();
+        assert_eq!(updated.devices.len(), 2);
+        let dev3 = updated.devices.iter().find(|d| d.device_id == 3).unwrap();
+        assert_eq!(dev3.key_index, Some(2));
     }
 }

@@ -231,7 +231,13 @@ impl<'a> Groups<'a> {
             .client
             .execute(AddParticipantsIq::new(jid, participants))
             .await?;
-        self.client.get_group_cache().await.invalidate(jid).await;
+        // Patch cache with the participants we just added (no phone_number known here)
+        let group_cache = self.client.get_group_cache().await;
+        if let Some(mut info) = group_cache.get(jid).await {
+            let new: Vec<_> = participants.iter().map(|p| (p.clone(), None)).collect();
+            info.add_participants(&new);
+            group_cache.insert(jid.clone(), info).await;
+        }
         Ok(result)
     }
 
@@ -244,7 +250,13 @@ impl<'a> Groups<'a> {
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
             .await?;
-        self.client.get_group_cache().await.invalidate(jid).await;
+        // Patch cache by filtering out removed participants
+        let group_cache = self.client.get_group_cache().await;
+        if let Some(mut info) = group_cache.get(jid).await {
+            let users: Vec<&str> = participants.iter().map(|p| p.user.as_str()).collect();
+            info.remove_participants(&users);
+            group_cache.insert(jid.clone(), info).await;
+        }
         Ok(result)
     }
 
