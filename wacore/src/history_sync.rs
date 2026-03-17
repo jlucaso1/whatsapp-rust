@@ -43,13 +43,17 @@ pub fn process_history_sync<F>(
     compressed_data: Vec<u8>,
     own_user: Option<&str>,
     mut on_conversation_bytes: Option<F>,
+    decompressed_size_hint: Option<u64>,
 ) -> Result<HistorySyncResult, HistorySyncError>
 where
     F: FnMut(Bytes),
 {
     // Decompress into a single contiguous buffer.
-    // Pre-allocate with estimated 4x ratio, clamped to reasonable bounds.
-    let estimated = (compressed_data.len() * 4).clamp(256, 8 * 1024 * 1024);
+    // Use the known decompressed size if available, otherwise estimate 4x ratio.
+    let estimated = decompressed_size_hint
+        .and_then(|s| usize::try_from(s).ok())
+        .unwrap_or_else(|| compressed_data.len() * 4)
+        .clamp(256, 8 * 1024 * 1024);
     let mut decompressed = Vec::with_capacity(estimated);
     {
         let mut decoder = ZlibDecoder::new(compressed_data.as_slice());

@@ -91,6 +91,10 @@ impl Client {
             return;
         }
 
+        // Capture the known decompressed size before consuming the notification.
+        // file_length is the uncompressed size of the history sync blob.
+        let decompressed_size_hint = notification.file_length.filter(|&s| s > 0);
+
         // Use take() to avoid cloning large payloads - moves ownership instead
         let compressed_data = if let Some(inline_payload) =
             notification.initial_hist_bootstrap_inline_payload.take()
@@ -152,6 +156,7 @@ impl Client {
                         // Send Bytes through channel (zero-copy clone)
                         let _ = tx.blocking_send(raw_bytes);
                     }),
+                    decompressed_size_hint,
                 )
                 // tx dropped here, closing channel
             });
@@ -193,7 +198,12 @@ impl Client {
                 let own_user_ref = own_user.as_deref();
 
                 // Pass None for callback - conversations are skipped at protobuf level
-                process_history_sync::<fn(Bytes)>(compressed_data, own_user_ref, None)
+                process_history_sync::<fn(Bytes)>(
+                    compressed_data,
+                    own_user_ref,
+                    None,
+                    decompressed_size_hint,
+                )
             })
             .await
         };

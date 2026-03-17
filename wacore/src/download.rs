@@ -353,9 +353,8 @@ impl DownloadUtils {
                 let mut processable_len = tail.len() - (MAC_SIZE + BLOCK);
                 processable_len -= processable_len % BLOCK;
                 if processable_len >= BLOCK {
-                    let (to_process, rest) = tail.split_at(processable_len);
-                    hmac.update(to_process);
-                    for cblock in to_process.chunks_exact(BLOCK) {
+                    hmac.update(&tail[..processable_len]);
+                    for cblock in tail[..processable_len].chunks_exact(BLOCK) {
                         #[allow(deprecated)]
                         let mut block = GenericArray::clone_from_slice(cblock);
                         cipher.decrypt_block(&mut block);
@@ -369,7 +368,8 @@ impl DownloadUtils {
                             Err(_) => return Err(anyhow!("Failed to convert block to array")),
                         };
                     }
-                    tail = rest.to_vec();
+                    // Drain processed bytes, reusing the Vec's existing allocation
+                    tail.drain(..processable_len);
                 }
             }
         }
