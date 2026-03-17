@@ -256,6 +256,10 @@ pub struct Client {
     pub(crate) is_logged_in: Arc<AtomicBool>,
     pub(crate) is_connecting: Arc<AtomicBool>,
     pub(crate) is_running: Arc<AtomicBool>,
+    /// Whether the noise socket is established (connected to WhatsApp servers).
+    /// Uses an AtomicBool instead of probing the noise_socket mutex to avoid
+    /// TOCTOU races where `try_lock()` fails due to contention, not disconnection.
+    is_connected: Arc<AtomicBool>,
     pub(crate) shutdown_notifier: Arc<Notify>,
     /// Timestamp (ms since UNIX epoch) of the last received WebSocket data.
     /// Updated on every `DataReceived` transport event.
@@ -532,6 +536,7 @@ impl Client {
             is_logged_in: Arc::new(AtomicBool::new(false)),
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
+            is_connected: Arc::new(AtomicBool::new(false)),
             shutdown_notifier: Arc::new(Notify::new()),
             last_data_received_ms: Arc::new(AtomicU64::new(0)),
             last_data_sent_ms: Arc::new(AtomicU64::new(0)),
@@ -859,6 +864,7 @@ impl Client {
         // a previous connection's post-login task bailed out early.
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
+        self.is_connected.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.server_has_prekeys.store(true, Ordering::Relaxed);
 
@@ -898,6 +904,7 @@ impl Client {
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
         *self.noise_socket.lock().await = Some(noise_socket);
+        self.is_connected.store(true, Ordering::Release);
 
         // Notify waiters that socket is ready (before login)
         self.socket_ready_notifier.notify_waiters();
@@ -972,6 +979,10 @@ impl Client {
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
+        // Clear is_connected AFTER noise_socket is None, so no task can see
+        // is_connected==true with a cleared socket. send_node() independently
+        // checks the socket, but this ordering avoids a confusing state window.
+        self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
         // Clear signal cache so stale state doesn't leak across connections
         self.signal_cache.clear().await;
@@ -1397,8 +1408,11 @@ impl Client {
 
     /// Build and send an <ack/> node corresponding to the given stanza.
     async fn send_ack_for(&self, node: &Node) -> Result<(), ClientError> {
-        if !self.is_connected() || self.expected_disconnect.load(Ordering::Relaxed) {
+        if self.expected_disconnect.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let ack = match build_ack_node(node, device_snapshot.pn.as_ref()) {
@@ -2715,9 +2729,7 @@ impl Client {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.noise_socket
-            .try_lock()
-            .is_ok_and(|guard| guard.is_some())
+        self.is_connected.load(Ordering::Acquire)
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -5098,5 +5110,122 @@ mod tests {
         .await;
 
         assert!(!client.is_logged_in());
+    }
+
+    /// Proves that `is_connected()` no longer gives false negatives under mutex
+    /// contention. Before the fix, `try_lock()` would fail when another task held
+    /// the noise_socket mutex, causing `is_connected()` to return `false` even
+    /// though the connection was alive — silently dropping receipt acks.
+    ///
+    /// This test sets up a real NoiseSocket (same as socket unit tests) so it
+    /// accurately models the pre-fix scenario: socket is Some + mutex is held
+    /// by another task = old is_connected() returned false.
+    #[tokio::test]
+    async fn test_is_connected_not_affected_by_mutex_contention() {
+        use crate::socket::NoiseSocket;
+        use wacore::handshake::NoiseCipher;
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Initially not connected
+        assert!(!client.is_connected(), "should start disconnected");
+
+        // Simulate a real connection: create a NoiseSocket and store it
+        let transport: Arc<dyn crate::transport::Transport> =
+            Arc::new(crate::transport::mock::MockTransport);
+        let key = [0u8; 32];
+        let write_key = NoiseCipher::new(&key).expect("valid key");
+        let read_key = NoiseCipher::new(&key).expect("valid key");
+        let noise_socket = NoiseSocket::new(transport, write_key, read_key);
+        *client.noise_socket.lock().await = Some(Arc::new(noise_socket));
+        client.is_connected.store(true, Ordering::Release);
+
+        assert!(client.is_connected(), "should report connected");
+
+        // Hold the noise_socket mutex — this used to make is_connected() return
+        // false via try_lock() even though the socket was Some(...)
+        let _guard = client.noise_socket.lock().await;
+        assert!(
+            client.is_connected(),
+            "is_connected() must return true even while noise_socket mutex is held"
+        );
+    }
+
+    /// Verifies that `send_ack_for` returns an error (not silent Ok) when
+    /// disconnected. This ensures the caller's `warn!` fires so dropped acks
+    /// are visible in logs.
+    #[tokio::test]
+    async fn test_send_ack_for_returns_error_when_disconnected() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Not connected — send_ack_for should return Err, not Ok
+        let receipt = NodeBuilder::new("receipt")
+            .attr("from", "120363040237990503@g.us")
+            .attr("id", "TEST-RECEIPT-ID")
+            .attr("participant", "236395184570386@lid")
+            .build();
+
+        let result = client.send_ack_for(&receipt).await;
+        assert!(
+            matches!(result, Err(ClientError::NotConnected)),
+            "send_ack_for must return Err(NotConnected) when disconnected, got: {result:?}"
+        );
+    }
+
+    /// Verifies that `send_ack_for` returns Ok when expected_disconnect is set,
+    /// since this is an intentional shutdown path.
+    #[tokio::test]
+    async fn test_send_ack_for_returns_ok_on_expected_disconnect() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _rx) = Client::new(
+            pm,
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        // Set expected disconnect — send_ack_for should gracefully return Ok
+        client.expected_disconnect.store(true, Ordering::Relaxed);
+
+        let receipt = NodeBuilder::new("receipt")
+            .attr("from", "120363040237990503@g.us")
+            .attr("id", "TEST-RECEIPT-ID")
+            .build();
+
+        let result = client.send_ack_for(&receipt).await;
+        assert!(
+            result.is_ok(),
+            "send_ack_for should return Ok during expected disconnect"
+        );
     }
 }
