@@ -310,6 +310,33 @@ impl<'a> Newsletter<'a> {
         parse_newsletter_metadata(newsletter)
     }
 
+    // ─── Live updates ───────────────────────────────────────────────────
+
+    /// Subscribe to live updates for a newsletter (reaction counts, message changes).
+    ///
+    /// The server will send `<notification type="newsletter">` stanzas with
+    /// `<live_updates>` children, dispatched as `Event::NewsletterLiveUpdate`.
+    /// Returns the subscription duration in seconds.
+    pub async fn subscribe_live_updates(&self, jid: &Jid) -> Result<u64, anyhow::Error> {
+        let iq = InfoQuery::set(
+            NEWSLETTER_XMLNS,
+            jid.clone(),
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("live_updates").build(),
+            ])),
+        );
+
+        let response = self.client.send_iq(iq).await?;
+        let duration = response
+            .get_optional_child("live_updates")
+            .and_then(|n| n.attrs.get("duration"))
+            .map(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(300);
+
+        Ok(duration)
+    }
+
     // ─── Message operations ────────────────────────────────────────────
 
     /// Send a message to a newsletter.
@@ -333,6 +360,30 @@ impl<'a> Newsletter<'a> {
 
         self.client.send_node(stanza).await?;
         Ok(request_id)
+    }
+
+    /// Send a reaction to a newsletter message.
+    ///
+    /// `server_id` is the server-assigned ID of the message to react to.
+    /// `reaction` is the emoji code (e.g., "👍", "❤️"), or empty to remove.
+    pub async fn send_reaction(
+        &self,
+        jid: &Jid,
+        server_id: u64,
+        reaction: &str,
+    ) -> Result<(), anyhow::Error> {
+        let request_id = self.client.generate_message_id().await;
+
+        let stanza = NodeBuilder::new("message")
+            .attr("to", jid.clone())
+            .attr("type", "reaction")
+            .attr("id", &request_id)
+            .attr("server_id", server_id.to_string())
+            .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
+            .build();
+
+        self.client.send_node(stanza).await?;
+        Ok(())
     }
 
     /// Fetch message history from a newsletter.

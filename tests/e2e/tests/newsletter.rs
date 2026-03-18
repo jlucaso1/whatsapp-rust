@@ -1,5 +1,6 @@
 use e2e_tests::TestClient;
 use log::info;
+use wacore::types::events::Event;
 use whatsapp_rust::waproto::whatsapp as wa;
 
 #[tokio::test]
@@ -301,5 +302,109 @@ async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
     );
 
     client.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_newsletter_subscribe_live_updates() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_live").await?;
+
+    let created = client
+        .client
+        .newsletter()
+        .create("Live Updates Test", None)
+        .await?;
+
+    let duration = client
+        .client
+        .newsletter()
+        .subscribe_live_updates(&created.jid)
+        .await?;
+
+    assert!(duration > 0, "subscription duration should be positive");
+    info!(
+        "Subscribed to live updates for {} — duration={}s",
+        created.jid, duration
+    );
+
+    client.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_newsletter_reaction_live_update() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Client A creates a newsletter and sends a message
+    let mut client_a = TestClient::connect("e2e_newsletter_react_a").await?;
+    let created = client_a
+        .client
+        .newsletter()
+        .create("Reaction Test", None)
+        .await?;
+
+    let msg = wa::Message {
+        conversation: Some("React to me!".to_string()),
+        ..Default::default()
+    };
+    client_a
+        .client
+        .newsletter()
+        .send_message(&created.jid, &msg)
+        .await?;
+
+    // Get the server_id of the message we just sent
+    let messages = client_a
+        .client
+        .newsletter()
+        .get_messages(&created.jid, 1, None)
+        .await?;
+    assert!(!messages.is_empty());
+    let server_id = messages[0].server_id;
+    info!("Sent message with server_id={}", server_id);
+
+    // Subscribe to live updates
+    client_a
+        .client
+        .newsletter()
+        .subscribe_live_updates(&created.jid)
+        .await?;
+
+    // Send a reaction (mock server echoes live_updates back to sender)
+    client_a
+        .client
+        .newsletter()
+        .send_reaction(&created.jid, server_id, "👍")
+        .await?;
+
+    // Wait for the live update notification
+    let nl_jid = created.jid.clone();
+    let event = client_a
+        .wait_for_event(10, move |e| {
+            matches!(e, Event::NewsletterLiveUpdate(update) if update.newsletter_jid == nl_jid)
+        })
+        .await?;
+
+    if let Event::NewsletterLiveUpdate(update) = event {
+        info!(
+            "Received live update for {} with {} message(s)",
+            update.newsletter_jid,
+            update.messages.len()
+        );
+        assert!(!update.messages.is_empty());
+        let msg_update = &update.messages[0];
+        assert_eq!(msg_update.server_id, server_id);
+        assert!(
+            msg_update
+                .reactions
+                .iter()
+                .any(|r| r.code == "👍" && r.count > 0),
+            "should have thumbs up reaction"
+        );
+    }
+
+    client_a.disconnect().await;
     Ok(())
 }

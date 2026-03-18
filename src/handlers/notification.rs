@@ -202,6 +202,9 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // updates the contact's default ephemeral setting.
             handle_disappearing_mode_notification(client, node);
         }
+        "newsletter" => {
+            handle_newsletter_notification(client, node);
+        }
         _ => {
             debug!("Unhandled notification type '{notification_type}', dispatching raw event");
             client
@@ -1106,6 +1109,94 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
         .core
         .event_bus
         .dispatch(&Event::Notification(node.clone()));
+}
+
+/// Handle `<notification type="newsletter">` — live updates with reaction counts.
+///
+/// Format:
+/// ```xml
+/// <notification from="NL_JID" type="newsletter" id="..." t="...">
+///   <live_updates>
+///     <messages jid="NL_JID" t="...">
+///       <message server_id="123" ...>
+///         <reactions><reaction code="👍" count="3"/></reactions>
+///       </message>
+///     </messages>
+///   </live_updates>
+/// </notification>
+/// ```
+fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
+    use wacore::types::events::{
+        NewsletterLiveUpdate, NewsletterLiveUpdateMessage, NewsletterLiveUpdateReaction,
+    };
+
+    let newsletter_jid = node.attrs().jid("from");
+
+    let Some(live_updates) = node.get_optional_child("live_updates") else {
+        debug!(
+            "Newsletter notification without <live_updates>, dispatching raw: {}",
+            wacore::xml::DisplayableNode(node)
+        );
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::Notification(node.clone()));
+        return;
+    };
+
+    let Some(messages_node) = live_updates.get_optional_child("messages") else {
+        return;
+    };
+
+    let mut messages = Vec::new();
+    if let Some(children) = messages_node.children() {
+        for msg_node in children.iter().filter(|n| n.tag.as_ref() == "message") {
+            let server_id = msg_node
+                .attrs
+                .get("server_id")
+                .map(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            let mut reactions = Vec::new();
+            if let Some(reactions_node) = msg_node.get_optional_child("reactions")
+                && let Some(reaction_children) = reactions_node.children()
+            {
+                for r in reaction_children
+                    .iter()
+                    .filter(|n| n.tag.as_ref() == "reaction")
+                {
+                    let code = r
+                        .attrs
+                        .get("code")
+                        .map(|v| v.as_str().into_owned())
+                        .unwrap_or_default();
+                    let count = r
+                        .attrs
+                        .get("count")
+                        .map(|v| v.as_str())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    reactions.push(NewsletterLiveUpdateReaction { code, count });
+                }
+            }
+
+            messages.push(NewsletterLiveUpdateMessage {
+                server_id,
+                reactions,
+            });
+        }
+    }
+
+    if !messages.is_empty() {
+        client
+            .core
+            .event_bus
+            .dispatch(&Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
+                newsletter_jid,
+                messages,
+            }));
+    }
 }
 
 /// Handle `<notification type="disappearing_mode">` — a contact changed
