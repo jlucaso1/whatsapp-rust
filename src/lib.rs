@@ -50,9 +50,10 @@ pub use features::{
     CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,
     GroupParticipantOptions, GroupSubject, Groups, IsOnWhatsAppResult, MemberAddMode,
     MemberLinkMode, MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest,
-    MexResponse, ParticipantChangeResponse, Presence, PresenceError, PresenceStatus, Profile,
-    ProfilePicture, SetProfilePictureResponse, Status, StatusPrivacySetting, StatusSendOptions,
-    TcToken, UserInfo,
+    MexResponse, Newsletter, NewsletterMetadata, NewsletterRole, NewsletterState,
+    NewsletterVerification, ParticipantChangeResponse, Presence, PresenceError, PresenceStatus,
+    Profile, ProfilePicture, SetProfilePictureResponse, Status, StatusPrivacySetting,
+    StatusSendOptions, TcToken, UserInfo,
 };
 
 pub mod bot;

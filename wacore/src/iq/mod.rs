@@ -6,6 +6,7 @@ pub mod groups;
 pub mod keepalive;
 pub mod mediaconn;
 pub mod mex;
+pub mod newsletter;
 pub mod node;
 pub mod passive;
 pub mod prekeys;
