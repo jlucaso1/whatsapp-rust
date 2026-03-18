@@ -278,12 +278,7 @@ fn main() {
                         Event::Connected(_) => {
                             info!("✅ Bot connected successfully!");
                         }
-                        Event::Receipt(receipt) => {
-                            info!(
-                                "Got receipt for message(s) {:?}, type: {:?}",
-                                receipt.message_ids, receipt.r#type
-                            );
-                        }
+                        Event::Receipt(_receipt) => {}
                         Event::LoggedOut(_) => {
                             error!("❌ Bot was logged out!");
                         }

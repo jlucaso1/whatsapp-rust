@@ -870,7 +870,7 @@ impl Client {
 
                         match retry_decrypt_res {
                             Ok(padded_plaintext) => {
-                                log::info!(
+                                log::debug!(
                                     "[msg:{}] Successfully decrypted message from {} after handling untrusted identity",
                                     info.id,
                                     address
@@ -1159,7 +1159,7 @@ impl Client {
         info: &MessageInfo,
     ) -> Result<(), anyhow::Error> {
         let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
-        log::info!(
+        log::debug!(
             "[msg:{}] Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
             info.id,
             info.source.sender,
@@ -1549,7 +1549,7 @@ impl Client {
                 e
             );
         } else {
-            log::info!(
+            log::debug!(
                 "Successfully processed sender key distribution for group {} from {}",
                 group_jid,
                 sender_jid

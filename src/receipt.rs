@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
-use log::info;
+use log::debug;
 use std::sync::Arc;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -42,7 +42,7 @@ impl Client {
 
         let receipt_type = ReceiptType::from(receipt_type_str.to_string());
 
-        info!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
+        debug!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
         let from_clone = from.clone();
         let sender = if from.is_group() {
@@ -147,7 +147,7 @@ impl Client {
 
         let receipt_node = builder.build();
 
-        info!(target: "Client/Receipt", "Sending {} receipt for message {} to {}",
+        debug!(target: "Client/Receipt", "Sending {} receipt for message {} to {}",
             if info.category == "peer" { "peer_msg" } else { "delivery" },
             info.id, info.source.sender);
 
@@ -196,7 +196,7 @@ impl Client {
 
         let node = builder.build();
 
-        info!(target: "Client/Receipt", "Sending read receipt for {} message(s) to {}", message_ids.len(), chat);
+        debug!(target: "Client/Receipt", "Sending read receipt for {} message(s) to {}", message_ids.len(), chat);
 
         self.send_node(node)
             .await

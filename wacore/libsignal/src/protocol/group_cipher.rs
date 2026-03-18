@@ -254,7 +254,7 @@ pub async fn process_sender_key_distribution_message(
     skdm: &SenderKeyDistributionMessage,
     sender_key_store: &mut dyn SenderKeyStore,
 ) -> Result<()> {
-    log::info!(
+    log::debug!(
         "Processing SenderKey distribution for group {} from sender {} with chain ID {}",
         sender_key_name.group_id(),
         sender_key_name.sender_id(),
