@@ -20,10 +20,13 @@ pub fn optional_child<'a>(node: &'a Node, tag: &str) -> Option<&'a Node> {
 }
 
 /// Get a required string attribute, returning an error if not found.
+///
+/// Handles both string and JID-typed attribute values transparently:
+/// JID values are formatted to their string representation.
 pub fn required_attr(node: &Node, key: &str) -> Result<String, anyhow::Error> {
-    node.attrs()
-        .optional_string(key)
-        .map(str::to_string)
+    node.attrs
+        .get(key)
+        .map(|v| v.to_string_value())
         .ok_or_else(|| anyhow!("missing required attribute {key}"))
 }
 

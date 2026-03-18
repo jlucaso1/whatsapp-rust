@@ -150,6 +150,13 @@ impl From<&str> for NodeValue {
     }
 }
 
+impl From<&String> for NodeValue {
+    #[inline]
+    fn from(s: &String) -> Self {
+        NodeValue::String(s.clone())
+    }
+}
+
 impl From<Jid> for NodeValue {
     #[inline]
     fn from(jid: Jid) -> Self {

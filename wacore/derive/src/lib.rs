@@ -126,13 +126,13 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 (AttrType::Jid, true) => {
                     quote! {
                         if let Some(jid) = self.#field_ident {
-                            builder = builder.jid_attr(#attr_name, jid);
+                            builder = builder.attr(#attr_name, jid);
                         }
                     }
                 }
                 (AttrType::Jid, false) => {
                     quote! {
-                        builder = builder.jid_attr(#attr_name, self.#field_ident);
+                        builder = builder.attr(#attr_name, self.#field_ident);
                     }
                 }
                 (AttrType::String, true) => {

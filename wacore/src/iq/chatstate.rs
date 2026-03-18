@@ -335,12 +335,12 @@ mod tests {
     #[test]
     fn test_parse_jid_attribute_as_jid_type() {
         // In the binary protocol, JID attributes are stored as actual JID types,
-        // not strings. This test simulates that behavior using jid_attr().
+        // not strings. This test simulates that by passing a Jid directly to attr().
         use wacore_binary::jid::Jid;
 
         let jid: Jid = "236395184570386@lid".parse().unwrap();
         let node = NodeBuilder::new("chatstate")
-            .jid_attr("from", jid)
+            .attr("from", jid)
             .children([NodeBuilder::new("composing").build()])
             .build();
 
@@ -363,8 +363,8 @@ mod tests {
         let participant_jid: Jid = "236395184570386@lid".parse().unwrap();
 
         let node = NodeBuilder::new("chatstate")
-            .jid_attr("from", group_jid)
-            .jid_attr("participant", participant_jid)
+            .attr("from", group_jid)
+            .attr("participant", participant_jid)
             .children([NodeBuilder::new("composing").build()])
             .build();
 

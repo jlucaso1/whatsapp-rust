@@ -37,7 +37,7 @@
 //! </iq>
 //! ```
 
-use crate::iq::node::{required_attr, required_child};
+use crate::iq::node::required_child;
 use crate::iq::spec::IqSpec;
 use crate::prekeys::PreKeyUtils;
 use crate::protocol::ProtocolNode;
@@ -677,7 +677,7 @@ impl ProtocolNode for PreKeyBundleUserNode {
         }
 
         NodeBuilder::new("user")
-            .attr("jid", self.jid.to_string())
+            .attr("jid", self.jid)
             .attr("type", "result")
             .children(children)
             .build()
@@ -688,8 +688,10 @@ impl ProtocolNode for PreKeyBundleUserNode {
             return Err(anyhow!("expected <user>, got <{}>", node.tag));
         }
 
-        let jid_str = required_attr(node, "jid")?;
-        let jid = jid_str.parse()?;
+        let jid = node
+            .attrs()
+            .optional_jid("jid")
+            .ok_or_else(|| anyhow!("missing required attribute jid"))?;
 
         // Parse registration ID (4 bytes big-endian)
         let reg_node = required_child(node, "registration")?;
@@ -1007,10 +1009,7 @@ mod tests {
         let node = user_node.into_node();
 
         assert_eq!(node.tag, "user");
-        assert_eq!(
-            node.attrs().optional_string("jid"),
-            Some(jid.to_string().as_str())
-        );
+        assert_eq!(node.attrs().optional_jid("jid"), Some(jid));
         assert_eq!(node.attrs().optional_string("type"), Some("result"));
 
         // Verify children count (registration, type, identity, skey, key, device-identity)

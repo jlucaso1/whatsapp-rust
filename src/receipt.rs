@@ -125,7 +125,7 @@ impl Client {
 
         let mut builder = NodeBuilder::new("receipt")
             .attr("id", &info.id)
-            .jid_attr("to", info.source.chat.clone());
+            .attr("to", info.source.chat.clone());
 
         // WA Web: peer device messages (category="peer") use type="peer_msg".
         // Normal delivery receipts omit the type attribute (DROP_ATTR).
@@ -135,7 +135,7 @@ impl Client {
 
         // For group messages, the 'participant' attribute is required to identify the sender.
         if info.source.is_group {
-            builder = builder.jid_attr("participant", info.source.sender.clone());
+            builder = builder.attr("participant", info.source.sender.clone());
         }
 
         let receipt_node = builder.build();
@@ -169,13 +169,13 @@ impl Client {
             .to_string();
 
         let mut builder = NodeBuilder::new("receipt")
-            .attr("to", chat.to_string())
+            .attr("to", chat.clone())
             .attr("type", "read")
             .attr("id", &message_ids[0])
             .attr("t", &timestamp);
 
         if let Some(sender) = sender {
-            builder = builder.attr("participant", sender.to_string());
+            builder = builder.attr("participant", sender.clone());
         }
 
         // Additional message IDs go into <list><item id="..."/></list>
@@ -599,7 +599,7 @@ mod tests {
     }
 
     /// Verify that receipt nodes use JID-typed attrs for `to` and `participant`,
-    /// ensuring the jid_attr optimization is not accidentally regressed to to_string.
+    /// ensuring the NodeValue::Jid optimization is not accidentally regressed to to_string.
     #[test]
     fn test_receipt_node_uses_jid_attrs() {
         use wacore_binary::node::NodeValue;
@@ -614,8 +614,8 @@ mod tests {
         // Build a group receipt node using the same pattern as send_delivery_receipt
         let node = NodeBuilder::new("receipt")
             .attr("id", "MSG-123")
-            .jid_attr("to", chat_jid.clone())
-            .jid_attr("participant", sender_jid.clone())
+            .attr("to", chat_jid.clone())
+            .attr("participant", sender_jid.clone())
             .build();
 
         // "to" must be stored as NodeValue::Jid, not NodeValue::String

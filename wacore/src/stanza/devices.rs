@@ -126,12 +126,12 @@ impl ProtocolNode for DeviceElement {
     }
 
     fn into_node(self) -> Node {
-        let mut builder = NodeBuilder::new("device").attr("jid", self.jid.to_string());
+        let mut builder = NodeBuilder::new("device").attr("jid", self.jid);
         if let Some(ki) = self.key_index {
             builder = builder.attr("key-index", ki.to_string());
         }
         if let Some(lid) = self.lid {
-            builder = builder.attr("lid", lid.to_string());
+            builder = builder.attr("lid", lid);
         }
         builder.build()
     }

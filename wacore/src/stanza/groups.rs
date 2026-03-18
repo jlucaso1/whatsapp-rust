@@ -414,8 +414,8 @@ mod tests {
     fn make_notification(children: Vec<Node>) -> Node {
         NodeBuilder::new("notification")
             .attr("type", "w:gp2")
-            .jid_attr("from", group_jid())
-            .jid_attr("participant", admin_jid())
+            .attr("from", group_jid())
+            .attr("participant", admin_jid())
             .attr("t", "1704067200")
             .children(children)
             .build()
@@ -427,7 +427,7 @@ mod tests {
             NodeBuilder::new("add")
                 .children(vec![
                     NodeBuilder::new("participant")
-                        .jid_attr("jid", user_jid())
+                        .attr("jid", user_jid())
                         .build(),
                 ])
                 .build(),
@@ -457,7 +457,7 @@ mod tests {
         let node = make_notification(vec![
             NodeBuilder::new("subject")
                 .attr("subject", "New Group Name")
-                .jid_attr("s_o", admin_jid())
+                .attr("s_o", admin_jid())
                 .attr("s_t", "1704067200")
                 .build(),
         ]);

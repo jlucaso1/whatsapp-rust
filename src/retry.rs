@@ -713,21 +713,21 @@ impl Client {
         };
 
         let receipt_to = if info.source.is_group {
-            info.source.chat.to_string()
+            &info.source.chat
         } else {
-            info.source.sender.to_string()
+            &info.source.sender
         };
 
         // Build the receipt node. For group messages, include the participant attribute
         // to identify which group member should resend. For DMs, omit it since the
         // "to" address already identifies the sender.
         let mut builder = NodeBuilder::new("receipt")
-            .attr("to", receipt_to)
+            .attr("to", receipt_to.clone())
             .attr("id", info.id.clone())
             .attr("type", "retry");
 
         if info.source.is_group {
-            builder = builder.attr("participant", info.source.sender.to_string());
+            builder = builder.attr("participant", info.source.sender.clone());
         }
 
         // Handle peer vs device sync messages (matches WhatsApp Web's sendRetryReceipt):
@@ -751,7 +751,7 @@ impl Client {
                     // Include recipient so the sender can look up the original message.
                     // Without this, the retry fails silently (getTargetChat returns null).
                     let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
-                    builder = builder.attr("recipient", recipient.to_string());
+                    builder = builder.attr("recipient", recipient.clone());
                 }
             }
         }
@@ -793,7 +793,7 @@ impl Client {
 
         // WA Web: <enc_rekey call-creator="JID" call-id="..." count="N"/>
         let enc_rekey_node = NodeBuilder::new("enc_rekey")
-            .attr("call-creator", call_creator.to_string())
+            .attr("call-creator", call_creator.clone())
             .attr("call-id", call_id)
             .attr("count", retry_count.to_string())
             .build();
@@ -803,7 +803,7 @@ impl Client {
             .build();
 
         let receipt_node = NodeBuilder::new("receipt")
-            .attr("to", peer_jid.to_string())
+            .attr("to", peer_jid.clone())
             .attr("id", stanza_id)
             .attr("type", "enc_rekey_retry")
             .children([enc_rekey_node, registration_node])
@@ -938,12 +938,12 @@ mod tests {
             our_lid: &Jid,
         ) -> wacore_binary::node::Node {
             let mut builder = NodeBuilder::new("receipt")
-                .attr("to", info.source.sender.to_string())
+                .attr("to", info.source.sender.clone())
                 .attr("id", info.id.clone())
                 .attr("type", "retry");
 
             if info.source.is_group {
-                builder = builder.attr("participant", info.source.sender.to_string());
+                builder = builder.attr("participant", info.source.sender.clone());
             }
 
             if !info.source.is_group {
@@ -955,7 +955,7 @@ mod tests {
                         builder = builder.attr("category", "peer");
                     } else {
                         let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
-                        builder = builder.attr("recipient", recipient.to_string());
+                        builder = builder.attr("recipient", recipient.clone());
                     }
                 }
             }
@@ -981,16 +981,18 @@ mod tests {
 
         let node = build_retry_receipt(&device_sync_info, &our_pn, &our_lid);
         assert_eq!(
-            node.attrs().optional_string("recipient"),
-            Some("200000000000002@lid"),
+            node.attrs
+                .get("recipient")
+                .map(|v| v == "200000000000002@lid"),
+            Some(true),
             "Device sync DM should include recipient"
         );
         assert!(
-            node.attrs().optional_string("category").is_none(),
+            node.attrs.get("category").is_none(),
             "Device sync DM should NOT have category=peer"
         );
         assert!(
-            node.attrs().optional_string("participant").is_none(),
+            node.attrs.get("participant").is_none(),
             "DM should NOT have participant"
         );
 
@@ -1012,12 +1014,12 @@ mod tests {
 
         let node = build_retry_receipt(&peer_info, &our_pn, &our_lid);
         assert_eq!(
-            node.attrs().optional_string("category"),
-            Some("peer"),
+            node.attrs.get("category").map(|v| v == "peer"),
+            Some(true),
             "Peer DM should have category=peer"
         );
         assert!(
-            node.attrs().optional_string("recipient").is_none(),
+            node.attrs.get("recipient").is_none(),
             "Peer DM should NOT have recipient"
         );
 
@@ -1038,15 +1040,15 @@ mod tests {
 
         let node = build_retry_receipt(&group_info, &our_pn, &our_lid);
         assert!(
-            node.attrs().optional_string("participant").is_some(),
+            node.attrs.get("participant").is_some(),
             "Group should have participant"
         );
         assert!(
-            node.attrs().optional_string("category").is_none(),
+            node.attrs.get("category").is_none(),
             "Group should NOT have category"
         );
         assert!(
-            node.attrs().optional_string("recipient").is_none(),
+            node.attrs.get("recipient").is_none(),
             "Group should NOT have recipient"
         );
 
@@ -1067,11 +1069,11 @@ mod tests {
 
         let node = build_retry_receipt(&other_dm_info, &our_pn, &our_lid);
         assert!(
-            node.attrs().optional_string("category").is_none(),
+            node.attrs.get("category").is_none(),
             "DM from other should NOT have category"
         );
         assert!(
-            node.attrs().optional_string("recipient").is_none(),
+            node.attrs.get("recipient").is_none(),
             "DM from other should NOT have recipient"
         );
     }
@@ -1094,7 +1096,7 @@ mod tests {
 
         // Build the receipt exactly as send_enc_rekey_retry_receipt does
         let enc_rekey_node = NodeBuilder::new("enc_rekey")
-            .attr("call-creator", call_creator.to_string())
+            .attr("call-creator", call_creator)
             .attr("call-id", call_id)
             .attr("count", retry_count.to_string())
             .build();
@@ -1104,7 +1106,7 @@ mod tests {
             .build();
 
         let receipt_node = NodeBuilder::new("receipt")
-            .attr("to", peer_jid.to_string())
+            .attr("to", peer_jid)
             .attr("id", stanza_id)
             .attr("type", "enc_rekey_retry")
             .children([enc_rekey_node, registration_node])
@@ -1116,9 +1118,12 @@ mod tests {
             Some("enc_rekey_retry"),
             "receipt type must be enc_rekey_retry"
         );
-        assert_eq!(
-            receipt_node.attrs().optional_string("to"),
-            Some("5511999999999@s.whatsapp.net")
+        assert!(
+            receipt_node
+                .attrs
+                .get("to")
+                .is_some_and(|v| *v == "5511999999999@s.whatsapp.net"),
+            "receipt 'to' must be peer JID"
         );
         assert_eq!(
             receipt_node.attrs().optional_string("id"),
@@ -1137,9 +1142,12 @@ mod tests {
             enc_rekey.attrs().optional_string("call-id"),
             Some("CALL-ABC-123")
         );
-        assert_eq!(
-            enc_rekey.attrs().optional_string("call-creator"),
-            Some("5511888888888@s.whatsapp.net")
+        assert!(
+            enc_rekey
+                .attrs
+                .get("call-creator")
+                .is_some_and(|v| *v == "5511888888888@s.whatsapp.net"),
+            "enc_rekey 'call-creator' must be creator JID"
         );
         assert_eq!(enc_rekey.attrs().optional_string("count"), Some("2"));
 

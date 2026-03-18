@@ -339,7 +339,7 @@ impl PairUtils {
         req_id: String,
     ) -> Node {
         let response_content = NodeBuilder::new("pair-device-sign")
-            .attr("jid", master_jid.to_string())
+            .attr("jid", master_jid.clone())
             .bytes(encrypted_message)
             .build();
         NodeBuilder::new("iq")

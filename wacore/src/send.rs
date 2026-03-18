@@ -351,11 +351,11 @@ where
                 }
                 let enc_node = enc_builder.bytes(serialized_bytes).build();
 
-                // Use jid_attr to avoid device_jid.to_string() allocation —
+                // Pass the Jid directly to avoid device_jid.to_string() allocation —
                 // the encoder writes the JID directly in binary format.
                 participant_nodes.push(
                     NodeBuilder::new("to")
-                        .jid_attr("jid", device_jid.clone())
+                        .attr("jid", device_jid.clone())
                         .children([enc_node])
                         .build(),
                 );
@@ -492,7 +492,7 @@ pub async fn prepare_dm_stanza<
     message_content_nodes.extend(extra_stanza_nodes);
 
     let mut stanza_builder = NodeBuilder::new("message")
-        .jid_attr("to", to_jid)
+        .attr("to", to_jid)
         .attr("id", request_id)
         .attr("type", "text");
 
@@ -537,7 +537,7 @@ where
         .build();
 
     let stanza = NodeBuilder::new("message")
-        .jid_attr("to", transport_jid)
+        .attr("to", transport_jid)
         .attr("id", request_id)
         .attr("type", "text")
         .attr("category", "peer")
@@ -792,7 +792,7 @@ pub async fn prepare_group_stanza<
     let content_node = enc_builder.build();
 
     let mut stanza_builder = NodeBuilder::new("message")
-        .jid_attr("to", to_jid.clone())
+        .attr("to", to_jid.clone())
         .attr("id", request_id)
         .attr("type", "text");
 

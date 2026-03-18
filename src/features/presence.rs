@@ -46,7 +46,7 @@ impl<'a> Presence<'a> {
     async fn build_subscription_node(&self, jid: &Jid) -> Node {
         let mut builder = NodeBuilder::new("presence")
             .attr("type", "subscribe")
-            .attr("to", jid.to_string());
+            .attr("to", jid.clone());
 
         // Include tctoken if available (no t attribute, matching WhatsApp Web)
         if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
@@ -59,7 +59,7 @@ impl<'a> Presence<'a> {
     fn build_unsubscription_node(&self, jid: &Jid) -> Node {
         NodeBuilder::new("presence")
             .attr("type", "unsubscribe")
-            .attr("to", jid.to_string())
+            .attr("to", jid.clone())
             .build()
     }
 

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use crate::jid::Jid;
 use crate::node::{Attrs, Node, NodeContent, NodeValue};
 
 #[derive(Debug, Default)]
@@ -26,15 +25,8 @@ impl NodeBuilder {
         }
     }
 
-    pub fn attr(mut self, key: &'static str, value: impl Into<String>) -> Self {
+    pub fn attr(mut self, key: &'static str, value: impl Into<NodeValue>) -> Self {
         self.attrs.insert(Cow::Borrowed(key), value.into());
-        self
-    }
-
-    /// Add a JID attribute directly without stringifying.
-    /// This is more efficient than `attr(key, jid.to_string())`.
-    pub fn jid_attr(mut self, key: &'static str, jid: Jid) -> Self {
-        self.attrs.insert(Cow::Borrowed(key), NodeValue::Jid(jid));
         self
     }
 
