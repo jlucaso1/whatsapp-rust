@@ -187,12 +187,6 @@ pub struct CacheConfig {
     /// Per-chat message enqueue lock capacity. Default: 2000.
     pub message_enqueue_locks_capacity: u64,
 
-    // --- Buffer pool ---
-    /// Max number of reusable plaintext marshal buffers. Default: 8.
-    pub max_pooled_buffers: usize,
-    /// Max byte capacity per pooled buffer. Default: 256 KiB.
-    pub max_pooled_buffer_capacity: usize,
-
     // --- Sent message DB cleanup ---
     /// TTL in seconds for sent messages in DB before periodic cleanup.
     /// 0 = no automatic cleanup. Default: 300 (5 minutes).
@@ -229,11 +223,6 @@ impl std::fmt::Debug for CacheConfig {
             .field(
                 "message_enqueue_locks_capacity",
                 &self.message_enqueue_locks_capacity,
-            )
-            .field("max_pooled_buffers", &self.max_pooled_buffers)
-            .field(
-                "max_pooled_buffer_capacity",
-                &self.max_pooled_buffer_capacity,
             )
             .field("sent_message_ttl_secs", &self.sent_message_ttl_secs)
             .field(
@@ -273,8 +262,6 @@ impl Default for CacheConfig {
             session_locks_capacity: 2_000,
             message_queues_capacity: 2_000,
             message_enqueue_locks_capacity: 2_000,
-            max_pooled_buffers: 8,
-            max_pooled_buffer_capacity: 256 * 1024,
             sent_message_ttl_secs: 300,
             cache_stores: CacheStores::default(),
         }

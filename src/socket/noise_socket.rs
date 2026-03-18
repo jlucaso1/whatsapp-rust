@@ -8,8 +8,8 @@ use wacore::handshake::NoiseCipher;
 
 const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
-/// Result type for send operations, returning both buffers for reuse.
-type SendResult = std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError>;
+/// Result type for send operations.
+type SendResult = std::result::Result<(), EncryptSendError>;
 
 /// A job sent to the dedicated sender task.
 struct SendJob {
@@ -103,20 +103,14 @@ impl NoiseSocket {
         // This avoids the previous triple-copy pattern (plaintext→out→plaintext→out).
         if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
             if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut plaintext_buf) {
-                return Err(EncryptSendError::crypto(
-                    anyhow::anyhow!(e.to_string()),
-                    plaintext_buf,
-                    out_buf,
-                ));
+                return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
             }
 
             // Frame the ciphertext from plaintext_buf into out_buf (single copy)
             out_buf.clear();
             if let Err(e) = wacore::framing::encode_frame_into(&plaintext_buf, None, &mut out_buf) {
-                plaintext_buf.clear();
-                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+                return Err(EncryptSendError::framing(e));
             }
-            plaintext_buf.clear();
         } else {
             // Offload larger messages to a blocking thread
             let write_key = write_key.clone();
@@ -129,34 +123,31 @@ impl NoiseSocket {
             })
             .await;
 
+            // Recover ownership so the buffer is dropped at end of scope
             plaintext_buf = Arc::try_unwrap(plaintext_arc).unwrap_or_else(|arc| (*arc).clone());
+            drop(plaintext_buf);
 
             let ciphertext = match spawn_result {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
-                    return Err(EncryptSendError::crypto(
-                        anyhow::anyhow!(e.to_string()),
-                        plaintext_buf,
-                        out_buf,
-                    ));
+                    return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
                 }
                 Err(join_err) => {
-                    return Err(EncryptSendError::join(join_err, plaintext_buf, out_buf));
+                    return Err(EncryptSendError::join(join_err));
                 }
             };
 
-            plaintext_buf.clear();
             out_buf.clear();
             if let Err(e) = wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
-                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+                return Err(EncryptSendError::framing(e));
             }
         }
 
         if let Err(e) = transport.send(out_buf).await {
-            return Err(EncryptSendError::transport(e, plaintext_buf, Vec::new()));
+            return Err(EncryptSendError::transport(e));
         }
 
-        Ok((plaintext_buf, Vec::new()))
+        Ok(())
     }
 
     pub async fn encrypt_and_send(&self, plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> SendResult {
@@ -169,13 +160,8 @@ impl NoiseSocket {
         };
 
         // Send job to the sender task. If channel is closed, sender task has stopped.
-        if let Err(send_err) = self.send_job_tx.send(job).await {
-            // Recover the buffers from the failed send job so caller can reuse them
-            let job = send_err.0;
-            return Err(EncryptSendError::channel_closed(
-                job.plaintext_buf,
-                job.out_buf,
-            ));
+        if let Err(_send_err) = self.send_job_tx.send(job).await {
+            return Err(EncryptSendError::channel_closed());
         }
 
         // Wait for the sender task to process our job and return the result
@@ -183,7 +169,7 @@ impl NoiseSocket {
             Ok(result) => result,
             Err(_) => {
                 // Sender task dropped without sending a response
-                Err(EncryptSendError::channel_closed(Vec::new(), Vec::new()))
+                Err(EncryptSendError::channel_closed())
             }
         }
     }
@@ -210,11 +196,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_encrypt_and_send_returns_both_buffers() {
-        // Create a mock transport
+    async fn test_encrypt_and_send_succeeds() {
         let transport = Arc::new(crate::transport::mock::MockTransport);
 
-        // Create dummy keys for testing
         let key = [0u8; 32];
         let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
         let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
@@ -223,26 +207,9 @@ mod tests {
 
         let plaintext_buf = Vec::with_capacity(1024);
         let encrypted_buf = Vec::with_capacity(1024);
-        let plaintext_capacity = plaintext_buf.capacity();
 
         let result = socket.encrypt_and_send(plaintext_buf, encrypted_buf).await;
         assert!(result.is_ok(), "encrypt_and_send should succeed");
-
-        let (returned_plaintext, returned_encrypted) = result.unwrap();
-
-        assert_eq!(
-            returned_plaintext.capacity(),
-            plaintext_capacity,
-            "Plaintext buffer should maintain its capacity"
-        );
-        assert!(
-            returned_encrypted.is_empty(),
-            "Encrypted buffer is moved to transport (zero-copy)"
-        );
-        assert!(
-            returned_plaintext.is_empty(),
-            "Returned plaintext buffer should be cleared"
-        );
     }
 
     #[tokio::test]

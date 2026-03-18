@@ -35,65 +35,41 @@ pub struct EncryptSendError {
     pub kind: EncryptSendErrorKind,
     #[source]
     pub source: anyhow::Error,
-    pub plaintext_buf: Vec<u8>,
-    pub out_buf: Vec<u8>,
 }
 
 impl EncryptSendError {
-    pub fn crypto(
-        source: impl Into<anyhow::Error>,
-        plaintext_buf: Vec<u8>,
-        out_buf: Vec<u8>,
-    ) -> Self {
+    pub fn crypto(source: impl Into<anyhow::Error>) -> Self {
         Self {
             kind: EncryptSendErrorKind::Crypto,
             source: source.into(),
-            plaintext_buf,
-            out_buf,
         }
     }
 
-    pub fn framing(
-        source: impl Into<anyhow::Error>,
-        plaintext_buf: Vec<u8>,
-        out_buf: Vec<u8>,
-    ) -> Self {
+    pub fn framing(source: impl Into<anyhow::Error>) -> Self {
         Self {
             kind: EncryptSendErrorKind::Framing,
             source: source.into(),
-            plaintext_buf,
-            out_buf,
         }
     }
 
-    pub fn transport(
-        source: impl Into<anyhow::Error>,
-        plaintext_buf: Vec<u8>,
-        out_buf: Vec<u8>,
-    ) -> Self {
+    pub fn transport(source: impl Into<anyhow::Error>) -> Self {
         Self {
             kind: EncryptSendErrorKind::Transport,
             source: source.into(),
-            plaintext_buf,
-            out_buf,
         }
     }
 
-    pub fn join(source: JoinError, plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> Self {
+    pub fn join(source: JoinError) -> Self {
         Self {
             kind: EncryptSendErrorKind::Join,
             source: source.into(),
-            plaintext_buf,
-            out_buf,
         }
     }
 
-    pub fn channel_closed(plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> Self {
+    pub fn channel_closed() -> Self {
         Self {
             kind: EncryptSendErrorKind::ChannelClosed,
             source: anyhow::anyhow!("sender task channel closed unexpectedly"),
-            plaintext_buf,
-            out_buf,
         }
     }
 }

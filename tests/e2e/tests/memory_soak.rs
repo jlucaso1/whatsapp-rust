@@ -174,11 +174,6 @@ fn analyze_growth(label: &str, snapshots: &[Snapshot]) {
             last.diag.signal_cache_sender_keys,
         ),
         (
-            "plaintext_buffer_pool",
-            first.diag.plaintext_buffer_pool,
-            last.diag.plaintext_buffer_pool,
-        ),
-        (
             "chatstate_handlers",
             first.diag.chatstate_handlers,
             last.diag.chatstate_handlers,
