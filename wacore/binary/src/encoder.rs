@@ -439,7 +439,7 @@ fn node_encoded_size_with_cache(node: &Node, hints: &mut StringHintCache) -> usi
     };
 
     list_start_encoded_size(list_len)
-        + string_encoded_size_with_cache(node.tag.as_str(), hints)
+        + string_encoded_size_with_cache(&node.tag, hints)
         + attrs_size
         + content_size
 }

@@ -781,7 +781,7 @@ fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
             // Unknown child type (e.g., "request", "set_avatar") — log and skip
             let child_tag = node
                 .children()
-                .and_then(|c| c.first().map(|n| n.tag.as_str()));
+                .and_then(|c| c.first().map(|n| n.tag.as_ref()));
             debug!(
                 target: "Client/Picture",
                 "Ignoring picture notification with child {:?} from {}", child_tag, from
@@ -929,7 +929,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &Node) {
         return;
     };
 
-    match child.tag.as_str() {
+    match child.tag.as_ref() {
         "update" => {
             let Some(jid) = child.attrs().optional_jid("jid") else {
                 // WA Web: when no jid, tries hash-based lookup against local contacts

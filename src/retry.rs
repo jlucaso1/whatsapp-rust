@@ -824,6 +824,7 @@ mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
+    use std::borrow::Cow;
     use wacore_binary::jid::{Jid, JidExt};
     use waproto::whatsapp as wa;
 
@@ -887,7 +888,7 @@ mod tests {
 
         // Test with bytes content
         let node = Node {
-            tag: "test".to_string(),
+            tag: Cow::Borrowed("test"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(vec![1, 2, 3, 4])),
         };
@@ -895,7 +896,7 @@ mod tests {
 
         // Test with string content (should return None)
         let node_str = Node {
-            tag: "test".to_string(),
+            tag: Cow::Borrowed("test"),
             attrs: Attrs::new(),
             content: Some(NodeContent::String("hello".to_string())),
         };
@@ -903,7 +904,7 @@ mod tests {
 
         // Test with no content
         let node_empty = Node {
-            tag: "test".to_string(),
+            tag: Cow::Borrowed("test"),
             attrs: Attrs::new(),
             content: None,
         };
@@ -1357,12 +1358,12 @@ mod tests {
         // Test with 4-byte registration ID
         let reg_bytes = vec![0x00, 0x01, 0x02, 0x03]; // = 66051
         let reg_node = Node {
-            tag: "registration".to_string(),
+            tag: Cow::Borrowed("registration"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(reg_bytes)),
         };
         let parent = Node {
-            tag: "receipt".to_string(),
+            tag: Cow::Borrowed("receipt"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node])),
         };
@@ -1371,12 +1372,12 @@ mod tests {
         // Test with 3-byte registration ID (variable length)
         let reg_bytes_short = vec![0x01, 0x02, 0x03]; // = 66051
         let reg_node_short = Node {
-            tag: "registration".to_string(),
+            tag: Cow::Borrowed("registration"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(reg_bytes_short)),
         };
         let parent_short = Node {
-            tag: "receipt".to_string(),
+            tag: Cow::Borrowed("receipt"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node_short])),
         };
@@ -1387,7 +1388,7 @@ mod tests {
 
         // Test with no registration node
         let parent_no_reg = Node {
-            tag: "receipt".to_string(),
+            tag: Cow::Borrowed("receipt"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![])),
         };
@@ -1395,12 +1396,12 @@ mod tests {
 
         // Test with empty bytes
         let reg_node_empty = Node {
-            tag: "registration".to_string(),
+            tag: Cow::Borrowed("registration"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Bytes(vec![])),
         };
         let parent_empty = Node {
-            tag: "receipt".to_string(),
+            tag: Cow::Borrowed("receipt"),
             attrs: Attrs::new(),
             content: Some(NodeContent::Nodes(vec![reg_node_empty])),
         };

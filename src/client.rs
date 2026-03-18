@@ -11,11 +11,12 @@ use crate::pair;
 use anyhow::{Result, anyhow};
 use dashmap::{DashMap, DashSet};
 use moka::future::Cache;
+use std::borrow::Cow;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
-use wacore_binary::node::{Attrs, Node};
+use wacore_binary::node::{Attrs, Node, NodeValue};
 
 use crate::appstate_sync::AppStateProcessor;
 use crate::handlers::chatstate::ChatStateEvent;
@@ -1122,7 +1123,7 @@ impl Client {
                                         //   is set up before offline messages are processed
                                         // - Everything else: spawned concurrently for parallelism
                                         let process_inline = matches!(
-                                            node.tag.as_str(),
+                                            &*node.tag,
                                             "success" | "failure" | "stream:error" | "message" | "ib"
                                         );
 
@@ -1218,7 +1219,7 @@ impl Client {
         use wacore::xml::DisplayableNode;
 
         // --- Offline Sync Tracking ---
-        if node.tag.as_str() == "ib" {
+        if &*node.tag == "ib" {
             // Check for offline_preview child to get expected count
             if let Some(preview) = node.get_optional_child("offline_preview") {
                 let count: usize = preview
@@ -1303,7 +1304,7 @@ impl Client {
         }
         // --- End Tracking ---
 
-        if node.tag.as_str() == "iq"
+        if &*node.tag == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
@@ -1319,7 +1320,7 @@ impl Client {
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
         let mut cancelled = false;
 
-        if node.tag.as_str() == "xmlstreamend" {
+        if &*node.tag == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!("Received <xmlstreamend/>, expected disconnect.");
             } else {
@@ -1334,7 +1335,7 @@ impl Client {
             self.resolve_node_waiters(&node);
         }
 
-        if node.tag.as_str() == "iq"
+        if &*node.tag == "iq"
             && let Some(id) = node.attrs.get("id").and_then(|v| v.as_str())
         {
             let has_waiter = self.response_waiters.lock().await.contains_key(id);
@@ -1364,10 +1365,8 @@ impl Client {
 
     /// Determine if a Node should be acknowledged with <ack/>.
     fn should_ack(&self, node: &Node) -> bool {
-        matches!(
-            node.tag.as_str(),
-            "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
+        matches!(&*node.tag, "message" | "receipt" | "notification" | "call")
+            && node.attrs.contains_key("id")
             && node.attrs.contains_key("from")
     }
 
@@ -3116,24 +3115,24 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     };
 
     let mut attrs = Attrs::new();
-    attrs.insert("class".to_string(), node.tag.clone());
-    attrs.insert("id".to_string(), id);
-    attrs.insert("to".to_string(), from);
+    attrs.insert("class", NodeValue::String(node.tag.to_string()));
+    attrs.insert("id", id);
+    attrs.insert("to", from);
 
     if node.tag == "message"
         && let Some(own_device_pn) = own_device_pn
     {
-        attrs.insert("from".to_string(), own_device_pn.to_string());
+        attrs.insert("from", own_device_pn.to_string());
     }
     if let Some(p) = participant {
-        attrs.insert("participant".to_string(), p);
+        attrs.insert("participant", p);
     }
     if let Some(t) = typ {
-        attrs.insert("type".to_string(), t);
+        attrs.insert("type", t);
     }
 
     Some(Node {
-        tag: "ack".to_string(),
+        tag: Cow::Borrowed("ack"),
         attrs,
         content: None,
     })

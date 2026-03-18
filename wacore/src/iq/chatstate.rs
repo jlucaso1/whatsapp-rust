@@ -76,7 +76,7 @@ impl ReceivedChatState {
     /// - `<composing media="audio"/>` → RecordingAudio
     /// - `<paused/>` → Idle
     pub fn from_child_node(child: &Node) -> Self {
-        match child.tag.as_str() {
+        match &*child.tag {
             "composing" => {
                 // Check for media="audio" to distinguish recording from typing
                 if child.attrs().optional_string("media") == Some("audio") {
@@ -130,7 +130,7 @@ impl ChatstateStanza {
     /// (e.g., to ignore self-echo chatstates without logging warnings).
     pub fn parse(node: &Node) -> Result<Self, ChatstateParseError> {
         if node.tag != "chatstate" {
-            return Err(ChatstateParseError::WrongTag(node.tag.clone()));
+            return Err(ChatstateParseError::WrongTag(node.tag.to_string()));
         }
 
         let from = match optional_jid(node, "from")? {

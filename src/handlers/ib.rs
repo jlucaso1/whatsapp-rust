@@ -31,7 +31,7 @@ impl StanzaHandler for IbHandler {
 
 async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
     for child in node.children().unwrap_or_default() {
-        match child.tag.as_str() {
+        match child.tag.as_ref() {
             "dirty" => {
                 let mut attrs = child.attrs();
                 let dirty_type = match attrs.optional_string("type") {
