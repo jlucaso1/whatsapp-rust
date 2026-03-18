@@ -8,13 +8,16 @@ use std::borrow::Cow;
 /// vast majority of tag names and attribute keys which are protocol tokens.
 #[inline]
 fn intern_cow(s: &str) -> Cow<'static, str> {
-    if let Some(idx) = token::index_of_single_token(s) {
-        Cow::Borrowed(token::get_single_token(idx).unwrap())
-    } else if let Some((dict, idx)) = token::index_of_double_byte_token(s) {
-        Cow::Borrowed(token::get_double_token(dict, idx).unwrap())
-    } else {
-        Cow::Owned(s.to_string())
+    if let Some(idx) = token::index_of_single_token(s)
+        && let Some(token) = token::get_single_token(idx)
+    {
+        return Cow::Borrowed(token);
+    } else if let Some((dict, idx)) = token::index_of_double_byte_token(s)
+        && let Some(token) = token::get_double_token(dict, idx)
+    {
+        return Cow::Borrowed(token);
     }
+    Cow::Owned(s.to_string())
 }
 
 /// An owned attribute value that can be either a string or a structured JID.

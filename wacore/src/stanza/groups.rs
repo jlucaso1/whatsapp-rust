@@ -229,7 +229,7 @@ impl GroupNotification {
 
 /// Parse a single child element into a GroupNotificationAction.
 fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
-    let action = match &*node.tag {
+    let action = match node.tag.as_ref() {
         // Participant management
         "add" => GroupNotificationAction::Add {
             participants: parse_participants(node),

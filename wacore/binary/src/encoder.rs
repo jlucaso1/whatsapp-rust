@@ -1136,8 +1136,8 @@ mod tests {
         use crate::decoder::Decoder;
 
         let mut attrs = Attrs::new();
-        attrs.insert("key".to_string(), ""); // Empty value
-        attrs.insert("".to_string(), "value"); // Empty key
+        attrs.insert("key", ""); // Empty value
+        attrs.insert("", "value"); // Empty key
 
         let node = Node::new("test", attrs, Some(NodeContent::String("".to_string())));
 

@@ -218,7 +218,7 @@ impl DeviceOperation {
     /// - `key-index-list` is REQUIRED for add/remove operations
     /// - `ts` attribute is REQUIRED for remove operations
     pub fn try_from_child(node: &Node) -> Result<Self> {
-        let operation_type = DeviceNotificationType::try_from(&*node.tag)
+        let operation_type = DeviceNotificationType::try_from(node.tag.as_ref())
             .map_err(|_| anyhow!("unknown device operation: {}", node.tag))?;
 
         match operation_type {

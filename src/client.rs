@@ -1123,7 +1123,7 @@ impl Client {
                                         //   is set up before offline messages are processed
                                         // - Everything else: spawned concurrently for parallelism
                                         let process_inline = matches!(
-                                            &*node.tag,
+                                            node.tag.as_ref(),
                                             "success" | "failure" | "stream:error" | "message" | "ib"
                                         );
 
@@ -1219,7 +1219,7 @@ impl Client {
         use wacore::xml::DisplayableNode;
 
         // --- Offline Sync Tracking ---
-        if &*node.tag == "ib" {
+        if node.tag.as_ref() == "ib" {
             // Check for offline_preview child to get expected count
             if let Some(preview) = node.get_optional_child("offline_preview") {
                 let count: usize = preview
@@ -1304,7 +1304,7 @@ impl Client {
         }
         // --- End Tracking ---
 
-        if &*node.tag == "iq"
+        if node.tag.as_ref() == "iq"
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
@@ -1320,7 +1320,7 @@ impl Client {
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
         let mut cancelled = false;
 
-        if &*node.tag == "xmlstreamend" {
+        if node.tag.as_ref() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!("Received <xmlstreamend/>, expected disconnect.");
             } else {
@@ -1335,7 +1335,7 @@ impl Client {
             self.resolve_node_waiters(&node);
         }
 
-        if &*node.tag == "iq"
+        if node.tag.as_ref() == "iq"
             && let Some(id) = node.attrs.get("id").and_then(|v| v.as_str())
         {
             let has_waiter = self.response_waiters.lock().await.contains_key(id);
@@ -1365,8 +1365,10 @@ impl Client {
 
     /// Determine if a Node should be acknowledged with <ack/>.
     fn should_ack(&self, node: &Node) -> bool {
-        matches!(&*node.tag, "message" | "receipt" | "notification" | "call")
-            && node.attrs.contains_key("id")
+        matches!(
+            node.tag.as_ref(),
+            "message" | "receipt" | "notification" | "call"
+        ) && node.attrs.contains_key("id")
             && node.attrs.contains_key("from")
     }
 
