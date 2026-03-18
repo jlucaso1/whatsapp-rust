@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
-use crate::types::message::{EditAttribute, MessageInfo};
+use crate::types::message::{AddressingMode, EditAttribute, MessageInfo};
 use chrono::DateTime;
 use log::{debug, warn};
 use prost::Message as ProtoMessage;
@@ -1247,9 +1247,9 @@ impl Client {
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
         let own_lid = device_snapshot.lid.clone();
         let from = attrs.jid("from");
-        let addressing_mode_str = attrs
+        let addressing_mode = attrs
             .optional_string("addressing_mode")
-            .map(|s| s.to_ascii_lowercase());
+            .and_then(|s| AddressingMode::try_from(s.as_ref()).ok());
 
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
@@ -1270,13 +1270,10 @@ impl Client {
             }
         } else if from.is_group() {
             let sender = attrs.jid("participant");
-            let sender_alt = if let Some(addressing_mode) = addressing_mode_str.as_deref() {
-                match addressing_mode {
-                    "lid" => attrs.optional_jid("participant_pn"),
-                    _ => attrs.optional_jid("participant_lid"),
-                }
-            } else {
-                None
+            let sender_alt = match addressing_mode {
+                Some(AddressingMode::Lid) => attrs.optional_jid("participant_pn"),
+                Some(AddressingMode::Pn) => attrs.optional_jid("participant_lid"),
+                None => None,
             };
 
             let is_from_me = sender.matches_user_or_lid(&own_jid, own_lid.as_ref());
@@ -1335,11 +1332,7 @@ impl Client {
             }
         };
 
-        source.addressing_mode = addressing_mode_str.as_deref().and_then(|s| match s {
-            "pn" => Some(crate::types::message::AddressingMode::Pn),
-            "lid" => Some(crate::types::message::AddressingMode::Lid),
-            _ => None,
-        });
+        source.addressing_mode = addressing_mode;
 
         // Parse the category attribute - this is used for peer device messages ("peer")
         // and is critical for proper retry receipt handling.

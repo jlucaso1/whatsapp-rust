@@ -206,9 +206,9 @@ impl GroupNotification {
         let participant_pn = node.attrs().optional_jid("participant_pn");
         let timestamp = node.attrs().optional_u64("t").unwrap_or(0);
         let is_lid_addressing_mode = node
-            .attrs()
-            .optional_string("addressing_mode")
-            .is_some_and(|s| s == "lid");
+            .attrs
+            .get("addressing_mode")
+            .is_some_and(|v| v == "lid");
 
         let actions = node
             .children()
