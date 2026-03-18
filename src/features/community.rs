@@ -4,13 +4,15 @@
 //! Uses the `w:g2` IQ namespace for mutations and MEX (GraphQL) for metadata queries.
 
 use crate::client::Client;
-use crate::features::groups::{GroupMetadata, GroupParticipant};
+use crate::features::groups::GroupMetadata;
+use crate::features::groups::GroupParticipant;
 use crate::features::mex::{MexError, MexRequest};
+use log::warn;
 use serde_json::json;
 use wacore::iq::community::mex_docs;
 use wacore::iq::groups::{
     DeleteCommunityIq, GetLinkedGroupsParticipantsIq, GroupCreateIq, GroupCreateOptions,
-    GroupInfoResponse, JoinLinkedGroupIq, LinkSubgroupsIq, QueryLinkedGroupIq, UnlinkSubgroupsIq,
+    JoinLinkedGroupIq, LinkSubgroupsIq, QueryLinkedGroupIq, UnlinkSubgroupsIq,
 };
 use wacore_binary::jid::Jid;
 
@@ -230,7 +232,7 @@ impl<'a> Community<'a> {
         // Parse default subgroup
         if let Some(default_sub) = group_query.get("default_sub_group")
             && !default_sub.is_null()
-            && let Some(sg) = parse_subgroup_node(default_sub, true, false)
+            && let Some(sg) = parse_subgroup_node(default_sub, true)
         {
             subgroups.push(sg);
         }
@@ -241,7 +243,7 @@ impl<'a> Community<'a> {
         {
             for edge in edges {
                 if let Some(node) = edge.get("node")
-                    && let Some(sg) = parse_subgroup_node(node, false, false)
+                    && let Some(sg) = parse_subgroup_node(node, false)
                 {
                     subgroups.push(sg);
                 }
@@ -287,8 +289,12 @@ impl<'a> Community<'a> {
                         .or_else(|| node.get("participants_count"))
                         .and_then(|c| c.as_u64())
                         .unwrap_or(0) as u32;
-                    if let Ok(jid) = id_str.parse::<Jid>() {
-                        counts.push((jid, count));
+                    match id_str.parse::<Jid>() {
+                        Ok(jid) => counts.push((jid, count)),
+                        Err(_) => warn!(
+                            "community: skipping subgroup with unparseable id: {:?}",
+                            id_str
+                        ),
                     }
                 }
             }
@@ -307,7 +313,7 @@ impl<'a> Community<'a> {
             .client
             .execute(QueryLinkedGroupIq::new(community_jid, subgroup_jid))
             .await?;
-        Ok(group_info_to_metadata(response))
+        Ok(GroupMetadata::from_response(response))
     }
 
     /// Join a linked subgroup via the parent community.
@@ -320,7 +326,7 @@ impl<'a> Community<'a> {
             .client
             .execute(JoinLinkedGroupIq::new(community_jid, subgroup_jid))
             .await?;
-        Ok(group_info_to_metadata(response))
+        Ok(GroupMetadata::from_response(response))
     }
 
     /// Get all participants across all linked groups of a community.
@@ -336,37 +342,7 @@ impl<'a> Community<'a> {
     }
 }
 
-fn group_info_to_metadata(group: GroupInfoResponse) -> GroupMetadata {
-    GroupMetadata {
-        id: group.id,
-        subject: group.subject.into_string(),
-        participants: group.participants.into_iter().map(Into::into).collect(),
-        addressing_mode: group.addressing_mode,
-        creator: group.creator,
-        creation_time: group.creation_time,
-        subject_time: group.subject_time,
-        subject_owner: group.subject_owner,
-        description: group.description,
-        description_id: group.description_id,
-        is_locked: group.is_locked,
-        is_announcement: group.is_announcement,
-        ephemeral_expiration: group.ephemeral_expiration,
-        membership_approval: group.membership_approval,
-        member_add_mode: group.member_add_mode,
-        member_link_mode: group.member_link_mode,
-        size: group.size,
-        is_parent_group: group.is_parent_group,
-        parent_group_jid: group.parent_group_jid,
-        is_default_sub_group: group.is_default_sub_group,
-        is_general_chat: group.is_general_chat,
-    }
-}
-
-fn parse_subgroup_node(
-    node: &serde_json::Value,
-    is_default: bool,
-    is_general: bool,
-) -> Option<CommunitySubgroup> {
+fn parse_subgroup_node(node: &serde_json::Value, is_default: bool) -> Option<CommunitySubgroup> {
     let id_str = node.get("id")?.as_str()?;
     let jid: Jid = id_str.parse().ok()?;
 
@@ -400,7 +376,7 @@ fn parse_subgroup_node(
         subject,
         participant_count,
         is_default_sub_group: is_default,
-        is_general_chat: is_general || is_general_from_props,
+        is_general_chat: is_general_from_props,
     })
 }
 

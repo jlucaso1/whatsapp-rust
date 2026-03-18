@@ -408,6 +408,19 @@ async fn test_community_get_linked_groups_participants() -> anyhow::Result<()> {
         .create(CreateCommunityOptions::new("Participants Test"))
         .await?;
 
+    // Link a subgroup so linked_groups_participants has something to return
+    let group = client
+        .client
+        .groups()
+        .create_group(GroupCreateOptions::new("Participants Sub"))
+        .await?;
+
+    client
+        .client
+        .community()
+        .link_subgroups(&community.gid, std::slice::from_ref(&group.gid))
+        .await?;
+
     // Get all participants across linked groups
     let participants = client
         .client
@@ -415,25 +428,14 @@ async fn test_community_get_linked_groups_participants() -> anyhow::Result<()> {
         .get_linked_groups_participants(&community.gid)
         .await?;
 
-    // The creator should be a participant
-    let own_jid = client
-        .client
-        .get_pn()
-        .await
-        .expect("should have JID")
-        .to_non_ad();
-
     info!(
         "Got {} participant(s) across linked groups",
         participants.len()
     );
 
-    info!(
-        "Own JID: {}, participants include self: {}",
-        own_jid,
-        participants
-            .iter()
-            .any(|p| p.jid == own_jid || p.phone_number.as_ref() == Some(&own_jid))
+    assert!(
+        !participants.is_empty(),
+        "should return at least the creator as a participant across linked groups"
     );
 
     client.disconnect().await;

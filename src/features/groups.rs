@@ -56,6 +56,8 @@ pub struct GroupMetadata {
     pub is_default_sub_group: bool,
     /// Whether this is the general chat subgroup of a community.
     pub is_general_chat: bool,
+    /// Whether non-admin community members can create subgroups.
+    pub allow_non_admin_sub_group_creation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +78,7 @@ impl From<GroupParticipantResponse> for GroupParticipant {
 }
 
 impl GroupMetadata {
-    fn from_response(group: GroupInfoResponse) -> Self {
+    pub(crate) fn from_response(group: GroupInfoResponse) -> Self {
         Self {
             id: group.id,
             subject: group.subject.into_string(),
@@ -99,6 +101,7 @@ impl GroupMetadata {
             parent_group_jid: group.parent_group_jid,
             is_default_sub_group: group.is_default_sub_group,
             is_general_chat: group.is_general_chat,
+            allow_non_admin_sub_group_creation: group.allow_non_admin_sub_group_creation,
         }
     }
 }
@@ -406,6 +409,7 @@ mod tests {
             parent_group_jid: None,
             is_default_sub_group: false,
             is_general_chat: false,
+            allow_non_admin_sub_group_creation: false,
         };
 
         assert_eq!(metadata.subject, "Test Group");
