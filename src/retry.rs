@@ -128,18 +128,12 @@ impl Client {
         }
 
         // Prevent concurrent retries for the same message.
-        {
-            let mut pending = self.pending_retries.lock().await;
-            if pending.contains(&message_id) {
-                log::debug!("Ignoring retry for {message_id}: a retry is already in progress.");
-                return Ok(());
-            }
-            pending.insert(message_id.clone());
+        if !self.pending_retries.insert(message_id.clone()) {
+            log::debug!("Ignoring retry for {message_id}: a retry is already in progress.");
+            return Ok(());
         }
         let _guard = scopeguard::guard((self.clone(), message_id.clone()), |(client, id)| {
-            tokio::spawn(async move {
-                client.pending_retries.lock().await.remove(&id);
-            });
+            client.pending_retries.remove(&id);
         });
 
         let original_msg = match self

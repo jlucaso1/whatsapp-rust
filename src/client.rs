@@ -9,7 +9,7 @@ use crate::handshake;
 use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use moka::future::Cache;
 use tokio::sync::watch;
 use wacore::xml::DisplayableNode;
@@ -144,7 +144,6 @@ pub struct MemoryDiagnostics {
     pub signal_cache_identities: usize,
     pub signal_cache_sender_keys: usize,
     // -- Misc --
-    pub plaintext_buffer_pool: usize,
     pub chatstate_handlers: usize,
     pub custom_enc_handlers: usize,
 }
@@ -210,11 +209,6 @@ impl std::fmt::Display for MemoryDiagnostics {
             self.signal_cache_sender_keys
         )?;
         writeln!(f, "--- Misc ---")?;
-        writeln!(
-            f,
-            "  plaintext_buffer_pool:  {}",
-            self.plaintext_buffer_pool
-        )?;
         writeln!(f, "  chatstate_handlers:     {}", self.chatstate_handlers)?;
         writeln!(f, "  custom_enc_handlers:    {}", self.custom_enc_handlers)?;
         Ok(())
@@ -338,7 +332,7 @@ pub struct Client {
     /// Uses moka cache with TTL and max capacity for automatic eviction.
     pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
 
-    pub(crate) pending_retries: Arc<Mutex<HashSet<String>>>,
+    pub(crate) pending_retries: Arc<DashSet<String>>,
 
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
@@ -347,7 +341,6 @@ pub struct Client {
 
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
-    pub last_successful_connect: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
@@ -394,10 +387,6 @@ pub struct Client {
     /// State machine for pair code authentication flow.
     /// Tracks the pending pair code request and ephemeral keys.
     pub(crate) pair_code_state: Arc<Mutex<wacore::pair_code::PairCodeState>>,
-
-    /// Pool for reusing plaintext marshal buffers.
-    /// Note: encrypted buffers are not pooled since they're moved to transport (zero-copy).
-    pub(crate) plaintext_buffer_pool: Arc<Mutex<Vec<Vec<u8>>>>,
 
     /// Custom handlers for encrypted message types
     pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
@@ -582,7 +571,7 @@ impl Client {
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
 
-            pending_retries: Arc::new(Mutex::new(HashSet::new())),
+            pending_retries: Arc::new(DashSet::new()),
 
             message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
 
@@ -595,7 +584,6 @@ impl Client {
 
             enable_auto_reconnect: Arc::new(AtomicBool::new(true)),
             auto_reconnect_errors: Arc::new(AtomicU32::new(0)),
-            last_successful_connect: Arc::new(Mutex::new(None)),
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
@@ -617,9 +605,6 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            plaintext_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(
-                cache_config.max_pooled_buffers,
-            ))),
             custom_enc_handlers: Arc::new(DashMap::new()),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
@@ -1069,14 +1054,13 @@ impl Client {
             message_enqueue_locks: self.message_enqueue_locks.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
-            pending_retries: self.pending_retries.lock().await.len(),
+            pending_retries: self.pending_retries.len(),
             presence_subscriptions: self.presence_subscriptions.lock().await.len(),
             app_state_key_requests: self.app_state_key_requests.lock().await.len(),
             app_state_syncing: self.app_state_syncing.lock().await.len(),
             signal_cache_sessions: sig_sessions,
             signal_cache_identities: sig_identities,
             signal_cache_sender_keys: sig_sender_keys,
-            plaintext_buffer_pool: self.plaintext_buffer_pool.lock().await.len(),
             chatstate_handlers: self.chatstate_handlers.read().await.len(),
             custom_enc_handlers: self.custom_enc_handlers.len(),
         }
@@ -1530,7 +1514,6 @@ impl Client {
             "Successfully authenticated with WhatsApp servers! (gen={})",
             current_generation
         );
-        *self.last_successful_connect.lock().await = Some(chrono::Utc::now());
         self.auto_reconnect_errors.store(0, Ordering::Relaxed);
 
         self.update_server_time_offset(node);
@@ -2931,16 +2914,6 @@ impl Client {
         Ok(original_id)
     }
 
-    /// Return a plaintext buffer to the pool if it meets size/count limits.
-    async fn try_recycle_buffer(&self, buf: Vec<u8>) {
-        let mut pool = self.plaintext_buffer_pool.lock().await;
-        if buf.capacity() <= self.cache_config.max_pooled_buffer_capacity
-            && pool.len() < self.cache_config.max_pooled_buffers
-        {
-            pool.push(buf);
-        }
-    }
-
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         let noise_socket_arc = { self.noise_socket.lock().await.clone() };
         let noise_socket = match noise_socket_arc {
@@ -2950,34 +2923,22 @@ impl Client {
 
         debug!(target: "Client/Send", "{}", DisplayableNode(&node));
 
-        let mut plaintext_buf = {
-            let mut pool = self.plaintext_buffer_pool.lock().await;
-            pool.pop().unwrap_or_else(|| Vec::with_capacity(1024))
-        };
-        plaintext_buf.clear();
+        let mut plaintext_buf = Vec::with_capacity(1024);
 
         if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
-            self.try_recycle_buffer(plaintext_buf).await;
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }
 
         // Size based on plaintext + encryption overhead (16 byte tag + 3 byte frame header)
         let encrypted_buf = Vec::with_capacity(plaintext_buf.len() + 32);
 
-        let (plaintext_buf, _) = match noise_socket
+        if let Err(e) = noise_socket
             .encrypt_and_send(plaintext_buf, encrypted_buf)
             .await
         {
-            Ok(bufs) => bufs,
-            Err(mut e) => {
-                self.try_recycle_buffer(std::mem::take(&mut e.plaintext_buf))
-                    .await;
-                return Err(e.into());
-            }
-        };
-
-        self.try_recycle_buffer(plaintext_buf).await;
+            return Err(e.into());
+        }
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
         self.last_data_sent_ms.store(
@@ -3271,50 +3232,6 @@ mod tests {
 
         info!(
             "✅ test_ack_behavior_for_incoming_stanzas passed: Client correctly differentiates which stanzas to acknowledge."
-        );
-    }
-
-    #[tokio::test]
-    async fn test_plaintext_buffer_pool_reuses_buffers() {
-        let backend = crate::test_utils::create_test_backend().await;
-        let pm = Arc::new(
-            PersistenceManager::new(backend)
-                .await
-                .expect("persistence manager should initialize"),
-        );
-        let (client, _rx) = Client::new(
-            pm,
-            Arc::new(crate::transport::mock::MockTransportFactory::new()),
-            Arc::new(MockHttpClient),
-            None,
-        )
-        .await;
-
-        // Check initial pool size
-        let initial_pool_size = {
-            let pool = client.plaintext_buffer_pool.lock().await;
-            pool.len()
-        };
-
-        // Attempt to send a node (this will fail because we're not connected, but that's okay)
-        let test_node = NodeBuilder::new("test").attr("id", "test-123").build();
-
-        let _ = client.send_node(test_node).await;
-
-        // After the send attempt, the pool should have the same or more buffers
-        // (depending on whether buffers were consumed and returned)
-        let final_pool_size = {
-            let pool = client.plaintext_buffer_pool.lock().await;
-            pool.len()
-        };
-
-        assert!(
-            final_pool_size >= initial_pool_size,
-            "Plaintext buffer pool should not shrink after send operations"
-        );
-
-        info!(
-            "✅ test_plaintext_buffer_pool_reuses_buffers passed: Buffer pool properly manages plaintext buffers"
         );
     }
 
