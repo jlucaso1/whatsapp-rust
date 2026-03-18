@@ -1126,77 +1126,59 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
 /// </notification>
 /// ```
 fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
+    use crate::features::newsletter::parse_reaction_counts;
     use wacore::types::events::{
         NewsletterLiveUpdate, NewsletterLiveUpdateMessage, NewsletterLiveUpdateReaction,
     };
 
     let newsletter_jid = node.attrs().jid("from");
 
-    let Some(live_updates) = node.get_optional_child("live_updates") else {
-        debug!(
-            "Newsletter notification without <live_updates>, dispatching raw: {}",
-            wacore::xml::DisplayableNode(node)
-        );
-        client
-            .core
-            .event_bus
-            .dispatch(&Event::Notification(node.clone()));
-        return;
-    };
+    if let Some(live_updates) = node.get_optional_child("live_updates")
+        && let Some(messages_node) = live_updates.get_optional_child("messages")
+        && let Some(children) = messages_node.children()
+    {
+        let messages: Vec<_> = children
+            .iter()
+            .filter(|n| n.tag.as_ref() == "message")
+            .map(|msg_node| {
+                let server_id = msg_node
+                    .attrs
+                    .get("server_id")
+                    .map(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
 
-    let Some(messages_node) = live_updates.get_optional_child("messages") else {
-        return;
-    };
+                let reactions = parse_reaction_counts(msg_node)
+                    .into_iter()
+                    .map(|r| NewsletterLiveUpdateReaction {
+                        code: r.code,
+                        count: r.count,
+                    })
+                    .collect();
 
-    let mut messages = Vec::new();
-    if let Some(children) = messages_node.children() {
-        for msg_node in children.iter().filter(|n| n.tag.as_ref() == "message") {
-            let server_id = msg_node
-                .attrs
-                .get("server_id")
-                .map(|v| v.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
-
-            let mut reactions = Vec::new();
-            if let Some(reactions_node) = msg_node.get_optional_child("reactions")
-                && let Some(reaction_children) = reactions_node.children()
-            {
-                for r in reaction_children
-                    .iter()
-                    .filter(|n| n.tag.as_ref() == "reaction")
-                {
-                    let code = r
-                        .attrs
-                        .get("code")
-                        .map(|v| v.as_str().into_owned())
-                        .unwrap_or_default();
-                    let count = r
-                        .attrs
-                        .get("count")
-                        .map(|v| v.as_str())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    reactions.push(NewsletterLiveUpdateReaction { code, count });
+                NewsletterLiveUpdateMessage {
+                    server_id,
+                    reactions,
                 }
-            }
+            })
+            .collect();
 
-            messages.push(NewsletterLiveUpdateMessage {
-                server_id,
-                reactions,
-            });
+        if !messages.is_empty() {
+            client
+                .core
+                .event_bus
+                .dispatch(&Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
+                    newsletter_jid,
+                    messages,
+                }));
         }
     }
 
-    if !messages.is_empty() {
-        client
-            .core
-            .event_bus
-            .dispatch(&Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
-                newsletter_jid,
-                messages,
-            }));
-    }
+    // Also dispatch raw notification for backward compatibility
+    client
+        .core
+        .event_bus
+        .dispatch(&Event::Notification(node.clone()));
 }
 
 /// Handle `<notification type="disappearing_mode">` — a contact changed

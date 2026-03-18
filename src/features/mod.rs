@@ -4,7 +4,7 @@ mod chatstate;
 mod contacts;
 mod groups;
 mod mex;
-mod newsletter;
+pub(crate) mod newsletter;
 mod presence;
 mod profile;
 pub(crate) mod status;

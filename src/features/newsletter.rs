@@ -343,6 +343,10 @@ impl<'a> Newsletter<'a> {
     ///
     /// Newsletter messages are plaintext (no Signal E2E encryption).
     /// Returns the message ID assigned by the client.
+    ///
+    /// **Note:** This sends the raw protobuf as plaintext. For media messages
+    /// (images, videos, etc.), the media must be uploaded separately using the
+    /// newsletter-specific upload endpoint first. Text messages work directly.
     pub async fn send_message(
         &self,
         jid: &Jid,
@@ -491,6 +495,33 @@ fn parse_newsletter_metadata(value: &serde_json::Value) -> Result<NewsletterMeta
     })
 }
 
+// ─── Shared parsing helpers ────────────────────────────────────────────
+
+/// Parse reaction counts from a `<reactions>` node.
+/// Used by both message history parsing and notification handling.
+pub(crate) fn parse_reaction_counts(node: &Node) -> Vec<NewsletterReactionCount> {
+    let mut reactions = Vec::new();
+    if let Some(reactions_node) = node.get_optional_child("reactions")
+        && let Some(children) = reactions_node.children()
+    {
+        for r in children.iter().filter(|n| n.tag.as_ref() == "reaction") {
+            let code = r
+                .attrs
+                .get("code")
+                .map(|v| v.as_str().into_owned())
+                .unwrap_or_default();
+            let count = r
+                .attrs
+                .get("count")
+                .map(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            reactions.push(NewsletterReactionCount { code, count });
+        }
+    }
+    reactions
+}
+
 // Node response parsing helpers
 
 /// Parse the IQ response for newsletter message history.
@@ -549,29 +580,7 @@ fn parse_newsletter_messages_response(
                 _ => None,
             });
 
-        // Parse <reactions> counts
-        let mut reactions = Vec::new();
-        if let Some(reactions_node) = msg_node.get_optional_child("reactions")
-            && let Some(reaction_children) = reactions_node.children()
-        {
-            for r in reaction_children
-                .iter()
-                .filter(|n| n.tag.as_ref() == "reaction")
-            {
-                let code = r
-                    .attrs
-                    .get("code")
-                    .map(|v| v.as_str().into_owned())
-                    .unwrap_or_default();
-                let count = r
-                    .attrs
-                    .get("count")
-                    .map(|v| v.as_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
-                reactions.push(NewsletterReactionCount { code, count });
-            }
-        }
+        let reactions = parse_reaction_counts(msg_node);
 
         result.push(NewsletterMessage {
             server_id,
