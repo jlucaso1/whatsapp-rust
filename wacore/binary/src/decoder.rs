@@ -795,7 +795,7 @@ mod tests {
         for i in 0..50 {
             let tag = format!("level{}", i);
             current = Node::new(
-                &tag,
+                tag,
                 Attrs::new(),
                 Some(crate::node::NodeContent::Nodes(vec![current])),
             );

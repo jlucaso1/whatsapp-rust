@@ -321,9 +321,9 @@ impl ProtocolNode for GroupParticipantResponse {
     }
 
     fn into_node(self) -> Node {
-        let mut builder = NodeBuilder::new("participant").attr("jid", self.jid.to_string());
-        if let Some(pn) = &self.phone_number {
-            builder = builder.attr("phone_number", pn.to_string());
+        let mut builder = NodeBuilder::new("participant").attr("jid", self.jid);
+        if let Some(pn) = self.phone_number {
+            builder = builder.attr("phone_number", pn);
         }
         if self.participant_type != ParticipantType::Member {
             builder = builder.attr("type", self.participant_type.as_str());
@@ -444,12 +444,12 @@ impl ProtocolNode for GroupInfoResponse {
         }
 
         let mut builder = NodeBuilder::new("group")
-            .attr("id", self.id.to_string())
+            .attr("id", self.id)
             .attr("subject", self.subject.as_str())
             .attr("addressing_mode", self.addressing_mode.as_str());
 
-        if let Some(ref creator) = self.creator {
-            builder = builder.attr("creator", creator.to_string());
+        if let Some(creator) = self.creator {
+            builder = builder.attr("creator", creator);
         }
         if let Some(creation_time) = self.creation_time {
             builder = builder.attr("creation", creation_time.to_string());
@@ -457,8 +457,8 @@ impl ProtocolNode for GroupInfoResponse {
         if let Some(subject_time) = self.subject_time {
             builder = builder.attr("s_t", subject_time.to_string());
         }
-        if let Some(ref subject_owner) = self.subject_owner {
-            builder = builder.attr("s_o", subject_owner.to_string());
+        if let Some(subject_owner) = self.subject_owner {
+            builder = builder.attr("s_o", subject_owner);
         }
         if let Some(size) = self.size {
             builder = builder.attr("size", size.to_string());
@@ -903,7 +903,7 @@ impl IqSpec for LeaveGroupIq {
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let group_node = NodeBuilder::new("group")
-            .attr("id", self.group_jid.to_string())
+            .attr("id", self.group_jid.clone())
             .build();
         let leave_node = NodeBuilder::new("leave").children([group_node]).build();
 
@@ -951,7 +951,7 @@ macro_rules! define_group_participant_iq {
                     .iter()
                     .map(|jid| {
                         NodeBuilder::new("participant")
-                            .attr("jid", jid.to_string())
+                            .attr("jid", jid.clone())
                             .build()
                     })
                     .collect();
@@ -1000,7 +1000,7 @@ macro_rules! define_group_participant_iq {
                     .iter()
                     .map(|jid| {
                         NodeBuilder::new("participant")
-                            .attr("jid", jid.to_string())
+                            .attr("jid", jid.clone())
                             .build()
                     })
                     .collect();

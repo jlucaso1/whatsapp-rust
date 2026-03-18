@@ -10,6 +10,8 @@
 //! ```
 //! Response: `<iq type="result" .../>`
 
+use std::borrow::Cow;
+
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::jid::DEFAULT_USER_SERVER;
@@ -34,7 +36,7 @@ impl IqSpec for SetStatusTextSpec {
             "status",
             DEFAULT_USER_SERVER.parse().expect("valid server JID"),
             Some(NodeContent::Nodes(vec![Node {
-                tag: "status".to_string(),
+                tag: Cow::Borrowed("status"),
                 attrs: Default::default(),
                 content: Some(NodeContent::String(self.text.clone())),
             }])),

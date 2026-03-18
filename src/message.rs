@@ -1797,8 +1797,8 @@ mod tests {
 
         let message_node = Arc::new(
             NodeBuilder::new("message")
-                .attr("from", group_jid.to_string())
-                .attr("participant", sender_jid.to_string())
+                .attr("from", group_jid)
+                .attr("participant", sender_jid)
                 .attr("id", "test-id-123")
                 .attr("t", "12345")
                 .children(vec![msg_node, skmsg_node])
@@ -2536,8 +2536,8 @@ mod tests {
 
         let message_node = Arc::new(
             NodeBuilder::new("message")
-                .attr("from", group_jid.to_string())
-                .attr("participant", sender_jid.to_string())
+                .attr("from", group_jid)
+                .attr("participant", sender_jid)
                 .attr("id", "SECOND_MSG_TEST")
                 .attr("t", "1759306493")
                 .attr("type", "text")
@@ -4182,8 +4182,8 @@ mod tests {
 
         let node = NodeBuilder::new("message")
             .attr("id", msg_id)
-            .attr("from", group_jid.to_string())
-            .attr("participant", sender_jid.to_string())
+            .attr("from", group_jid.clone())
+            .attr("participant", sender_jid.clone())
             .attr("type", "text")
             .children(vec![{
                 let mut n = NodeBuilder::new("enc")

@@ -145,14 +145,14 @@ impl ProtocolNode for MediaConnHostExtended {
             let download_cat_nodes: Vec<Node> = self
                 .download_categories
                 .iter()
-                .map(|cat| NodeBuilder::new(cat).build())
+                .map(|cat| NodeBuilder::new_dynamic(cat.clone()).build())
                 .collect();
 
             // Build download buckets
             let download_bucket_nodes: Vec<Node> = self
                 .download_buckets
                 .iter()
-                .map(|bucket| NodeBuilder::new(bucket).build())
+                .map(|bucket| NodeBuilder::new_dynamic(bucket.clone()).build())
                 .collect();
 
             children.push(
@@ -205,12 +205,12 @@ impl ProtocolNode for MediaConnHostExtended {
             download_categories: node
                 .get_optional_child("download")
                 .and_then(|d| d.children())
-                .map(|children| children.iter().map(|c| c.tag.clone()).collect())
+                .map(|children| children.iter().map(|c| c.tag.to_string()).collect())
                 .unwrap_or_default(),
             download_buckets: node
                 .get_optional_child("download_buckets")
                 .and_then(|d| d.children())
-                .map(|children| children.iter().map(|c| c.tag.clone()).collect())
+                .map(|children| children.iter().map(|c| c.tag.to_string()).collect())
                 .unwrap_or_default(),
         })
     }

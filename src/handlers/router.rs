@@ -52,7 +52,7 @@ impl StanzaRouter {
         node: Arc<Node>,
         cancelled: &mut bool,
     ) -> bool {
-        if let Some(handler) = self.handlers.get(node.tag.as_str()) {
+        if let Some(handler) = self.handlers.get(node.tag.as_ref()) {
             handler.handle(client, node, cancelled).await
         } else {
             false

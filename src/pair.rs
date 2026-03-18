@@ -35,7 +35,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 
     if let Some(children) = node.children() {
         for child in children {
-            let handled = match child.tag.as_str() {
+            let handled = match child.tag.as_ref() {
                 "pair-device" => {
                     if let Some(ack_node) = PairUtils::build_ack_node(node)
                         && let Err(e) = client.send_node(ack_node).await

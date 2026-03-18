@@ -76,7 +76,7 @@ impl ReceivedChatState {
     /// - `<composing media="audio"/>` → RecordingAudio
     /// - `<paused/>` → Idle
     pub fn from_child_node(child: &Node) -> Self {
-        match child.tag.as_str() {
+        match child.tag.as_ref() {
             "composing" => {
                 // Check for media="audio" to distinguish recording from typing
                 if child.attrs().optional_string("media") == Some("audio") {
@@ -130,7 +130,7 @@ impl ChatstateStanza {
     /// (e.g., to ignore self-echo chatstates without logging warnings).
     pub fn parse(node: &Node) -> Result<Self, ChatstateParseError> {
         if node.tag != "chatstate" {
-            return Err(ChatstateParseError::WrongTag(node.tag.clone()));
+            return Err(ChatstateParseError::WrongTag(node.tag.to_string()));
         }
 
         let from = match optional_jid(node, "from")? {
@@ -335,12 +335,12 @@ mod tests {
     #[test]
     fn test_parse_jid_attribute_as_jid_type() {
         // In the binary protocol, JID attributes are stored as actual JID types,
-        // not strings. This test simulates that behavior using jid_attr().
+        // not strings. This test simulates that by passing a Jid directly to attr().
         use wacore_binary::jid::Jid;
 
         let jid: Jid = "236395184570386@lid".parse().unwrap();
         let node = NodeBuilder::new("chatstate")
-            .jid_attr("from", jid)
+            .attr("from", jid)
             .children([NodeBuilder::new("composing").build()])
             .build();
 
@@ -363,8 +363,8 @@ mod tests {
         let participant_jid: Jid = "236395184570386@lid".parse().unwrap();
 
         let node = NodeBuilder::new("chatstate")
-            .jid_attr("from", group_jid)
-            .jid_attr("participant", participant_jid)
+            .attr("from", group_jid)
+            .attr("participant", participant_jid)
             .children([NodeBuilder::new("composing").build()])
             .build();
 
