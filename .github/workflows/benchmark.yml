@@ -74,9 +74,12 @@ jobs:
               --token "$BENCHER_API_TOKEN" \
               --branch "${{ github.head_ref }}" \
               --start-point "${{ github.base_ref }}" \
-              --start-point-hash "${{ github.event.pull_request.base.sha }}" \
               --start-point-clone-thresholds \
               --start-point-reset \
+              --threshold-measure instructions \
+              --threshold-test percentage \
+              --threshold-upper-boundary 0.05 \
+              --thresholds-reset \
               --ci-only-thresholds \
               "cargo bench --workspace"
 
