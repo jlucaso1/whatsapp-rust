@@ -81,7 +81,7 @@ waproto = { path = "./waproto", version = "0.3.0" }
 debug-diagnostics = []
 debug-snapshots = []
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
-default = ["simd", "sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
+default = ["simd", "sqlite-storage", "tokio-transport", "ureq-client", "tokio-native", "signal"]
 simd = ["wacore/simd"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]

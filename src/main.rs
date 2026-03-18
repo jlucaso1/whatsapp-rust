@@ -295,6 +295,8 @@ fn main() {
         // If you want and need, you can get the client:
         // let client = bot.client();
 
+        let client = bot.client();
+
         let bot_handle = match bot.run().await {
             Ok(handle) => handle,
             Err(e) => {
@@ -303,9 +305,23 @@ fn main() {
             }
         };
 
-        bot_handle
-            .await
-            .expect("Bot task should complete without panicking");
+        #[cfg(feature = "signal")]
+        {
+            tokio::select! {
+                _ = bot_handle => {}
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received Ctrl+C, shutting down...");
+                    client.disconnect().await;
+                }
+            }
+        }
+
+        #[cfg(not(feature = "signal"))]
+        {
+            bot_handle
+                .await
+                .expect("Bot task should complete without panicking");
+        }
     });
 }
 
