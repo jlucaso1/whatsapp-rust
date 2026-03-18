@@ -505,11 +505,14 @@ pub(crate) fn parse_reaction_counts(node: &Node) -> Vec<NewsletterReactionCount>
         && let Some(children) = reactions_node.children()
     {
         for r in children.iter().filter(|n| n.tag.as_ref() == "reaction") {
-            let code = r
+            let Some(code) = r
                 .attrs
                 .get("code")
                 .map(|v| v.as_str().into_owned())
-                .unwrap_or_default();
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
             let count = r
                 .attrs
                 .get("count")

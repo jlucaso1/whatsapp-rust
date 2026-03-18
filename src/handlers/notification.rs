@@ -1131,7 +1131,9 @@ fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
         NewsletterLiveUpdate, NewsletterLiveUpdateMessage, NewsletterLiveUpdateReaction,
     };
 
-    let newsletter_jid = node.attrs().jid("from");
+    let Some(newsletter_jid) = node.attrs().optional_jid("from") else {
+        return;
+    };
 
     if let Some(live_updates) = node.get_optional_child("live_updates")
         && let Some(messages_node) = live_updates.get_optional_child("messages")
