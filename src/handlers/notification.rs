@@ -202,6 +202,9 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             // updates the contact's default ephemeral setting.
             handle_disappearing_mode_notification(client, node);
         }
+        "newsletter" => {
+            handle_newsletter_notification(client, node);
+        }
         _ => {
             debug!("Unhandled notification type '{notification_type}', dispatching raw event");
             client
@@ -1102,6 +1105,77 @@ async fn handle_group_notification(client: &Arc<Client>, node: &Node) {
     }
 
     // Also dispatch legacy generic notification for backward compatibility
+    client
+        .core
+        .event_bus
+        .dispatch(&Event::Notification(node.clone()));
+}
+
+/// Handle `<notification type="newsletter">` — live updates with reaction counts.
+///
+/// Format:
+/// ```xml
+/// <notification from="NL_JID" type="newsletter" id="..." t="...">
+///   <live_updates>
+///     <messages jid="NL_JID" t="...">
+///       <message server_id="123" ...>
+///         <reactions><reaction code="👍" count="3"/></reactions>
+///       </message>
+///     </messages>
+///   </live_updates>
+/// </notification>
+/// ```
+fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
+    use crate::features::newsletter::parse_reaction_counts;
+    use wacore::types::events::{
+        NewsletterLiveUpdate, NewsletterLiveUpdateMessage, NewsletterLiveUpdateReaction,
+    };
+
+    let Some(newsletter_jid) = node.attrs().optional_jid("from") else {
+        return;
+    };
+
+    if let Some(live_updates) = node.get_optional_child("live_updates")
+        && let Some(messages_node) = live_updates.get_optional_child("messages")
+        && let Some(children) = messages_node.children()
+    {
+        let messages: Vec<_> = children
+            .iter()
+            .filter(|n| n.tag.as_ref() == "message")
+            .filter_map(|msg_node| {
+                let server_id = msg_node
+                    .attrs
+                    .get("server_id")
+                    .map(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())?;
+
+                let reactions = parse_reaction_counts(msg_node)
+                    .into_iter()
+                    .map(|r| NewsletterLiveUpdateReaction {
+                        code: r.code,
+                        count: r.count,
+                    })
+                    .collect();
+
+                Some(NewsletterLiveUpdateMessage {
+                    server_id,
+                    reactions,
+                })
+            })
+            .collect();
+
+        if !messages.is_empty() {
+            client
+                .core
+                .event_bus
+                .dispatch(&Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
+                    newsletter_jid,
+                    messages,
+                }));
+        }
+    }
+
+    // Also dispatch raw notification for backward compatibility
     client
         .core
         .event_bus

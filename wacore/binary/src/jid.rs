@@ -359,6 +359,15 @@ impl Jid {
         }
     }
 
+    /// Create a newsletter (channel) JID (newsletter server).
+    pub fn newsletter(id: impl Into<String>) -> Self {
+        Self {
+            user: id.into(),
+            server: Cow::Borrowed(NEWSLETTER_SERVER),
+            ..Default::default()
+        }
+    }
+
     /// Create a phone number JID with device ID
     pub fn pn_device(user: impl Into<String>, device: u16) -> Self {
         Self {

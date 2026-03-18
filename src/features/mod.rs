@@ -4,6 +4,7 @@ mod chatstate;
 mod contacts;
 mod groups;
 mod mex;
+pub(crate) mod newsletter;
 mod presence;
 mod profile;
 pub(crate) mod status;
@@ -24,6 +25,11 @@ pub use groups::{
 };
 
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
+
+pub use newsletter::{
+    Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount, NewsletterRole,
+    NewsletterState, NewsletterVerification,
+};
 
 pub use presence::{Presence, PresenceError, PresenceStatus};
 

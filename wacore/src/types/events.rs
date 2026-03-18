@@ -386,6 +386,31 @@ pub enum Event {
 
     /// A contact changed their default disappearing messages setting.
     DisappearingModeChanged(DisappearingModeChanged),
+
+    /// Newsletter live update (reaction counts changed, message updates, etc.).
+    NewsletterLiveUpdate(NewsletterLiveUpdate),
+}
+
+/// A newsletter live update notification, typically containing updated
+/// reaction counts for one or more messages.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdate {
+    pub newsletter_jid: Jid,
+    pub messages: Vec<NewsletterLiveUpdateMessage>,
+}
+
+/// A single message entry in a newsletter live update.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateMessage {
+    pub server_id: u64,
+    pub reactions: Vec<NewsletterLiveUpdateReaction>,
+}
+
+/// A reaction count in a newsletter live update.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateReaction {
+    pub code: String,
+    pub count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
