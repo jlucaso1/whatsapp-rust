@@ -109,7 +109,8 @@ impl IqSpec for PreKeyCountSpec {
 
         // Server may return <count/> without value attribute when count is 0,
         // or return an unparseable value. Default to 0 in these cases.
-        let count_str = count_node.attrs().optional_string("value").unwrap_or("0");
+        let count_str = count_node.attrs().optional_string("value");
+        let count_str = count_str.as_deref().unwrap_or("0");
         let count = count_str.parse::<usize>().unwrap_or(0);
 
         Ok(PreKeyCountResponse { count })
@@ -1010,7 +1011,10 @@ mod tests {
 
         assert_eq!(node.tag, "user");
         assert_eq!(node.attrs().optional_jid("jid"), Some(jid));
-        assert_eq!(node.attrs().optional_string("type"), Some("result"));
+        assert_eq!(
+            node.attrs().optional_string("type").as_deref(),
+            Some("result")
+        );
 
         // Verify children count (registration, type, identity, skey, key, device-identity)
         if let Some(children) = node.children() {

@@ -24,7 +24,7 @@ impl StanzaHandler for IqHandler {
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
         if !client.handle_iq(&node).await {
-            if node.attrs.get("type").and_then(|s| s.as_str()) == Some("result") {
+            if node.attrs.get("type").is_some_and(|s| s == "result") {
                 debug!(
                     "Received late IQ response (waiter already removed): {}",
                     DisplayableNode(&node)

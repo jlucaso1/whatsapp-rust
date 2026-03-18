@@ -112,9 +112,11 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "clean");
-            assert_eq!(
-                nodes[0].attrs.get("type").and_then(|v| v.as_str()),
-                Some("account_sync")
+            assert!(
+                nodes[0]
+                    .attrs
+                    .get("type")
+                    .is_some_and(|v| v == "account_sync")
             );
             assert!(nodes[0].attrs.get("timestamp").is_none());
         } else {
@@ -129,13 +131,12 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
-            assert_eq!(
-                nodes[0].attrs.get("type").and_then(|v| v.as_str()),
-                Some("groups")
-            );
-            assert_eq!(
-                nodes[0].attrs.get("timestamp").and_then(|v| v.as_str()),
-                Some("1234567890")
+            assert!(nodes[0].attrs.get("type").is_some_and(|v| v == "groups"));
+            assert!(
+                nodes[0]
+                    .attrs
+                    .get("timestamp")
+                    .is_some_and(|v| v == "1234567890")
             );
         } else {
             panic!("Expected NodeContent::Nodes");
@@ -165,18 +166,19 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 2);
-            assert_eq!(
-                nodes[0].attrs.get("type").and_then(|v| v.as_str()),
-                Some("account_sync")
+            assert!(
+                nodes[0]
+                    .attrs
+                    .get("type")
+                    .is_some_and(|v| v == "account_sync")
             );
             assert!(nodes[0].attrs.get("timestamp").is_none());
-            assert_eq!(
-                nodes[1].attrs.get("type").and_then(|v| v.as_str()),
-                Some("groups")
-            );
-            assert_eq!(
-                nodes[1].attrs.get("timestamp").and_then(|v| v.as_str()),
-                Some("9876543210")
+            assert!(nodes[1].attrs.get("type").is_some_and(|v| v == "groups"));
+            assert!(
+                nodes[1]
+                    .attrs
+                    .get("timestamp")
+                    .is_some_and(|v| v == "9876543210")
             );
         } else {
             panic!("Expected NodeContent::Nodes");

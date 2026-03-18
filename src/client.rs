@@ -1225,8 +1225,7 @@ impl Client {
                 let count: usize = preview
                     .attrs
                     .get("count")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok())
+                    .and_then(|v| v.as_str().parse().ok())
                     .unwrap_or(0);
 
                 if count == 0 {
@@ -1308,10 +1307,8 @@ impl Client {
             && let Some(sync_node) = node.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
-            let name = collection_node
-                .attrs()
-                .optional_string("name")
-                .unwrap_or("<unknown>");
+            let name = collection_node.attrs().optional_string("name");
+            let name = name.as_deref().unwrap_or("<unknown>");
             debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
             debug!(target: "Client/Recv","{}", DisplayableNode(&node));
@@ -1336,9 +1333,9 @@ impl Client {
         }
 
         if node.tag.as_ref() == "iq"
-            && let Some(id) = node.attrs.get("id").and_then(|v| v.as_str())
+            && let Some(id) = node.attrs.get("id").map(|v| v.as_str())
         {
-            let has_waiter = self.response_waiters.lock().await.contains_key(id);
+            let has_waiter = self.response_waiters.lock().await.contains_key(id.as_ref());
             if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
                 return;
             }
@@ -1822,7 +1819,7 @@ impl Client {
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
     pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
-        let id_opt = node.attrs.get("id").map(|v| v.to_string_value());
+        let id_opt = node.attrs.get("id").map(|v| v.as_str().into_owned());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {
@@ -2499,10 +2496,17 @@ impl Client {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
         let mut attrs = node.attrs();
-        let code = attrs.optional_string("code").unwrap_or("");
+        let code_cow = attrs.optional_string("code");
+        let code = code_cow.as_deref().unwrap_or("");
         let conflict_type = node
             .get_optional_child("conflict")
-            .map(|n| n.attrs().optional_string("type").unwrap_or("").to_string())
+            .map(|n| {
+                n.attrs()
+                    .optional_string("type")
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .unwrap_or_default();
 
         if !conflict_type.is_empty() {
@@ -2681,7 +2685,11 @@ impl Client {
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
-                    message: attrs.optional_string("message").unwrap_or("").to_string(),
+                    message: attrs
+                        .optional_string("message")
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_string(),
                     raw: Some(node.clone()),
                 },
             ));
@@ -2689,9 +2697,12 @@ impl Client {
     }
 
     pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
-        if let Some("get") = node.attrs.get("type").and_then(|s| s.as_str())
+        if node.attrs.get("type").is_some_and(|s| s == "get")
             && (node.get_optional_child("ping").is_some()
-                || node.attrs.get("xmlns").and_then(|s| s.as_str()) == Some("urn:xmpp:ping"))
+                || node
+                    .attrs
+                    .get("xmlns")
+                    .is_some_and(|s| s == "urn:xmpp:ping"))
         {
             info!("Received ping, sending pong.");
             let mut parser = node.attrs();
@@ -3143,7 +3154,7 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
 /// WA Web omits `type` when ACKing `<notification type="encrypt"><identity/></notification>`.
 fn is_encrypt_identity_notification(node: &Node) -> bool {
     node.tag == "notification"
-        && node.attrs.get("type").and_then(|v| v.as_str()) == Some("encrypt")
+        && node.attrs.get("type").is_some_and(|v| v == "encrypt")
         && node.get_optional_child("identity").is_some()
 }
 
@@ -3281,9 +3292,11 @@ mod tests {
         // 4. Await the receiver with a timeout
         match tokio::time::timeout(Duration::from_secs(1), rx).await {
             Ok(Ok(response_node)) => {
-                assert_eq!(
-                    response_node.attrs.get("id").and_then(|v| v.as_str()),
-                    Some(test_id.as_str()),
+                assert!(
+                    response_node
+                        .attrs
+                        .get("id")
+                        .is_some_and(|v| v == test_id.as_str()),
                     "Response node should have correct ID"
                 );
             }
@@ -4310,10 +4323,7 @@ mod tests {
         // Convert to node
         let node = session.into_node();
         assert_eq!(node.tag, "unified_session");
-        assert_eq!(
-            node.attrs.get("id").and_then(|v| v.as_str()),
-            Some("123456789")
-        );
+        assert!(node.attrs.get("id").is_some_and(|v| v == "123456789"));
 
         // Create an IB stanza
         let stanza = IbStanza::unified_session(UnifiedSession::new("987654321"));
@@ -4325,9 +4335,11 @@ mod tests {
         let children = ib_node.children().expect("IB stanza should have children");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "unified_session");
-        assert_eq!(
-            children[0].attrs.get("id").and_then(|v| v.as_str()),
-            Some("987654321")
+        assert!(
+            children[0]
+                .attrs
+                .get("id")
+                .is_some_and(|v| v == "987654321")
         );
 
         info!("✅ test_unified_session_protocol_node passed");
@@ -4684,19 +4696,12 @@ mod tests {
     #[test]
     fn test_build_pong_with_id() {
         let pong = build_pong("s.whatsapp.net".to_string(), Some("ping-123"));
-        assert_eq!(
-            pong.attrs.get("id").and_then(|v| v.as_str()),
-            Some("ping-123"),
+        assert!(
+            pong.attrs.get("id").is_some_and(|v| v == "ping-123"),
             "pong should include id when server ping has one"
         );
-        assert_eq!(
-            pong.attrs.get("type").and_then(|v| v.as_str()),
-            Some("result")
-        );
-        assert_eq!(
-            pong.attrs.get("to").and_then(|v| v.as_str()),
-            Some("s.whatsapp.net")
-        );
+        assert!(pong.attrs.get("type").is_some_and(|v| v == "result"));
+        assert!(pong.attrs.get("to").is_some_and(|v| v == "s.whatsapp.net"));
     }
 
     #[test]
@@ -4706,10 +4711,7 @@ mod tests {
             !pong.attrs.contains_key("id"),
             "pong should NOT include id when server ping has none"
         );
-        assert_eq!(
-            pong.attrs.get("type").and_then(|v| v.as_str()),
-            Some("result")
-        );
+        assert!(pong.attrs.get("type").is_some_and(|v| v == "result"));
     }
 
     #[test]

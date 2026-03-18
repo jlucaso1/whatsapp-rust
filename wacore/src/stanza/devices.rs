@@ -307,7 +307,7 @@ impl DeviceNotification {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
         }
-        if optional_attr(node, "type") != Some("devices") {
+        if !node.attrs.get("type").is_some_and(|v| v == "devices") {
             return Err(anyhow!("expected type='devices'"));
         }
 
@@ -317,7 +317,7 @@ impl DeviceNotification {
             .ok_or_else(|| anyhow!("notification missing required 'from' attribute"))?;
         let lid_user = node.attrs().optional_jid("lid");
         let stanza_id = optional_attr(node, "id")
-            .map(String::from)
+            .map(|s| s.into_owned())
             .unwrap_or_default();
 
         // Parse timestamp with checked conversion

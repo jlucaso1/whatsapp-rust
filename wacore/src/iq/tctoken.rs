@@ -221,7 +221,8 @@ pub fn parse_privacy_token_notification(
 
     let mut tokens = Vec::new();
     for token_node in tokens_node.get_children_by_tag("token") {
-        let token_type = optional_attr(token_node, "type").unwrap_or("");
+        let token_type = optional_attr(token_node, "type");
+        let token_type = token_type.as_deref().unwrap_or("");
         if token_type != "trusted_contact" {
             continue;
         }
@@ -473,7 +474,10 @@ mod tests {
     fn test_build_tc_token_node_with_timestamp() {
         let node = build_tc_token_node_with_timestamp(&[0x01], 1707000000);
         assert_eq!(node.tag, "tctoken");
-        assert_eq!(node.attrs().optional_string("t"), Some("1707000000"));
+        assert_eq!(
+            node.attrs().optional_string("t").as_deref(),
+            Some("1707000000")
+        );
     }
 
     #[test]

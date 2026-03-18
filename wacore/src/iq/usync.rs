@@ -119,7 +119,7 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
 
     let contact_node = user_node.get_optional_child("contact");
     let is_registered = contact_node
-        .map(|c| c.attrs().optional_string("type") == Some("in"))
+        .map(|c| c.attrs.get("type").is_some_and(|v| v == "in"))
         .unwrap_or(false);
 
     let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
@@ -274,7 +274,7 @@ impl IqSpec for IsOnWhatsAppSpec {
             {
                 let contact_node = user_node.get_optional_child("contact");
                 let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
+                    .map(|c| c.attrs.get("type").is_some_and(|v| v == "in"))
                     .unwrap_or(false);
 
                 results.push(IsOnWhatsAppResult { jid, is_registered });
@@ -652,17 +652,13 @@ mod tests {
             assert_eq!(nodes.len(), 1);
             let usync = &nodes[0];
             assert_eq!(usync.tag, "usync");
-            assert_eq!(
-                usync.attrs.get("sid").and_then(|s| s.as_str()),
-                Some("test-sid")
-            );
-            assert_eq!(
-                usync.attrs.get("mode").and_then(|s| s.as_str()),
-                Some("query")
-            );
-            assert_eq!(
-                usync.attrs.get("context").and_then(|s| s.as_str()),
-                Some("interactive")
+            assert!(usync.attrs.get("sid").is_some_and(|s| s == "test-sid"));
+            assert!(usync.attrs.get("mode").is_some_and(|s| s == "query"));
+            assert!(
+                usync
+                    .attrs
+                    .get("context")
+                    .is_some_and(|s| s == "interactive")
             );
         } else {
             panic!("Expected NodeContent::Nodes");
@@ -777,13 +773,12 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
-            assert_eq!(
-                usync.attrs.get("mode").and_then(|s| s.as_str()),
-                Some("full")
-            );
-            assert_eq!(
-                usync.attrs.get("context").and_then(|s| s.as_str()),
-                Some("background")
+            assert!(usync.attrs.get("mode").is_some_and(|s| s == "full"));
+            assert!(
+                usync
+                    .attrs
+                    .get("context")
+                    .is_some_and(|s| s == "background")
             );
         } else {
             panic!("Expected NodeContent::Nodes");
@@ -865,25 +860,13 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
-            assert_eq!(
-                usync.attrs.get("sid").and_then(|s| s.as_str()),
-                Some("test-sid")
-            );
-            assert_eq!(
-                usync.attrs.get("mode").and_then(|s| s.as_str()),
-                Some("query")
-            );
-            assert_eq!(
-                usync.attrs.get("context").and_then(|s| s.as_str()),
-                Some("message")
-            );
+            assert!(usync.attrs.get("sid").is_some_and(|s| s == "test-sid"));
+            assert!(usync.attrs.get("mode").is_some_and(|s| s == "query"));
+            assert!(usync.attrs.get("context").is_some_and(|s| s == "message"));
 
             let query = usync.get_optional_child("query").unwrap();
             let devices = query.get_optional_child("devices").unwrap();
-            assert_eq!(
-                devices.attrs.get("version").and_then(|s| s.as_str()),
-                Some("2")
-            );
+            assert!(devices.attrs.get("version").is_some_and(|s| s == "2"));
         } else {
             panic!("Expected NodeContent::Nodes");
         }

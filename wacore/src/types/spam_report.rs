@@ -150,13 +150,17 @@ mod tests {
         let node = build_spam_list_node(&request);
 
         assert_eq!(node.tag, "spam_list");
-        assert_eq!(node.attrs().string("spam_flow"), "MessageMenu");
+        assert!(
+            node.attrs
+                .get("spam_flow")
+                .is_some_and(|v| v == "MessageMenu")
+        );
 
         let message = node
             .get_optional_child_by_tag(&["message"])
             .expect("test node child should exist");
-        assert_eq!(message.attrs().string("id"), "TEST123");
-        assert_eq!(message.attrs().string("t"), "1234567890");
+        assert!(message.attrs.get("id").is_some_and(|v| v == "TEST123"));
+        assert!(message.attrs.get("t").is_some_and(|v| v == "1234567890"));
     }
 
     #[test]
@@ -179,8 +183,8 @@ mod tests {
             .get_optional_child_by_tag(&["raw"])
             .expect("test node child should exist");
 
-        assert_eq!(raw.attrs().string("v"), "3");
-        assert_eq!(raw.attrs().string("mediatype"), "image");
+        assert!(raw.attrs.get("v").is_some_and(|v| v == "3"));
+        assert!(raw.attrs.get("mediatype").is_some_and(|v| v == "image"));
     }
 
     #[test]
@@ -197,8 +201,16 @@ mod tests {
 
         let node = build_spam_list_node(&request);
 
-        assert_eq!(node.attrs().string("spam_flow"), "GroupInfoReport");
-        assert_eq!(node.attrs().string("jid"), "120363025918861132@g.us");
-        assert_eq!(node.attrs().string("subject"), "Test Group");
+        assert!(
+            node.attrs
+                .get("spam_flow")
+                .is_some_and(|v| v == "GroupInfoReport")
+        );
+        assert!(
+            node.attrs
+                .get("jid")
+                .is_some_and(|v| v == "120363025918861132@g.us")
+        );
+        assert!(node.attrs.get("subject").is_some_and(|v| v == "Test Group"));
     }
 }

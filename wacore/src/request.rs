@@ -194,7 +194,11 @@ impl RequestUtils {
             if let Some(error_node) = error_child {
                 let mut parser = wacore_binary::attrs::AttrParser::new(error_node);
                 let code = parser.optional_u64("code").unwrap_or(0) as u16;
-                let text = parser.optional_string("text").unwrap_or("").to_string();
+                let text = parser
+                    .optional_string("text")
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string();
                 return Box::new(Err(IqError::ServerError { code, text }));
             }
             return Box::new(Err(IqError::ServerError {

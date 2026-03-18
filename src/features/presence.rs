@@ -97,7 +97,8 @@ impl<'a> Presence<'a> {
             presence_type,
             node.attrs
                 .get("name")
-                .and_then(|s| s.as_str())
+                .map(|s| s.as_str())
+                .as_deref()
                 .unwrap_or("")
         );
 
@@ -445,10 +446,7 @@ mod tests {
         let node = client.presence().build_unsubscription_node(&jid);
 
         assert_eq!(node.tag, "presence");
-        assert_eq!(
-            node.attrs.get("type").and_then(|v| v.as_str()),
-            Some("unsubscribe")
-        );
+        assert!(node.attrs.get("type").is_some_and(|v| v == "unsubscribe"));
         assert_eq!(
             node.attrs.get("to").map(ToString::to_string),
             Some(jid.to_string())

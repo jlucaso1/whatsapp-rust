@@ -153,12 +153,24 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let business_name = success_node
         .get_optional_child_by_tag(&["biz"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.attrs()
+                .optional_string("name")
+                .as_deref()
+                .unwrap_or("")
+                .to_string()
+        })
         .unwrap_or_default();
 
     let platform = success_node
         .get_optional_child_by_tag(&["platform"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.attrs()
+                .optional_string("name")
+                .as_deref()
+                .unwrap_or("")
+                .to_string()
+        })
         .unwrap_or_default();
 
     // For jid and lid, parse them together to handle errors correctly

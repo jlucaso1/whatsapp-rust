@@ -1114,7 +1114,7 @@ mod tests {
 
         // Verify top-level receipt attributes
         assert_eq!(
-            receipt_node.attrs().optional_string("type"),
+            receipt_node.attrs().optional_string("type").as_deref(),
             Some("enc_rekey_retry"),
             "receipt type must be enc_rekey_retry"
         );
@@ -1126,7 +1126,7 @@ mod tests {
             "receipt 'to' must be peer JID"
         );
         assert_eq!(
-            receipt_node.attrs().optional_string("id"),
+            receipt_node.attrs().optional_string("id").as_deref(),
             Some("3EB0AABBCCDD")
         );
 
@@ -1139,7 +1139,7 @@ mod tests {
             .get_optional_child("enc_rekey")
             .expect("<enc_rekey> child must exist");
         assert_eq!(
-            enc_rekey.attrs().optional_string("call-id"),
+            enc_rekey.attrs().optional_string("call-id").as_deref(),
             Some("CALL-ABC-123")
         );
         assert!(
@@ -1149,7 +1149,10 @@ mod tests {
                 .is_some_and(|v| *v == "5511888888888@s.whatsapp.net"),
             "enc_rekey 'call-creator' must be creator JID"
         );
-        assert_eq!(enc_rekey.attrs().optional_string("count"), Some("2"));
+        assert_eq!(
+            enc_rekey.attrs().optional_string("count").as_deref(),
+            Some("2")
+        );
 
         // Verify <registration> child
         let registration = receipt_node

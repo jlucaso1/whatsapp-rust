@@ -55,17 +55,23 @@ impl VerifiedName {
         let name = node
             .attrs()
             .optional_string("name")
+            .map(|s| s.into_owned())
             .or_else(|| {
                 node.get_optional_child_by_tag(&["name"])
                     .and_then(|n| match &n.content {
-                        Some(NodeContent::String(s)) => Some(s.as_str()),
+                        Some(NodeContent::String(s)) => Some(s.clone()),
                         _ => None,
                     })
-            })
-            .map(String::from);
+            });
 
-        let serial = node.attrs().optional_string("serial").map(String::from);
-        let issuer = node.attrs().optional_string("issuer").map(String::from);
+        let serial = node
+            .attrs()
+            .optional_string("serial")
+            .map(|s| s.into_owned());
+        let issuer = node
+            .attrs()
+            .optional_string("issuer")
+            .map(|s| s.into_owned());
         let certificate = match &node.content {
             Some(NodeContent::Bytes(b)) => Some(b.clone()),
             _ => None,
@@ -117,7 +123,7 @@ impl BusinessNotification {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
         }
-        if optional_attr(node, "type") != Some("business") {
+        if !node.attrs.get("type").is_some_and(|v| v == "business") {
             return Err(anyhow!("expected type='business'"));
         }
 
@@ -127,7 +133,7 @@ impl BusinessNotification {
             .ok_or_else(|| anyhow!("notification missing required 'from' attribute"))?;
 
         let stanza_id = optional_attr(node, "id")
-            .map(String::from)
+            .map(|s| s.into_owned())
             .unwrap_or_default();
 
         let timestamp = match node.attrs().optional_u64("t") {

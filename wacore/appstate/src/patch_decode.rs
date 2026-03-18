@@ -119,7 +119,7 @@ fn parse_single_collection(collection: &Node) -> Result<PatchList> {
 
     // Check for per-collection error (WA Web: `3JJWKHeu5-P.js:54222-54254`)
     let col_type = ag.optional_string("type");
-    let error = parse_collection_error(collection, col_type);
+    let error = parse_collection_error(collection, col_type.as_deref());
 
     ag.finish()?;
 
@@ -174,12 +174,13 @@ fn parse_collection_error(
     // error if the <error> child is missing/malformed.
     let (code, text) = if let Some(error_node) = collection.get_optional_child("error") {
         let mut error_attrs = error_node.attrs();
-        let code_str = error_attrs.optional_string("code").unwrap_or("0");
+        let code_str = error_attrs.optional_string("code");
         let text = error_attrs
             .optional_string("text")
+            .as_deref()
             .unwrap_or("")
             .to_string();
-        let code: u16 = code_str.parse().unwrap_or(0);
+        let code: u16 = code_str.as_deref().unwrap_or("0").parse().unwrap_or(0);
         (code, text)
     } else {
         (0u16, "missing <error> child".to_string())

@@ -435,7 +435,11 @@ impl Client {
             max_sender_retry_count = max_sender_retry_count.max(sender_count);
 
             // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
-            if enc_node.attrs().optional_string("decrypt-fail") == Some("hide") {
+            if enc_node
+                .attrs
+                .get("decrypt-fail")
+                .is_some_and(|v| v == "hide")
+            {
                 has_hide_fail = true;
             }
 
@@ -479,8 +483,7 @@ impl Client {
             && !group_content_enc_nodes.is_empty()
             && all_enc_nodes
                 .first()
-                .and_then(|n| n.attrs().optional_string("type"))
-                == Some("skmsg")
+                .is_some_and(|n| n.attrs.get("type").is_some_and(|v| v == "skmsg"))
         {
             log::error!(
                 "[msg:{}] Protocol violation: skmsg is first in multi-enc message from {}. \

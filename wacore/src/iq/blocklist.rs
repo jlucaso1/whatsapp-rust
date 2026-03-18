@@ -189,8 +189,12 @@ mod tests {
         let node = request.into_node();
 
         assert_eq!(node.tag, "item");
-        assert_eq!(node.attrs().string("action"), "block");
-        assert_eq!(node.attrs().string("jid"), "1234567890@s.whatsapp.net");
+        assert!(node.attrs.get("action").is_some_and(|v| v == "block"));
+        assert!(
+            node.attrs
+                .get("jid")
+                .is_some_and(|v| v == "1234567890@s.whatsapp.net")
+        );
     }
 
     #[test]
@@ -203,8 +207,12 @@ mod tests {
         let node = entry.into_node();
 
         assert_eq!(node.tag, "item");
-        assert_eq!(node.attrs().string("jid"), "1234567890@s.whatsapp.net");
-        assert_eq!(node.attrs().string("t"), "1234567890");
+        assert!(
+            node.attrs
+                .get("jid")
+                .is_some_and(|v| v == "1234567890@s.whatsapp.net")
+        );
+        assert!(node.attrs.get("t").is_some_and(|v| v == "1234567890"));
     }
 
     #[test]

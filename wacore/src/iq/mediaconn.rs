@@ -189,17 +189,24 @@ impl ProtocolNode for MediaConnHostExtended {
             .to_string();
         let host_type = attrs
             .optional_string("type")
+            .as_deref()
             .unwrap_or("primary")
             .to_string();
 
         Ok(Self {
             hostname,
             host_type,
-            fallback_hostname: attrs.optional_string("fallback_hostname").map(String::from),
-            ip4: attrs.optional_string("ip4").map(String::from),
-            ip6: attrs.optional_string("ip6").map(String::from),
-            fallback_ip4: attrs.optional_string("fallback_ip4").map(String::from),
-            fallback_ip6: attrs.optional_string("fallback_ip6").map(String::from),
+            fallback_hostname: attrs
+                .optional_string("fallback_hostname")
+                .map(|s| s.into_owned()),
+            ip4: attrs.optional_string("ip4").map(|s| s.into_owned()),
+            ip6: attrs.optional_string("ip6").map(|s| s.into_owned()),
+            fallback_ip4: attrs
+                .optional_string("fallback_ip4")
+                .map(|s| s.into_owned()),
+            fallback_ip6: attrs
+                .optional_string("fallback_ip6")
+                .map(|s| s.into_owned()),
             upload: node.get_optional_child("upload").is_some(),
             download: node.get_optional_child("download").is_some(),
             download_categories: node
@@ -295,7 +302,7 @@ impl ProtocolNode for MediaConnResponseExtended {
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
         let auth_ttl = attrs.optional_u64("auth_ttl");
         let max_buckets = attrs.optional_u64("max_buckets");
-        let ip_token = attrs.optional_string("ip_token").map(String::from);
+        let ip_token = attrs.optional_string("ip_token").map(|s| s.into_owned());
         let set_ip_token = attrs.optional_u64("set_ip_token");
 
         let mut hosts = Vec::new();
