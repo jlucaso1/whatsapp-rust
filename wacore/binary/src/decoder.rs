@@ -129,6 +129,8 @@ impl<'a> Decoder<'a> {
         let server = match agent {
             0 => Cow::Borrowed(crate::jid::DEFAULT_USER_SERVER),
             1 => Cow::Borrowed(crate::jid::HIDDEN_USER_SERVER),
+            128 => Cow::Borrowed(crate::jid::HOSTED_SERVER),
+            129 => Cow::Borrowed(crate::jid::HOSTED_LID_SERVER),
             _ => Cow::Borrowed(crate::jid::HOSTED_SERVER),
         };
 

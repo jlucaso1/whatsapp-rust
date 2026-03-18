@@ -350,17 +350,21 @@ fn split_jid_from_meta(input: &str, meta: ParsedJidMeta) -> (&str, &str) {
 ///   128 = hosted
 ///   129 = hosted.lid
 ///
+/// For unmapped servers, falls back to `agent` to match the string-path
+/// behavior in `parse_jid_meta` (which uses `agent_byte` as the default).
+///
 /// WARNING: This must stay in sync with the string-path mapping in
-/// `classify_string_hint` / `parse_jid_meta`. Writing `jid.agent` here
-/// instead of the domain_type was the root cause of a regression where
-/// LID group messages were silently rejected by the server (error 421).
+/// `classify_string_hint` / `parse_jid_meta` and the inverse mapping in
+/// `decoder.rs read_ad_jid`. Writing `jid.agent` unconditionally here
+/// (instead of only as a fallback) was the root cause of a regression
+/// where LID group messages were silently rejected by the server (error 421).
 #[inline]
-fn server_to_domain_type(server: &str) -> u8 {
+fn server_to_domain_type(server: &str, agent: u8) -> u8 {
     match server {
         jid::HIDDEN_USER_SERVER => 1,  // "lid"
         jid::HOSTED_SERVER => 128,     // "hosted"
         jid::HOSTED_LID_SERVER => 129, // "hosted.lid"
-        _ => 0,                        // "s.whatsapp.net" and others
+        _ => agent,                    // s.whatsapp.net (0) and exotic servers
     }
 }
 
@@ -749,7 +753,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(server_to_domain_type(&jid.server))?;
+            self.write_u8(server_to_domain_type(&jid.server, jid.agent))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
@@ -774,7 +778,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(server_to_domain_type(jid.server.as_ref()))?;
+            self.write_u8(server_to_domain_type(jid.server.as_ref(), jid.agent))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
