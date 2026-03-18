@@ -389,7 +389,7 @@ pub async fn prepare_dm_stanza<
     message: &wa::Message,
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
-    extra_stanza_nodes: Vec<Node>,
+    extra_stanza_nodes: &[Node],
 ) -> Result<Node> {
     // Generate reporting token if the message type supports it
     // For DMs, both sender_jid and remote_jid are the recipient (to_jid) per Baileys implementation
@@ -489,7 +489,7 @@ pub async fn prepare_dm_stanza<
     }
 
     // Add any extra stanza nodes provided by the caller
-    message_content_nodes.extend(extra_stanza_nodes);
+    message_content_nodes.extend(extra_stanza_nodes.iter().cloned());
 
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", to_jid)
@@ -567,7 +567,7 @@ pub async fn prepare_group_stanza<
     force_skdm_distribution: bool,
     skdm_target_devices: Option<Vec<Jid>>,
     edit: Option<crate::types::message::EditAttribute>,
-    extra_stanza_nodes: Vec<Node>,
+    extra_stanza_nodes: &[Node],
 ) -> Result<Node> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
@@ -829,7 +829,7 @@ pub async fn prepare_group_stanza<
     }
 
     // Add any extra stanza nodes provided by the caller
-    message_children.extend(extra_stanza_nodes);
+    message_children.extend(extra_stanza_nodes.iter().cloned());
 
     let stanza = stanza_builder.children(message_children).build();
 

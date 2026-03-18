@@ -271,36 +271,18 @@ impl Client {
             force_skdm,
             skdm_target_devices,
             None,
-            extra_stanza_nodes.clone(),
+            &extra_stanza_nodes,
         )
         .await
         {
             Ok(stanza) => {
-                if !devices_receiving_skdm.is_empty() {
-                    if let Err(e) = self
-                        .persistence_manager
-                        .add_skdm_recipients(&to_str, &devices_receiving_skdm)
-                        .await
-                    {
-                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
-                    }
-                } else if is_full_distribution {
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-
-                    if let Ok(all_devices) =
-                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        && let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to_str, &all_devices)
-                            .await
-                    {
-                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
-                    }
-                }
+                self.update_skdm_recipients(
+                    &to_str,
+                    &devices_receiving_skdm,
+                    is_full_distribution,
+                    &group_info.participants,
+                )
+                .await;
                 stanza
             }
             Err(e) => {
@@ -342,28 +324,13 @@ impl Client {
                         true,
                         None,
                         None,
-                        extra_stanza_nodes,
+                        &extra_stanza_nodes,
                     )
                     .await?;
 
                     // Re-populate SKDM recipients after successful full distribution
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-                    if let Ok(all_devices) =
-                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        && let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to_str, &all_devices)
-                            .await
-                    {
-                        log::warn!(
-                            "Failed to update status SKDM recipients after retry: {:?}",
-                            e
-                        );
-                    }
+                    self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
+                        .await;
 
                     retry_stanza
                 } else {
@@ -388,6 +355,40 @@ impl Client {
         }
 
         Ok(request_id)
+    }
+
+    /// Update SKDM recipient bookkeeping after a successful group/status stanza build.
+    ///
+    /// If specific devices received SKDM, record them. If this was a full distribution
+    /// (all participants), resolve all devices and record them instead.
+    async fn update_skdm_recipients(
+        &self,
+        to_str: &str,
+        devices_receiving_skdm: &[Jid],
+        is_full_distribution: bool,
+        participants: &[Jid],
+    ) {
+        if !devices_receiving_skdm.is_empty() {
+            if let Err(e) = self
+                .persistence_manager
+                .add_skdm_recipients(to_str, devices_receiving_skdm)
+                .await
+            {
+                log::warn!("Failed to update SKDM recipients: {:?}", e);
+            }
+        } else if is_full_distribution {
+            let jids_to_resolve: Vec<Jid> =
+                participants.iter().map(|jid| jid.to_non_ad()).collect();
+            if let Ok(all_devices) =
+                SendContextResolver::resolve_devices(self, &jids_to_resolve).await
+                && let Err(e) = self
+                    .persistence_manager
+                    .add_skdm_recipients(to_str, &all_devices)
+                    .await
+            {
+                log::warn!("Failed to update SKDM recipients: {:?}", e);
+            }
+        }
     }
 
     /// Ensure the status stanza has a <participants> node listing all recipient
@@ -770,36 +771,18 @@ impl Client {
                 force_skdm,
                 skdm_target_devices,
                 edit.clone(),
-                extra_stanza_nodes.clone(),
+                &extra_stanza_nodes,
             )
             .await
             {
                 Ok(stanza) => {
-                    if !devices_receiving_skdm.is_empty() {
-                        if let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to_str, &devices_receiving_skdm)
-                            .await
-                        {
-                            log::warn!("Failed to update SKDM recipients: {:?}", e);
-                        }
-                    } else if is_full_distribution {
-                        let jids_to_resolve: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|jid| jid.to_non_ad())
-                            .collect();
-
-                        if let Ok(all_devices) =
-                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                            && let Err(e) = self
-                                .persistence_manager
-                                .add_skdm_recipients(&to_str, &all_devices)
-                                .await
-                        {
-                            log::warn!("Failed to update SKDM recipients: {:?}", e);
-                        }
-                    }
+                    self.update_skdm_recipients(
+                        &to_str,
+                        &devices_receiving_skdm,
+                        is_full_distribution,
+                        &group_info.participants,
+                    )
+                    .await;
                     stanza
                 }
                 Err(e) => {
@@ -842,25 +825,13 @@ impl Client {
                             true, // Force distribution on retry
                             None, // Distribute to all devices
                             edit.clone(),
-                            extra_stanza_nodes.clone(),
+                            &extra_stanza_nodes,
                         )
                         .await?;
 
                         // Re-populate SKDM recipients after successful full distribution
-                        let jids_to_resolve: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|jid| jid.to_non_ad())
-                            .collect();
-                        if let Ok(all_devices) =
-                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                            && let Err(e) = self
-                                .persistence_manager
-                                .add_skdm_recipients(&to_str, &all_devices)
-                                .await
-                        {
-                            log::warn!("Failed to update SKDM recipients after retry: {:?}", e);
-                        }
+                        self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
+                            .await;
 
                         retry_stanza
                     } else {
@@ -929,7 +900,7 @@ impl Client {
                 message,
                 request_id,
                 edit,
-                extra_stanza_nodes,
+                &extra_stanza_nodes,
             )
             .await?
         };
