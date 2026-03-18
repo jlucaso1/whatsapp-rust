@@ -323,7 +323,7 @@ fn parse_jid_meta(input: &str) -> Option<ParsedJidMeta> {
         1
     } else if server == jid::HOSTED_SERVER {
         128
-    } else if server == "hosted.lid" {
+    } else if server == jid::HOSTED_LID_SERVER {
         129
     } else {
         agent_byte
