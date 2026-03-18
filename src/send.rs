@@ -242,6 +242,8 @@ impl Client {
 
         let is_full_distribution = force_skdm || skdm_target_devices.is_none();
         let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
+        #[allow(clippy::needless_late_init)]
+        let skdm_is_full: bool;
 
         // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
         // Revoke messages omit this node.
@@ -276,13 +278,7 @@ impl Client {
         .await
         {
             Ok(stanza) => {
-                self.update_skdm_recipients(
-                    &to_str,
-                    &devices_receiving_skdm,
-                    is_full_distribution,
-                    &group_info.participants,
-                )
-                .await;
+                skdm_is_full = is_full_distribution;
                 stanza
             }
             Err(e) => {
@@ -328,10 +324,8 @@ impl Client {
                     )
                     .await?;
 
-                    // Re-populate SKDM recipients after successful full distribution
-                    self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
-                        .await;
-
+                    // Retry is always full distribution (rotated sender key)
+                    skdm_is_full = true;
                     retry_stanza
                 } else {
                     return Err(e);
@@ -349,6 +343,16 @@ impl Client {
 
         self.send_node(stanza).await?;
 
+        // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
+        // WA Web only calls markHasSenderKey() after the server confirms receipt.
+        self.update_skdm_recipients(
+            &to_str,
+            &devices_receiving_skdm,
+            skdm_is_full,
+            &group_info.participants,
+        )
+        .await;
+
         // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
             log::error!("Failed to flush signal cache after send_status_message: {e:?}");
@@ -357,8 +361,10 @@ impl Client {
         Ok(request_id)
     }
 
-    /// Update SKDM recipient bookkeeping after a successful group/status stanza build.
+    /// Update SKDM recipient bookkeeping after a successful group/status send.
     ///
+    /// Called AFTER `send_node()` succeeds to match WhatsApp Web behavior, which
+    /// only marks devices as having the sender key after the server ACK.
     /// If specific devices received SKDM, record them. If this was a full distribution
     /// (all participants), resolve all devices and record them instead.
     async fn update_skdm_recipients(
@@ -587,6 +593,16 @@ impl Client {
             None => self.generate_message_id().await,
         };
 
+        // SKDM update data — only populated for group sends, deferred until after send_node().
+        // This matches WhatsApp Web which only calls markHasSenderKey() after server ACK.
+        struct SkdmUpdate {
+            to_str: String,
+            devices: Vec<Jid>,
+            is_full_distribution: bool,
+            participants: Vec<Jid>,
+        }
+        let mut skdm_update: Option<SkdmUpdate> = None;
+
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
             // Peer messages are only valid for individual users, not groups
             // Resolve encryption JID and acquire lock ONLY for encryption
@@ -781,13 +797,12 @@ impl Client {
             .await
             {
                 Ok(stanza) => {
-                    self.update_skdm_recipients(
-                        &to_str,
-                        &devices_receiving_skdm,
+                    skdm_update = Some(SkdmUpdate {
+                        to_str: to_str.clone(),
+                        devices: devices_receiving_skdm,
                         is_full_distribution,
-                        &group_info.participants,
-                    )
-                    .await;
+                        participants: group_info.participants.clone(),
+                    });
                     stanza
                 }
                 Err(e) => {
@@ -834,10 +849,13 @@ impl Client {
                         )
                         .await?;
 
-                        // Re-populate SKDM recipients after successful full distribution
-                        self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
-                            .await;
-
+                        // Retry is always full distribution (rotated sender key)
+                        skdm_update = Some(SkdmUpdate {
+                            to_str,
+                            devices: vec![],
+                            is_full_distribution: true,
+                            participants: group_info.participants.clone(),
+                        });
                         retry_stanza
                     } else {
                         return Err(e);
@@ -910,14 +928,26 @@ impl Client {
             .await?
         };
 
-        let result = self.send_node(stanza_to_send).await.map_err(|e| e.into());
+        self.send_node(stanza_to_send).await?;
+
+        // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
+        // WA Web only calls markHasSenderKey() after the server confirms receipt.
+        if let Some(update) = skdm_update {
+            self.update_skdm_recipients(
+                &update.to_str,
+                &update.devices,
+                update.is_full_distribution,
+                &update.participants,
+            )
+            .await;
+        }
 
         // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
             log::error!("Failed to flush signal cache after send_message_impl: {e:?}");
         }
 
-        result
+        Ok(())
     }
 
     /// Look up and include a tctoken in outgoing 1:1 message stanza nodes.
