@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
-use crate::types::message::{EditAttribute, MessageInfo};
+use crate::types::message::{AddressingMode, EditAttribute, MessageInfo};
 use chrono::DateTime;
 use log::{debug, warn};
 use prost::Message as ProtoMessage;
@@ -444,32 +444,36 @@ impl Client {
             }
 
             let enc_type = match enc_node.attrs().optional_string("type") {
-                Some(t) => t.to_string(),
+                Some(t) => t,
                 None => {
                     log::warn!("Enc node missing 'type' attribute, skipping");
                     continue;
                 }
             };
 
-            if let Some(handler) = self.custom_enc_handlers.get(&enc_type) {
+            if let Some(handler) = self.custom_enc_handlers.get(enc_type.as_ref()) {
                 let handler_clone = handler.clone();
                 let client_clone = self.clone();
                 let info_arc = Arc::clone(&info);
                 let enc_node_clone = Arc::new(enc_node.clone());
+                let enc_type_owned = enc_type.to_string();
 
                 tokio::spawn(async move {
                     if let Err(e) = handler_clone
                         .handle(client_clone, &enc_node_clone, &info_arc)
                         .await
                     {
-                        log::warn!("Custom handler for enc type '{}' failed: {e:?}", enc_type);
+                        log::warn!(
+                            "Custom handler for enc type '{}' failed: {e:?}",
+                            enc_type_owned
+                        );
                     }
                 });
                 continue;
             }
 
             // Fall back to built-in handlers
-            match enc_type.as_str() {
+            match enc_type.as_ref() {
                 "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
                 "skmsg" => group_content_enc_nodes.push(enc_node),
                 _ => log::warn!("Unknown enc type: {enc_type}"),
@@ -717,7 +721,7 @@ impl Client {
                 }
             };
             let enc_type = match enc_node.attrs().optional_string("type") {
-                Some(t) => t.to_string(),
+                Some(t) => t,
                 None => {
                     log::warn!("Enc node missing 'type' attribute (batch session)");
                     continue;
@@ -725,7 +729,7 @@ impl Client {
             };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
-            let parsed_message = if enc_type == "pkmsg" {
+            let parsed_message = if enc_type.as_ref() == "pkmsg" {
                 match PreKeySignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
                     Err(e) => {
@@ -745,7 +749,7 @@ impl Client {
 
             let signal_address = sender_encryption_jid.to_protocol_address();
 
-            if enc_type == "pkmsg" {
+            if enc_type.as_ref() == "pkmsg" {
                 // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
                 #[cfg(feature = "debug-snapshots")]
                 {
@@ -1243,6 +1247,9 @@ impl Client {
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
         let own_lid = device_snapshot.lid.clone();
         let from = attrs.jid("from");
+        let addressing_mode = attrs
+            .optional_string("addressing_mode")
+            .and_then(|s| AddressingMode::try_from(s.as_ref()).ok());
 
         let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
             // This is the new logic block for handling all broadcast messages, including status.
@@ -1263,16 +1270,10 @@ impl Client {
             }
         } else if from.is_group() {
             let sender = attrs.jid("participant");
-            let sender_alt = if let Some(addressing_mode) = attrs
-                .optional_string("addressing_mode")
-                .map(|s| s.to_ascii_lowercase())
-            {
-                match addressing_mode.as_str() {
-                    "lid" => attrs.optional_jid("participant_pn"),
-                    _ => attrs.optional_jid("participant_lid"),
-                }
-            } else {
-                None
+            let sender_alt = match addressing_mode {
+                Some(AddressingMode::Lid) => attrs.optional_jid("participant_pn"),
+                Some(AddressingMode::Pn) => attrs.optional_jid("participant_lid"),
+                None => None,
             };
 
             let is_from_me = sender.matches_user_or_lid(&own_jid, own_lid.as_ref());
@@ -1331,14 +1332,7 @@ impl Client {
             }
         };
 
-        source.addressing_mode = attrs
-            .optional_string("addressing_mode")
-            .map(|s| s.to_ascii_lowercase())
-            .and_then(|s| match s.as_str() {
-                "pn" => Some(crate::types::message::AddressingMode::Pn),
-                "lid" => Some(crate::types::message::AddressingMode::Lid),
-                _ => None,
-            });
+        source.addressing_mode = addressing_mode;
 
         // Parse the category attribute - this is used for peer device messages ("peer")
         // and is critical for proper retry receipt handling.

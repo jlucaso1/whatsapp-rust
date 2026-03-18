@@ -148,11 +148,12 @@ impl Client {
             .await;
 
         let device_store_arc = self.persistence_manager.get_device_arc().await;
+        let to_str = to.to_string();
 
         let force_skdm = {
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
             let sender_address = own_jid.to_protocol_address();
-            let sender_key_name = SenderKeyName::new(to.to_string(), sender_address.to_string());
+            let sender_key_name = SenderKeyName::new(to_str.clone(), sender_address.to_string());
             let cache_key = format!(
                 "{}:{}",
                 sender_key_name.group_id(),
@@ -179,17 +180,14 @@ impl Client {
             sender_key_store: &mut store_adapter.sender_key_store,
         };
 
-        let marked_for_fresh_skdm = self
-            .consume_forget_marks(&to.to_string())
-            .await
-            .unwrap_or_default();
+        let marked_for_fresh_skdm = self.consume_forget_marks(&to_str).await.unwrap_or_default();
 
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
             let known_recipients = self
                 .persistence_manager
-                .get_skdm_recipients(&to.to_string())
+                .get_skdm_recipients(&to_str)
                 .await
                 .unwrap_or_default();
 
@@ -273,36 +271,18 @@ impl Client {
             force_skdm,
             skdm_target_devices,
             None,
-            extra_stanza_nodes.clone(),
+            &extra_stanza_nodes,
         )
         .await
         {
             Ok(stanza) => {
-                if !devices_receiving_skdm.is_empty() {
-                    if let Err(e) = self
-                        .persistence_manager
-                        .add_skdm_recipients(&to.to_string(), &devices_receiving_skdm)
-                        .await
-                    {
-                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
-                    }
-                } else if is_full_distribution {
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-
-                    if let Ok(all_devices) =
-                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        && let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to.to_string(), &all_devices)
-                            .await
-                    {
-                        log::warn!("Failed to update status SKDM recipients: {:?}", e);
-                    }
-                }
+                self.update_skdm_recipients(
+                    &to_str,
+                    &devices_receiving_skdm,
+                    is_full_distribution,
+                    &group_info.participants,
+                )
+                .await;
                 stanza
             }
             Err(e) => {
@@ -313,7 +293,7 @@ impl Client {
 
                     if let Err(e) = self
                         .persistence_manager
-                        .clear_skdm_recipients(&to.to_string())
+                        .clear_skdm_recipients(&to_str)
                         .await
                     {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
@@ -344,28 +324,13 @@ impl Client {
                         true,
                         None,
                         None,
-                        extra_stanza_nodes,
+                        &extra_stanza_nodes,
                     )
                     .await?;
 
                     // Re-populate SKDM recipients after successful full distribution
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-                    if let Ok(all_devices) =
-                        SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                        && let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to.to_string(), &all_devices)
-                            .await
-                    {
-                        log::warn!(
-                            "Failed to update status SKDM recipients after retry: {:?}",
-                            e
-                        );
-                    }
+                    self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
+                        .await;
 
                     retry_stanza
                 } else {
@@ -390,6 +355,45 @@ impl Client {
         }
 
         Ok(request_id)
+    }
+
+    /// Update SKDM recipient bookkeeping after a successful group/status stanza build.
+    ///
+    /// If specific devices received SKDM, record them. If this was a full distribution
+    /// (all participants), resolve all devices and record them instead.
+    async fn update_skdm_recipients(
+        &self,
+        to_str: &str,
+        devices_receiving_skdm: &[Jid],
+        is_full_distribution: bool,
+        participants: &[Jid],
+    ) {
+        if !devices_receiving_skdm.is_empty() {
+            if let Err(e) = self
+                .persistence_manager
+                .add_skdm_recipients(to_str, devices_receiving_skdm)
+                .await
+            {
+                log::warn!("Failed to update SKDM recipients: {:?}", e);
+            }
+        } else if is_full_distribution {
+            let jids_to_resolve: Vec<Jid> =
+                participants.iter().map(|jid| jid.to_non_ad()).collect();
+            match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+                Ok(all_devices) => {
+                    if let Err(e) = self
+                        .persistence_manager
+                        .add_skdm_recipients(to_str, &all_devices)
+                        .await
+                    {
+                        log::warn!("Failed to persist SKDM recipients: {:?}", e);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to resolve devices for SKDM recipients: {:?}", e);
+                }
+            }
+        }
     }
 
     /// Ensure the status stanza has a <participants> node listing all recipient
@@ -634,6 +638,7 @@ impl Client {
                 .await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
+            let to_str = to.to_string();
 
             let (own_sending_jid, _) = match group_info.addressing_mode {
                 crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
@@ -654,7 +659,7 @@ impl Client {
                 let mut device_guard = device_store_arc.write().await;
                 let sender_address = own_sending_jid.to_protocol_address();
                 let sender_key_name =
-                    SenderKeyName::new(to.to_string(), sender_address.to_string());
+                    SenderKeyName::new(to_str.clone(), sender_address.to_string());
 
                 let key_exists = device_guard
                     .load_sender_key(&sender_key_name)
@@ -679,10 +684,8 @@ impl Client {
 
             // Consume forget marks - these participants need fresh SKDMs (matches WhatsApp Web)
             // markForgetSenderKey is called during retry handling, this consumes those marks
-            let marked_for_fresh_skdm = self
-                .consume_forget_marks(&to.to_string())
-                .await
-                .unwrap_or_default();
+            let marked_for_fresh_skdm =
+                self.consume_forget_marks(&to_str).await.unwrap_or_default();
 
             // Determine which devices need SKDM distribution
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
@@ -690,7 +693,7 @@ impl Client {
             } else {
                 let known_recipients = self
                     .persistence_manager
-                    .get_skdm_recipients(&to.to_string())
+                    .get_skdm_recipients(&to_str)
                     .await
                     .unwrap_or_default();
 
@@ -773,36 +776,18 @@ impl Client {
                 force_skdm,
                 skdm_target_devices,
                 edit.clone(),
-                extra_stanza_nodes.clone(),
+                &extra_stanza_nodes,
             )
             .await
             {
                 Ok(stanza) => {
-                    if !devices_receiving_skdm.is_empty() {
-                        if let Err(e) = self
-                            .persistence_manager
-                            .add_skdm_recipients(&to.to_string(), &devices_receiving_skdm)
-                            .await
-                        {
-                            log::warn!("Failed to update SKDM recipients: {:?}", e);
-                        }
-                    } else if is_full_distribution {
-                        let jids_to_resolve: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|jid| jid.to_non_ad())
-                            .collect();
-
-                        if let Ok(all_devices) =
-                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                            && let Err(e) = self
-                                .persistence_manager
-                                .add_skdm_recipients(&to.to_string(), &all_devices)
-                                .await
-                        {
-                            log::warn!("Failed to update SKDM recipients: {:?}", e);
-                        }
-                    }
+                    self.update_skdm_recipients(
+                        &to_str,
+                        &devices_receiving_skdm,
+                        is_full_distribution,
+                        &group_info.participants,
+                    )
+                    .await;
                     stanza
                 }
                 Err(e) => {
@@ -814,7 +799,7 @@ impl Client {
                         // Clear SKDM recipients since we're rotating the key
                         if let Err(e) = self
                             .persistence_manager
-                            .clear_skdm_recipients(&to.to_string())
+                            .clear_skdm_recipients(&to_str)
                             .await
                         {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
@@ -832,7 +817,6 @@ impl Client {
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
-                        let to_str = to.to_string();
                         let retry_stanza = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
@@ -846,25 +830,13 @@ impl Client {
                             true, // Force distribution on retry
                             None, // Distribute to all devices
                             edit.clone(),
-                            extra_stanza_nodes.clone(),
+                            &extra_stanza_nodes,
                         )
                         .await?;
 
                         // Re-populate SKDM recipients after successful full distribution
-                        let jids_to_resolve: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|jid| jid.to_non_ad())
-                            .collect();
-                        if let Ok(all_devices) =
-                            SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                            && let Err(e) = self
-                                .persistence_manager
-                                .add_skdm_recipients(&to_str, &all_devices)
-                                .await
-                        {
-                            log::warn!("Failed to update SKDM recipients after retry: {:?}", e);
-                        }
+                        self.update_skdm_recipients(&to_str, &[], true, &group_info.participants)
+                            .await;
 
                         retry_stanza
                     } else {
@@ -933,7 +905,7 @@ impl Client {
                 message,
                 request_id,
                 edit,
-                extra_stanza_nodes,
+                &extra_stanza_nodes,
             )
             .await?
         };
