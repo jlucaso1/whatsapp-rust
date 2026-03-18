@@ -3124,7 +3124,7 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     if node.tag == "message"
         && let Some(own_device_pn) = own_device_pn
     {
-        attrs.insert("from", own_device_pn.to_string());
+        attrs.insert("from", NodeValue::Jid(own_device_pn.clone()));
     }
     if let Some(p) = participant {
         attrs.insert("participant", p);
@@ -4760,21 +4760,23 @@ mod tests {
             .expect("message ack should be buildable");
 
         assert_eq!(ack.tag, "ack");
-        assert_eq!(
-            ack.attrs.get("class").and_then(|v| v.as_str()),
-            Some("message")
+        // Use PartialEq<str> on NodeValue — works for both String and Jid variants
+        // without allocation, so tests don't depend on internal representation.
+        assert!(ack.attrs.get("class").is_some_and(|v| v == "message"));
+        assert!(
+            ack.attrs
+                .get("to")
+                .is_some_and(|v| v == "120363161500776365@g.us")
         );
-        assert_eq!(
-            ack.attrs.get("to").and_then(|v| v.as_str()),
-            Some("120363161500776365@g.us")
+        assert!(
+            ack.attrs
+                .get("from")
+                .is_some_and(|v| v == "155500012345:48@s.whatsapp.net")
         );
-        assert_eq!(
-            ack.attrs.get("from").and_then(|v| v.as_str()),
-            Some("155500012345:48@s.whatsapp.net")
-        );
-        assert_eq!(
-            ack.attrs.get("participant").and_then(|v| v.as_str()),
-            Some("181531758878822@lid")
+        assert!(
+            ack.attrs
+                .get("participant")
+                .is_some_and(|v| v == "181531758878822@lid")
         );
         assert!(
             !ack.attrs.contains_key("type"),
@@ -4797,10 +4799,7 @@ mod tests {
         let ack = build_ack_node(&incoming, Some(&own_device_pn))
             .expect("notification ack should be buildable");
 
-        assert_eq!(
-            ack.attrs.get("class").and_then(|v| v.as_str()),
-            Some("notification")
-        );
+        assert!(ack.attrs.get("class").is_some_and(|v| v == "notification"));
         assert!(
             !ack.attrs.contains_key("type"),
             "identity-change notification ACK must omit type"
@@ -4826,13 +4825,9 @@ mod tests {
         let ack = build_ack_node(&incoming, Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
-        assert_eq!(
-            ack.attrs.get("class").and_then(|v| v.as_str()),
-            Some("receipt")
-        );
-        assert_eq!(
-            ack.attrs.get("type").and_then(|v| v.as_str()),
-            Some("read"),
+        assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
+        assert!(
+            ack.attrs.get("type").is_some_and(|v| v == "read"),
             "receipt ACK must echo the type attribute when present"
         );
         assert!(
@@ -4856,10 +4851,7 @@ mod tests {
         let ack = build_ack_node(&incoming, Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
-        assert_eq!(
-            ack.attrs.get("class").and_then(|v| v.as_str()),
-            Some("receipt")
-        );
+        assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
         assert!(
             !ack.attrs.contains_key("type"),
             "receipt ACK must NOT contain type when the incoming receipt has no type attribute"
