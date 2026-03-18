@@ -439,7 +439,7 @@ async fn test_group_delivery_receipt() -> anyhow::Result<()> {
     // Wait for B to receive group create notification
     client_b
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type") == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
         })
         .await?;
 

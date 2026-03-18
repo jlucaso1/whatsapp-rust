@@ -43,8 +43,8 @@ impl UnifiedSessionManager {
 
     /// Update server time offset from node's `t` attribute (Unix timestamp in seconds).
     pub fn update_server_time_offset(&self, node: &Node) {
-        if let Some(t_str) = node.attrs.get("t").and_then(|v| v.as_str())
-            && let Ok(server_time) = t_str.parse::<i64>()
+        if let Some(t_val) = node.attrs.get("t").map(|v| v.as_str())
+            && let Ok(server_time) = t_val.parse::<i64>()
             && server_time > 0
         {
             let local_time = chrono::Utc::now().timestamp();
@@ -62,8 +62,8 @@ impl UnifiedSessionManager {
     /// This gives a more accurate clock skew estimate by assuming the server
     /// timestamp corresponds to the midpoint of the round trip.
     pub fn update_server_time_offset_with_rtt(&self, node: &Node, start_time_ms: i64, rtt_ms: i64) {
-        if let Some(t_str) = node.attrs.get("t").and_then(|v| v.as_str())
-            && let Ok(server_time) = t_str.parse::<i64>()
+        if let Some(t_val) = node.attrs.get("t").map(|v| v.as_str())
+            && let Ok(server_time) = t_val.parse::<i64>()
             && server_time > 0
         {
             let midpoint_s = (start_time_ms + rtt_ms / 2) / 1000;

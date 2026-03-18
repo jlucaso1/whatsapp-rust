@@ -79,7 +79,7 @@ impl ReceivedChatState {
         match child.tag.as_ref() {
             "composing" => {
                 // Check for media="audio" to distinguish recording from typing
-                if child.attrs().optional_string("media") == Some("audio") {
+                if child.attrs().optional_string("media").as_deref() == Some("audio") {
                     Self::RecordingAudio
                 } else {
                     Self::Typing

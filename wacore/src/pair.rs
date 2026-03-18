@@ -71,8 +71,8 @@ impl PairUtils {
             Some(
                 NodeBuilder::new("iq")
                     .attrs([
-                        ("to", to.to_string_value()),
-                        ("id", id.to_string_value()),
+                        ("to", to.to_string()),
+                        ("id", id.to_string()),
                         ("type", "result".to_string()),
                     ])
                     .build(),

@@ -54,6 +54,7 @@ mod tests {
             let enc_type = enc_node
                 .attrs()
                 .optional_string("type")
+                .as_deref()
                 .unwrap_or("unknown")
                 .to_string();
             self.calls.lock().await.push(enc_type);

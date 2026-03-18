@@ -37,21 +37,14 @@ impl Default for NodeValue {
 }
 
 impl NodeValue {
-    /// Get the value as a string slice, if it's a string variant.
+    /// String view of the value. Works for both variants.
+    /// - String variant: Cow::Borrowed(&str) — zero copy
+    /// - Jid variant: Cow::Owned(formatted) — allocates only when needed
     #[inline]
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Cow<'_, str> {
         match self {
-            NodeValue::String(s) => Some(s.as_ref()),
-            NodeValue::Jid(_) => None,
-        }
-    }
-
-    /// Get the value as a Jid reference, if it's a JID variant.
-    #[inline]
-    pub fn as_jid(&self) -> Option<&Jid> {
-        match self {
-            NodeValue::Jid(j) => Some(j),
-            NodeValue::String(_) => None,
+            NodeValue::String(s) => Cow::Borrowed(s.as_str()),
+            NodeValue::Jid(j) => Cow::Owned(j.to_string()),
         }
     }
 
@@ -61,15 +54,6 @@ impl NodeValue {
         match self {
             NodeValue::Jid(j) => Some(j.clone()),
             NodeValue::String(s) => s.parse().ok(),
-        }
-    }
-
-    /// Convert to a string, formatting the JID if necessary.
-    #[inline]
-    pub fn to_string_value(&self) -> String {
-        match self {
-            NodeValue::String(s) => s.clone(),
-            NodeValue::Jid(j) => j.to_string(),
         }
     }
 }

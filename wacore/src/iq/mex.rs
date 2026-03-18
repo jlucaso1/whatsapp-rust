@@ -188,9 +188,11 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "query");
-            assert_eq!(
-                nodes[0].attrs.get("query_id").and_then(|s| s.as_str()),
-                Some("29829202653362039")
+            assert!(
+                nodes[0]
+                    .attrs
+                    .get("query_id")
+                    .is_some_and(|s| s == "29829202653362039")
             );
         } else {
             panic!("Expected NodeContent::Nodes");

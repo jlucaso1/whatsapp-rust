@@ -208,8 +208,7 @@ impl GroupNotification {
         let is_lid_addressing_mode = node
             .attrs()
             .optional_string("addressing_mode")
-            .map(|s| s == "lid")
-            .unwrap_or(false);
+            .is_some_and(|s| s == "lid");
 
         let actions = node
             .children()
@@ -233,11 +232,17 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
         // Participant management
         "add" => GroupNotificationAction::Add {
             participants: parse_participants(node),
-            reason: node.attrs().optional_string("reason").map(str::to_string),
+            reason: node
+                .attrs()
+                .optional_string("reason")
+                .map(|s| s.into_owned()),
         },
         "remove" => GroupNotificationAction::Remove {
             participants: parse_participants(node),
-            reason: node.attrs().optional_string("reason").map(str::to_string),
+            reason: node
+                .attrs()
+                .optional_string("reason")
+                .map(|s| s.into_owned()),
         },
         "promote" => GroupNotificationAction::Promote {
             participants: parse_participants(node),
@@ -254,6 +259,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             subject: node
                 .attrs()
                 .optional_string("subject")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string(),
             subject_owner: node.attrs().optional_jid("s_o"),
@@ -263,6 +269,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             let id = node
                 .attrs()
                 .optional_string("id")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string();
             let description = if node.get_optional_child("delete").is_some() {
@@ -285,7 +292,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             threshold: node
                 .attrs()
                 .optional_string("threshold")
-                .map(str::to_string),
+                .map(|s| s.into_owned()),
         },
         "unlocked" => GroupNotificationAction::Unlocked,
         "announcement" => GroupNotificationAction::Announce,
@@ -302,8 +309,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             let enabled = node
                 .get_optional_child("group_join")
                 .and_then(|gj| gj.attrs().optional_string("state"))
-                .map(|s| s == "on")
-                .unwrap_or(false);
+                .is_some_and(|s| s == "on");
             GroupNotificationAction::MembershipApprovalMode { enabled }
         }
         "member_add_mode" => {
@@ -322,6 +328,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             code: node
                 .attrs()
                 .optional_string("code")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string(),
         },
@@ -331,6 +338,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             lock_type: node
                 .attrs()
                 .optional_string("type")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string(),
         },
@@ -339,7 +347,10 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
         // Group lifecycle
         "create" => GroupNotificationAction::Create { raw: node.clone() },
         "delete" => GroupNotificationAction::Delete {
-            reason: node.attrs().optional_string("reason").map(str::to_string),
+            reason: node
+                .attrs()
+                .optional_string("reason")
+                .map(|s| s.into_owned()),
         },
 
         // Community linking
@@ -347,6 +358,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             link_type: node
                 .attrs()
                 .optional_string("link_type")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string(),
             raw: node.clone(),
@@ -355,12 +367,13 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             unlink_type: node
                 .attrs()
                 .optional_string("unlink_type")
+                .as_deref()
                 .unwrap_or_default()
                 .to_string(),
             unlink_reason: node
                 .attrs()
                 .optional_string("unlink_reason")
-                .map(str::to_string),
+                .map(|s| s.into_owned()),
             raw: node.clone(),
         },
 

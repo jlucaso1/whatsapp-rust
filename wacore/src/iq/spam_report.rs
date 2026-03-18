@@ -90,9 +90,11 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "spam_list");
-            assert_eq!(
-                nodes[0].attrs.get("spam_flow").and_then(|s| s.as_str()),
-                Some("MessageMenu")
+            assert!(
+                nodes[0]
+                    .attrs
+                    .get("spam_flow")
+                    .is_some_and(|s| s == "MessageMenu")
             );
         } else {
             panic!("Expected NodeContent::Nodes");

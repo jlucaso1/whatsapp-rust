@@ -221,14 +221,14 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 (AttrType::StringEnum, false, Some(default)) => {
                     quote! {
                         #field_ident: ::wacore::protocol::parse_string_enum(
-                            node.attrs().optional_string(#attr_name).unwrap_or(#default)
+                            node.attrs().optional_string(#attr_name).as_deref().unwrap_or(#default)
                         )?
                     }
                 }
                 (AttrType::StringEnum, false, None) => {
                     quote! {
                         #field_ident: ::wacore::protocol::parse_string_enum(
-                            node.attrs().optional_string(#attr_name)
+                            &node.attrs().optional_string(#attr_name)
                                 .ok_or_else(|| ::anyhow::anyhow!("missing required attribute '{}'", #attr_name))?
                         )?
                     }
@@ -236,7 +236,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 (AttrType::StringEnum, true, _) => {
                     quote! {
                         #field_ident: node.attrs().optional_string(#attr_name)
-                            .map(|s| ::wacore::protocol::parse_string_enum(s))
+                            .map(|s| ::wacore::protocol::parse_string_enum(&s))
                             .transpose()?
                     }
                 }

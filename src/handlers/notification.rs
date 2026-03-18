@@ -40,11 +40,12 @@ impl StanzaHandler for NotificationHandler {
 }
 
 async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
-    let notification_type = node.attrs().optional_string("type").unwrap_or_default();
+    let notification_type = node.attrs().optional_string("type");
+    let notification_type = notification_type.as_deref().unwrap_or_default();
 
     match notification_type {
         "encrypt" => {
-            if node.attrs().optional_string("from") == Some(SERVER_JID) {
+            if node.attrs().optional_string("from").as_deref() == Some(SERVER_JID) {
                 // Dispatch based on first child tag, matching WA Web's handleEncryptNotification.
                 // "count" → handlePreKeyLow, "digest" → handleDigestKey
                 let first_child_tag = node
@@ -74,10 +75,8 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
             let mut collections = Vec::new();
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name_str = collection_node
-                        .attrs()
-                        .optional_string("name")
-                        .unwrap_or("<unknown>");
+                    let name_cow = collection_node.attrs().optional_string("name");
+                    let name_str = name_cow.as_deref().unwrap_or("<unknown>");
                     let server_version =
                         collection_node.attrs().optional_u64("version").unwrap_or(0);
                     debug!(
@@ -461,7 +460,7 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
     let dhash = devices_node
         .attrs()
         .optional_string("dhash")
-        .map(String::from);
+        .map(|s| s.into_owned());
 
     // Get timestamp from notification
     let timestamp = node.attrs().optional_u64("t").unwrap_or_else(|| {

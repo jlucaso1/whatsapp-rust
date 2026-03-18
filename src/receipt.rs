@@ -36,7 +36,8 @@ impl Client {
                 return;
             }
         };
-        let receipt_type_str = attrs.optional_string("type").unwrap_or("delivery");
+        let receipt_type_cow = attrs.optional_string("type");
+        let receipt_type_str = receipt_type_cow.as_deref().unwrap_or("delivery");
         let participant = attrs.optional_jid("participant");
 
         let receipt_type = ReceiptType::from(receipt_type_str.to_string());
@@ -94,9 +95,15 @@ impl Client {
                 log::debug!(
                     "Received enc_rekey_retry receipt for call-id={} from {} \
                      (call-creator={}, count={}). VoIP not implemented, forwarding as event.",
-                    attrs.optional_string("call-id").unwrap_or_default(),
+                    attrs
+                        .optional_string("call-id")
+                        .as_deref()
+                        .unwrap_or_default(),
                     from,
-                    attrs.optional_string("call-creator").unwrap_or_default(),
+                    attrs
+                        .optional_string("call-creator")
+                        .as_deref()
+                        .unwrap_or_default(),
                     attrs
                         .optional_string("count")
                         .and_then(|s| s.parse::<u8>().ok())
@@ -625,7 +632,7 @@ mod tests {
             "'to' attr should be JID-typed, got: {:?}",
             to_attr
         );
-        assert_eq!(to_attr.as_jid().unwrap(), &chat_jid);
+        assert_eq!(to_attr.to_jid().unwrap(), chat_jid);
 
         // "participant" must also be JID-typed
         let participant_attr = node
@@ -637,6 +644,6 @@ mod tests {
             "'participant' attr should be JID-typed, got: {:?}",
             participant_attr
         );
-        assert_eq!(participant_attr.as_jid().unwrap(), &sender_jid);
+        assert_eq!(participant_attr.to_jid().unwrap(), sender_jid);
     }
 }

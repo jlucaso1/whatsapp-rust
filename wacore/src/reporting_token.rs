@@ -875,7 +875,7 @@ mod tests {
 
         let token_node = node.get_children_by_tag("reporting_token").next().unwrap();
 
-        assert_eq!(token_node.attrs().string("v"), "2");
+        assert!(token_node.attrs.get("v").is_some_and(|v| v == "2"));
 
         // CRITICAL: Verify the token content is BINARY BYTES, not a hex string.
         // WhatsApp expects raw bytes in the reporting_token node content.

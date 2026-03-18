@@ -105,10 +105,7 @@ mod tests {
         let node = session.into_node();
 
         assert_eq!(node.tag, "unified_session");
-        assert_eq!(
-            node.attrs.get("id").and_then(|v| v.as_str()),
-            Some("123456789")
-        );
+        assert!(node.attrs.get("id").is_some_and(|v| v == "123456789"));
     }
 
     #[test]
@@ -130,9 +127,11 @@ mod tests {
         let children = node.children().unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "unified_session");
-        assert_eq!(
-            children[0].attrs.get("id").and_then(|v| v.as_str()),
-            Some("123456789")
+        assert!(
+            children[0]
+                .attrs
+                .get("id")
+                .is_some_and(|v| v == "123456789")
         );
     }
 

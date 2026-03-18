@@ -136,15 +136,14 @@ impl IqSpec for ProfilePictureSpec {
 
         // Check for error response
         if let Some(error_node) = picture_node.get_optional_child("error") {
-            let code = error_node.attrs().optional_string("code").unwrap_or("0");
-            if code == "404" || code == "401" {
+            let code = error_node.attrs().optional_string("code");
+            let code_str = code.as_deref().unwrap_or("0");
+            if code_str == "404" || code_str == "401" {
                 return Ok(None);
             }
-            let text = error_node
-                .attrs()
-                .optional_string("text")
-                .unwrap_or("unknown error");
-            return Err(anyhow!("Profile picture error {}: {}", code, text));
+            let text = error_node.attrs().optional_string("text");
+            let text_str = text.as_deref().unwrap_or("unknown error");
+            return Err(anyhow!("Profile picture error {}: {}", code_str, text_str));
         }
 
         let id = match picture_node.attrs().optional_string("id") {
@@ -320,10 +319,7 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "picture");
-            assert_eq!(
-                nodes[0].attrs.get("type").and_then(|s| s.as_str()),
-                Some("preview")
-            );
+            assert!(nodes[0].attrs.get("type").is_some_and(|s| s == "preview"));
         }
     }
 
@@ -336,10 +332,7 @@ mod tests {
 
         let iq = spec.build_iq();
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(
-                nodes[0].attrs.get("type").and_then(|s| s.as_str()),
-                Some("image")
-            );
+            assert!(nodes[0].attrs.get("type").is_some_and(|s| s == "image"));
         }
     }
 
@@ -450,10 +443,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let picture = &nodes[0];
             assert_eq!(picture.tag, "picture");
-            assert_eq!(
-                picture.attrs.get("type").and_then(|v| v.as_str()),
-                Some("image")
-            );
+            assert!(picture.attrs.get("type").is_some_and(|v| v == "image"));
             match &picture.content {
                 Some(NodeContent::Bytes(data)) => {
                     assert_eq!(data, &[0xFF, 0xD8, 0xFF]);

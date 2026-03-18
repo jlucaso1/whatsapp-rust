@@ -341,7 +341,10 @@ impl ProtocolNode for GroupParticipantResponse {
             .ok_or_else(|| anyhow!("participant missing required 'jid' attribute"))?;
         let phone_number = node.attrs().optional_jid("phone_number");
         // Default to Member for unknown participant types to avoid failing the whole group parse
-        let participant_type = ParticipantType::try_from(node.attrs().optional_string("type"))
+        let participant_type = node
+            .attrs()
+            .optional_string("type")
+            .and_then(|s| ParticipantType::try_from(s.as_ref()).ok())
             .unwrap_or(ParticipantType::Member);
 
         Ok(Self {
@@ -479,11 +482,17 @@ impl ProtocolNode for GroupInfoResponse {
             Jid::group(id_str)
         };
 
-        let subject =
-            GroupSubject::new_unchecked(optional_attr(node, "subject").unwrap_or_default());
+        let subject = GroupSubject::new_unchecked(
+            optional_attr(node, "subject")
+                .as_deref()
+                .unwrap_or_default(),
+        );
 
-        let addressing_mode =
-            AddressingMode::try_from(optional_attr(node, "addressing_mode").unwrap_or("pn"))?;
+        let addressing_mode = AddressingMode::try_from(
+            optional_attr(node, "addressing_mode")
+                .as_deref()
+                .unwrap_or("pn"),
+        )?;
 
         let participants = collect_children::<GroupParticipantResponse>(node, "participant")?;
 
@@ -1416,7 +1425,7 @@ mod tests {
         let node = build_create_group_node(&options);
         assert_eq!(node.tag, "create");
         assert_eq!(
-            node.attrs().optional_string("subject"),
+            node.attrs().optional_string("subject").as_deref(),
             Some("Test Subject")
         );
 
@@ -1454,7 +1463,10 @@ mod tests {
             // id is random hex, just check it exists and is 8 chars
             let id = desc_node.attrs().optional_string("id").unwrap();
             assert_eq!(id.len(), 8);
-            assert_eq!(desc_node.attrs().optional_string("prev"), Some("AABBCCDD"));
+            assert_eq!(
+                desc_node.attrs().optional_string("prev").as_deref(),
+                Some("AABBCCDD")
+            );
             // Should have a <body> child
             assert!(desc_node.get_children_by_tag("body").next().is_some());
         } else {
@@ -1471,8 +1483,14 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let desc_node = &nodes[0];
             assert_eq!(desc_node.tag, "description");
-            assert_eq!(desc_node.attrs().optional_string("delete"), Some("true"));
-            assert_eq!(desc_node.attrs().optional_string("prev"), Some("PREV1234"));
+            assert_eq!(
+                desc_node.attrs().optional_string("delete").as_deref(),
+                Some("true")
+            );
+            assert_eq!(
+                desc_node.attrs().optional_string("prev").as_deref(),
+                Some("PREV1234")
+            );
             // id should still be present
             assert!(desc_node.attrs().optional_string("id").is_some());
         } else {
@@ -1629,7 +1647,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "ephemeral");
             assert_eq!(
-                nodes[0].attrs().optional_string("expiration"),
+                nodes[0].attrs().optional_string("expiration").as_deref(),
                 Some("86400")
             );
         } else {
@@ -1654,7 +1672,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "membership_approval_mode");
             let join = nodes[0].get_children_by_tag("group_join").next().unwrap();
-            assert_eq!(join.attrs().optional_string("state"), Some("on"));
+            assert_eq!(join.attrs().optional_string("state").as_deref(), Some("on"));
         } else {
             panic!("expected nodes content");
         }

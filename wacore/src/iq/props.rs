@@ -242,8 +242,8 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             return Err(anyhow::anyhow!("expected <props>, got <{}>", node.tag));
         }
 
-        let ab_key = optional_attr(node, "ab_key").map(str::to_string);
-        let hash = optional_attr(node, "hash").map(str::to_string);
+        let ab_key = optional_attr(node, "ab_key").map(|s| s.into_owned());
+        let hash = optional_attr(node, "hash").map(|s| s.into_owned());
         let refresh = optional_attr(node, "refresh").and_then(|s| s.parse().ok());
         let refresh_id = optional_attr(node, "refresh_id").and_then(|s| s.parse().ok());
         let delta_update = optional_attr(node, "delta_update")
@@ -343,10 +343,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes.len(), 1);
             assert_eq!(nodes[0].tag, "props");
-            assert_eq!(
-                nodes[0].attrs.get("protocol").and_then(|v| v.as_str()),
-                Some("1")
-            );
+            assert!(nodes[0].attrs.get("protocol").is_some_and(|v| v == "1"));
             assert!(nodes[0].attrs.get("hash").is_none());
             assert!(nodes[0].attrs.get("refresh_id").is_none());
         } else {
@@ -360,10 +357,7 @@ mod tests {
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
-            assert_eq!(
-                nodes[0].attrs.get("hash").and_then(|v| v.as_str()),
-                Some("abc123")
-            );
+            assert!(nodes[0].attrs.get("hash").is_some_and(|v| v == "abc123"));
             assert!(nodes[0].attrs.get("refresh_id").is_none());
         } else {
             panic!("Expected NodeContent::Nodes");
@@ -377,10 +371,7 @@ mod tests {
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert!(nodes[0].attrs.get("hash").is_none());
-            assert_eq!(
-                nodes[0].attrs.get("refresh_id").and_then(|v| v.as_str()),
-                Some("42")
-            );
+            assert!(nodes[0].attrs.get("refresh_id").is_some_and(|v| v == "42"));
         } else {
             panic!("Expected NodeContent::Nodes");
         }

@@ -51,36 +51,20 @@ impl<'a> AttrParserRef<'a> {
         val
     }
 
-    /// Get string from the value.
-    /// For JID values, this returns None - use optional_jid instead.
-    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).and_then(|v| v.as_str())
+    /// Get string from the value. Works for both String and JID variants.
+    /// - String variant: Cow::Borrowed — zero copy
+    /// - JID variant: Cow::Owned — allocates only when needed
+    pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
+        self.get_raw(key, false).map(|v| v.to_string_cow())
     }
 
     /// Get a required string attribute, returning an error if missing.
     ///
     /// Prefer this over `string()` for required attributes as it makes
     /// the error explicit rather than silently defaulting to empty string.
-    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+    pub fn required_string(&mut self, key: &str) -> Result<Cow<'a, str>> {
         self.optional_string(key)
             .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
-    }
-
-    /// Get string, defaulting to empty string if missing.
-    ///
-    /// # Deprecation
-    ///
-    /// This method silently defaults to an empty string when the attribute is missing.
-    /// Use `optional_string()` with explicit error handling or `required_string()`
-    /// to avoid silent failures.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use optional_string() with explicit handling or required_string() instead"
-    )]
-    pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true)
-            .map(|v| v.to_string_cow().into_owned())
-            .unwrap_or_default()
     }
 
     /// Get JID from the value.
@@ -218,34 +202,20 @@ impl<'a> AttrParser<'a> {
     }
 
     // --- String ---
-    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).and_then(|v| v.as_str())
+    /// Get string from the value. Works for both String and JID variants.
+    /// - String variant: Cow::Borrowed — zero copy
+    /// - JID variant: Cow::Owned — allocates only when needed
+    pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
+        self.get_raw(key, false).map(|v| v.as_str())
     }
 
     /// Get a required string attribute, returning an error if missing.
     ///
     /// Prefer this over `string()` for required attributes as it makes
     /// the error explicit rather than silently defaulting to empty string.
-    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+    pub fn required_string(&mut self, key: &str) -> Result<Cow<'a, str>> {
         self.optional_string(key)
             .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
-    }
-
-    /// Get string, defaulting to empty string if missing.
-    ///
-    /// # Deprecation
-    ///
-    /// This method silently defaults to an empty string when the attribute is missing.
-    /// Use `optional_string()` with explicit error handling or `required_string()`
-    /// to avoid silent failures.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use optional_string() with explicit handling or required_string() instead"
-    )]
-    pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true)
-            .map(|v| v.to_string_value())
-            .unwrap_or_default()
     }
 
     // --- JID ---

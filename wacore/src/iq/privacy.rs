@@ -148,8 +148,8 @@ impl IqSpec for PrivacySettingsSpec {
                 .ok_or_else(|| anyhow::anyhow!("missing value in category"))?;
 
             settings.push(PrivacySetting {
-                category: PrivacyCategory::from(name),
-                value: PrivacyValue::from(value),
+                category: PrivacyCategory::from(name.as_ref()),
+                value: PrivacyValue::from(value.as_ref()),
             });
         }
 
