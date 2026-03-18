@@ -379,14 +379,19 @@ impl Client {
         } else if is_full_distribution {
             let jids_to_resolve: Vec<Jid> =
                 participants.iter().map(|jid| jid.to_non_ad()).collect();
-            if let Ok(all_devices) =
-                SendContextResolver::resolve_devices(self, &jids_to_resolve).await
-                && let Err(e) = self
-                    .persistence_manager
-                    .add_skdm_recipients(to_str, &all_devices)
-                    .await
-            {
-                log::warn!("Failed to update SKDM recipients: {:?}", e);
+            match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+                Ok(all_devices) => {
+                    if let Err(e) = self
+                        .persistence_manager
+                        .add_skdm_recipients(to_str, &all_devices)
+                        .await
+                    {
+                        log::warn!("Failed to persist SKDM recipients: {:?}", e);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to resolve devices for SKDM recipients: {:?}", e);
+                }
             }
         }
     }
