@@ -342,6 +342,28 @@ fn split_jid_from_meta(input: &str, meta: ParsedJidMeta) -> (&str, &str) {
     (&input[..meta.user_end], &input[meta.server_start..])
 }
 
+/// Map a JID server string to the AD_JID domain_type byte.
+///
+/// The AD_JID binary encoding uses a single byte to identify the server:
+///   0 = s.whatsapp.net (default)
+///   1 = lid
+///   128 = hosted
+///   129 = hosted.lid
+///
+/// WARNING: This must stay in sync with the string-path mapping in
+/// `classify_string_hint` / `parse_jid_meta`. Writing `jid.agent` here
+/// instead of the domain_type was the root cause of a regression where
+/// LID group messages were silently rejected by the server (error 421).
+#[inline]
+fn server_to_domain_type(server: &str) -> u8 {
+    match server {
+        jid::HIDDEN_USER_SERVER => 1,  // "lid"
+        jid::HOSTED_SERVER => 128,     // "hosted"
+        jid::HOSTED_LID_SERVER => 129, // "hosted.lid"
+        _ => 0,                        // "s.whatsapp.net" and others
+    }
+}
+
 #[inline]
 fn classify_string_hint(s: &str) -> StringHint {
     if s.is_empty() {
@@ -722,12 +744,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
         if jid.device > 0 {
-            // AD_JID format: agent/domain_type, device, user
+            // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(jid.agent)?;
+            self.write_u8(server_to_domain_type(&jid.server))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
@@ -747,12 +769,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
-            // AD_JID format: agent/domain_type, device, user
+            // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(jid.agent)?;
+            self.write_u8(server_to_domain_type(jid.server.as_ref()))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
