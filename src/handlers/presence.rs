@@ -21,29 +21,15 @@ impl StanzaHandler for PresenceHandler {
     }
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        let from = match node.attrs.get("from").map(|v| v.to_string()) {
-            Some(f) => f,
+        let from_jid = match node.attrs.get("from").and_then(|v| v.to_jid()) {
+            Some(jid) => jid,
             None => {
-                debug!(target: "PresenceHandler", "Presence stanza missing 'from' attribute");
+                debug!(target: "PresenceHandler", "Presence stanza missing or invalid 'from' attribute");
                 return true;
             }
         };
 
-        let from_jid = match from.parse() {
-            Ok(jid) => jid,
-            Err(e) => {
-                debug!(target: "PresenceHandler", "Failed to parse presence 'from' JID: {}", e);
-                return true;
-            }
-        };
-
-        let presence_type = node
-            .attrs
-            .get("type")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-
-        let unavailable = presence_type == "unavailable";
+        let unavailable = node.attrs.get("type").is_some_and(|v| v == "unavailable");
 
         // Parse last_seen from 'last' attribute if present
         let last_seen = node
@@ -54,8 +40,8 @@ impl StanzaHandler for PresenceHandler {
 
         debug!(
             target: "PresenceHandler",
-            "Received presence from {}: type={}, unavailable={}",
-            from, presence_type, unavailable
+            "Received presence from {}: unavailable={}",
+            from_jid, unavailable
         );
 
         client

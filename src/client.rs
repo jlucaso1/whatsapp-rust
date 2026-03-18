@@ -1819,7 +1819,7 @@ impl Client {
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
     pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
-        let id_opt = node.attrs.get("id").map(|v| v.to_string());
+        let id_opt = node.attrs.get("id").map(|v| v.as_str().into_owned());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {

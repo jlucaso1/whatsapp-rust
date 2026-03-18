@@ -483,9 +483,7 @@ impl Client {
             && !group_content_enc_nodes.is_empty()
             && all_enc_nodes
                 .first()
-                .and_then(|n| n.attrs().optional_string("type"))
-                .as_deref()
-                == Some("skmsg")
+                .is_some_and(|n| n.attrs.get("type").is_some_and(|v| v == "skmsg"))
         {
             log::error!(
                 "[msg:{}] Protocol violation: skmsg is first in multi-enc message from {}. \
