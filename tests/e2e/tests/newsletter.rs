@@ -1,5 +1,6 @@
 use e2e_tests::TestClient;
 use log::info;
+use whatsapp_rust::waproto::whatsapp as wa;
 
 #[tokio::test]
 async fn test_newsletter_create_and_list() -> anyhow::Result<()> {
@@ -178,6 +179,126 @@ async fn test_newsletter_update() -> anyhow::Result<()> {
         .get_metadata(&created.jid)
         .await?;
     assert_eq!(metadata.name, "Updated Name");
+
+    client.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_newsletter_send_and_get_messages() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_msg").await?;
+
+    // Create a newsletter
+    let created = client
+        .client
+        .newsletter()
+        .create("Message Test Channel", None)
+        .await?;
+
+    info!("Created newsletter: {}", created.jid);
+
+    // Send a text message
+    let message = wa::Message {
+        conversation: Some("Hello from newsletter!".to_string()),
+        ..Default::default()
+    };
+    let msg_id = client
+        .client
+        .newsletter()
+        .send_message(&created.jid, &message)
+        .await?;
+
+    info!("Sent message with id: {}", msg_id);
+
+    // Fetch message history
+    let messages = client
+        .client
+        .newsletter()
+        .get_messages(&created.jid, 50, None)
+        .await?;
+
+    assert!(!messages.is_empty(), "should have at least one message");
+
+    let first = &messages[0];
+    assert!(first.server_id > 0, "server_id should be assigned");
+    assert!(first.timestamp > 0, "timestamp should be set");
+
+    // Verify the plaintext was decoded
+    if let Some(ref decoded) = first.message {
+        assert_eq!(
+            decoded.conversation.as_deref(),
+            Some("Hello from newsletter!")
+        );
+        info!(
+            "Message decoded: server_id={}, text={:?}",
+            first.server_id,
+            decoded.conversation.as_deref()
+        );
+    }
+
+    info!(
+        "Fetched {} messages, first server_id={}",
+        messages.len(),
+        first.server_id
+    );
+
+    client.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_pag").await?;
+
+    let created = client
+        .client
+        .newsletter()
+        .create("Pagination Test", None)
+        .await?;
+
+    // Send multiple messages
+    for i in 0..5 {
+        let msg = wa::Message {
+            conversation: Some(format!("Message {}", i)),
+            ..Default::default()
+        };
+        client
+            .client
+            .newsletter()
+            .send_message(&created.jid, &msg)
+            .await?;
+    }
+
+    // Fetch all messages
+    let all = client
+        .client
+        .newsletter()
+        .get_messages(&created.jid, 50, None)
+        .await?;
+    assert_eq!(all.len(), 5, "should have 5 messages");
+
+    // Paginate: get messages before the last one
+    let last_server_id = all.last().unwrap().server_id;
+    let page = client
+        .client
+        .newsletter()
+        .get_messages(&created.jid, 2, Some(last_server_id))
+        .await?;
+
+    assert!(
+        page.len() <= 4,
+        "page before last should have fewer messages"
+    );
+
+    info!(
+        "Pagination: total={}, page_before_last={}",
+        all.len(),
+        page.len()
+    );
 
     client.disconnect().await;
     Ok(())
