@@ -550,12 +550,15 @@ fn parse_newsletter_messages_response(
 
     let mut result = Vec::with_capacity(children.len());
     for msg_node in children.iter().filter(|n| n.tag.as_ref() == "message") {
-        let server_id = msg_node
+        // Skip nodes without a valid server_id (required for pagination/correlation)
+        let Some(server_id) = msg_node
             .attrs
             .get("server_id")
             .map(|v| v.as_str())
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
+        else {
+            continue;
+        };
 
         let timestamp = msg_node
             .attrs

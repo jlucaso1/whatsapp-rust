@@ -291,8 +291,9 @@ async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
         .await?;
 
     assert!(
-        page.len() <= 4,
-        "page before last should have fewer messages"
+        page.len() <= 2,
+        "page with count=2 should return at most 2 messages, got {}",
+        page.len()
     );
 
     info!(

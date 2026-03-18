@@ -1140,13 +1140,12 @@ fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
         let messages: Vec<_> = children
             .iter()
             .filter(|n| n.tag.as_ref() == "message")
-            .map(|msg_node| {
+            .filter_map(|msg_node| {
                 let server_id = msg_node
                     .attrs
                     .get("server_id")
                     .map(|v| v.as_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
+                    .and_then(|s| s.parse::<u64>().ok())?;
 
                 let reactions = parse_reaction_counts(msg_node)
                     .into_iter()
@@ -1156,10 +1155,10 @@ fn handle_newsletter_notification(client: &Arc<Client>, node: &Node) {
                     })
                     .collect();
 
-                NewsletterLiveUpdateMessage {
+                Some(NewsletterLiveUpdateMessage {
                     server_id,
                     reactions,
-                }
+                })
             })
             .collect();
 
