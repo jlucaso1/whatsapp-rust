@@ -77,8 +77,8 @@ impl From<GroupParticipantResponse> for GroupParticipant {
     }
 }
 
-impl GroupMetadata {
-    pub(crate) fn from_response(group: GroupInfoResponse) -> Self {
+impl From<GroupInfoResponse> for GroupMetadata {
+    fn from(group: GroupInfoResponse) -> Self {
         Self {
             id: group.id,
             subject: group.subject.into_string(),
@@ -165,7 +165,7 @@ impl<'a> Groups<'a> {
             .into_iter()
             .map(|group| {
                 let key = group.id.to_string();
-                let metadata = GroupMetadata::from_response(group);
+                let metadata = GroupMetadata::from(group);
                 (key, metadata)
             })
             .collect();
@@ -175,7 +175,7 @@ impl<'a> Groups<'a> {
 
     pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
         let group = self.client.execute(GroupQueryIq::new(jid)).await?;
-        Ok(GroupMetadata::from_response(group))
+        Ok(GroupMetadata::from(group))
     }
 
     pub async fn create_group(

@@ -116,10 +116,15 @@ impl<'a> Community<'a> {
     }
 
     /// Create a new community.
+    ///
+    /// If a description is provided, it is set via a follow-up IQ after creation
+    /// (the group create stanza does not support inline descriptions for communities).
     pub async fn create(
         &self,
         options: CreateCommunityOptions,
     ) -> Result<CreateCommunityResult, anyhow::Error> {
+        let description = options.description.clone();
+
         let create_options = GroupCreateOptions {
             subject: options.name,
             is_parent: true,
@@ -133,6 +138,16 @@ impl<'a> Community<'a> {
             .client
             .execute(GroupCreateIq::new(create_options))
             .await?;
+
+        // Set description via follow-up IQ if provided
+        if let Some(desc_text) = description
+            && let Ok(desc) = wacore::iq::groups::GroupDescription::new(&desc_text)
+        {
+            self.client
+                .groups()
+                .set_description(&gid, Some(desc), None)
+                .await?;
+        }
 
         Ok(CreateCommunityResult { gid })
     }
@@ -313,7 +328,7 @@ impl<'a> Community<'a> {
             .client
             .execute(QueryLinkedGroupIq::new(community_jid, subgroup_jid))
             .await?;
-        Ok(GroupMetadata::from_response(response))
+        Ok(GroupMetadata::from(response))
     }
 
     /// Join a linked subgroup via the parent community.
@@ -326,7 +341,7 @@ impl<'a> Community<'a> {
             .client
             .execute(JoinLinkedGroupIq::new(community_jid, subgroup_jid))
             .await?;
-        Ok(GroupMetadata::from_response(response))
+        Ok(GroupMetadata::from(response))
     }
 
     /// Get all participants across all linked groups of a community.

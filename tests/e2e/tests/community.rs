@@ -77,6 +77,19 @@ async fn test_community_create_with_general_chat() -> anyhow::Result<()> {
         "should have a default announcement subgroup"
     );
 
+    // Verify general chat subgroup was created (create_general_chat: true)
+    assert!(
+        subgroups.iter().any(|s| s.is_general_chat),
+        "should have a general chat subgroup when create_general_chat is true, got: {:?}",
+        subgroups
+            .iter()
+            .map(|s| format!(
+                "{} (default={}, general={})",
+                s.id, s.is_default_sub_group, s.is_general_chat
+            ))
+            .collect::<Vec<_>>()
+    );
+
     client.disconnect().await;
     Ok(())
 }
@@ -428,6 +441,19 @@ async fn test_community_get_linked_groups_participants() -> anyhow::Result<()> {
         .get_linked_groups_participants(&community.gid)
         .await?;
 
+    let own_pn = client
+        .client
+        .get_pn()
+        .await
+        .expect("should have PN JID")
+        .to_non_ad();
+    let own_lid = client
+        .client
+        .get_lid()
+        .await
+        .expect("should have LID JID")
+        .to_non_ad();
+
     info!(
         "Got {} participant(s) across linked groups",
         participants.len()
@@ -436,6 +462,17 @@ async fn test_community_get_linked_groups_participants() -> anyhow::Result<()> {
     assert!(
         !participants.is_empty(),
         "should return at least the creator as a participant across linked groups"
+    );
+
+    let creator_found = participants
+        .iter()
+        .any(|p| p.jid == own_pn || p.jid == own_lid || p.phone_number.as_ref() == Some(&own_pn));
+    assert!(
+        creator_found,
+        "creator ({} / {}) should be in linked groups participants, got: {:?}",
+        own_pn,
+        own_lid,
+        participants.iter().map(|p| &p.jid).collect::<Vec<_>>()
     );
 
     client.disconnect().await;
@@ -477,9 +514,20 @@ async fn test_community_subgroup_participant_counts() -> anyhow::Result<()> {
     info!("Subgroup participant counts: {:?}", counts);
 
     // The linked subgroup should appear with a count >= 1 (at least the creator)
+    let subgroup_count = counts
+        .iter()
+        .find(|(jid, _)| *jid == group.gid)
+        .map(|(_, count)| *count);
+
     assert!(
-        counts.iter().any(|(jid, _)| *jid == group.gid),
-        "linked subgroup should appear in participant counts"
+        subgroup_count.is_some(),
+        "linked subgroup should appear in participant counts, got: {:?}",
+        counts
+    );
+    assert!(
+        subgroup_count.unwrap() >= 1,
+        "subgroup participant count should be >= 1, got: {}",
+        subgroup_count.unwrap()
     );
 
     client.disconnect().await;
