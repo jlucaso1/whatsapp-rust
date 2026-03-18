@@ -323,7 +323,7 @@ fn parse_jid_meta(input: &str) -> Option<ParsedJidMeta> {
         1
     } else if server == jid::HOSTED_SERVER {
         128
-    } else if server == "hosted.lid" {
+    } else if server == jid::HOSTED_LID_SERVER {
         129
     } else {
         agent_byte
@@ -340,6 +340,32 @@ fn parse_jid_meta(input: &str) -> Option<ParsedJidMeta> {
 #[inline]
 fn split_jid_from_meta(input: &str, meta: ParsedJidMeta) -> (&str, &str) {
     (&input[..meta.user_end], &input[meta.server_start..])
+}
+
+/// Map a JID server string to the AD_JID domain_type byte.
+///
+/// The AD_JID binary encoding uses a single byte to identify the server:
+///   0 = s.whatsapp.net (default)
+///   1 = lid
+///   128 = hosted
+///   129 = hosted.lid
+///
+/// For unmapped servers, falls back to `agent` to match the string-path
+/// behavior in `parse_jid_meta` (which uses `agent_byte` as the default).
+///
+/// WARNING: This must stay in sync with the string-path mapping in
+/// `classify_string_hint` / `parse_jid_meta` and the inverse mapping in
+/// `decoder.rs read_ad_jid`. Writing `jid.agent` unconditionally here
+/// (instead of only as a fallback) was the root cause of a regression
+/// where LID group messages were silently rejected by the server (error 421).
+#[inline]
+fn server_to_domain_type(server: &str, agent: u8) -> u8 {
+    match server {
+        jid::HIDDEN_USER_SERVER => 1,  // "lid"
+        jid::HOSTED_SERVER => 128,     // "hosted"
+        jid::HOSTED_LID_SERVER => 129, // "hosted.lid"
+        _ => agent,                    // s.whatsapp.net (0) and exotic servers
+    }
 }
 
 #[inline]
@@ -722,12 +748,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
         if jid.device > 0 {
-            // AD_JID format: agent/domain_type, device, user
+            // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(jid.agent)?;
+            self.write_u8(server_to_domain_type(&jid.server, jid.agent))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
@@ -747,12 +773,12 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     /// This avoids the allocation that would occur with `jid.to_string()`.
     fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
-            // AD_JID format: agent/domain_type, device, user
+            // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
                 BinaryError::AttrParse(format!("AD_JID device id out of range: {}", jid.device))
             })?;
             self.write_u8(token::AD_JID)?;
-            self.write_u8(jid.agent)?;
+            self.write_u8(server_to_domain_type(jid.server.as_ref(), jid.agent))?;
             self.write_u8(device)?;
             self.write_string(&jid.user)?;
         } else {
@@ -901,6 +927,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::NodeBuilder;
     use crate::node::Attrs;
     use std::io::Cursor;
 
@@ -1270,6 +1297,131 @@ mod tests {
             Some(NodeContent::String(s)) => assert_eq!(s, value),
             other => panic!("Expected string content, got {:?}", other),
         }
+        Ok(())
+    }
+
+    /// Regression test: AD_JID domain_type must be derived from the server field,
+    /// not from jid.agent.
+    ///
+    /// The binary AD_JID format is: [0xF7] [domain_type] [device] [user_string]
+    /// where domain_type encodes the server: 0=s.whatsapp.net, 1=lid, 128=hosted.
+    ///
+    /// A previous bug wrote `jid.agent` (always 0) instead of the domain_type,
+    /// causing LID JIDs to be encoded as s.whatsapp.net JIDs. The real WhatsApp
+    /// server rejected these with error 421, while our mock server accepted them
+    /// because it doesn't validate domain_type — hence e2e tests didn't catch it.
+    #[test]
+    fn test_ad_jid_domain_type_lid() -> TestResult {
+        // Encode a LID device JID as a node attribute
+        let lid_jid = Jid::lid_device("236395184570386", 39);
+        let node = NodeBuilder::new("to").attr("jid", lid_jid).build();
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        // Find the AD_JID marker (0xF7 = 247) in the encoded bytes
+        let ad_jid_pos = buffer
+            .iter()
+            .position(|&b| b == token::AD_JID)
+            .expect("AD_JID token (0xF7) must be present for device JID");
+
+        // Byte after AD_JID is domain_type: must be 1 for "lid"
+        let domain_type = buffer[ad_jid_pos + 1];
+        assert_eq!(
+            domain_type, 1,
+            "LID JID must encode domain_type=1 (lid), got {domain_type} (0=whatsapp, 128=hosted)"
+        );
+
+        // Byte after domain_type is device
+        let device = buffer[ad_jid_pos + 2];
+        assert_eq!(device, 39, "Device byte must be 39");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ad_jid_domain_type_whatsapp() -> TestResult {
+        let pn_jid = Jid::pn_device("559984726662", 33);
+        let node = NodeBuilder::new("to").attr("jid", pn_jid).build();
+
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
+        encoder.write_node(&node)?;
+
+        let ad_jid_pos = buffer
+            .iter()
+            .position(|&b| b == token::AD_JID)
+            .expect("AD_JID token must be present for device JID");
+
+        let domain_type = buffer[ad_jid_pos + 1];
+        assert_eq!(
+            domain_type, 0,
+            "s.whatsapp.net JID must encode domain_type=0, got {domain_type}"
+        );
+
+        Ok(())
+    }
+
+    /// Verify that string-encoded JIDs and direct Jid-encoded JIDs produce
+    /// identical bytes AND decode back to the same JID. This catches any
+    /// divergence between the two encoding paths (root cause of the domain_type
+    /// bug) and ensures encode→decode round-trip fidelity for all server types.
+    #[test]
+    fn test_jid_string_vs_direct_encoding_matches() -> TestResult {
+        use crate::decoder::Decoder;
+
+        let test_cases: Vec<Jid> = vec![
+            Jid::lid_device("236395184570386", 39),     // LID with device
+            Jid::pn_device("559984726662", 33),         // PN with device
+            Jid::lid("236395184570386"),                // LID primary (device 0)
+            Jid::pn("559984726662"),                    // PN primary (device 0)
+            "5511999887766:99@hosted".parse().unwrap(), // HOSTED device
+            "100000012345678:99@hosted.lid".parse().unwrap(), // HOSTED_LID device
+        ];
+
+        for jid in test_cases {
+            // Path 1: string encoding (known correct — uses parse_jid_meta)
+            let node_str = NodeBuilder::new("to").attr("jid", jid.to_string()).build();
+
+            // Path 2: direct Jid encoding (uses write_jid_owned)
+            let node_jid = NodeBuilder::new("to").attr("jid", jid.clone()).build();
+
+            let mut buf_str = Vec::new();
+            Encoder::new(Cursor::new(&mut buf_str))?.write_node(&node_str)?;
+
+            let mut buf_jid = Vec::new();
+            Encoder::new(Cursor::new(&mut buf_jid))?.write_node(&node_jid)?;
+
+            assert_eq!(
+                buf_str, buf_jid,
+                "String vs direct Jid encoding must produce identical bytes for {jid}"
+            );
+
+            // Round-trip: decode the encoded bytes and verify the JID is preserved.
+            // Skip version byte (first byte) then decode.
+            let mut decoder = Decoder::new(&buf_jid[1..]);
+            let decoded_node = decoder.read_node_ref()?.to_owned();
+            let decoded_jid: Jid = decoded_node
+                .attrs()
+                .optional_jid("jid")
+                .expect("jid attr must round-trip as JID");
+
+            assert_eq!(
+                jid.user, decoded_jid.user,
+                "Round-trip user mismatch for {jid}"
+            );
+            assert_eq!(
+                jid.device, decoded_jid.device,
+                "Round-trip device mismatch for {jid}"
+            );
+            assert_eq!(
+                jid.server.as_ref(),
+                decoded_jid.server.as_ref(),
+                "Round-trip server mismatch for {jid}"
+            );
+        }
+
         Ok(())
     }
 }
