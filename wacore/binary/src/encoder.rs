@@ -1364,15 +1364,20 @@ mod tests {
     }
 
     /// Verify that string-encoded JIDs and direct Jid-encoded JIDs produce
-    /// identical bytes. This catches any divergence between the two encoding
-    /// paths (which was the root cause of the domain_type bug).
+    /// identical bytes AND decode back to the same JID. This catches any
+    /// divergence between the two encoding paths (root cause of the domain_type
+    /// bug) and ensures encode→decode round-trip fidelity for all server types.
     #[test]
     fn test_jid_string_vs_direct_encoding_matches() -> TestResult {
-        let test_cases = vec![
-            Jid::lid_device("236395184570386", 39), // LID with device
-            Jid::pn_device("559984726662", 33),     // PN with device
-            Jid::lid("236395184570386"),            // LID primary (device 0)
-            Jid::pn("559984726662"),                // PN primary (device 0)
+        use crate::decoder::Decoder;
+
+        let test_cases: Vec<Jid> = vec![
+            Jid::lid_device("236395184570386", 39),     // LID with device
+            Jid::pn_device("559984726662", 33),         // PN with device
+            Jid::lid("236395184570386"),                // LID primary (device 0)
+            Jid::pn("559984726662"),                    // PN primary (device 0)
+            "5511999887766:99@hosted".parse().unwrap(), // HOSTED device
+            "100000012345678:99@hosted.lid".parse().unwrap(), // HOSTED_LID device
         ];
 
         for jid in test_cases {
@@ -1391,6 +1396,29 @@ mod tests {
             assert_eq!(
                 buf_str, buf_jid,
                 "String vs direct Jid encoding must produce identical bytes for {jid}"
+            );
+
+            // Round-trip: decode the encoded bytes and verify the JID is preserved.
+            // Skip version byte (first byte) then decode.
+            let mut decoder = Decoder::new(&buf_jid[1..]);
+            let decoded_node = decoder.read_node_ref()?.to_owned();
+            let decoded_jid: Jid = decoded_node
+                .attrs()
+                .optional_jid("jid")
+                .expect("jid attr must round-trip as JID");
+
+            assert_eq!(
+                jid.user, decoded_jid.user,
+                "Round-trip user mismatch for {jid}"
+            );
+            assert_eq!(
+                jid.device, decoded_jid.device,
+                "Round-trip device mismatch for {jid}"
+            );
+            assert_eq!(
+                jid.server.as_ref(),
+                decoded_jid.server.as_ref(),
+                "Round-trip server mismatch for {jid}"
             );
         }
 

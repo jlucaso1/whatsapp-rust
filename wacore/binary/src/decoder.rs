@@ -126,12 +126,22 @@ impl<'a> Decoder<'a> {
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
 
+        // Domain type mapping — must mirror encoder's server_to_domain_type().
+        // WA Web: 0=WHATSAPP, 1=LID, even+bit7=HOSTED, 129=HOSTED_LID, else throw.
         let server = match agent {
             0 => Cow::Borrowed(crate::jid::DEFAULT_USER_SERVER),
             1 => Cow::Borrowed(crate::jid::HIDDEN_USER_SERVER),
             128 => Cow::Borrowed(crate::jid::HOSTED_SERVER),
             129 => Cow::Borrowed(crate::jid::HOSTED_LID_SERVER),
-            _ => Cow::Borrowed(crate::jid::HOSTED_SERVER),
+            n if (n & 128) != 0 && (n & 1) == 0 => {
+                // WA Web treats any even number with bit 7 set as HOSTED
+                Cow::Borrowed(crate::jid::HOSTED_SERVER)
+            }
+            _ => {
+                return Err(BinaryError::AttrParse(format!(
+                    "AD_JID invalid domain type: {agent}"
+                )));
+            }
         };
 
         Ok(JidRef {
