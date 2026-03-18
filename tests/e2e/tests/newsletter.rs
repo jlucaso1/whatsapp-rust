@@ -113,3 +113,72 @@ async fn test_newsletter_join() -> anyhow::Result<()> {
     client_b.disconnect().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_newsletter_leave() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_leave").await?;
+
+    // Create and join a newsletter
+    let created = client
+        .client
+        .newsletter()
+        .create("Leave Test Channel", None)
+        .await?;
+
+    info!("Created newsletter: {}", created.jid);
+
+    // Leave it
+    client.client.newsletter().leave(&created.jid).await?;
+    info!("Left newsletter: {}", created.jid);
+
+    client.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_newsletter_update() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_update").await?;
+
+    // Create a newsletter
+    let created = client
+        .client
+        .newsletter()
+        .create("Original Name", Some("Original description"))
+        .await?;
+
+    info!("Created newsletter: {} ({})", created.name, created.jid);
+
+    // Update name and description
+    let updated = client
+        .client
+        .newsletter()
+        .update(
+            &created.jid,
+            Some("Updated Name"),
+            Some("Updated description"),
+        )
+        .await?;
+
+    assert_eq!(updated.jid, created.jid);
+    assert_eq!(updated.name, "Updated Name");
+
+    info!(
+        "Updated newsletter: name='{}', desc={:?}",
+        updated.name, updated.description
+    );
+
+    // Verify via metadata fetch
+    let metadata = client
+        .client
+        .newsletter()
+        .get_metadata(&created.jid)
+        .await?;
+    assert_eq!(metadata.name, "Updated Name");
+
+    client.disconnect().await;
+    Ok(())
+}

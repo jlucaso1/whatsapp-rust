@@ -178,6 +178,71 @@ impl<'a> Newsletter<'a> {
         parse_newsletter_metadata(newsletter)
     }
 
+    /// Leave (unsubscribe from) a newsletter.
+    pub async fn leave(&self, jid: &Jid) -> Result<(), MexError> {
+        let response = self
+            .client
+            .mex()
+            .mutate(MexRequest {
+                doc_id: wacore::iq::newsletter::mex_docs::LEAVE,
+                variables: json!({
+                    "newsletter_id": jid.to_string()
+                }),
+            })
+            .await?;
+
+        let data = response
+            .data
+            .ok_or_else(|| MexError::PayloadParsing("missing data".into()))?;
+        if data["xwa2_newsletter_leave_v2"].is_null() {
+            return Err(MexError::PayloadParsing(format!(
+                "failed to leave newsletter: {}",
+                jid
+            )));
+        }
+        Ok(())
+    }
+
+    /// Update a newsletter's name and/or description.
+    pub async fn update(
+        &self,
+        jid: &Jid,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<NewsletterMetadata, MexError> {
+        let mut updates = json!({});
+        if let Some(name) = name {
+            updates["name"] = json!(name);
+        }
+        if let Some(desc) = description {
+            updates["description"] = json!(desc);
+        }
+
+        let response = self
+            .client
+            .mex()
+            .mutate(MexRequest {
+                doc_id: wacore::iq::newsletter::mex_docs::UPDATE,
+                variables: json!({
+                    "newsletter_id": jid.to_string(),
+                    "updates": updates
+                }),
+            })
+            .await?;
+
+        let data = response
+            .data
+            .ok_or_else(|| MexError::PayloadParsing("missing data".into()))?;
+        let newsletter = &data["xwa2_newsletter_update"];
+        if newsletter.is_null() {
+            return Err(MexError::PayloadParsing(format!(
+                "failed to update newsletter: {}",
+                jid
+            )));
+        }
+        parse_newsletter_metadata(newsletter)
+    }
+
     /// Fetch metadata for a newsletter by its invite code.
     pub async fn get_metadata_by_invite(
         &self,

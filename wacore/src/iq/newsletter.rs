@@ -17,4 +17,8 @@ pub mod mex_docs {
     pub const FETCH_PENDING_INVITES: &str = "9783111038412085";
     pub const FETCH_SUBSCRIBERS: &str = "9537574256318798";
     pub const FETCH_REACTION_SENDERS: &str = "29575462448733991";
+    pub const LEAVE: &str = "9767147403369991";
 }
+
+/// IQ namespace for newsletter operations (message history, reactions, live updates).
+pub const NEWSLETTER_XMLNS: &str = "newsletter";
