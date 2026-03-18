@@ -1,6 +1,7 @@
 mod blocking;
 pub(crate) mod chat_actions;
 mod chatstate;
+mod community;
 mod contacts;
 mod groups;
 mod mex;
@@ -13,6 +14,11 @@ mod tctoken;
 pub use blocking::{Blocking, BlocklistEntry};
 
 pub use chat_actions::ChatActions;
+
+pub use community::{
+    Community, CommunitySubgroup, CreateCommunityOptions, CreateCommunityResult, GroupType,
+    LinkSubgroupsResult, UnlinkSubgroupsResult, group_type,
+};
 
 pub use chatstate::{ChatStateType, Chatstate};
 

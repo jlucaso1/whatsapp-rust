@@ -48,6 +48,16 @@ pub struct GroupMetadata {
     pub member_link_mode: Option<MemberLinkMode>,
     /// Total participant count.
     pub size: Option<u32>,
+    /// Whether this group is a community parent group.
+    pub is_parent_group: bool,
+    /// JID of the parent community (for subgroups).
+    pub parent_group_jid: Option<Jid>,
+    /// Whether this is the default announcement subgroup of a community.
+    pub is_default_sub_group: bool,
+    /// Whether this is the general chat subgroup of a community.
+    pub is_general_chat: bool,
+    /// Whether non-admin community members can create subgroups.
+    pub allow_non_admin_sub_group_creation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -67,8 +77,8 @@ impl From<GroupParticipantResponse> for GroupParticipant {
     }
 }
 
-impl GroupMetadata {
-    fn from_response(group: GroupInfoResponse) -> Self {
+impl From<GroupInfoResponse> for GroupMetadata {
+    fn from(group: GroupInfoResponse) -> Self {
         Self {
             id: group.id,
             subject: group.subject.into_string(),
@@ -87,6 +97,11 @@ impl GroupMetadata {
             member_add_mode: group.member_add_mode,
             member_link_mode: group.member_link_mode,
             size: group.size,
+            is_parent_group: group.is_parent_group,
+            parent_group_jid: group.parent_group_jid,
+            is_default_sub_group: group.is_default_sub_group,
+            is_general_chat: group.is_general_chat,
+            allow_non_admin_sub_group_creation: group.allow_non_admin_sub_group_creation,
         }
     }
 }
@@ -150,7 +165,7 @@ impl<'a> Groups<'a> {
             .into_iter()
             .map(|group| {
                 let key = group.id.to_string();
-                let metadata = GroupMetadata::from_response(group);
+                let metadata = GroupMetadata::from(group);
                 (key, metadata)
             })
             .collect();
@@ -160,7 +175,7 @@ impl<'a> Groups<'a> {
 
     pub async fn get_metadata(&self, jid: &Jid) -> Result<GroupMetadata, anyhow::Error> {
         let group = self.client.execute(GroupQueryIq::new(jid)).await?;
-        Ok(GroupMetadata::from_response(group))
+        Ok(GroupMetadata::from(group))
     }
 
     pub async fn create_group(
@@ -390,6 +405,11 @@ mod tests {
             member_add_mode: None,
             member_link_mode: None,
             size: None,
+            is_parent_group: false,
+            parent_group_jid: None,
+            is_default_sub_group: false,
+            is_general_chat: false,
+            allow_non_admin_sub_group_creation: false,
         };
 
         assert_eq!(metadata.subject, "Test Group");
