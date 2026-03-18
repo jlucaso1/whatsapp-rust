@@ -48,6 +48,14 @@ pub struct GroupMetadata {
     pub member_link_mode: Option<MemberLinkMode>,
     /// Total participant count.
     pub size: Option<u32>,
+    /// Whether this group is a community parent group.
+    pub is_parent_group: bool,
+    /// JID of the parent community (for subgroups).
+    pub parent_group_jid: Option<Jid>,
+    /// Whether this is the default announcement subgroup of a community.
+    pub is_default_sub_group: bool,
+    /// Whether this is the general chat subgroup of a community.
+    pub is_general_chat: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +95,10 @@ impl GroupMetadata {
             member_add_mode: group.member_add_mode,
             member_link_mode: group.member_link_mode,
             size: group.size,
+            is_parent_group: group.is_parent_group,
+            parent_group_jid: group.parent_group_jid,
+            is_default_sub_group: group.is_default_sub_group,
+            is_general_chat: group.is_general_chat,
         }
     }
 }
@@ -390,6 +402,10 @@ mod tests {
             member_add_mode: None,
             member_link_mode: None,
             size: None,
+            is_parent_group: false,
+            parent_group_jid: None,
+            is_default_sub_group: false,
+            is_general_chat: false,
         };
 
         assert_eq!(metadata.subject, "Test Group");
