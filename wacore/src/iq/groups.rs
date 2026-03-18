@@ -1672,7 +1672,7 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             assert_eq!(nodes[0].tag, "membership_approval_mode");
             let join = nodes[0].get_children_by_tag("group_join").next().unwrap();
-            assert_eq!(join.attrs().optional_string("state").as_deref(), Some("on"));
+            assert!(join.attrs.get("state").is_some_and(|v| v == "on"));
         } else {
             panic!("expected nodes content");
         }

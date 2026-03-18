@@ -36,7 +36,7 @@ async fn wait_for_group_notification(
 ) -> anyhow::Result<Event> {
     client
         .wait_for_event(timeout_secs, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await
 }

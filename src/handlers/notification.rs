@@ -45,7 +45,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 
     match notification_type {
         "encrypt" => {
-            if node.attrs().optional_string("from").as_deref() == Some(SERVER_JID) {
+            if node.attrs.get("from").is_some_and(|v| v == SERVER_JID) {
                 // Dispatch based on first child tag, matching WA Web's handleEncryptNotification.
                 // "count" → handlePreKeyLow, "digest" → handleDigestKey
                 let first_child_tag = node

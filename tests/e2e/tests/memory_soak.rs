@@ -454,7 +454,7 @@ async fn test_heavy_group_soak() -> anyhow::Result<()> {
     for client in [&mut client_b, &mut client_c] {
         client
             .wait_for_event(15, |e| {
-                matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+                matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
             })
             .await?;
     }
@@ -474,7 +474,7 @@ async fn test_heavy_group_soak() -> anyhow::Result<()> {
 
     client_b
         .wait_for_event(15, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
 
@@ -599,7 +599,7 @@ async fn test_heavy_mixed_soak() -> anyhow::Result<()> {
     for client in [&mut client_b, &mut client_c] {
         client
             .wait_for_event(15, |e| {
-                matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+                matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
             })
             .await?;
     }

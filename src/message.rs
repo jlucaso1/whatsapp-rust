@@ -435,7 +435,11 @@ impl Client {
             max_sender_retry_count = max_sender_retry_count.max(sender_count);
 
             // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
-            if enc_node.attrs().optional_string("decrypt-fail").as_deref() == Some("hide") {
+            if enc_node
+                .attrs
+                .get("decrypt-fail")
+                .is_some_and(|v| v == "hide")
+            {
                 has_hide_fail = true;
             }
 

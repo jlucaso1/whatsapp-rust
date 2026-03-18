@@ -50,7 +50,7 @@ async fn test_offline_group_notification() -> anyhow::Result<()> {
     // Wait for B to get the create notification (confirms group is set up)
     let _notif_b = client_b
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
     info!("B received group create notification");
@@ -76,7 +76,7 @@ async fn test_offline_group_notification() -> anyhow::Result<()> {
     // B (online) should get the notification immediately
     let _notif_b2 = client_b
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
     info!("B received add notification (online)");
@@ -84,7 +84,7 @@ async fn test_offline_group_notification() -> anyhow::Result<()> {
     // Step 4: C should receive the notification after reconnecting (from offline queue)
     let notif_c = client_c
         .wait_for_event(30, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
 
@@ -147,13 +147,13 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
     // Wait for C to receive create notification
     let _notif = client_c
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
     // Also consume B's notification
     let _notif_b = client_b
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
 
@@ -200,7 +200,7 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
     // B receives the add notification
     let _notif_b2 = client_b
         .wait_for_event(10, |e| {
-            matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
         })
         .await?;
 
@@ -230,7 +230,7 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
         let result = client_c
             .wait_for_event(10, |e| {
                 matches!(e, Event::Message(msg, _) if msg.conversation.is_some())
-                    || matches!(e, Event::Notification(node) if node.attrs().optional_string("type").as_deref() == Some("w:gp2"))
+                    || matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
             })
             .await;
 

@@ -123,7 +123,7 @@ impl BusinessNotification {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
         }
-        if optional_attr(node, "type").as_deref() != Some("business") {
+        if !node.attrs.get("type").is_some_and(|v| v == "business") {
             return Err(anyhow!("expected type='business'"));
         }
 

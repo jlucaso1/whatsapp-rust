@@ -119,7 +119,7 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
 
     let contact_node = user_node.get_optional_child("contact");
     let is_registered = contact_node
-        .map(|c| c.attrs().optional_string("type").as_deref() == Some("in"))
+        .map(|c| c.attrs.get("type").is_some_and(|v| v == "in"))
         .unwrap_or(false);
 
     let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
@@ -274,7 +274,7 @@ impl IqSpec for IsOnWhatsAppSpec {
             {
                 let contact_node = user_node.get_optional_child("contact");
                 let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type").as_deref() == Some("in"))
+                    .map(|c| c.attrs.get("type").is_some_and(|v| v == "in"))
                     .unwrap_or(false);
 
                 results.push(IsOnWhatsAppResult { jid, is_registered });
