@@ -29,8 +29,8 @@ chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
 event-listener = { workspace = true }
 flate2 = { workspace = true }
-getrandom = { version = "0.3", default-features = false, optional = true }
 futures = { workspace = true, features = ["std"] }
+getrandom = { version = "0.3", default-features = false, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }

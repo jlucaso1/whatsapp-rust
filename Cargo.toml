@@ -88,6 +88,7 @@ default = [
     "simd",
     "sqlite-storage",
     "tokio-transport",
+    "tokio-runtime",
     "ureq-client",
     "tokio-native",
     "signal",
@@ -96,9 +97,10 @@ moka-cache = ["dep:moka"]
 simd = ["wacore/simd"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
-signal = ["tokio/signal"]
+tokio-runtime = ["dep:tokio"]
+signal = ["tokio-runtime", "tokio/signal"]
 sqlite-storage = ["whatsapp-rust-sqlite-storage"]
-tokio-native = ["tokio/rt-multi-thread"]
+tokio-native = ["tokio-runtime", "tokio/rt-multi-thread"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -120,7 +122,7 @@ scopeguard = "1.2"
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"], optional = true }
 wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }

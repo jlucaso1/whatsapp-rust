@@ -30,8 +30,9 @@ pub mod message;
 pub mod pair;
 pub mod pair_code;
 pub mod request;
+#[cfg(feature = "tokio-runtime")]
 pub mod runtime_impl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "tokio-runtime")]
 pub use runtime_impl::TokioRuntime;
 pub use wacore::runtime::Runtime;
 pub mod send;
