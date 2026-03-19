@@ -77,6 +77,11 @@ impl PersistenceManager {
         self.backend.clone()
     }
 
+    /// Modify device state directly.
+    ///
+    /// **Warning**: This bypasses the `DeviceCommand` abstraction. Prefer
+    /// `process_command()` for structured modifications. Use this only when
+    /// `DeviceCommand` doesn't cover the needed mutation.
     pub async fn modify_device<F, R>(&self, modifier: F) -> R
     where
         F: FnOnce(&mut Device) -> R,
@@ -130,6 +135,11 @@ impl PersistenceManager {
         }
     }
 
+    // Known limitation: the background saver does not perform a final flush
+    // when the PersistenceManager is dropped. Any dirty state that hasn't been
+    // flushed by a periodic tick will be lost. A proper fix requires adding an
+    // explicit `shutdown()` method that callers invoke before dropping, which is
+    // a larger design change tracked separately.
     pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);

@@ -92,6 +92,10 @@ impl Client {
         let sent_msg_ttl = self.cache_config.sent_message_ttl_secs;
 
         loop {
+            // Register the shutdown listener BEFORE calculating the sleep
+            // duration so we never miss a notification between loop iterations.
+            let shutdown = self.shutdown_notifier.listen();
+
             let interval_ms = rand::rng().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
             );
@@ -173,7 +177,7 @@ impl Client {
                         }
                     }
                 },
-                _ = self.shutdown_notifier.listen().fuse() => {
+                _ = shutdown.fuse() => {
                     debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
                     return;
                 }

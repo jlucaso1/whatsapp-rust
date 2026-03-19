@@ -107,7 +107,6 @@ impl NoiseSocket {
         mut out_buf: Vec<u8>,
     ) -> SendResult {
         let counter = *write_counter;
-        *write_counter = write_counter.wrapping_add(1);
 
         // For small messages, encrypt plaintext_buf in-place then frame into out_buf.
         // This avoids the previous triple-copy pattern (plaintext→out→plaintext→out).
@@ -153,6 +152,10 @@ impl NoiseSocket {
         if let Err(e) = transport.send(out_buf).await {
             return Err(EncryptSendError::transport(e));
         }
+
+        // Only advance the counter after the encrypted frame was successfully sent.
+        // If transport.send() fails, we can retry with the same counter value.
+        *write_counter = write_counter.wrapping_add(1);
 
         Ok(())
     }

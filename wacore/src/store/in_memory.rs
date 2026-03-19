@@ -547,6 +547,11 @@ impl DeviceStore for InMemoryBackend {
 
     async fn create(&self) -> Result<i32> {
         let id = self.next_device_id.fetch_add(1, Ordering::Relaxed);
+        // Materialize a default Device so that `exists()` returns true after `create()`.
+        let mut state = self.state.lock().await;
+        if state.device.is_none() {
+            state.device = Some(Device::new());
+        }
         Ok(id)
     }
 }

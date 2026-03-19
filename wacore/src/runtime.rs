@@ -107,15 +107,13 @@ where
 /// Offload a blocking closure to a thread where blocking is acceptable,
 /// returning its result.
 ///
-/// This is a convenience wrapper around [`Runtime::spawn_blocking`] that uses
+/// Convenience wrapper around [`Runtime::spawn_blocking`] that uses
 /// a oneshot channel to ferry the closure's return value back to the caller.
 ///
 /// # Panics
 ///
-/// Offload a blocking closure, returning its result.
-///
-/// # Panics
-/// Panics if the runtime drops the task before completion.
+/// Panics if the runtime drops the spawned task before it completes
+/// (e.g. during runtime shutdown).
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn blocking<T: Send + 'static>(
     rt: &dyn Runtime,

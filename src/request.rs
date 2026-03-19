@@ -151,6 +151,13 @@ impl Client {
         // a shutdown fires between send_node() completing and listen() being called.
         let shutdown = self.shutdown_notifier.listen();
 
+        // Re-check after registering the listener to close the race window where
+        // shutdown fires between the initial check and the listen() call above.
+        if !self.is_running.load(Ordering::Acquire) {
+            self.response_waiters.lock().await.remove(&req_id);
+            return Err(IqError::NotConnected);
+        }
+
         if let Err(e) = self.send_node(node).await {
             self.response_waiters.lock().await.remove(&req_id);
             return match e {
