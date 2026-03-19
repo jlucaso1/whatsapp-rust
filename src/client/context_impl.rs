@@ -5,7 +5,8 @@ use wacore::client::context::{GroupInfo, SendContextResolver};
 use wacore::libsignal::protocol::PreKeyBundle;
 use wacore_binary::jid::Jid;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SendContextResolver for Client {
     async fn resolve_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
         self.get_user_devices(jids).await

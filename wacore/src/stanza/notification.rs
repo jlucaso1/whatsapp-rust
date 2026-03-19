@@ -15,13 +15,13 @@ use wacore_binary::node::Node;
 /// Extract a notification timestamp from a node's `t` attribute.
 ///
 /// Parses the `t` attribute as a Unix timestamp (seconds) and converts to
-/// a `chrono::DateTime<Utc>`. Falls back to `Utc::now()` if the attribute
+/// a `chrono::DateTime<Utc>`. Falls back to `crate::time::now_utc()` if the attribute
 /// is missing or cannot be parsed.
 pub fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
         .and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
-        .unwrap_or_else(chrono::Utc::now)
+        .unwrap_or_else(crate::time::now_utc)
 }
 
 /// Parse a `<disappearing_mode>` child from a notification node.
@@ -64,7 +64,7 @@ mod tests {
         let node = NodeBuilder::new("notification").build();
         let ts = notification_timestamp(&node);
         // Should fall back to approximately now
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::time::now_secs();
         assert!((ts.timestamp() - now).abs() < 2);
     }
 

@@ -51,7 +51,7 @@ pub async fn resolve_and_update_version(
     } else {
         match chrono::DateTime::from_timestamp_millis(last_fetched_ms) {
             Some(last_fetched_dt) => {
-                chrono::Utc::now().signed_duration_since(last_fetched_dt)
+                wacore::time::now_utc().signed_duration_since(last_fetched_dt)
                     > chrono::Duration::hours(24)
             }
             None => true,

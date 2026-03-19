@@ -27,7 +27,8 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 #[derive(Default)]
 pub struct NotificationHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for NotificationHandler {
     fn tag(&self) -> &'static str {
         "notification"
@@ -472,12 +473,11 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
         .map(|s| s.into_owned());
 
     // Get timestamp from notification
-    let timestamp = node.attrs().optional_u64("t").unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }) as i64;
+    let timestamp = node
+        .attrs()
+        .optional_u64("t")
+        .map(|v| v as i64)
+        .unwrap_or_else(wacore::time::now_secs);
 
     // Build DeviceListRecord for storage
     // Note: update_device_list() will automatically store under LID if mapping is known

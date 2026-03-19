@@ -112,13 +112,7 @@ impl Client {
             format!("{}:{}", receipt.source.chat, message_id)
         };
 
-        let entry = self
-            .retried_group_messages
-            .entry(dedupe_key.clone())
-            .or_insert(())
-            .await;
-
-        if !entry.is_fresh() {
+        if self.retried_group_messages.get(&dedupe_key).await.is_some() {
             log::debug!(
                 "Ignoring duplicate retry for message {} from {}: already handled.",
                 message_id,
@@ -126,14 +120,21 @@ impl Client {
             );
             return Ok(());
         }
+        self.retried_group_messages
+            .insert(dedupe_key.clone(), ())
+            .await;
 
         // Prevent concurrent retries for the same message+participant.
-        if !self.pending_retries.insert(dedupe_key.clone()) {
+        if !self.pending_retries.lock().await.insert(dedupe_key.clone()) {
             log::debug!("Ignoring retry for {dedupe_key}: a retry is already in progress.");
             return Ok(());
         }
         let _guard = scopeguard::guard((self.clone(), dedupe_key.clone()), |(client, key)| {
-            client.pending_retries.remove(&key);
+            if let Some(mut set) = client.pending_retries.try_lock() {
+                set.remove(&key);
+            } else {
+                log::warn!("Failed to acquire pending_retries lock during cleanup for {key}");
+            }
         });
 
         let original_msg = match self

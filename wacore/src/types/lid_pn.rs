@@ -77,10 +77,7 @@ pub struct LidPnEntry {
 impl LidPnEntry {
     /// Create a new entry with the current timestamp
     pub fn new(lid: String, phone_number: String, learning_source: LearningSource) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now = crate::time::now_secs();
 
         Self {
             lid,

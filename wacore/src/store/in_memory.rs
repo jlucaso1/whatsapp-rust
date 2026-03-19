@@ -100,7 +100,8 @@ impl Default for InMemoryBackend {
 // SignalStore
 // ---------------------------------------------------------------------------
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignalStore for InMemoryBackend {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
         self.state
@@ -234,7 +235,8 @@ impl SignalStore for InMemoryBackend {
 // AppSyncStore
 // ---------------------------------------------------------------------------
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AppSyncStore for InMemoryBackend {
     async fn get_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
         Ok(self.state.lock().await.sync_keys.get(key_id).cloned())
@@ -308,7 +310,8 @@ impl AppSyncStore for InMemoryBackend {
 // ProtocolStore
 // ---------------------------------------------------------------------------
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl ProtocolStore for InMemoryBackend {
     // --- SKDM Tracking ---
 
@@ -492,10 +495,7 @@ impl ProtocolStore for InMemoryBackend {
         message_id: &str,
         payload: &[u8],
     ) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now = crate::time::now_secs();
         self.state.lock().await.sent_messages.insert(
             (chat_jid.to_string(), message_id.to_string()),
             SentMessageEntry {
@@ -529,7 +529,8 @@ impl ProtocolStore for InMemoryBackend {
 // DeviceStore
 // ---------------------------------------------------------------------------
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl DeviceStore for InMemoryBackend {
     async fn save(&self, device: &Device) -> Result<()> {
         self.state.lock().await.device = Some(device.clone());

@@ -90,7 +90,7 @@ impl Client {
         use prost::Message;
         let key = self.make_stanza_key(to.clone(), id.clone()).await;
         let chat_str = key.chat.to_string();
-        let has_l1_cache = self.recent_messages.policy().max_capacity().unwrap_or(0) > 0;
+        let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 
         // L1 cache check (if capacity > 0)
         if has_l1_cache && let Some(bytes) = self.recent_messages.remove(&key).await {
@@ -153,7 +153,7 @@ impl Client {
         use prost::Message;
         let key = self.make_stanza_key(to, id).await;
         let bytes = msg.encode_to_vec();
-        let has_l1_cache = self.recent_messages.policy().max_capacity().unwrap_or(0) > 0;
+        let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 
         if has_l1_cache {
             // L1 cache serves reads immediately; DB write can be backgrounded

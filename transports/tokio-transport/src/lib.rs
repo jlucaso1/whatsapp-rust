@@ -133,7 +133,8 @@ impl TokioWebSocketTransport {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl Transport for TokioWebSocketTransport {
     /// Sends raw data through the WebSocket.
     /// The caller is responsible for any framing.
@@ -197,7 +198,8 @@ impl Default for TokioWebSocketTransportFactory {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,

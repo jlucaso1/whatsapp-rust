@@ -62,12 +62,12 @@ impl Client {
 
         debug!(target: "Client/Keepalive", "Sending keepalive ping");
 
-        let start_ms = chrono::Utc::now().timestamp_millis();
+        let start_ms = wacore::time::now_millis();
         let iq = wacore::iq::keepalive::KeepaliveSpec::with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE)
             .build_iq();
         match self.send_iq(iq).await {
             Ok(response_node) => {
-                let end_ms = chrono::Utc::now().timestamp_millis();
+                let end_ms = wacore::time::now_millis();
                 let rtt_ms = end_ms - start_ms;
                 debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_ms}ms)");
                 // WA Web: onClockSkewUpdate — Math.round((startTime + rtt/2) / 1000 - serverTime)
@@ -139,10 +139,7 @@ impl Client {
                             if sent_msg_ttl > 0 && cleanup_counter >= 12 {
                                 cleanup_counter = 0;
                                 let backend = self.persistence_manager.backend();
-                                let cutoff = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64
+                                let cutoff = wacore::time::now_secs()
                                     - sent_msg_ttl as i64;
                                 self.runtime.spawn(Box::pin(async move {
                                     if let Err(e) = backend.delete_expired_sent_messages(cutoff).await {

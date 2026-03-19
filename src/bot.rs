@@ -704,7 +704,11 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
-            client.custom_enc_handlers.insert(enc_type, handler);
+            client
+                .custom_enc_handlers
+                .write()
+                .await
+                .insert(enc_type, handler);
         }
 
         if self.skip_history_sync {

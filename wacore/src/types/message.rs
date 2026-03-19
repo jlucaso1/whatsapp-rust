@@ -132,7 +132,7 @@ impl MessageInfo {
     /// no undecryptable events. Matches `WAWebMsgProcessingDecryptionHandler.E()`.
     pub fn is_expired_status(&self) -> bool {
         self.source.chat.is_status_broadcast()
-            && (chrono::Utc::now() - self.timestamp) > chrono::Duration::hours(24)
+            && (crate::time::now_utc() - self.timestamp) > chrono::Duration::hours(24)
     }
 }
 

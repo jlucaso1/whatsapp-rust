@@ -14,7 +14,8 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct PresenceHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for PresenceHandler {
     fn tag(&self) -> &'static str {
         "presence"

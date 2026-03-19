@@ -4,16 +4,16 @@ mod lid_pn;
 mod sender_keys;
 mod sessions;
 
+use crate::cache::Cache;
 use crate::cache_store::TypedCache;
 use crate::handshake;
 use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
-use dashmap::{DashMap, DashSet};
 use futures::FutureExt;
-use moka::future::Cache;
 use std::borrow::Cow;
-use tokio::sync::watch;
+use std::collections::{HashMap, HashSet};
+
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
@@ -30,7 +30,6 @@ use log::{debug, error, info, trace, warn};
 
 use rand::{Rng, RngCore};
 use scopeguard;
-use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 
 use std::sync::Arc;
@@ -96,7 +95,7 @@ use async_lock::Mutex;
 use async_lock::RwLock;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::OnceCell;
+
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
 use wacore::runtime::timeout as rt_timeout;
@@ -325,8 +324,9 @@ pub struct Client {
     /// preventing race conditions during queue initialization.
     pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
-    pub group_cache: OnceCell<TypedCache<Jid, GroupInfo>>,
-    pub device_cache: OnceCell<TypedCache<Jid, Vec<Jid>>>,
+    pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
+    #[allow(clippy::type_complexity)]
+    pub device_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, Vec<Jid>>>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -339,7 +339,7 @@ pub struct Client {
     /// Uses moka cache with TTL and max capacity for automatic eviction.
     pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
 
-    pub(crate) pending_retries: Arc<DashSet<String>>,
+    pub(crate) pending_retries: Arc<async_lock::Mutex<HashSet<String>>>,
 
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
@@ -351,7 +351,7 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    pub(crate) app_state_processor: OnceCell<AppStateProcessor>,
+    pub(crate) app_state_processor: async_lock::Mutex<Option<Arc<AppStateProcessor>>>,
     pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     /// Tracks collections currently being synced to prevent duplicate sync tasks.
     /// Matches WA Web's in-flight tracking set in WAWebSyncdCollectionsStateMachine.
@@ -389,14 +389,14 @@ pub struct Client {
     /// Triggered after Event::Connected is dispatched.
     pub(crate) connected_notifier: Arc<event_listener::Event>,
     pub(crate) major_sync_task_sender: async_channel::Sender<MajorSyncTask>,
-    pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
+    pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<async_channel::Sender<()>>>>,
 
     /// State machine for pair code authentication flow.
     /// Tracks the pending pair code request and ephemeral keys.
     pub(crate) pair_code_state: Arc<Mutex<wacore::pair_code::PairCodeState>>,
 
     /// Custom handlers for encrypted message types
-    pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
+    pub custom_enc_handlers: Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>,
 
     /// Chat state (typing indicator) handlers registered by external consumers.
     /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
@@ -573,8 +573,8 @@ impl Client {
             message_enqueue_locks: Cache::builder()
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
-            group_cache: OnceCell::new(),
-            device_cache: OnceCell::new(),
+            group_cache: async_lock::Mutex::new(None),
+            device_cache: async_lock::Mutex::new(None),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
@@ -582,7 +582,7 @@ impl Client {
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
 
-            pending_retries: Arc::new(DashSet::new()),
+            pending_retries: Arc::new(async_lock::Mutex::new(HashSet::new())),
 
             message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
 
@@ -598,7 +598,7 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            app_state_processor: OnceCell::new(),
+            app_state_processor: async_lock::Mutex::new(None),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
             initial_keys_synced_notifier: Arc::new(event_listener::Event::new()),
@@ -616,7 +616,7 @@ impl Client {
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            custom_enc_handlers: Arc::new(DashMap::new()),
+            custom_enc_handlers: Arc::new(async_lock::RwLock::new(HashMap::new())),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
             device_registry_cache: cache_config.device_registry_cache.build_typed_ttl(
@@ -654,36 +654,47 @@ impl Client {
         (arc, rx)
     }
 
-    pub(crate) async fn get_group_cache(&self) -> &TypedCache<Jid, GroupInfo> {
-        self.group_cache
-            .get_or_init(|| async {
-                debug!("Initializing Group Cache for the first time.");
-                self.cache_config
-                    .group_cache
-                    .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group")
-            })
-            .await
+    pub(crate) async fn get_group_cache(&self) -> Arc<TypedCache<Jid, GroupInfo>> {
+        let mut guard = self.group_cache.lock().await;
+        if let Some(cache) = guard.as_ref() {
+            return cache.clone();
+        }
+        debug!("Initializing Group Cache for the first time.");
+        let cache = Arc::new(
+            self.cache_config
+                .group_cache
+                .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group"),
+        );
+        *guard = Some(cache.clone());
+        cache
     }
 
-    pub(crate) async fn get_device_cache(&self) -> &TypedCache<Jid, Vec<Jid>> {
-        self.device_cache
-            .get_or_init(|| async {
-                debug!("Initializing Device Cache for the first time.");
-                self.cache_config.device_cache.build_typed_ttl(
-                    self.cache_config.cache_stores.device_cache.clone(),
-                    "device",
-                )
-            })
-            .await
+    pub(crate) async fn get_device_cache(&self) -> Arc<TypedCache<Jid, Vec<Jid>>> {
+        let mut guard = self.device_cache.lock().await;
+        if let Some(cache) = guard.as_ref() {
+            return cache.clone();
+        }
+        debug!("Initializing Device Cache for the first time.");
+        let cache = Arc::new(self.cache_config.device_cache.build_typed_ttl(
+            self.cache_config.cache_stores.device_cache.clone(),
+            "device",
+        ));
+        *guard = Some(cache.clone());
+        cache
     }
 
-    pub(crate) async fn get_app_state_processor(&self) -> &AppStateProcessor {
-        self.app_state_processor
-            .get_or_init(|| async {
-                debug!("Initializing AppStateProcessor for the first time.");
-                AppStateProcessor::new(self.persistence_manager.backend(), self.runtime.clone())
-            })
-            .await
+    pub(crate) async fn get_app_state_processor(&self) -> Arc<AppStateProcessor> {
+        let mut guard = self.app_state_processor.lock().await;
+        if let Some(proc) = guard.as_ref() {
+            return proc.clone();
+        }
+        debug!("Initializing AppStateProcessor for the first time.");
+        let proc = Arc::new(AppStateProcessor::new(
+            self.persistence_manager.backend(),
+            self.runtime.clone(),
+        ));
+        *guard = Some(proc.clone());
+        proc
     }
 
     /// Create and configure the stanza router with all the handlers.
@@ -804,8 +815,8 @@ impl Client {
         while self.is_running.load(Ordering::Relaxed) {
             self.expected_disconnect.store(false, Ordering::Relaxed);
 
-            if self.connect().await.is_err() {
-                error!("Failed to connect, will retry...");
+            if let Err(connect_err) = self.connect().await {
+                error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
                     warn!(
@@ -1047,7 +1058,7 @@ impl Client {
         *self.media_conn.write().await = None;
 
         // Clear app state key cache — keys will be re-fetched from DB on demand
-        if let Some(proc) = self.app_state_processor.get() {
+        if let Some(proc) = self.app_state_processor.lock().await.as_ref() {
             proc.clear_key_cache().await;
         }
     }
@@ -1065,8 +1076,18 @@ impl Client {
         let (lid_lid, lid_pn) = self.lid_pn_cache.entry_counts();
 
         MemoryDiagnostics {
-            group_cache: self.group_cache.get().map_or(0, |c| c.entry_count()),
-            device_cache: self.device_cache.get().map_or(0, |c| c.entry_count()),
+            group_cache: self
+                .group_cache
+                .lock()
+                .await
+                .as_ref()
+                .map_or(0, |c| c.entry_count()),
+            device_cache: self
+                .device_cache
+                .lock()
+                .await
+                .as_ref()
+                .map_or(0, |c| c.entry_count()),
             device_registry_cache: self.device_registry_cache.entry_count(),
             lid_pn_lid_entries: lid_lid,
             lid_pn_pn_entries: lid_pn,
@@ -1079,7 +1100,7 @@ impl Client {
             message_enqueue_locks: self.message_enqueue_locks.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
-            pending_retries: self.pending_retries.len(),
+            pending_retries: self.pending_retries.lock().await.len(),
             presence_subscriptions: self.presence_subscriptions.lock().await.len(),
             app_state_key_requests: self.app_state_key_requests.lock().await.len(),
             app_state_syncing: self.app_state_syncing.lock().await.len(),
@@ -1087,7 +1108,7 @@ impl Client {
             signal_cache_identities: sig_identities,
             signal_cache_sender_keys: sig_sender_keys,
             chatstate_handlers: self.chatstate_handlers.read().await.len(),
-            custom_enc_handlers: self.custom_enc_handlers.len(),
+            custom_enc_handlers: self.custom_enc_handlers.read().await.len(),
         }
     }
 
@@ -1125,7 +1146,7 @@ impl Client {
                             Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Update dead-socket timer (WA Web: deadSocketTimer reset)
                                 self.last_data_received_ms.store(
-                                    chrono::Utc::now().timestamp_millis() as u64,
+                                    wacore::time::now_millis() as u64,
                                     Ordering::Relaxed,
                                 );
 
@@ -2939,7 +2960,7 @@ impl Client {
                         }),
                         r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
                         edited_message: Some(Box::new(new_content)),
-                        timestamp_ms: Some(chrono::Utc::now().timestamp_millis()),
+                        timestamp_ms: Some(wacore::time::now_millis()),
                         ..Default::default()
                     })),
                     ..Default::default()
@@ -2994,10 +3015,8 @@ impl Client {
         }
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
-        self.last_data_sent_ms.store(
-            chrono::Utc::now().timestamp_millis() as u64,
-            Ordering::Relaxed,
-        );
+        self.last_data_sent_ms
+            .store(wacore::time::now_millis() as u64, Ordering::Relaxed);
 
         Ok(())
     }
@@ -4267,7 +4286,7 @@ mod tests {
         );
 
         // Create a node with a 't' attribute
-        let server_time = chrono::Utc::now().timestamp() + 10; // Server is 10 seconds ahead
+        let server_time = wacore::time::now_secs() + 10; // Server is 10 seconds ahead
         let node = NodeBuilder::new("success")
             .attr("t", server_time.to_string())
             .build();

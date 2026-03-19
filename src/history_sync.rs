@@ -159,7 +159,10 @@ impl Client {
                     own_user_ref,
                     Some(|raw_bytes: Bytes| {
                         // Send Bytes through channel (zero-copy clone)
+                        #[cfg(not(target_arch = "wasm32"))]
                         let _ = tx.send_blocking(raw_bytes);
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = tx.try_send(raw_bytes);
                     }),
                     compressed_size_hint,
                 );

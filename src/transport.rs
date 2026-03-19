@@ -16,7 +16,8 @@ pub mod mock {
     /// A mock transport that does nothing, for testing purposes
     pub struct MockTransport;
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl Transport for MockTransport {
         async fn send(&self, _data: Vec<u8>) -> Result<(), anyhow::Error> {
             Ok(())
@@ -35,7 +36,8 @@ pub mod mock {
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl TransportFactory for MockTransportFactory {
         async fn create_transport(
             &self,

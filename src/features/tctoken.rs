@@ -40,10 +40,7 @@ impl<'a> TcToken<'a> {
         let spec = IssuePrivacyTokensSpec::new(jids);
         let response = self.client.execute(spec).await?;
         let backend = self.client.persistence_manager.backend();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now = wacore::time::now_secs();
 
         for received in &response.tokens {
             let entry = TcTokenEntry {

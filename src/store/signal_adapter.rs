@@ -55,7 +55,8 @@ impl SignalProtocolStoreAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SessionStore for SessionAdapter {
     async fn load_session(
         &self,
@@ -130,7 +131,8 @@ impl SessionStore for SessionAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl IdentityKeyStore for IdentityAdapter {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
         let device = self.0.device.read().await;
@@ -215,7 +217,8 @@ impl IdentityKeyStore for IdentityAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PreKeyStore for PreKeyAdapter {
     async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord, SignalProtocolError> {
         let device = self.0.device.read().await;
@@ -244,7 +247,8 @@ impl PreKeyStore for PreKeyAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignedPreKeyStore for SignedPreKeyAdapter {
     async fn get_signed_pre_key(
         &self,
@@ -266,7 +270,8 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,

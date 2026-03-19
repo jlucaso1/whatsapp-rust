@@ -59,10 +59,7 @@ pub const TC_TOKEN_TOTAL_DURATION: i64 = TC_TOKEN_BUCKET_DURATION * TC_TOKEN_NUM
 
 /// Get the current unix timestamp in seconds.
 fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    crate::time::now_secs()
 }
 
 /// Check if a tcToken has expired (older than the rolling window).

@@ -1165,7 +1165,8 @@ impl SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignalStore for SqliteStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
         self.put_identity_for_device(address, key, self.device_id)
@@ -1584,7 +1585,8 @@ impl SignalStore for SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AppSyncStore for SqliteStore {
     async fn get_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
         self.get_app_state_sync_key_for_device(key_id, self.device_id)
@@ -1632,7 +1634,8 @@ impl AppSyncStore for SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl ProtocolStore for SqliteStore {
     async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
         let pool = self.pool.clone();
@@ -2322,7 +2325,8 @@ impl ProtocolStore for SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl DeviceStore for SqliteStore {
     async fn save(&self, device: &CoreDevice) -> Result<()> {
         SqliteStore::save_device_data_for_device(self, self.device_id, device).await

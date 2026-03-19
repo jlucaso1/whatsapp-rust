@@ -3,6 +3,10 @@ pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;
 
+pub mod cache;
+#[cfg(not(feature = "moka-cache"))]
+pub mod portable_cache;
+
 pub mod cache_config;
 pub use cache_config::{CacheConfig, CacheEntryConfig, CacheStores};
 pub mod cache_store;
@@ -27,6 +31,7 @@ pub mod pair;
 pub mod pair_code;
 pub mod request;
 pub mod runtime_impl;
+#[cfg(not(target_arch = "wasm32"))]
 pub use runtime_impl::TokioRuntime;
 pub use wacore::runtime::Runtime;
 pub mod send;

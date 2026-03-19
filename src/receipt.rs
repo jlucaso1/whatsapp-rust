@@ -62,7 +62,7 @@ impl Client {
                 sender: sender.clone(),
                 ..Default::default()
             },
-            timestamp: chrono::Utc::now(),
+            timestamp: wacore::time::now_utc(),
             r#type: receipt_type.clone(),
             message_sender: sender.clone(),
         };
@@ -171,11 +171,7 @@ impl Client {
             return Ok(());
         }
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .to_string();
+        let timestamp = (wacore::time::now_secs() as u64).to_string();
 
         let mut builder = NodeBuilder::new("receipt")
             .attr("to", chat.clone())

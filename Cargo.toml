@@ -84,6 +84,7 @@ debug-diagnostics = ["wacore/debug-diagnostics"]
 debug-snapshots = ["wacore/debug-snapshots"]
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
 default = [
+    "moka-cache",
     "simd",
     "sqlite-storage",
     "tokio-transport",
@@ -91,6 +92,7 @@ default = [
     "tokio-native",
     "signal",
 ]
+moka-cache = ["dep:moka"]
 simd = ["wacore/simd"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
@@ -106,13 +108,12 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
-dashmap = "6.1.0"
 env_logger = { version = "0.11", default-features = false }
 event-listener = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
 log = { workspace = true }
-moka = { version = "0.12.12", features = ["future"] }
+moka = { version = "0.12.12", features = ["future"], optional = true }
 prost = { workspace = true }
 rand = { workspace = true }
 scopeguard = "1.2"

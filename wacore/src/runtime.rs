@@ -6,22 +6,27 @@ use async_trait::async_trait;
 
 /// A runtime-agnostic abstraction over async executor capabilities.
 ///
-/// Only truly runtime-specific operations live here: spawning tasks,
-/// sleeping, and offloading blocking work. Everything else (mutexes,
-/// channels, etc.) uses runtime-agnostic crates directly.
+/// On native targets, futures must be `Send` (multi-threaded executors).
+/// On wasm32, `Send` is dropped (single-threaded).
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 pub trait Runtime: Send + Sync + 'static {
-    /// Spawn a background task. Returns a handle that can cancel the task.
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> AbortHandle;
-
-    /// Sleep for the given duration.
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
-
-    /// Offload a blocking closure to a thread where blocking is acceptable.
     fn spawn_blocking(
         &self,
         f: Box<dyn FnOnce() + Send + 'static>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+}
+
+/// WASM variant — `Send` bounds removed since WASM is single-threaded.
+/// Concrete types use `unsafe impl Send + Sync` since there's only one thread.
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait Runtime: Send + Sync + 'static {
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> AbortHandle;
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()>>>;
+    fn spawn_blocking(&self, f: Box<dyn FnOnce() + 'static>) -> Pin<Box<dyn Future<Output = ()>>>;
 }
 
 /// Handle returned by [`Runtime::spawn`]. Aborts the spawned task when dropped.
@@ -107,9 +112,11 @@ where
 ///
 /// # Panics
 ///
-/// Panics if the runtime drops the spawned task before it completes (e.g.
-/// during runtime shutdown). Callers in shutdown-sensitive paths should use
-/// [`Runtime::spawn_blocking`] directly with explicit error handling.
+/// Offload a blocking closure, returning its result.
+///
+/// # Panics
+/// Panics if the runtime drops the task before completion.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn blocking<T: Send + 'static>(
     rt: &dyn Runtime,
     f: impl FnOnce() -> T + Send + 'static,
@@ -122,4 +129,10 @@ pub async fn blocking<T: Send + 'static>(
     rx.await.unwrap_or_else(|_| {
         panic!("blocking task failed to complete (closure panic or runtime shutdown)")
     })
+}
+
+/// WASM variant — runs inline (single-threaded).
+#[cfg(target_arch = "wasm32")]
+pub async fn blocking<T: 'static>(_rt: &dyn Runtime, f: impl FnOnce() -> T + 'static) -> T {
+    f()
 }

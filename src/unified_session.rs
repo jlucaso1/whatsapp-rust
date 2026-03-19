@@ -47,7 +47,7 @@ impl UnifiedSessionManager {
             && let Ok(server_time) = t_val.parse::<i64>()
             && server_time > 0
         {
-            let local_time = chrono::Utc::now().timestamp();
+            let local_time = wacore::time::now_secs();
             let offset_ms = (server_time - local_time) * 1000;
             self.server_time_offset_ms
                 .store(offset_ms, Ordering::Relaxed);
@@ -137,7 +137,7 @@ mod tests {
     fn test_update_server_time_offset() {
         let manager = UnifiedSessionManager::new();
 
-        let server_time = chrono::Utc::now().timestamp() + 10;
+        let server_time = wacore::time::now_secs() + 10;
         let node = NodeBuilder::new("success")
             .attr("t", server_time.to_string())
             .build();
@@ -230,7 +230,7 @@ mod tests {
         let manager = UnifiedSessionManager::new();
 
         let node = NodeBuilder::new("success")
-            .attr("t", (chrono::Utc::now().timestamp() + 10).to_string())
+            .attr("t", (wacore::time::now_secs() + 10).to_string())
             .build();
         manager.update_server_time_offset(&node);
         let (_, seq1) = manager.prepare_send().await.unwrap();

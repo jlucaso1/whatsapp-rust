@@ -17,7 +17,8 @@ use wacore_binary::node::{Node, NodeContent};
 #[derive(Default)]
 pub struct IbHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for IbHandler {
     fn tag(&self) -> &'static str {
         "ib"

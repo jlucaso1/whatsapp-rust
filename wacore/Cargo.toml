@@ -12,6 +12,9 @@ default = ["simd"]
 simd = ["wacore-appstate/simd"]
 debug-diagnostics = []
 debug-snapshots = []
+# Enable JS-based random number generation for wasm32 targets.
+# Activates getrandom's wasm_js backend so rand works in the browser.
+js = ["getrandom/wasm_js"]
 
 [dependencies]
 aes = { workspace = true }
@@ -26,6 +29,7 @@ chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
 event-listener = { workspace = true }
 flate2 = { workspace = true }
+getrandom = { version = "0.3", default-features = false, optional = true }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
 hkdf = { workspace = true }

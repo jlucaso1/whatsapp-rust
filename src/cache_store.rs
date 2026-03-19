@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use moka::future::Cache;
+use crate::cache::Cache;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub use wacore::store::cache::CacheStore;
@@ -43,10 +43,10 @@ pub struct TypedCache<K, V> {
 
 impl<K, V> TypedCache<K, V>
 where
-    K: std::hash::Hash + Eq + Send + Sync + 'static,
+    K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Wrap an existing moka cache (zero overhead vs. using moka directly).
+    /// Wrap an existing cache (zero overhead vs. using the cache directly).
     pub fn from_moka(cache: Cache<K, V>) -> Self {
         Self {
             inner: Inner::Moka(cache),
@@ -56,7 +56,7 @@ where
 
 impl<K, V> TypedCache<K, V>
 where
-    K: std::hash::Hash + Eq + Display + Send + Sync + 'static,
+    K: std::hash::Hash + Eq + Clone + Display + Send + Sync + 'static,
     V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Create a cache backed by a custom store.
@@ -172,18 +172,19 @@ where
             Inner::Custom {
                 store, namespace, ..
             } => {
-                let store = store.clone();
-                let ns = *namespace;
+                let _store = store.clone();
+                let _ns = *namespace;
+                #[cfg(not(target_arch = "wasm32"))]
                 match tokio::runtime::Handle::try_current() {
                     Ok(handle) => {
                         handle.spawn(async move {
-                            if let Err(e) = store.clear(ns).await {
-                                log::warn!("TypedCache[{ns}]: clear() error: {e}");
+                            if let Err(e) = _store.clear(_ns).await {
+                                log::warn!("TypedCache[{_ns}]: clear() error: {e}");
                             }
                         });
                     }
                     Err(_) => {
-                        log::warn!("TypedCache[{ns}]: clear() skipped: no Tokio runtime");
+                        log::warn!("TypedCache[{_ns}]: clear() skipped: no runtime");
                     }
                 }
             }

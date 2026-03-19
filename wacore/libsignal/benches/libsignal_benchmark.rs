@@ -33,7 +33,8 @@ impl InMemoryIdentityKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl IdentityKeyStore for InMemoryIdentityKeyStore {
     async fn get_identity_key_pair(
         &self,
@@ -87,7 +88,8 @@ impl InMemoryPreKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PreKeyStore for InMemoryPreKeyStore {
     async fn get_pre_key(
         &self,
@@ -129,7 +131,8 @@ impl InMemorySignedPreKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignedPreKeyStore for InMemorySignedPreKeyStore {
     async fn get_signed_pre_key(
         &self,
@@ -163,7 +166,8 @@ impl InMemorySessionStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SessionStore for InMemorySessionStore {
     async fn load_session(
         &self,
@@ -194,7 +198,8 @@ impl InMemorySenderKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SenderKeyStore for InMemorySenderKeyStore {
     async fn store_sender_key(
         &mut self,

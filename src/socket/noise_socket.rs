@@ -232,7 +232,8 @@ mod tests {
             counter: std::sync::atomic::AtomicU32,
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for RecordingTransport {
             async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 // Decrypt the data to extract the index (first byte of plaintext)
@@ -313,7 +314,8 @@ mod tests {
             last_size: Arc<AtomicUsize>,
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for SizeRecordingTransport {
             async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 self.last_size.store(data.len(), Ordering::SeqCst);
@@ -387,7 +389,8 @@ mod tests {
 
         struct NoOpTransport;
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for NoOpTransport {
             async fn send(&self, _data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 Ok(())

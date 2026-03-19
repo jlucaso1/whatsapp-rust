@@ -1,7 +1,7 @@
 use crate::StringEnum;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use thiserror::Error;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{self, Jid, JidExt};
@@ -131,10 +131,7 @@ impl RequestUtils {
     pub fn generate_message_id(&self, user_jid: Option<&Jid>) -> String {
         let mut data = Vec::with_capacity(8 + 20 + 16);
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let timestamp = crate::time::now_secs() as u64;
         data.extend_from_slice(&timestamp.to_be_bytes());
 
         if let Some(jid) = user_jid {
