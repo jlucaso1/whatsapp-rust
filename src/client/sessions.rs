@@ -26,13 +26,13 @@ impl Client {
         // Signal that offline sync is complete - post-login tasks are waiting for this.
         // This mimics WhatsApp Web's offlineDeliveryEnd event.
         // Use compare_exchange to ensure we only run this once (add_permits is NOT idempotent).
+        // Install the wider semaphore BEFORE flipping the flag so that any thread
+        // observing offline_sync_completed=true already sees the 64-permit semaphore.
         if self
             .offline_sync_completed
-            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            self.offline_sync_notifier.notify(usize::MAX);
-
             // Allow parallel message processing now that offline sync is done.
             // During offline sync, permits=1 serialized all message processing.
             // Replace with a new semaphore with 64 permits for concurrent processing.
@@ -42,6 +42,8 @@ impl Client {
                 .lock()
                 .expect("message_processing_semaphore poisoned") =
                 std::sync::Arc::new(async_lock::Semaphore::new(64));
+
+            self.offline_sync_notifier.notify(usize::MAX);
 
             self.core
                 .event_bus

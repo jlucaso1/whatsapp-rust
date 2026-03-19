@@ -147,6 +147,10 @@ impl Client {
         let request_utils = self.get_request_utils();
         let node = request_utils.build_iq_node(&query, Some(req_id.clone()));
 
+        // Register the shutdown listener BEFORE sending to avoid a window where
+        // a shutdown fires between send_node() completing and listen() being called.
+        let shutdown = self.shutdown_notifier.listen();
+
         if let Err(e) = self.send_node(node).await {
             self.response_waiters.lock().await.remove(&req_id);
             return match e {
@@ -158,7 +162,6 @@ impl Client {
 
         // Race the IQ response against shutdown so we fail fast on disconnect
         // instead of waiting the full timeout.
-        let shutdown = self.shutdown_notifier.listen();
         let iq_timeout = query.timeout.unwrap_or(default_timeout);
 
         futures::select! {

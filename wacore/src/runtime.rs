@@ -120,6 +120,6 @@ pub async fn blocking<T: Send + 'static>(
     }))
     .await;
     rx.await.unwrap_or_else(|_| {
-        panic!("spawn_blocking task was dropped before completion (runtime shutting down?)")
+        panic!("blocking task failed to complete (closure panic or runtime shutdown)")
     })
 }

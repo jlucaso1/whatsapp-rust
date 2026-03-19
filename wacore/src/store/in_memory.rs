@@ -357,6 +357,15 @@ impl ProtocolStore for InMemoryBackend {
 
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
         let mut s = self.state.lock().await;
+        // Remove stale reverse entry if the LID was previously mapped to a different phone number
+        if let Some(old_phone) = s
+            .lid_mappings
+            .get(&entry.lid)
+            .filter(|old| old.phone_number != entry.phone_number)
+            .map(|old| old.phone_number.clone())
+        {
+            s.pn_to_lid.remove(&old_phone);
+        }
         s.pn_to_lid
             .insert(entry.phone_number.clone(), entry.lid.clone());
         s.lid_mappings.insert(entry.lid.clone(), entry.clone());

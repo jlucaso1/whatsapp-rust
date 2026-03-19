@@ -89,10 +89,11 @@ impl PersistenceManager {
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
 
-            self.backend
-                .save(&serializable_device)
-                .await
-                .map_err(db_err)?;
+            if let Err(e) = self.backend.save(&serializable_device).await {
+                // Restore dirty flag so the next tick retries the save
+                self.dirty.store(true, Ordering::Release);
+                return Err(db_err(e));
+            }
             debug!("Device state saved successfully.");
         }
         Ok(())
@@ -125,11 +126,19 @@ impl PersistenceManager {
 
     pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
         let rt = runtime.clone();
+        let weak = Arc::downgrade(&self);
+        drop(self); // Release the strong reference; the caller's Arc keeps it alive
         runtime
             .spawn(Box::pin(async move {
                 loop {
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
                     // Create the listener BEFORE the event can fire to avoid missing notifications.
-                    let listener = self.save_notify.listen();
+                    let listener = this.save_notify.listen();
+                    drop(this); // Don't hold strong ref while sleeping
+
                     futures::select! {
                         _ = listener.fuse() => {
                             debug!("Save notification received.");
@@ -137,7 +146,11 @@ impl PersistenceManager {
                         _ = rt.sleep(interval).fuse() => {}
                     }
 
-                    if let Err(e) = self.save_to_disk().await {
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
+                    if let Err(e) = this.save_to_disk().await {
                         error!("Error saving device state in background: {e}");
                     }
                 }

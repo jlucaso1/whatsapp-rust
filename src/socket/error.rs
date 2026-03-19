@@ -22,7 +22,7 @@ pub enum EncryptSendErrorKind {
     Framing,
     #[error("transport error")]
     Transport,
-    #[error("tokio join error")]
+    #[error("task join error")]
     Join,
     #[error("sender channel closed")]
     ChannelClosed,

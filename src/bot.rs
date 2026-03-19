@@ -122,8 +122,7 @@ pub struct BotHandle {
 impl BotHandle {
     /// Abort the bot's run task.
     pub fn abort(&self) {
-        // AbortHandle aborts on drop, but we also allow explicit abort
-        // by disconnecting. The actual abort happens via _abort_handle's Drop.
+        self._abort_handle.abort();
     }
 }
 
@@ -648,11 +647,15 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
 
 impl BotBuilder<Provided, Provided, Provided, Provided> {
     pub async fn build(self) -> std::result::Result<Bot, BotBuilderError> {
-        // Safety: typestate guarantees all four are Some.
-        let runtime = self.runtime.unwrap();
-        let backend = self.backend.unwrap();
-        let transport_factory = self.transport_factory.unwrap();
-        let http_client = self.http_client.unwrap();
+        // Destructure to extract required fields — typestate guarantees all are Some.
+        let (Some(runtime), Some(backend), Some(transport_factory), Some(http_client)) = (
+            self.runtime,
+            self.backend,
+            self.transport_factory,
+            self.http_client,
+        ) else {
+            unreachable!("typestate guarantees all required fields are Provided")
+        };
 
         // Note: For multi-account mode, create the backend with SqliteStore::new_for_device()
         // before passing it to with_backend()

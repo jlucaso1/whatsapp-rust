@@ -66,8 +66,11 @@ pub fn extract_registration_id_from_node(node: &Node) -> Option<u32> {
     let registration_node = node.get_optional_child("registration")?;
     let bytes = get_bytes_content(registration_node)?;
 
-    if bytes.len() >= 4 {
+    if bytes.len() == 4 {
         Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    } else if bytes.len() > 4 {
+        // Registration IDs are u32; reject oversized payloads rather than silently truncating.
+        None
     } else if !bytes.is_empty() {
         // Handle variable-length encoding.
         let mut arr = [0u8; 4];
