@@ -4,8 +4,9 @@
 
 use crate::client::Client;
 use crate::request::IqError;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wacore::iq::mediaconn::MediaConnSpec;
+use wacore::time::Instant;
 
 /// Re-export the host type from wacore.
 pub use wacore::iq::mediaconn::MediaConnHost;

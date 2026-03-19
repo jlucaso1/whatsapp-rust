@@ -118,7 +118,7 @@ impl Client {
 
     pub async fn wait_for_startup_sync(&self, timeout: std::time::Duration) -> Result<()> {
         use anyhow::anyhow;
-        use std::time::Instant;
+        use wacore::time::Instant;
 
         let deadline = Instant::now() + timeout;
 

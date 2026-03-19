@@ -51,3 +51,47 @@ pub fn now_utc() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp_millis(now_millis())
         .expect("time provider returned out-of-range millisecond timestamp")
 }
+
+/// Portable monotonic instant, replacing `std::time::Instant` which is
+/// unavailable on `wasm32-unknown-unknown`.
+///
+/// Uses `now_millis()` internally — not truly monotonic but sufficient
+/// for elapsed-time measurement and timeout tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Instant(i64);
+
+impl Instant {
+    /// Capture the current instant.
+    #[inline]
+    pub fn now() -> Self {
+        Self(now_millis())
+    }
+
+    /// Duration elapsed since this instant was captured.
+    #[inline]
+    pub fn elapsed(&self) -> std::time::Duration {
+        let diff = now_millis().saturating_sub(self.0);
+        std::time::Duration::from_millis(diff.max(0) as u64)
+    }
+
+    /// Duration from this instant until another (saturating).
+    #[inline]
+    pub fn saturating_duration_since(&self, earlier: Instant) -> std::time::Duration {
+        let diff = self.0.saturating_sub(earlier.0);
+        std::time::Duration::from_millis(diff.max(0) as u64)
+    }
+}
+
+impl std::ops::Add<std::time::Duration> for Instant {
+    type Output = Instant;
+    fn add(self, rhs: std::time::Duration) -> Self {
+        Self(self.0.saturating_add(rhs.as_millis() as i64))
+    }
+}
+
+impl std::ops::Sub<Instant> for Instant {
+    type Output = std::time::Duration;
+    fn sub(self, rhs: Instant) -> std::time::Duration {
+        self.saturating_duration_since(rhs)
+    }
+}

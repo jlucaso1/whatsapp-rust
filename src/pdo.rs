@@ -30,7 +30,7 @@ use waproto::whatsapp as wa;
 #[derive(Clone, Debug)]
 pub struct PendingPdoRequest {
     pub message_info: MessageInfo,
-    pub requested_at: std::time::Instant,
+    pub requested_at: wacore::time::Instant,
 }
 
 /// Creates a new PDO request cache.
@@ -94,7 +94,7 @@ impl Client {
 
         let pending = PendingPdoRequest {
             message_info: info.clone(),
-            requested_at: std::time::Instant::now(),
+            requested_at: wacore::time::Instant::now(),
         };
         self.pdo_pending_requests
             .insert(cache_key.clone(), pending)

@@ -265,7 +265,7 @@ mod tests {
     use crate::mediaconn::{MediaConn, MediaConnHost};
     use async_lock::Mutex;
     use std::sync::Arc;
-    use std::time::Instant;
+    use wacore::time::Instant;
 
     fn media_conn(auth: &str, hosts: &[&str]) -> MediaConn {
         MediaConn {

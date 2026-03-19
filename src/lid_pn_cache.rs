@@ -141,7 +141,7 @@ impl LidPnCache {
     /// This should be called during client initialization to populate
     /// the cache from the database.
     pub async fn warm_up(&self, entries: impl IntoIterator<Item = LidPnEntry>) {
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         let mut count = 0;
 
         for entry in entries {

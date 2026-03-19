@@ -243,7 +243,7 @@ pub(crate) struct OfflineSyncMetrics {
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
     // Using simple std Mutex for timestamp as it's rarely contended and non-async
-    pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
+    pub start_time: std::sync::Mutex<Option<wacore::time::Instant>>,
 }
 
 pub struct Client {
@@ -352,7 +352,7 @@ pub struct Client {
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
     pub(crate) app_state_processor: async_lock::Mutex<Option<Arc<AppStateProcessor>>>,
-    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, wacore::time::Instant>>>,
     /// Tracks collections currently being synced to prevent duplicate sync tasks.
     /// Matches WA Web's in-flight tracking set in WAWebSyncdCollectionsStateMachine.
     pub(crate) app_state_syncing: Arc<Mutex<HashSet<WAPatchName>>>,
@@ -1289,8 +1289,8 @@ impl Client {
                         .active
                         .store(true, Ordering::Release);
                     match self.offline_sync_metrics.start_time.lock() {
-                        Ok(mut guard) => *guard = Some(std::time::Instant::now()),
-                        Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+                        Ok(mut guard) => *guard = Some(wacore::time::Instant::now()),
+                        Err(poison) => *poison.into_inner() = Some(wacore::time::Instant::now()),
                     }
                     debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
@@ -2155,7 +2155,7 @@ impl Client {
                 if !missing.is_empty() {
                     let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                     let mut guard = self.app_state_key_requests.lock().await;
-                    let now = std::time::Instant::now();
+                    let now = wacore::time::Instant::now();
                     for key_id in missing {
                         let hex_id = hex::encode(&key_id);
                         let should = guard
@@ -2280,7 +2280,7 @@ impl Client {
             }
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
-            let _decode_start = std::time::Instant::now();
+            let _decode_start = wacore::time::Instant::now();
 
             // Pre-download all external blobs (snapshot and patch mutations)
             // We use directPath as the key to identify each blob
@@ -2362,7 +2362,7 @@ impl Client {
             if !missing.is_empty() {
                 let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                 let mut guard = self.app_state_key_requests.lock().await;
-                let now = std::time::Instant::now();
+                let now = wacore::time::Instant::now();
                 for key_id in missing {
                     let hex_id = hex::encode(&key_id);
                     let should = guard

@@ -448,7 +448,7 @@ mod tests {
     use async_lock::Mutex;
     use std::io::Cursor;
     use std::sync::Arc;
-    use std::time::Instant;
+    use wacore::time::Instant;
 
     struct PlaintextDownloadable {
         direct_path: String,
