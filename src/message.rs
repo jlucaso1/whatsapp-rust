@@ -33,34 +33,7 @@ const MAX_DECRYPT_RETRIES: u8 = 5;
 /// WhatsApp Web logs metrics when retry count exceeds this value.
 const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
 
-/// Retry reason codes matching WhatsApp Web's RetryReason enum.
-/// These are included in the retry receipt to help the sender understand
-/// why the message couldn't be decrypted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-#[allow(dead_code)] // All variants defined for WhatsApp Web compatibility
-pub(crate) enum RetryReason {
-    /// Unknown or unspecified error
-    UnknownError = 0,
-    /// No session exists with the sender (SessionNotFound)
-    NoSession = 1,
-    /// Invalid key in the message
-    InvalidKey = 2,
-    /// PreKey ID not found (InvalidPreKeyId)
-    InvalidKeyId = 3,
-    /// Invalid message format or content (InvalidMessage)
-    InvalidMessage = 4,
-    /// Invalid signature
-    InvalidSignature = 5,
-    /// Message from the future (timestamp issue)
-    FutureMessage = 6,
-    /// MAC verification failed (bad MAC)
-    BadMac = 7,
-    /// Invalid session state
-    InvalidSession = 8,
-    /// Invalid message key
-    InvalidMsgKey = 9,
-}
+pub(crate) use wacore::protocol::retry::RetryReason;
 
 impl Client {
     /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.

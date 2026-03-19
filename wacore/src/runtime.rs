@@ -61,6 +61,10 @@ impl AbortHandle {
     }
 
     /// Detach the handle so the task is NOT aborted on drop.
+    ///
+    /// The spawned task will run until completion even if the parent scope
+    /// is dropped. Use this for fire-and-forget tasks where cancellation
+    /// is not desired.
     pub fn detach(self) {
         *self.abort_fn.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -100,6 +104,12 @@ where
 ///
 /// This is a convenience wrapper around [`Runtime::spawn_blocking`] that uses
 /// a oneshot channel to ferry the closure's return value back to the caller.
+///
+/// # Panics
+///
+/// Panics if the runtime drops the spawned task before it completes (e.g.
+/// during runtime shutdown). Callers in shutdown-sensitive paths should use
+/// [`Runtime::spawn_blocking`] directly with explicit error handling.
 pub async fn blocking<T: Send + 'static>(
     rt: &dyn Runtime,
     f: impl FnOnce() -> T + Send + 'static,
@@ -109,5 +119,7 @@ pub async fn blocking<T: Send + 'static>(
         let _ = tx.send(f());
     }))
     .await;
-    rx.await.expect("spawn_blocking task completed")
+    rx.await.unwrap_or_else(|_| {
+        panic!("spawn_blocking task was dropped before completion (runtime shutting down?)")
+    })
 }
