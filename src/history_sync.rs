@@ -141,31 +141,41 @@ impl Client {
 
         let parse_result = if has_listeners {
             // Use a bounded channel to stream raw conversation bytes as Bytes (zero-copy)
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(4);
+            let (tx, rx) = async_channel::bounded::<Bytes>(4);
 
             // Run streaming parsing in blocking thread
             // own_user is moved directly, no clone needed
-            let parse_handle = tokio::task::spawn_blocking(move || {
+            let (result_tx, result_rx) = futures::channel::oneshot::channel();
+            // Spawn the blocking work concurrently — it runs while we
+            // process channel items below.
+            let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
                 let own_user_ref = own_user.as_deref();
 
                 // Streaming: decompresses and extracts raw bytes incrementally
                 // No parsing happens here - just raw byte extraction
                 // Uses Bytes for zero-copy reference counting
-                process_history_sync(
+                let result = process_history_sync(
                     compressed_data,
                     own_user_ref,
                     Some(|raw_bytes: Bytes| {
                         // Send Bytes through channel (zero-copy clone)
-                        let _ = tx.blocking_send(raw_bytes);
+                        let _ = tx.send_blocking(raw_bytes);
                     }),
                     compressed_size_hint,
-                )
+                );
                 // tx dropped here, closing channel
-            });
+                let _ = result_tx.send(result);
+            }));
+            // Drive the blocking future to completion in the background
+            self.runtime
+                .spawn(Box::pin(async move {
+                    blocking_fut.await;
+                }))
+                .detach();
 
             // Receive and dispatch lazy conversations as they come in
             let mut conv_count = 0usize;
-            while let Some(raw_bytes) = rx.recv().await {
+            while let Ok(raw_bytes) = rx.recv().await {
                 if self.is_shutting_down() {
                     log::debug!(
                         "Stopping history sync {} event dispatch during shutdown",
@@ -185,29 +195,31 @@ impl Client {
 
             // Drop receiver before awaiting the blocking task. If we broke out
             // of the loop during shutdown, the sender may be blocked on
-            // tx.blocking_send() — dropping rx causes it to return Err and
+            // tx.send_blocking() — dropping rx causes it to return Err and
             // unblock, preventing a deadlock.
             drop(rx);
 
-            // Wait for parsing to complete
-            parse_handle.await
+            // Wait for parsing result
+            result_rx.await.ok()
         } else {
             // No listeners - skip conversation processing entirely
             log::debug!("No event handlers registered, skipping conversation processing");
 
             // own_user is moved directly, no clone needed
-            tokio::task::spawn_blocking(move || {
-                let own_user_ref = own_user.as_deref();
+            Some(
+                wacore::runtime::blocking(&*self.runtime, move || {
+                    let own_user_ref = own_user.as_deref();
 
-                // Pass None for callback - conversations are skipped at protobuf level
-                process_history_sync::<fn(Bytes)>(
-                    compressed_data,
-                    own_user_ref,
-                    None,
-                    compressed_size_hint,
-                )
-            })
-            .await
+                    // Pass None for callback - conversations are skipped at protobuf level
+                    process_history_sync::<fn(Bytes)>(
+                        compressed_data,
+                        own_user_ref,
+                        None,
+                        compressed_size_hint,
+                    )
+                })
+                .await,
+            )
         };
 
         if self.is_shutting_down() {
@@ -219,7 +231,7 @@ impl Client {
         }
 
         match parse_result {
-            Ok(Ok(sync_result)) => {
+            Some(Ok(sync_result)) => {
                 log::info!(
                     "Successfully processed HistorySync (message {message_id}); {} conversations",
                     sync_result.conversations_processed
@@ -231,11 +243,11 @@ impl Client {
                     self.update_push_name_and_notify(new_name).await;
                 }
             }
-            Ok(Err(e)) => {
+            Some(Err(e)) => {
                 log::error!("Failed to process HistorySync data: {:?}", e);
             }
-            Err(e) => {
-                log::error!("History sync blocking task panicked: {:?}", e);
+            None => {
+                log::error!("History sync blocking task was cancelled");
             }
         }
     }

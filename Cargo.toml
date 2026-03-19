@@ -43,13 +43,15 @@ default-members = [
 aes = "0.8.3"
 aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
 anyhow = { version = "1.0", default-features = false }
-async-channel = { version = "2.5.0", default-features = false }
+async-channel = { version = "2.5.0", default-features = false, features = ["std"] }
+async-lock = { version = "3", default-features = false }
 async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytemuck = { version = "1.22", default-features = false }
 bytes = { version = "1.5", default-features = false, features = ["serde"] }
 chrono = { version = "0.4", default-features = false }
 ctr = { version = "0.9", default-features = false }
+event-listener = { version = "5", default-features = false }
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
 futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -78,10 +80,17 @@ wacore-noise = { path = "./wacore/noise", version = "0.3.0" }
 waproto = { path = "./waproto", version = "0.3.0" }
 
 [features]
-debug-diagnostics = []
-debug-snapshots = []
+debug-diagnostics = ["wacore/debug-diagnostics"]
+debug-snapshots = ["wacore/debug-snapshots"]
 danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
-default = ["simd", "sqlite-storage", "tokio-transport", "ureq-client", "tokio-native", "signal"]
+default = [
+    "simd",
+    "sqlite-storage",
+    "tokio-transport",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+]
 simd = ["wacore/simd"]
 ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
 tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
@@ -92,12 +101,15 @@ tokio-native = ["tokio/rt-multi-thread"]
 [dependencies]
 anyhow = { workspace = true }
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 dashmap = "6.1.0"
 env_logger = { version = "0.11", default-features = false }
+event-listener = { workspace = true }
+futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
 log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"] }

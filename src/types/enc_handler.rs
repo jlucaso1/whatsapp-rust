@@ -23,10 +23,11 @@ pub trait EncHandler: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TokioRuntime;
     use crate::types::message::MessageInfo;
     use anyhow::Result;
+    use async_lock::Mutex;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use wacore_binary::node::Node;
 
     /// Mock handler for testing custom enc types
@@ -79,6 +80,7 @@ mod tests {
             .with_transport_factory(transport)
             .with_http_client(http_client)
             .with_enc_handler("frskmsg", mock_handler)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -105,6 +107,7 @@ mod tests {
             .with_http_client(http_client)
             .with_enc_handler("frskmsg", handler1)
             .with_enc_handler("customtype", handler2)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -128,6 +131,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::Client;
 use crate::http::{HttpClient, HttpRequest, HttpResponse};
+use crate::runtime_impl::TokioRuntime;
 use crate::store::SqliteStore;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::store::traits::Backend;
@@ -59,6 +60,7 @@ pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
     );
 
     let (client, _rx) = Client::new(
+        Arc::new(TokioRuntime),
         pm,
         Arc::new(MockTransportFactory::new()),
         Arc::new(MockHttpClient),
@@ -94,6 +96,7 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
     );
 
     let (client, _rx) = Client::new(
+        Arc::new(TokioRuntime),
         pm,
         Arc::new(MockTransportFactory::new()),
         Arc::new(FailingMockHttpClient),

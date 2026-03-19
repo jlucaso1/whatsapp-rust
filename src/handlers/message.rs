@@ -3,7 +3,6 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::warn;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use wacore_binary::node::Node;
 
 /// Handler for `<message>` stanzas.
@@ -48,7 +47,7 @@ impl StanzaHandler for MessageHandler {
         // ordering since we hold the lock for the entire enqueue operation.
         let enqueue_mutex = client
             .message_enqueue_locks
-            .get_with_by_ref(&chat_id, async { Arc::new(tokio::sync::Mutex::new(())) })
+            .get_with_by_ref(&chat_id, async { Arc::new(async_lock::Mutex::new(())) })
             .await;
 
         // Acquire the lock - this serializes all enqueue operations for this chat
@@ -60,7 +59,7 @@ impl StanzaHandler for MessageHandler {
             .get_with_by_ref(&chat_id, async {
                 // Create a channel with backpressure
                 // Increased capacity to handle high message rates without blocking
-                let (tx, mut rx) = mpsc::channel::<Arc<Node>>(10000);
+                let (tx, rx) = async_channel::bounded::<Arc<Node>>(10000);
 
                 let client_for_worker = client.clone();
 
@@ -69,12 +68,15 @@ impl StanzaHandler for MessageHandler {
                 // the cached tx, and any cloned tx's are short-lived). No explicit
                 // invalidate() here — that would race with new queue entries under the
                 // same key (see bug audit #27).
-                tokio::spawn(async move {
-                    while let Some(msg_node) = rx.recv().await {
-                        let client = client_for_worker.clone();
-                        Box::pin(client.handle_incoming_message(msg_node)).await;
-                    }
-                });
+                client
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        while let Ok(msg_node) = rx.recv().await {
+                            let client = client_for_worker.clone();
+                            Box::pin(client.handle_incoming_message(msg_node)).await;
+                        }
+                    }))
+                    .detach();
 
                 tx
             })

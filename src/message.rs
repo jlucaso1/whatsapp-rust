@@ -68,9 +68,11 @@ impl Client {
         // Send delivery receipt immediately in the background.
         let client_clone = self.clone();
         let info_clone = info.clone();
-        tokio::spawn(async move {
-            client_clone.send_delivery_receipt(&info_clone).await;
-        });
+        self.runtime
+            .spawn(Box::pin(async move {
+                client_clone.send_delivery_receipt(&info_clone).await;
+            }))
+            .detach();
 
         // Dispatch to event bus
         self.core
@@ -224,7 +226,7 @@ impl Client {
         let client = Arc::clone(self);
         let info = info.clone();
 
-        tokio::spawn(async move {
+        self.runtime.spawn(Box::pin(async move {
             let cache_key = client
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
                 .await;
@@ -279,7 +281,7 @@ impl Client {
             if retry_count == 1 {
                 client.spawn_pdo_request(&info);
             }
-        });
+        })).detach();
     }
 
     pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<Node>) {
@@ -458,17 +460,19 @@ impl Client {
                 let enc_node_clone = Arc::new(enc_node.clone());
                 let enc_type_owned = enc_type.to_string();
 
-                tokio::spawn(async move {
-                    if let Err(e) = handler_clone
-                        .handle(client_clone, &enc_node_clone, &info_arc)
-                        .await
-                    {
-                        log::warn!(
-                            "Custom handler for enc type '{}' failed: {e:?}",
-                            enc_type_owned
-                        );
-                    }
-                });
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        if let Err(e) = handler_clone
+                            .handle(client_clone, &enc_node_clone, &info_arc)
+                            .await
+                        {
+                            log::warn!(
+                                "Custom handler for enc type '{}' failed: {e:?}",
+                                enc_type_owned
+                            );
+                        }
+                    }))
+                    .detach();
                 continue;
             }
 
@@ -541,16 +545,7 @@ impl Client {
         // ALL message processing globally, matching WA Web's allChatQueue pattern.
         // After offline sync completes, permits are increased for parallel processing.
         let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
-        let _global_permit = match semaphore.acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                log::error!(
-                    "Message processing semaphore closed, dropping message {}",
-                    info.id
-                );
-                return;
-            }
-        };
+        let _global_permit = semaphore.acquire_arc().await;
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
@@ -698,7 +693,7 @@ impl Client {
         let session_mutex = self
             .session_locks
             .get_with(signal_addr_str.clone(), async {
-                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
         let _session_guard = session_mutex.lock().await;
@@ -1441,7 +1436,7 @@ impl Client {
                 .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             // First time setting; notify any waiters
-            self.initial_keys_synced_notifier.notify_waiters();
+            self.initial_keys_synced_notifier.notify(usize::MAX);
         }
     }
 
@@ -1636,7 +1631,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
@@ -1689,7 +1691,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1756,7 +1765,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1836,8 +1852,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -1933,8 +1955,14 @@ mod tests {
                 .expect("test backend should initialize"),
         );
         let transport_factory = Arc::new(crate::transport::mock::MockTransportFactory::new());
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), transport_factory, mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            transport_factory,
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2155,7 +2183,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Test case 1: LID group message with participant_pn
         let lid_group_node = NodeBuilder::new("message")
@@ -2389,8 +2424,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2480,8 +2521,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -2578,8 +2625,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2648,8 +2701,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2722,8 +2781,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate a group chat scenario
         let group_jid: Jid = "120363021033254949@g.us"
@@ -2812,7 +2877,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate self-sent DM to another user (from your phone to your bot echo)
         // Real log example:
@@ -2899,7 +2971,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate DM from another user via their LID
         // The sender_pn attribute should contain their phone number for session lookup
@@ -2987,7 +3066,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate DM to self (like "Notes to Myself" or pinging yourself)
         // from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
@@ -3051,7 +3137,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3113,7 +3206,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3162,7 +3262,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3228,7 +3335,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3298,7 +3412,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3432,7 +3553,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3540,7 +3668,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3676,7 +3811,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
         client
     }
 
@@ -4123,7 +4265,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let node = NodeBuilder::new("message")
             .attr("from", "15551234567@s.whatsapp.net")
@@ -4166,8 +4315,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
         let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();

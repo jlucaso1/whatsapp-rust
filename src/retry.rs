@@ -548,7 +548,7 @@ impl Client {
         let session_mutex = self
             .session_locks
             .get_with(signal_addr_str.clone(), async {
-                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
         let _session_guard = session_mutex.lock().await;
@@ -842,6 +842,7 @@ mod tests {
         let mut config = crate::cache_config::CacheConfig::default();
         config.recent_messages.capacity = 1_000;
         let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -1740,6 +1741,7 @@ mod tests {
         let mut config = crate::cache_config::CacheConfig::default();
         config.recent_messages.capacity = 1_000;
         let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),

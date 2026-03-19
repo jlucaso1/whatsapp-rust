@@ -3,10 +3,10 @@
 //! Sends `<ib><unified_session id="..."/></ib>` stanzas to match WhatsApp Web behavior.
 //! Features: server time sync, duplicate prevention, sequence counter.
 
+use async_lock::Mutex;
 use log::debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use tokio::sync::Mutex;
 use wacore::ib::{IbStanza, UnifiedSession};
 use wacore::protocol::ProtocolNode;
 use wacore_binary::node::Node;

@@ -1,7 +1,7 @@
 use crate::store::Device;
+use async_lock::Mutex;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use wacore::libsignal::protocol::error::Result as SignalResult;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PrivateKey,
@@ -427,7 +427,7 @@ impl SessionStore for Device {
     }
 }
 
-use tokio::sync::RwLock;
+use async_lock::RwLock;
 
 pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);
 

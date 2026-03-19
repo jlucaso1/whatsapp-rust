@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use async_lock::Mutex;
 use async_trait::async_trait;
 use prost::Message;
 use thiserror::Error;
-use tokio::sync::Mutex;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::keys::ExpandedAppStateKeys;
 use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list, parse_patch_lists};
@@ -32,12 +32,14 @@ pub enum AppStateSyncError {
 #[derive(Clone)]
 pub struct AppStateProcessor {
     pub(crate) backend: Arc<dyn Backend>,
+    pub(crate) runtime: Arc<dyn wacore::runtime::Runtime>,
     key_cache: Arc<Mutex<HashMap<String, Arc<ExpandedAppStateKeys>>>>,
 }
 
 impl AppStateProcessor {
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
+    pub fn new(backend: Arc<dyn Backend>, runtime: Arc<dyn wacore::runtime::Runtime>) -> Self {
         Self {
+            runtime,
             backend,
             key_cache: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -223,7 +225,7 @@ impl AppStateProcessor {
             let collection_name_owned = collection_name.to_string();
 
             // Offload CPU-intensive snapshot processing to a blocking thread
-            let result = tokio::task::spawn_blocking(move || {
+            let result = wacore::runtime::blocking(&*self.runtime, move || {
                 let get_keys = |key_id: &[u8]| -> Result<
                     ExpandedAppStateKeys,
                     wacore::appstate::AppStateError,
@@ -248,7 +250,6 @@ impl AppStateProcessor {
                 Ok::<_, wacore::appstate::AppStateError>((result, snapshot_state))
             })
             .await
-            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
 
             let (snapshot_result, snapshot_state) = result;
@@ -309,7 +310,7 @@ impl AppStateProcessor {
             let coll = collection_name_owned.clone();
 
             // Offload CPU-intensive patch processing to a blocking thread
-            let result = tokio::task::spawn_blocking(move || {
+            let result = wacore::runtime::blocking(&*self.runtime, move || {
                 let get_keys = |key_id: &[u8]| -> Result<
                     ExpandedAppStateKeys,
                     wacore::appstate::AppStateError,
@@ -338,7 +339,6 @@ impl AppStateProcessor {
                 )
             })
             .await
-            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
             .map_err(|e| anyhow!("{}", e))?;
 
             // Update local state with the result from the blocking task
@@ -769,7 +769,8 @@ mod tests {
     #[tokio::test]
     async fn test_process_patch_list_handles_set_overwrite_correctly() {
         let backend = Arc::new(MockBackend::default());
-        let processor = AppStateProcessor::new(backend.clone());
+        let processor =
+            AppStateProcessor::new(backend.clone(), Arc::new(crate::runtime_impl::TokioRuntime));
         let collection_name = WAPatchName::Regular;
         let index_mac = vec![1; 32];
         let key_id_bytes = b"test_key_id".to_vec();

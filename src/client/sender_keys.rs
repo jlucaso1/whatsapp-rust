@@ -103,9 +103,11 @@ impl Client {
                 let backend = self.persistence_manager.backend();
                 let cs = chat_str.clone();
                 let mid = key.id.clone();
-                tokio::spawn(async move {
-                    let _ = backend.take_sent_message(&cs, &mid).await;
-                });
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        let _ = backend.take_sent_message(&cs, &mid).await;
+                    }))
+                    .detach();
                 return Some(msg);
             }
             // Cache decode failed — fall through to DB
@@ -161,11 +163,13 @@ impl Client {
             let backend = self.persistence_manager.backend();
             let chat_str = key.chat.to_string();
             let msg_id = key.id.clone();
-            tokio::spawn(async move {
-                if let Err(e) = backend.store_sent_message(&chat_str, &msg_id, &bytes).await {
-                    log::warn!("Failed to store sent message to DB: {e}");
-                }
-            });
+            self.runtime
+                .spawn(Box::pin(async move {
+                    if let Err(e) = backend.store_sent_message(&chat_str, &msg_id, &bytes).await {
+                        log::warn!("Failed to store sent message to DB: {e}");
+                    }
+                }))
+                .detach();
         } else {
             // DB-only mode: await to guarantee the row exists before returning
             let chat_str = key.chat.to_string();

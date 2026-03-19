@@ -612,7 +612,7 @@ impl Client {
             let session_mutex = self
                 .session_locks
                 .get_with(signal_addr_str.clone(), async {
-                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    std::sync::Arc::new(async_lock::Mutex::new(()))
                 })
                 .await;
             let _session_guard = session_mutex.lock().await;
@@ -897,7 +897,7 @@ impl Client {
             let session_mutex = self
                 .session_locks
                 .get_with(signal_addr_str.clone(), async {
-                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    std::sync::Arc::new(async_lock::Mutex::new(()))
                 })
                 .await;
             let _session_guard = session_mutex.lock().await;

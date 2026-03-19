@@ -71,18 +71,20 @@ impl Client {
             let client_clone = Arc::clone(self);
             // Arc clone is cheap - just reference count increment
             let node_clone = Arc::clone(&node);
-            tokio::spawn(async move {
-                if let Err(e) = client_clone
-                    .handle_retry_receipt(&receipt, &node_clone)
-                    .await
-                {
-                    log::warn!(
-                        "Failed to handle retry receipt for {}: {:?}",
-                        receipt.message_ids[0],
-                        e
-                    );
-                }
-            });
+            self.runtime
+                .spawn(Box::pin(async move {
+                    if let Err(e) = client_clone
+                        .handle_retry_receipt(&receipt, &node_clone)
+                        .await
+                    {
+                        log::warn!(
+                            "Failed to handle retry receipt for {}: {:?}",
+                            receipt.message_ids[0],
+                            e
+                        );
+                    }
+                }))
+                .detach();
         } else if receipt_type == ReceiptType::EncRekeyRetry {
             // WA Web: both "retry" and "enc_rekey_retry" route through
             // handleMessageRetryRequest, but enc_rekey_retry branches to the
@@ -245,6 +247,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -288,6 +291,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -324,6 +328,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -362,6 +367,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -398,6 +404,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -485,6 +492,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),

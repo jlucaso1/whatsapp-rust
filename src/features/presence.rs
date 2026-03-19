@@ -227,6 +227,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TokioRuntime;
     use crate::bot::Bot;
     use crate::http::{HttpClient, HttpRequest, HttpResponse};
     use crate::store::SqliteStore;
@@ -273,6 +274,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -307,6 +309,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -348,6 +351,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -389,6 +393,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -412,6 +417,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
@@ -438,6 +444,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");

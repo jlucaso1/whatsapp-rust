@@ -378,23 +378,25 @@ impl Client {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
 
-        tokio::spawn(async move {
-            if !immediate {
-                // Add a small delay to allow the retry receipt to be processed first
-                // This avoids overwhelming the phone with simultaneous requests
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        self.runtime
+            .spawn(Box::pin(async move {
+                if !immediate {
+                    // Add a small delay to allow the retry receipt to be processed first
+                    // This avoids overwhelming the phone with simultaneous requests
+                    client_clone.runtime.sleep(Duration::from_millis(500)).await;
+                }
 
-            if let Err(e) = client_clone
-                .send_pdo_placeholder_resend_request(&info_clone)
-                .await
-            {
-                warn!(
-                    "Failed to send PDO request for message {} from {}: {:?}",
-                    info_clone.id, info_clone.source.sender, e
-                );
-            }
-        });
+                if let Err(e) = client_clone
+                    .send_pdo_placeholder_resend_request(&info_clone)
+                    .await
+                {
+                    warn!(
+                        "Failed to send PDO request for message {} from {}: {:?}",
+                        info_clone.id, info_clone.source.sender, e
+                    );
+                }
+            }))
+            .detach();
     }
 
     /// Spawns a PDO request for a message that failed to decrypt.

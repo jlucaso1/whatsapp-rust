@@ -1,11 +1,12 @@
 use crate::client::Client;
 use crate::socket::error::SocketError;
+use futures::FutureExt;
 use log::warn;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::time::timeout;
+use wacore::runtime::timeout as rt_timeout;
 use wacore_binary::node::Node;
 
 pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
@@ -137,7 +138,7 @@ impl Client {
             .unwrap_or_else(|| self.generate_request_id());
         let default_timeout = Duration::from_secs(75);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         self.response_waiters
             .lock()
             .await
@@ -157,11 +158,11 @@ impl Client {
 
         // Race the IQ response against shutdown so we fail fast on disconnect
         // instead of waiting the full timeout.
-        let shutdown = self.shutdown_notifier.notified();
+        let shutdown = self.shutdown_notifier.listen();
         let iq_timeout = query.timeout.unwrap_or(default_timeout);
 
-        tokio::select! {
-            result = timeout(iq_timeout, rx) => {
+        futures::select! {
+            result = rt_timeout(&*self.runtime, iq_timeout, rx).fuse() => {
                 match result {
                     Ok(Ok(response_node)) => match *request_utils.parse_iq_response(&response_node) {
                         Ok(()) => Ok(response_node),
@@ -174,7 +175,7 @@ impl Client {
                     }
                 }
             }
-            _ = shutdown => {
+            _ = shutdown.fuse() => {
                 self.response_waiters.lock().await.remove(&req_id);
                 Err(IqError::NotConnected)
             }

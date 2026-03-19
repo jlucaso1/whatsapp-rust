@@ -31,15 +31,17 @@ impl Client {
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
-            self.offline_sync_notifier.notify_waiters();
+            self.offline_sync_notifier.notify(usize::MAX);
 
             // Allow parallel message processing now that offline sync is done.
             // During offline sync, permits=1 serialized all message processing.
-            // Add 63 more permits for concurrent processing (1 + 63 = 64).
-            self.message_processing_semaphore
+            // Replace with a new semaphore with 64 permits for concurrent processing.
+            // Old workers holding the previous semaphore Arc will finish normally.
+            *self
+                .message_processing_semaphore
                 .lock()
-                .expect("message_processing_semaphore poisoned")
-                .add_permits(63);
+                .expect("message_processing_semaphore poisoned") =
+                std::sync::Arc::new(async_lock::Semaphore::new(64));
 
             self.core
                 .event_bus
@@ -55,12 +57,15 @@ impl Client {
 
     pub(crate) async fn wait_for_offline_delivery_end_with_timeout(&self, timeout: Duration) {
         let wait_generation = self.connection_generation.load(Ordering::Acquire);
-        let offline_fut = self.offline_sync_notifier.notified();
+        let offline_fut = self.offline_sync_notifier.listen();
         if self.offline_sync_completed.load(Ordering::Relaxed) {
             return;
         }
 
-        if tokio::time::timeout(timeout, offline_fut).await.is_err() {
+        if wacore::runtime::timeout(&*self.runtime, timeout, offline_fut)
+            .await
+            .is_err()
+        {
             // Guard: don't complete sync for a stale connection generation.
             // A reconnect may have happened while we were waiting, making this
             // timeout belong to the old connection.
@@ -105,7 +110,7 @@ impl Client {
         if previous <= 1 {
             self.history_sync_tasks_in_flight
                 .store(0, Ordering::Relaxed);
-            self.history_sync_idle_notifier.notify_waiters();
+            self.history_sync_idle_notifier.notify(usize::MAX);
         }
     }
 
@@ -117,22 +122,22 @@ impl Client {
 
         // Register the notified future *before* checking state to avoid missing
         // a notify_waiters() that fires between the check and the await.
-        let offline_fut = self.offline_sync_notifier.notified();
+        let offline_fut = self.offline_sync_notifier.listen();
         if !self.offline_sync_completed.load(Ordering::Relaxed) {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            tokio::time::timeout(remaining, offline_fut)
+            wacore::runtime::timeout(&*self.runtime, remaining, offline_fut)
                 .await
                 .map_err(|_| anyhow!("Timeout waiting for offline sync completion"))?;
         }
 
         loop {
-            let history_fut = self.history_sync_idle_notifier.notified();
+            let history_fut = self.history_sync_idle_notifier.listen();
             if self.history_sync_tasks_in_flight.load(Ordering::Relaxed) == 0 {
                 return Ok(());
             }
 
             let remaining = deadline.saturating_duration_since(Instant::now());
-            tokio::time::timeout(remaining, history_fut)
+            wacore::runtime::timeout(&*self.runtime, remaining, history_fut)
                 .await
                 .map_err(|_| anyhow!("Timeout waiting for history sync tasks to become idle"))?;
         }
@@ -214,7 +219,7 @@ impl Client {
                 let session_mutex = self
                     .session_locks
                     .get_with(signal_addr_str.clone(), async {
-                        std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                        std::sync::Arc::new(async_lock::Mutex::new(()))
                     })
                     .await;
                 let _session_guard = session_mutex.lock().await;

@@ -1,8 +1,8 @@
 use crate::store::Device;
 use crate::store::signal_cache::SignalStoreCache;
+use async_lock::RwLock;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PreKeyId,
     PreKeyRecord, PreKeyStore, ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,

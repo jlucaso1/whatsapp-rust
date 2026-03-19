@@ -155,11 +155,10 @@ impl Client {
             .try_into()
             .expect("ephemeral key is 32 bytes");
 
-        let wrapped_ephemeral = tokio::task::spawn_blocking(move || {
+        let wrapped_ephemeral = wacore::runtime::blocking(&*self.runtime, move || {
             PairCodeUtils::encrypt_ephemeral_pub(&ephemeral_pub, &code_clone)
         })
-        .await
-        .map_err(|e| PairCodeError::CryptoError(format!("spawn_blocking failed: {e}")))?;
+        .await;
 
         // Build the stage 1 IQ node
         let req_id = self.generate_request_id();
@@ -300,23 +299,16 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Decrypt primary's ephemeral public key (expensive PBKDF2 operation)
     // Run in spawn_blocking to avoid stalling the async runtime
     let pair_code_clone = pair_code.clone();
-    let primary_ephemeral_pub = match tokio::task::spawn_blocking(move || {
+    let primary_ephemeral_pub = match wacore::runtime::blocking(&*client.runtime, move || {
         PairCodeUtils::decrypt_primary_ephemeral_pub(&primary_wrapped_ephemeral, &pair_code_clone)
     })
     .await
     {
-        Ok(Ok(pub_key)) => pub_key,
-        Ok(Err(e)) => {
-            error!(
-                target: "Client/PairCode",
-                "Failed to decrypt primary ephemeral pub: {e}"
-            );
-            return false;
-        }
+        Ok(pub_key) => pub_key,
         Err(e) => {
             error!(
                 target: "Client/PairCode",
-                "spawn_blocking failed: {e}"
+                "Failed to decrypt primary ephemeral pub: {e}"
             );
             return false;
         }

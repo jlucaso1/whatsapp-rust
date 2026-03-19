@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::request::IqError;
+use futures::FutureExt;
 use log::{debug, warn};
 use rand::Rng;
 use std::sync::Arc;
@@ -131,8 +132,8 @@ impl Client {
             );
             let interval = Duration::from_millis(interval_ms as u64);
 
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {
+            futures::select! {
+                _ = self.runtime.sleep(interval).fuse() => {
                     if !self.is_connected() {
                         debug!(target: "Client/Keepalive", "Not connected, exiting keepalive loop.");
                         return;
@@ -178,11 +179,11 @@ impl Client {
                                     .unwrap_or_default()
                                     .as_secs() as i64
                                     - sent_msg_ttl as i64;
-                                tokio::spawn(async move {
+                                self.runtime.spawn(Box::pin(async move {
                                     if let Err(e) = backend.delete_expired_sent_messages(cutoff).await {
                                         log::debug!(target: "Client/Keepalive", "Sent message cleanup error: {e}");
                                     }
-                                });
+                                })).detach();
                             }
                         }
                         KeepaliveResult::FatalFailure => {
@@ -210,7 +211,7 @@ impl Client {
                         }
                     }
                 },
-                _ = self.shutdown_notifier.notified() => {
+                _ = self.shutdown_notifier.listen().fuse() => {
                     debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
                     return;
                 }
