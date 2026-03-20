@@ -436,8 +436,10 @@ impl Client {
 }
 
 fn strip_invite_url(code: &str) -> &str {
-    code.trim_start_matches("https://chat.whatsapp.com/")
-        .trim_start_matches("http://chat.whatsapp.com/")
+    let code = code.trim().trim_end_matches('/');
+    code.strip_prefix("https://chat.whatsapp.com/")
+        .or_else(|| code.strip_prefix("http://chat.whatsapp.com/"))
+        .unwrap_or(code)
 }
 
 #[cfg(test)]

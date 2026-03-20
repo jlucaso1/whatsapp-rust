@@ -1570,6 +1570,7 @@ impl Client {
         call_id: &str,
         call_from: &wacore_binary::jid::Jid,
     ) -> Result<(), anyhow::Error> {
+        anyhow::ensure!(!call_id.is_empty(), "call_id cannot be empty");
         let id = self.generate_request_id();
 
         let stanza = wacore_binary::builder::NodeBuilder::new("call")

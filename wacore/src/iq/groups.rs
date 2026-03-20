@@ -1820,7 +1820,7 @@ impl IqSpec for AcceptGroupInviteIq {
     type Response = JoinGroupResult;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let to: Jid = "@g.us".parse().unwrap();
+        let to = Jid::new("", GROUP_SERVER);
         InfoQuery::set_ref(
             GROUP_IQ_NAMESPACE,
             &to,
@@ -1877,7 +1877,7 @@ impl IqSpec for GetGroupInviteInfoIq {
     type Response = GroupInfoResponse;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let to: Jid = "@g.us".parse().unwrap();
+        let to = Jid::new("", GROUP_SERVER);
         InfoQuery::get_ref(
             GROUP_IQ_NAMESPACE,
             &to,
