@@ -50,7 +50,7 @@ impl Client {
         *self.media_conn.write().await = None;
     }
 
-    pub(crate) async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
+    pub async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
         {
             let guard = self.media_conn.read().await;
             if !force

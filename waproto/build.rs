@@ -39,6 +39,14 @@ fn main() -> std::io::Result<()> {
         ".",
         "#[cfg_attr(feature = \"serde-deserialize\", derive(serde::Deserialize))]",
     );
+    // Make serde deserialization lenient — use defaults for missing fields.
+    // This matches protobuf semantics (missing = default value) and avoids
+    // "missing field" errors when deserializing partial JSON from JS.
+    // Uses message_attribute (not type_attribute) so it only applies to structs, not enums.
+    config.message_attribute(
+        ".",
+        "#[cfg_attr(feature = \"serde-deserialize\", serde(default))]",
+    );
 
     // Use bytes::Bytes instead of Vec<u8> for frequently-serialized cryptographic structures.
     // This enables O(1) cloning (reference-counted) instead of O(n) copying.

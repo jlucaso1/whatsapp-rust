@@ -3,6 +3,7 @@
 
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvDeviceIdentity {
     #[prost(uint32, optional, tag = "1")]
@@ -18,6 +19,7 @@ pub struct AdvDeviceIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvKeyIndexList {
     #[prost(uint32, optional, tag = "1")]
@@ -33,6 +35,7 @@ pub struct AdvKeyIndexList {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedDeviceIdentity {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -46,6 +49,7 @@ pub struct AdvSignedDeviceIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedDeviceIdentityHmac {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -57,6 +61,7 @@ pub struct AdvSignedDeviceIdentityHmac {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedKeyIndexList {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -68,6 +73,7 @@ pub struct AdvSignedKeyIndexList {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiHomeState {
     #[prost(int64, optional, tag = "1")]
@@ -81,6 +87,7 @@ pub struct AiHomeState {
 pub mod ai_home_state {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiHomeOption {
         #[prost(enumeration = "ai_home_option::AiHomeActionType", optional, tag = "1")]
@@ -138,6 +145,7 @@ pub mod ai_home_state {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiQueryFanout {
     #[prost(message, optional, tag = "1")]
@@ -149,6 +157,7 @@ pub struct AiQueryFanout {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRegenerateMetadata {
     #[prost(message, optional, tag = "1")]
@@ -158,6 +167,7 @@ pub struct AiRegenerateMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseCodeMetadata {
     #[prost(string, optional, tag = "1")]
@@ -169,6 +179,7 @@ pub struct AiRichResponseCodeMetadata {
 pub mod ai_rich_response_code_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseCodeBlock {
         #[prost(enumeration = "AiRichResponseCodeHighlightType", optional, tag = "1")]
@@ -219,6 +230,7 @@ pub mod ai_rich_response_code_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseContentItemsMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -230,6 +242,7 @@ pub struct AiRichResponseContentItemsMetadata {
 pub mod ai_rich_response_content_items_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseContentItemMetadata {
         #[prost(oneof = "ai_rich_response_content_item_metadata::AIRichResponseContentItem", tags = "1")]
@@ -247,6 +260,7 @@ pub mod ai_rich_response_content_items_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseReelItem {
         #[prost(string, optional, tag = "1")]
@@ -289,6 +303,7 @@ pub mod ai_rich_response_content_items_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseDynamicMetadata {
     #[prost(enumeration = "ai_rich_response_dynamic_metadata::AiRichResponseDynamicMetadataType", optional, tag = "1")]
@@ -336,6 +351,7 @@ pub mod ai_rich_response_dynamic_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseGridImageMetadata {
     #[prost(message, optional, tag = "1")]
@@ -345,6 +361,7 @@ pub struct AiRichResponseGridImageMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseImageUrl {
     #[prost(string, optional, tag = "1")]
@@ -356,6 +373,7 @@ pub struct AiRichResponseImageUrl {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseInlineImageMetadata {
     #[prost(message, optional, tag = "1")]
@@ -403,6 +421,7 @@ pub mod ai_rich_response_inline_image_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseLatexMetadata {
     #[prost(string, optional, tag = "1")]
@@ -414,6 +433,7 @@ pub struct AiRichResponseLatexMetadata {
 pub mod ai_rich_response_latex_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AiRichResponseLatexExpression {
         #[prost(string, optional, tag = "1")]
@@ -438,6 +458,7 @@ pub mod ai_rich_response_latex_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseMapMetadata {
     #[prost(double, optional, tag = "1")]
@@ -457,6 +478,7 @@ pub struct AiRichResponseMapMetadata {
 pub mod ai_rich_response_map_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AiRichResponseMapAnnotation {
         #[prost(uint32, optional, tag = "1")]
@@ -473,6 +495,7 @@ pub mod ai_rich_response_map_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseMessage {
     #[prost(enumeration = "AiRichResponseMessageType", optional, tag = "1")]
@@ -486,6 +509,7 @@ pub struct AiRichResponseMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseSubMessage {
     #[prost(enumeration = "AiRichResponseSubMessageType", optional, tag = "1")]
@@ -511,6 +535,7 @@ pub struct AiRichResponseSubMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseTableMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -522,6 +547,7 @@ pub struct AiRichResponseTableMetadata {
 pub mod ai_rich_response_table_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseTableRow {
         #[prost(string, repeated, tag = "1")]
@@ -532,6 +558,7 @@ pub mod ai_rich_response_table_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseUnifiedResponse {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -539,6 +566,7 @@ pub struct AiRichResponseUnifiedResponse {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiThreadInfo {
     #[prost(message, optional, tag = "1")]
@@ -550,6 +578,7 @@ pub struct AiThreadInfo {
 pub mod ai_thread_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadClientInfo {
         #[prost(enumeration = "ai_thread_client_info::AiThreadType", optional, tag = "1")]
@@ -591,6 +620,7 @@ pub mod ai_thread_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadServerInfo {
         #[prost(string, optional, tag = "1")]
@@ -599,6 +629,7 @@ pub mod ai_thread_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Account {
     #[prost(string, optional, tag = "1")]
@@ -612,6 +643,7 @@ pub struct Account {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionLink {
     #[prost(string, optional, tag = "1")]
@@ -621,6 +653,7 @@ pub struct ActionLink {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AutoDownloadSettings {
     #[prost(bool, optional, tag = "1")]
@@ -634,6 +667,7 @@ pub struct AutoDownloadSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AvatarUserSettings {
     #[prost(string, optional, tag = "1")]
@@ -643,6 +677,7 @@ pub struct AvatarUserSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizAccountLinkInfo {
     #[prost(uint64, optional, tag = "1")]
@@ -714,6 +749,7 @@ pub mod biz_account_link_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizAccountPayload {
     #[prost(message, optional, tag = "1")]
@@ -723,6 +759,7 @@ pub struct BizAccountPayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizIdentityInfo {
     #[prost(enumeration = "biz_identity_info::VerifiedLevelValue", optional, tag = "1")]
@@ -834,6 +871,7 @@ pub mod biz_identity_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotAgeCollectionMetadata {
     #[prost(bool, optional, tag = "1")]
@@ -876,6 +914,7 @@ pub mod bot_age_collection_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotAvatarMetadata {
     #[prost(uint32, optional, tag = "1")]
@@ -891,6 +930,7 @@ pub struct BotAvatarMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotCapabilityMetadata {
     #[prost(enumeration = "bot_capability_metadata::BotCapabilityType", repeated, packed = "false", tag = "1")]
@@ -1088,6 +1128,7 @@ pub mod bot_capability_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotDocumentMessageMetadata {
     #[prost(enumeration = "bot_document_message_metadata::DocumentPluginType", optional, tag = "1")]
@@ -1126,6 +1167,7 @@ pub mod bot_document_message_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotFeedbackMessage {
     #[prost(message, optional, tag = "1")]
@@ -1147,6 +1189,7 @@ pub struct BotFeedbackMessage {
 pub mod bot_feedback_message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SideBySideSurveyMetadata {
         #[prost(string, optional, tag = "1")]
@@ -1172,6 +1215,7 @@ pub mod bot_feedback_message {
     pub mod side_by_side_survey_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SideBySideSurveyAnalyticsData {
             #[prost(string, optional, tag = "1")]
@@ -1183,6 +1227,7 @@ pub mod bot_feedback_message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SidebySideSurveyMetaAiAnalyticsData {
             #[prost(uint32, optional, tag = "1")]
@@ -1208,6 +1253,7 @@ pub mod bot_feedback_message {
         pub mod sideby_side_survey_meta_ai_analytics_data {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyAbandonEventData {
                 #[prost(string, optional, tag = "1")]
@@ -1215,6 +1261,7 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCtaClickEventData {
                 #[prost(bool, optional, tag = "1")]
@@ -1224,6 +1271,7 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCtaImpressionEventData {
                 #[prost(bool, optional, tag = "1")]
@@ -1231,11 +1279,13 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCardImpressionEventData {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyResponseEventData {
                 #[prost(string, optional, tag = "1")]
@@ -1417,6 +1467,7 @@ pub mod bot_feedback_message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotGroupMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -1424,6 +1475,7 @@ pub struct BotGroupMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotGroupParticipantMetadata {
     #[prost(string, optional, tag = "1")]
@@ -1431,6 +1483,7 @@ pub struct BotGroupParticipantMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotImagineMetadata {
     #[prost(enumeration = "bot_imagine_metadata::ImagineType", optional, tag = "1")]
@@ -1478,6 +1531,7 @@ pub mod bot_imagine_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotLinkedAccount {
     #[prost(enumeration = "bot_linked_account::BotLinkedAccountType", optional, tag = "1")]
@@ -1513,6 +1567,7 @@ pub mod bot_linked_account {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotLinkedAccountsMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -1524,6 +1579,7 @@ pub struct BotLinkedAccountsMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMediaMetadata {
     #[prost(string, optional, tag = "1")]
@@ -1577,6 +1633,7 @@ pub mod bot_media_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMemoryFact {
     #[prost(string, optional, tag = "1")]
@@ -1586,6 +1643,7 @@ pub struct BotMemoryFact {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMemoryMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -1597,6 +1655,7 @@ pub struct BotMemoryMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMemuMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -1604,6 +1663,7 @@ pub struct BotMemuMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMessageOrigin {
     #[prost(enumeration = "bot_message_origin::BotMessageOriginType", optional, tag = "1")]
@@ -1639,6 +1699,7 @@ pub mod bot_message_origin {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMessageOriginMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -1646,6 +1707,7 @@ pub struct BotMessageOriginMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMessageSharingInfo {
     #[prost(enumeration = "BotMetricsEntryPoint", optional, tag = "1")]
@@ -1655,6 +1717,7 @@ pub struct BotMessageSharingInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMetadata {
     #[prost(message, optional, tag = "1")]
@@ -1734,6 +1797,7 @@ pub struct BotMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMetricsMetadata {
     #[prost(string, optional, tag = "1")]
@@ -1745,6 +1809,7 @@ pub struct BotMetricsMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotModeSelectionMetadata {
     #[prost(enumeration = "bot_mode_selection_metadata::BotUserSelectionMode", repeated, packed = "false", tag = "1")]
@@ -1783,6 +1848,7 @@ pub mod bot_mode_selection_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotModelMetadata {
     #[prost(enumeration = "bot_model_metadata::ModelType", optional, tag = "1")]
@@ -1859,6 +1925,7 @@ pub mod bot_model_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPluginMetadata {
     #[prost(enumeration = "bot_plugin_metadata::SearchProvider", optional, tag = "1")]
@@ -1956,6 +2023,7 @@ pub mod bot_plugin_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotProgressIndicatorMetadata {
     #[prost(string, optional, tag = "1")]
@@ -1969,6 +2037,7 @@ pub struct BotProgressIndicatorMetadata {
 pub mod bot_progress_indicator_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct BotPlanningStepMetadata {
         #[prost(string, optional, tag = "1")]
@@ -1990,6 +2059,7 @@ pub mod bot_progress_indicator_metadata {
     pub mod bot_planning_step_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct BotPlanningSearchSourceMetadata {
             #[prost(string, optional, tag = "1")]
@@ -2003,6 +2073,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct BotPlanningSearchSourcesMetadata {
             #[prost(string, optional, tag = "1")]
@@ -2051,6 +2122,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct BotPlanningStepSectionMetadata {
             #[prost(string, optional, tag = "1")]
@@ -2132,6 +2204,7 @@ pub mod bot_progress_indicator_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPromotionMessageMetadata {
     #[prost(enumeration = "bot_promotion_message_metadata::BotPromotionType", optional, tag = "1")]
@@ -2175,6 +2248,7 @@ pub mod bot_promotion_message_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPromptSuggestion {
     #[prost(string, optional, tag = "1")]
@@ -2184,6 +2258,7 @@ pub struct BotPromptSuggestion {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotPromptSuggestions {
     #[prost(message, repeated, tag = "1")]
@@ -2191,6 +2266,7 @@ pub struct BotPromptSuggestions {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotQuotaMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -2200,6 +2276,7 @@ pub struct BotQuotaMetadata {
 pub mod bot_quota_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotFeatureQuotaMetadata {
         #[prost(enumeration = "bot_feature_quota_metadata::BotFeatureType", optional, tag = "1")]
@@ -2243,6 +2320,7 @@ pub mod bot_quota_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotReminderMetadata {
     #[prost(message, optional, tag = "1")]
@@ -2332,6 +2410,7 @@ pub mod bot_reminder_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotRenderingConfigMetadata {
     #[prost(string, optional, tag = "1")]
@@ -2341,6 +2420,7 @@ pub struct BotRenderingConfigMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotRenderingMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -2350,6 +2430,7 @@ pub struct BotRenderingMetadata {
 pub mod bot_rendering_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Keyword {
         #[prost(string, optional, tag = "1")]
@@ -2360,6 +2441,7 @@ pub mod bot_rendering_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotSessionMetadata {
     #[prost(string, optional, tag = "1")]
@@ -2369,6 +2451,7 @@ pub struct BotSessionMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSignatureVerificationMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -2376,6 +2459,7 @@ pub struct BotSignatureVerificationMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotSignatureVerificationUseCaseProof {
     #[prost(int32, optional, tag = "1")]
@@ -2420,6 +2504,7 @@ pub mod bot_signature_verification_use_case_proof {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSourcesMetadata {
     #[prost(message, repeated, tag = "1")]
@@ -2429,6 +2514,7 @@ pub struct BotSourcesMetadata {
 pub mod bot_sources_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotSourceItem {
         #[prost(enumeration = "bot_source_item::SourceProvider", optional, tag = "1")]
@@ -2489,6 +2575,7 @@ pub mod bot_sources_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSuggestedPromptMetadata {
     #[prost(string, repeated, tag = "1")]
@@ -2502,6 +2589,7 @@ pub struct BotSuggestedPromptMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotUnifiedResponseMutation {
     #[prost(message, optional, tag = "1")]
@@ -2513,6 +2601,7 @@ pub struct BotUnifiedResponseMutation {
 pub mod bot_unified_response_mutation {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MediaDetailsMetadata {
         #[prost(string, optional, tag = "1")]
@@ -2524,6 +2613,7 @@ pub mod bot_unified_response_mutation {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SideBySideMetadata {
         #[prost(string, optional, tag = "1")]
@@ -2534,6 +2624,7 @@ pub mod bot_unified_response_mutation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CallLogRecord {
     #[prost(enumeration = "call_log_record::CallResult", optional, tag = "1")]
@@ -2571,6 +2662,7 @@ pub struct CallLogRecord {
 pub mod call_log_record {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ParticipantInfo {
         #[prost(string, optional, tag = "1")]
@@ -2701,6 +2793,7 @@ pub mod call_log_record {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CertChain {
     #[prost(message, optional, tag = "1")]
@@ -2712,6 +2805,7 @@ pub struct CertChain {
 pub mod cert_chain {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NoiseCertificate {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -2723,6 +2817,7 @@ pub mod cert_chain {
     pub mod noise_certificate {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Details {
             #[prost(uint32, optional, tag = "1")]
@@ -2740,6 +2835,7 @@ pub mod cert_chain {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChatLockSettings {
     #[prost(bool, optional, tag = "1")]
@@ -2749,6 +2845,7 @@ pub struct ChatLockSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChatRowOpaqueData {
     #[prost(message, optional, tag = "1")]
@@ -2758,6 +2855,7 @@ pub struct ChatRowOpaqueData {
 pub mod chat_row_opaque_data {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DraftMessage {
         #[prost(string, optional, tag = "1")]
@@ -2775,6 +2873,7 @@ pub mod chat_row_opaque_data {
     pub mod draft_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CtwaContextData {
             #[prost(string, optional, tag = "1")]
@@ -2838,6 +2937,7 @@ pub mod chat_row_opaque_data {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CtwaContextLinkData {
             #[prost(string, optional, tag = "1")]
@@ -2853,6 +2953,7 @@ pub mod chat_row_opaque_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Citation {
     #[prost(string, required, tag = "1")]
@@ -2866,6 +2967,7 @@ pub struct Citation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientPairingProps {
     #[prost(bool, optional, tag = "1")]
@@ -2879,6 +2981,7 @@ pub struct ClientPairingProps {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientPayload {
     #[prost(uint64, optional, tag = "1")]
@@ -2954,6 +3057,7 @@ pub struct ClientPayload {
 pub mod client_payload {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DnsSource {
         #[prost(enumeration = "dns_source::DnsResolutionMethod", optional, tag = "15")]
@@ -3012,6 +3116,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DevicePairingRegistrationData {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -3033,6 +3138,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InteropData {
         #[prost(uint64, optional, tag = "1")]
@@ -3044,6 +3150,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserAgent {
         #[prost(enumeration = "user_agent::Platform", optional, tag = "1")]
@@ -3083,6 +3190,7 @@ pub mod client_payload {
     pub mod user_agent {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct AppVersion {
             #[prost(uint32, optional, tag = "1")]
@@ -3306,6 +3414,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WebInfo {
         #[prost(string, optional, tag = "1")]
@@ -3325,6 +3434,7 @@ pub mod client_payload {
     pub mod web_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct WebdPayload {
             #[prost(bool, optional, tag = "1")]
@@ -3628,6 +3738,7 @@ pub mod client_payload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommentMetadata {
     #[prost(message, optional, tag = "1")]
@@ -3637,6 +3748,7 @@ pub struct CommentMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompanionCommitment {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -3644,6 +3756,7 @@ pub struct CompanionCommitment {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompanionEphemeralIdentity {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -3655,6 +3768,7 @@ pub struct CompanionEphemeralIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Config {
     #[prost(map = "uint32, message", tag = "1")]
@@ -3664,6 +3778,7 @@ pub struct Config {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ContextInfo {
     #[prost(string, optional, tag = "1")]
@@ -3781,6 +3896,7 @@ pub struct ContextInfo {
 pub mod context_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AdReplyInfo {
         #[prost(string, optional, tag = "1")]
@@ -3828,6 +3944,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessMessageForwardInfo {
         #[prost(string, optional, tag = "1")]
@@ -3835,6 +3952,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DataSharingContext {
         #[prost(bool, optional, tag = "1")]
@@ -3850,6 +3968,7 @@ pub mod context_info {
     pub mod data_sharing_context {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Parameters {
             #[prost(string, optional, tag = "1")]
@@ -3894,6 +4013,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalAdReplyInfo {
         #[prost(string, optional, tag = "1")]
@@ -4015,6 +4135,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct FeatureEligibilities {
         #[prost(bool, optional, tag = "1")]
@@ -4030,6 +4151,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ForwardedNewsletterMessageInfo {
         #[prost(string, optional, tag = "1")]
@@ -4081,6 +4203,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct QuestionReplyQuotedMessage {
         #[prost(int32, optional, tag = "1")]
@@ -4092,6 +4215,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusAudienceMetadata {
         #[prost(enumeration = "status_audience_metadata::AudienceType", optional, tag = "1")]
@@ -4130,6 +4254,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UtmInfo {
         #[prost(string, optional, tag = "1")]
@@ -4334,6 +4459,7 @@ pub mod context_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Conversation {
     #[prost(string, required, tag = "1")]
@@ -4484,6 +4610,7 @@ pub mod conversation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceCapabilities {
     #[prost(enumeration = "device_capabilities::ChatLockSupportLevel", optional, tag = "1")]
@@ -4503,6 +4630,7 @@ pub struct DeviceCapabilities {
 pub mod device_capabilities {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThread {
         #[prost(enumeration = "ai_thread::SupportLevel", optional, tag = "1")]
@@ -4544,6 +4672,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessBroadcast {
         #[prost(bool, optional, tag = "1")]
@@ -4551,6 +4680,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LidMigration {
         #[prost(uint64, optional, tag = "1")]
@@ -4558,6 +4688,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserHasAvatar {
         #[prost(bool, optional, tag = "1")]
@@ -4628,6 +4759,7 @@ pub mod device_capabilities {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceConsistencyCodeMessage {
     #[prost(uint32, optional, tag = "1")]
@@ -4637,6 +4769,7 @@ pub struct DeviceConsistencyCodeMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceListMetadata {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -4658,6 +4791,7 @@ pub struct DeviceListMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceProps {
     #[prost(string, optional, tag = "1")]
@@ -4675,6 +4809,7 @@ pub struct DeviceProps {
 pub mod device_props {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppVersion {
         #[prost(uint32, optional, tag = "1")]
@@ -4690,6 +4825,7 @@ pub mod device_props {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncConfig {
         #[prost(uint32, optional, tag = "1")]
@@ -4831,6 +4967,7 @@ pub mod device_props {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DisappearingMode {
     #[prost(enumeration = "disappearing_mode::Initiator", optional, tag = "1")]
@@ -4921,6 +5058,7 @@ pub mod disappearing_mode {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmbeddedContent {
     #[prost(oneof = "embedded_content::Content", tags = "1, 2")]
@@ -4940,6 +5078,7 @@ pub mod embedded_content {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmbeddedMessage {
     #[prost(string, optional, tag = "1")]
@@ -4949,6 +5088,7 @@ pub struct EmbeddedMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EmbeddedMusic {
     #[prost(string, optional, tag = "1")]
@@ -4982,6 +5122,7 @@ pub struct EmbeddedMusic {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EncryptedPairingRequest {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -4991,6 +5132,7 @@ pub struct EncryptedPairingRequest {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EphemeralSetting {
     #[prost(sfixed32, optional, tag = "1")]
@@ -5000,6 +5142,7 @@ pub struct EphemeralSetting {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventAdditionalMetadata {
     #[prost(bool, optional, tag = "1")]
@@ -5007,6 +5150,7 @@ pub struct EventAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventResponse {
     #[prost(message, optional, tag = "1")]
@@ -5020,6 +5164,7 @@ pub struct EventResponse {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExitCode {
     #[prost(uint64, optional, tag = "1")]
@@ -5029,6 +5174,7 @@ pub struct ExitCode {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExternalBlobReference {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -5046,6 +5192,7 @@ pub struct ExternalBlobReference {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Field {
     #[prost(uint32, optional, tag = "1")]
@@ -5061,6 +5208,7 @@ pub struct Field {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ForwardedAiBotMessageInfo {
     #[prost(string, optional, tag = "1")]
@@ -5072,6 +5220,7 @@ pub struct ForwardedAiBotMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalSettings {
     #[prost(message, optional, tag = "1")]
@@ -5117,6 +5266,7 @@ pub struct GlobalSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GroupHistoryBundleInfo {
     #[prost(message, optional, tag = "1")]
@@ -5166,6 +5316,7 @@ pub mod group_history_bundle_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupHistoryIndividualMessageInfo {
     #[prost(message, optional, tag = "1")]
@@ -5175,6 +5326,7 @@ pub struct GroupHistoryIndividualMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupMention {
     #[prost(string, optional, tag = "1")]
@@ -5184,6 +5336,7 @@ pub struct GroupMention {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupParticipant {
     #[prost(string, required, tag = "1")]
@@ -5229,6 +5382,7 @@ pub mod group_participant {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandshakeMessage {
     #[prost(message, optional, tag = "2")]
@@ -5242,6 +5396,7 @@ pub struct HandshakeMessage {
 pub mod handshake_message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ClientFinish {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -5253,6 +5408,7 @@ pub mod handshake_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ClientHello {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -5268,6 +5424,7 @@ pub mod handshake_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ServerHello {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -5282,6 +5439,7 @@ pub mod handshake_message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HistorySync {
     #[prost(enumeration = "history_sync::HistorySyncType", required, tag = "1")]
@@ -5395,6 +5553,7 @@ pub mod history_sync {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HistorySyncMsg {
     #[prost(message, optional, tag = "1")]
@@ -5404,6 +5563,7 @@ pub struct HistorySyncMsg {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HydratedTemplateButton {
     #[prost(uint32, optional, tag = "4")]
@@ -5415,6 +5575,7 @@ pub struct HydratedTemplateButton {
 pub mod hydrated_template_button {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedCallButton {
         #[prost(string, optional, tag = "1")]
@@ -5424,6 +5585,7 @@ pub mod hydrated_template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedQuickReplyButton {
         #[prost(string, optional, tag = "1")]
@@ -5433,6 +5595,7 @@ pub mod hydrated_template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedUrlButton {
         #[prost(string, optional, tag = "1")]
@@ -5492,6 +5655,7 @@ pub mod hydrated_template_button {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IdentityKeyPairStructure {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -5501,6 +5665,7 @@ pub struct IdentityKeyPairStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InThreadSurveyMetadata {
     #[prost(string, optional, tag = "1")]
@@ -5544,6 +5709,7 @@ pub struct InThreadSurveyMetadata {
 pub mod in_thread_survey_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InThreadSurveyOption {
         #[prost(string, optional, tag = "1")]
@@ -5555,6 +5721,7 @@ pub mod in_thread_survey_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InThreadSurveyPrivacyStatementPart {
         #[prost(string, optional, tag = "1")]
@@ -5564,6 +5731,7 @@ pub mod in_thread_survey_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InThreadSurveyQuestion {
         #[prost(string, optional, tag = "1")]
@@ -5576,6 +5744,7 @@ pub mod in_thread_survey_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InteractiveAnnotation {
     #[prost(message, repeated, tag = "1")]
@@ -5638,6 +5807,7 @@ pub mod interactive_annotation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InteractiveMessageAdditionalMetadata {
     #[prost(bool, optional, tag = "1")]
@@ -5645,6 +5815,7 @@ pub struct InteractiveMessageAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeepInChat {
     #[prost(enumeration = "KeepType", optional, tag = "1")]
@@ -5662,6 +5833,7 @@ pub struct KeepInChat {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeyExchangeMessage {
     #[prost(uint32, optional, tag = "1")]
@@ -5677,6 +5849,7 @@ pub struct KeyExchangeMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeyId {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -5684,6 +5857,7 @@ pub struct KeyId {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LidMigrationMapping {
     #[prost(uint64, required, tag = "1")]
@@ -5695,6 +5869,7 @@ pub struct LidMigrationMapping {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LidMigrationMappingSyncMessage {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -5702,6 +5877,7 @@ pub struct LidMigrationMappingSyncMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LidMigrationMappingSyncPayload {
     #[prost(message, repeated, tag = "1")]
@@ -5711,6 +5887,7 @@ pub struct LidMigrationMappingSyncPayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LegacyMessage {
     #[prost(message, optional, tag = "1")]
@@ -5720,6 +5897,7 @@ pub struct LegacyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitSharing {
     #[prost(bool, optional, tag = "1")]
@@ -5770,6 +5948,7 @@ pub mod limit_sharing {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LocalizedName {
     #[prost(string, optional, tag = "1")]
@@ -5781,6 +5960,7 @@ pub struct LocalizedName {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Location {
     #[prost(double, optional, tag = "1")]
@@ -5792,6 +5972,7 @@ pub struct Location {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaData {
     #[prost(string, optional, tag = "1")]
@@ -5799,6 +5980,7 @@ pub struct MediaData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaNotifyMessage {
     #[prost(string, optional, tag = "1")]
@@ -5810,6 +5992,7 @@ pub struct MediaNotifyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaRetryNotification {
     #[prost(string, optional, tag = "1")]
@@ -5860,6 +6043,7 @@ pub mod media_retry_notification {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MemberLabel {
     #[prost(string, optional, tag = "1")]
@@ -5869,6 +6053,7 @@ pub struct MemberLabel {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Message {
     #[prost(string, optional, tag = "1")]
@@ -6068,6 +6253,7 @@ pub struct Message {
 pub mod message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AlbumMessage {
         #[prost(uint32, optional, tag = "2")]
@@ -6079,6 +6265,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateFatalExceptionNotification {
         #[prost(string, repeated, tag = "1")]
@@ -6088,6 +6275,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKey {
         #[prost(message, optional, tag = "1")]
@@ -6097,6 +6285,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyData {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -6108,6 +6297,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyFingerprint {
         #[prost(uint32, optional, tag = "1")]
@@ -6119,6 +6309,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyId {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -6126,6 +6317,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AppStateSyncKeyRequest {
         #[prost(message, repeated, tag = "1")]
@@ -6133,6 +6325,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AppStateSyncKeyShare {
         #[prost(message, repeated, tag = "1")]
@@ -6140,6 +6333,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AudioMessage {
         #[prost(string, optional, tag = "1")]
@@ -6179,6 +6373,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BCallMessage {
         #[prost(string, optional, tag = "1")]
@@ -6226,6 +6421,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ButtonsMessage {
         #[prost(string, optional, tag = "6")]
@@ -6245,6 +6441,7 @@ pub mod message {
     pub mod buttons_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Button {
             #[prost(string, optional, tag = "1")]
@@ -6260,6 +6457,7 @@ pub mod message {
         pub mod button {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct ButtonText {
                 #[prost(string, optional, tag = "1")]
@@ -6267,6 +6465,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct NativeFlowInfo {
                 #[prost(string, optional, tag = "1")]
@@ -6367,6 +6566,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ButtonsResponseMessage {
         #[prost(string, optional, tag = "1")]
@@ -6418,6 +6618,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Call {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -6443,6 +6644,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallLogMessage {
         #[prost(bool, optional, tag = "1")]
@@ -6460,6 +6662,7 @@ pub mod message {
     pub mod call_log_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CallParticipant {
             #[prost(string, optional, tag = "1")]
@@ -6547,6 +6750,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CancelPaymentRequestMessage {
         #[prost(message, optional, tag = "1")]
@@ -6554,6 +6758,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Chat {
         #[prost(string, optional, tag = "1")]
@@ -6563,6 +6768,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CloudApiThreadControlNotification {
         #[prost(enumeration = "cloud_api_thread_control_notification::CloudApiThreadControl", optional, tag = "1")]
@@ -6582,6 +6788,7 @@ pub mod message {
     pub mod cloud_api_thread_control_notification {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CloudApiThreadControlNotificationContent {
             #[prost(string, optional, tag = "1")]
@@ -6623,6 +6830,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CommentMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -6632,6 +6840,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ContactMessage {
         #[prost(string, optional, tag = "1")]
@@ -6643,6 +6852,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ContactsArrayMessage {
         #[prost(string, optional, tag = "1")]
@@ -6654,6 +6864,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeclinePaymentRequestMessage {
         #[prost(message, optional, tag = "1")]
@@ -6661,6 +6872,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DeviceSentMessage {
         #[prost(string, optional, tag = "1")]
@@ -6672,6 +6884,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DocumentMessage {
         #[prost(string, optional, tag = "1")]
@@ -6721,6 +6934,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncCommentMessage {
         #[prost(message, optional, tag = "1")]
@@ -6732,6 +6946,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncEventResponseMessage {
         #[prost(message, optional, tag = "1")]
@@ -6743,6 +6958,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncReactionMessage {
         #[prost(message, optional, tag = "1")]
@@ -6754,6 +6970,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct EventMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -6783,6 +7000,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EventResponseMessage {
         #[prost(enumeration = "event_response_message::EventResponseType", optional, tag = "1")]
@@ -6831,6 +7049,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ExtendedTextMessage {
         #[prost(string, optional, tag = "1")]
@@ -7023,6 +7242,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct FullHistorySyncOnDemandRequestMetadata {
         #[prost(string, optional, tag = "1")]
@@ -7030,6 +7250,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FutureProofMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -7037,6 +7258,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct GroupInviteMessage {
         #[prost(string, optional, tag = "1")]
@@ -7089,6 +7311,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct HighlyStructuredMessage {
         #[prost(string, optional, tag = "1")]
@@ -7114,6 +7337,7 @@ pub mod message {
     pub mod highly_structured_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HsmLocalizableParameter {
             #[prost(string, optional, tag = "1")]
@@ -7125,6 +7349,7 @@ pub mod message {
         pub mod hsm_localizable_parameter {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HsmCurrency {
                 #[prost(string, optional, tag = "1")]
@@ -7134,6 +7359,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HsmDateTime {
                 #[prost(oneof = "hsm_date_time::DatetimeOneof", tags = "1, 2")]
@@ -7143,6 +7369,7 @@ pub mod message {
             pub mod hsm_date_time {
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct HsmDateTimeComponent {
                     #[prost(enumeration = "hsm_date_time_component::DayOfWeekType", optional, tag = "1")]
@@ -7236,6 +7463,7 @@ pub mod message {
                 }
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct HsmDateTimeUnixEpoch {
                     #[prost(int64, optional, tag = "1")]
@@ -7264,6 +7492,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncMessageAccessStatus {
         #[prost(bool, optional, tag = "1")]
@@ -7271,6 +7500,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncNotification {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -7306,6 +7536,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ImageMessage {
         #[prost(string, optional, tag = "1")]
@@ -7410,6 +7641,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InitialSecurityNotificationSettingSync {
         #[prost(bool, optional, tag = "1")]
@@ -7417,6 +7649,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InteractiveMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -7436,6 +7669,7 @@ pub mod message {
     pub mod interactive_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Body {
             #[prost(string, optional, tag = "1")]
@@ -7443,6 +7677,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct CarouselMessage {
             #[prost(message, repeated, tag = "1")]
@@ -7488,6 +7723,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CollectionMessage {
             #[prost(string, optional, tag = "1")]
@@ -7499,6 +7735,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Footer {
             #[prost(string, optional, tag = "1")]
@@ -7520,6 +7757,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Header {
             #[prost(string, optional, tag = "1")]
@@ -7553,6 +7791,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct NativeFlowMessage {
             #[prost(message, repeated, tag = "1")]
@@ -7566,6 +7805,7 @@ pub mod message {
         pub mod native_flow_message {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct NativeFlowButton {
                 #[prost(string, optional, tag = "1")]
@@ -7576,6 +7816,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ShopMessage {
             #[prost(string, optional, tag = "1")]
@@ -7638,6 +7879,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InteractiveResponseMessage {
         #[prost(message, optional, tag = "1")]
@@ -7651,6 +7893,7 @@ pub mod message {
     pub mod interactive_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Body {
             #[prost(string, optional, tag = "1")]
@@ -7691,6 +7934,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct NativeFlowResponseMessage {
             #[prost(string, optional, tag = "1")]
@@ -7710,6 +7954,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InvoiceMessage {
         #[prost(string, optional, tag = "1")]
@@ -7766,6 +8011,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct KeepInChatMessage {
         #[prost(message, optional, tag = "1")]
@@ -7777,6 +8023,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LinkPreviewMetadata {
         #[prost(message, optional, tag = "1")]
@@ -7843,6 +8090,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ListMessage {
         #[prost(string, optional, tag = "1")]
@@ -7866,6 +8114,7 @@ pub mod message {
     pub mod list_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Product {
             #[prost(string, optional, tag = "1")]
@@ -7873,6 +8122,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ProductListHeaderImage {
             #[prost(string, optional, tag = "1")]
@@ -7882,6 +8132,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductListInfo {
             #[prost(message, repeated, tag = "1")]
@@ -7893,6 +8144,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductSection {
             #[prost(string, optional, tag = "1")]
@@ -7902,6 +8154,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Row {
             #[prost(string, optional, tag = "1")]
@@ -7913,6 +8166,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Section {
             #[prost(string, optional, tag = "1")]
@@ -7954,6 +8208,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ListResponseMessage {
         #[prost(string, optional, tag = "1")]
@@ -7971,6 +8226,7 @@ pub mod message {
     pub mod list_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SingleSelectReply {
             #[prost(string, optional, tag = "1")]
@@ -8007,6 +8263,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct LiveLocationMessage {
         #[prost(double, optional, tag = "1")]
@@ -8032,6 +8289,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct LocationMessage {
         #[prost(double, optional, tag = "1")]
@@ -8061,6 +8319,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MmsThumbnailMetadata {
         #[prost(string, optional, tag = "1")]
@@ -8082,6 +8341,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MessageHistoryBundle {
         #[prost(string, optional, tag = "1")]
@@ -8103,6 +8363,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MessageHistoryMetadata {
         #[prost(string, repeated, tag = "1")]
@@ -8114,6 +8375,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MessageHistoryNotice {
         #[prost(message, optional, boxed, tag = "1")]
@@ -8123,6 +8385,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct NewsletterAdminInviteMessage {
         #[prost(string, optional, tag = "1")]
@@ -8140,6 +8403,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct NewsletterFollowerInviteMessage {
         #[prost(string, optional, tag = "1")]
@@ -8155,6 +8419,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct OrderMessage {
         #[prost(string, optional, tag = "1")]
@@ -8249,6 +8514,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentExtendedMetadata {
         #[prost(uint32, optional, tag = "1")]
@@ -8258,6 +8524,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentInviteMessage {
         #[prost(enumeration = "payment_invite_message::ServiceType", optional, tag = "1")]
@@ -8304,6 +8571,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentLinkMetadata {
         #[prost(message, optional, tag = "1")]
@@ -8317,6 +8585,7 @@ pub mod message {
     pub mod payment_link_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkButton {
             #[prost(string, optional, tag = "1")]
@@ -8324,6 +8593,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkHeader {
             #[prost(enumeration = "payment_link_header::PaymentLinkHeaderType", optional, tag = "1")]
@@ -8362,6 +8632,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkProvider {
             #[prost(string, optional, tag = "1")]
@@ -8370,6 +8641,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PeerDataOperationRequestMessage {
         #[prost(enumeration = "PeerDataOperationRequestType", optional, tag = "1")]
@@ -8395,6 +8667,7 @@ pub mod message {
     pub mod peer_data_operation_request_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct FullHistorySyncOnDemandRequest {
             #[prost(message, optional, tag = "1")]
@@ -8404,6 +8677,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct GalaxyFlowAction {
             #[prost(enumeration = "galaxy_flow_action::GalaxyFlowActionType", optional, tag = "1")]
@@ -8443,6 +8717,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HistorySyncChunkRetryRequest {
             #[prost(enumeration = "super::HistorySyncType", optional, tag = "1")]
@@ -8456,6 +8731,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HistorySyncOnDemandRequest {
             #[prost(string, optional, tag = "1")]
@@ -8473,6 +8749,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PlaceholderMessageResendRequest {
             #[prost(message, optional, tag = "1")]
@@ -8480,6 +8757,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct RequestStickerReupload {
             #[prost(string, optional, tag = "1")]
@@ -8487,6 +8765,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct RequestUrlPreview {
             #[prost(string, optional, tag = "1")]
@@ -8496,6 +8775,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SyncDCollectionFatalRecoveryRequest {
             #[prost(string, optional, tag = "1")]
@@ -8506,6 +8786,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PeerDataOperationRequestResponseMessage {
         #[prost(enumeration = "PeerDataOperationRequestType", optional, tag = "1")]
@@ -8519,6 +8800,7 @@ pub mod message {
     pub mod peer_data_operation_request_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct PeerDataOperationResult {
             #[prost(enumeration = "super::super::media_retry_notification::ResultType", optional, tag = "1")]
@@ -8546,6 +8828,7 @@ pub mod message {
         pub mod peer_data_operation_result {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct CompanionCanonicalUserNonceFetchResponse {
                 #[prost(string, optional, tag = "1")]
@@ -8557,6 +8840,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct CompanionMetaNonceFetchResponse {
                 #[prost(string, optional, tag = "1")]
@@ -8564,6 +8848,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct FullHistorySyncOnDemandRequestResponse {
                 #[prost(message, optional, tag = "1")]
@@ -8573,6 +8858,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HistorySyncChunkRetryResponse {
                 #[prost(enumeration = "super::super::HistorySyncType", optional, tag = "1")]
@@ -8588,6 +8874,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct LinkPreviewResponse {
                 #[prost(string, optional, tag = "1")]
@@ -8611,6 +8898,7 @@ pub mod message {
             pub mod link_preview_response {
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct LinkPreviewHighQualityThumbnail {
                     #[prost(string, optional, tag = "1")]
@@ -8630,6 +8918,7 @@ pub mod message {
                 }
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct PaymentLinkPreviewMetadata {
                     #[prost(bool, optional, tag = "1")]
@@ -8640,6 +8929,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct PlaceholderMessageResendResponse {
                 #[prost(bytes = "vec", optional, tag = "1")]
@@ -8647,6 +8937,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SyncDSnapshotFatalRecoveryResponse {
                 #[prost(bytes = "vec", optional, tag = "1")]
@@ -8656,6 +8947,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct WaffleNonceFetchResponse {
                 #[prost(string, optional, tag = "1")]
@@ -8750,6 +9042,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PinInChatMessage {
         #[prost(message, optional, tag = "1")]
@@ -8795,6 +9088,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PlaceholderMessage {
         #[prost(enumeration = "placeholder_message::PlaceholderType", optional, tag = "1")]
@@ -8830,6 +9124,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollCreationMessage {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -8853,6 +9148,7 @@ pub mod message {
     pub mod poll_creation_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Option {
             #[prost(string, optional, tag = "1")]
@@ -8863,6 +9159,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollEncValue {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -8872,6 +9169,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollResultSnapshotMessage {
         #[prost(string, optional, tag = "1")]
@@ -8887,6 +9185,7 @@ pub mod message {
     pub mod poll_result_snapshot_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PollVote {
             #[prost(string, optional, tag = "1")]
@@ -8897,6 +9196,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollUpdateMessage {
         #[prost(message, optional, tag = "1")]
@@ -8910,11 +9210,13 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollUpdateMessageMetadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollVoteMessage {
         #[prost(bytes = "vec", repeated, tag = "1")]
@@ -8922,6 +9224,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ProductMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -8941,6 +9244,7 @@ pub mod message {
     pub mod product_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct CatalogSnapshot {
             #[prost(message, optional, boxed, tag = "1")]
@@ -8952,6 +9256,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductSnapshot {
             #[prost(message, optional, boxed, tag = "1")]
@@ -8982,6 +9287,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ProtocolMessage {
         #[prost(message, optional, tag = "1")]
@@ -9138,6 +9444,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct QuestionResponseMessage {
         #[prost(message, optional, tag = "1")]
@@ -9147,6 +9454,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ReactionMessage {
         #[prost(message, optional, tag = "1")]
@@ -9160,6 +9468,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RequestPaymentMessage {
         #[prost(message, optional, boxed, tag = "4")]
@@ -9179,6 +9488,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RequestPhoneNumberMessage {
         #[prost(message, optional, boxed, tag = "1")]
@@ -9186,6 +9496,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RequestWelcomeMessageMetadata {
         #[prost(enumeration = "request_welcome_message_metadata::LocalChatState", optional, tag = "1")]
@@ -9224,6 +9535,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ScheduledCallCreationMessage {
         #[prost(int64, optional, tag = "1")]
@@ -9269,6 +9581,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ScheduledCallEditMessage {
         #[prost(message, optional, tag = "1")]
@@ -9309,6 +9622,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SecretEncryptedMessage {
         #[prost(message, optional, tag = "1")]
@@ -9356,6 +9670,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SendPaymentMessage {
         #[prost(message, optional, boxed, tag = "2")]
@@ -9369,6 +9684,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderKeyDistributionMessage {
         #[prost(string, optional, tag = "1")]
@@ -9378,6 +9694,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusNotificationMessage {
         #[prost(message, optional, tag = "1")]
@@ -9426,6 +9743,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusQuestionAnswerMessage {
         #[prost(message, optional, tag = "1")]
@@ -9435,6 +9753,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusQuotedMessage {
         #[prost(enumeration = "status_quoted_message::StatusQuotedMessageType", optional, tag = "1")]
@@ -9476,6 +9795,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusStickerInteractionMessage {
         #[prost(message, optional, tag = "1")]
@@ -9518,6 +9838,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct StickerMessage {
         #[prost(string, optional, tag = "1")]
@@ -9565,6 +9886,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct StickerPackMessage {
         #[prost(string, optional, tag = "1")]
@@ -9616,6 +9938,7 @@ pub mod message {
     pub mod sticker_pack_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Sticker {
             #[prost(string, optional, tag = "1")]
@@ -9665,6 +9988,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StickerSyncRmrMessage {
         #[prost(string, repeated, tag = "1")]
@@ -9676,6 +10000,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct TemplateButtonReplyMessage {
         #[prost(string, optional, tag = "1")]
@@ -9691,6 +10016,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct TemplateMessage {
         #[prost(message, optional, boxed, tag = "3")]
@@ -9706,6 +10032,7 @@ pub mod message {
     pub mod template_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct FourRowTemplate {
             #[prost(message, optional, boxed, tag = "6")]
@@ -9737,6 +10064,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct HydratedFourRowTemplate {
             #[prost(string, optional, tag = "6")]
@@ -9784,6 +10112,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UrlMetadata {
         #[prost(uint32, optional, tag = "1")]
@@ -9791,6 +10120,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct VideoEndCard {
         #[prost(string, required, tag = "1")]
@@ -9804,6 +10134,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct VideoMessage {
         #[prost(string, optional, tag = "1")]
@@ -10140,6 +10471,7 @@ pub mod message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageAddOn {
     #[prost(enumeration = "message_add_on::MessageAddOnType", optional, tag = "1")]
@@ -10201,6 +10533,7 @@ pub mod message_add_on {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageAddOnContextInfo {
     #[prost(uint32, optional, tag = "1")]
@@ -10210,6 +10543,7 @@ pub struct MessageAddOnContextInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageAssociation {
     #[prost(enumeration = "message_association::AssociationType", optional, tag = "1")]
@@ -10306,6 +10640,7 @@ pub mod message_association {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageContextInfo {
     #[prost(message, optional, tag = "1")]
@@ -10374,6 +10709,7 @@ pub mod message_context_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageKey {
     #[prost(string, optional, tag = "1")]
@@ -10387,6 +10723,7 @@ pub struct MessageKey {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageSecretMessage {
     #[prost(sfixed32, optional, tag = "1")]
@@ -10398,6 +10735,7 @@ pub struct MessageSecretMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Money {
     #[prost(int64, optional, tag = "1")]
@@ -10409,6 +10747,7 @@ pub struct Money {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MsgOpaqueData {
     #[prost(string, optional, tag = "1")]
@@ -10502,6 +10841,7 @@ pub struct MsgOpaqueData {
 pub mod msg_opaque_data {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct EventLocation {
         #[prost(double, optional, tag = "1")]
@@ -10519,6 +10859,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollOption {
         #[prost(string, optional, tag = "1")]
@@ -10528,6 +10869,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollVoteSnapshot {
         #[prost(message, optional, tag = "1")]
@@ -10537,6 +10879,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollVotesSnapshot {
         #[prost(message, repeated, tag = "1")]
@@ -10604,6 +10947,7 @@ pub mod msg_opaque_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MsgRowOpaqueData {
     #[prost(message, optional, tag = "1")]
@@ -10613,6 +10957,7 @@ pub struct MsgRowOpaqueData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NoiseCertificate {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -10624,6 +10969,7 @@ pub struct NoiseCertificate {
 pub mod noise_certificate {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Details {
         #[prost(uint32, optional, tag = "1")]
@@ -10640,6 +10986,7 @@ pub mod noise_certificate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NotificationMessageInfo {
     #[prost(message, optional, tag = "1")]
@@ -10653,6 +11000,7 @@ pub struct NotificationMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NotificationSettings {
     #[prost(string, optional, tag = "1")]
@@ -10670,6 +11018,7 @@ pub struct NotificationSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PairingRequest {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -10681,6 +11030,7 @@ pub struct PairingRequest {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PastParticipant {
     #[prost(string, optional, tag = "1")]
@@ -10723,6 +11073,7 @@ pub mod past_participant {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PastParticipants {
     #[prost(string, optional, tag = "1")]
@@ -10732,6 +11083,7 @@ pub struct PastParticipants {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchDebugData {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -10820,6 +11172,7 @@ pub mod patch_debug_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PaymentBackground {
     #[prost(string, optional, tag = "1")]
@@ -10847,6 +11200,7 @@ pub struct PaymentBackground {
 pub mod payment_background {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MediaData {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -10891,6 +11245,7 @@ pub mod payment_background {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PaymentInfo {
     #[prost(enumeration = "payment_info::Currency", optional, tag = "1")]
@@ -11129,6 +11484,7 @@ pub mod payment_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhoneNumberToLidMapping {
     #[prost(string, optional, tag = "1")]
@@ -11138,6 +11494,7 @@ pub struct PhoneNumberToLidMapping {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhotoChange {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11149,6 +11506,7 @@ pub struct PhotoChange {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PinInChat {
     #[prost(enumeration = "pin_in_chat::Type", optional, tag = "1")]
@@ -11198,6 +11556,7 @@ pub mod pin_in_chat {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Point {
     #[prost(int32, optional, tag = "1")]
@@ -11211,6 +11570,7 @@ pub struct Point {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollAdditionalMetadata {
     #[prost(bool, optional, tag = "1")]
@@ -11218,6 +11578,7 @@ pub struct PollAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollEncValue {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11227,6 +11588,7 @@ pub struct PollEncValue {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollUpdate {
     #[prost(message, optional, tag = "1")]
@@ -11242,6 +11604,7 @@ pub struct PollUpdate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PreKeyRecordStructure {
     #[prost(uint32, optional, tag = "1")]
@@ -11253,6 +11616,7 @@ pub struct PreKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PreKeySignalMessage {
     #[prost(uint32, optional, tag = "5")]
@@ -11270,6 +11634,7 @@ pub struct PreKeySignalMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PremiumMessageInfo {
     #[prost(string, optional, tag = "1")]
@@ -11277,6 +11642,7 @@ pub struct PremiumMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PrimaryEphemeralIdentity {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11286,6 +11652,7 @@ pub struct PrimaryEphemeralIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProcessedVideo {
     #[prost(string, optional, tag = "1")]
@@ -11344,6 +11711,7 @@ pub mod processed_video {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProloguePayload {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11353,6 +11721,7 @@ pub struct ProloguePayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Pushname {
     #[prost(string, optional, tag = "1")]
@@ -11362,6 +11731,7 @@ pub struct Pushname {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QuarantinedMessage {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11371,6 +11741,7 @@ pub struct QuarantinedMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reaction {
     #[prost(message, optional, tag = "1")]
@@ -11386,6 +11757,7 @@ pub struct Reaction {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecentEmojiWeight {
     #[prost(string, optional, tag = "1")]
@@ -11395,6 +11767,7 @@ pub struct RecentEmojiWeight {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecordStructure {
     #[prost(message, optional, tag = "1")]
@@ -11404,6 +11777,7 @@ pub struct RecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reportable {
     #[prost(uint32, optional, tag = "1")]
@@ -11417,6 +11791,7 @@ pub struct Reportable {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReportingTokenInfo {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11424,6 +11799,7 @@ pub struct ReportingTokenInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyDistributionMessage {
     #[prost(uint32, optional, tag = "1")]
@@ -11437,6 +11813,7 @@ pub struct SenderKeyDistributionMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyMessage {
     #[prost(uint32, optional, tag = "1")]
@@ -11448,6 +11825,7 @@ pub struct SenderKeyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenderKeyRecordStructure {
     #[prost(message, repeated, tag = "1")]
@@ -11455,6 +11833,7 @@ pub struct SenderKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenderKeyStateStructure {
     #[prost(uint32, optional, tag = "1")]
@@ -11470,6 +11849,7 @@ pub struct SenderKeyStateStructure {
 pub mod sender_key_state_structure {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderChainKey {
         #[prost(uint32, optional, tag = "1")]
@@ -11480,6 +11860,7 @@ pub mod sender_key_state_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderMessageKey {
         #[prost(uint32, optional, tag = "1")]
@@ -11490,6 +11871,7 @@ pub mod sender_key_state_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderSigningKey {
         #[prost(bytes = "bytes", optional, tag = "1")]
@@ -11502,6 +11884,7 @@ pub mod sender_key_state_structure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServerErrorReceipt {
     #[prost(string, optional, tag = "1")]
@@ -11509,6 +11892,7 @@ pub struct ServerErrorReceipt {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionStructure {
     #[prost(uint32, optional, tag = "1")]
@@ -11542,6 +11926,7 @@ pub struct SessionStructure {
 pub mod session_structure {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Chain {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -11557,6 +11942,7 @@ pub mod session_structure {
     pub mod chain {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ChainKey {
             #[prost(uint32, optional, tag = "1")]
@@ -11567,6 +11953,7 @@ pub mod session_structure {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct MessageKey {
             #[prost(uint32, optional, tag = "1")]
@@ -11584,6 +11971,7 @@ pub mod session_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PendingKeyExchange {
         #[prost(uint32, optional, tag = "1")]
@@ -11603,6 +11991,7 @@ pub mod session_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PendingPreKey {
         #[prost(uint32, optional, tag = "1")]
@@ -11615,6 +12004,7 @@ pub mod session_structure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionTransparencyMetadata {
     #[prost(string, optional, tag = "1")]
@@ -11626,6 +12016,7 @@ pub struct SessionTransparencyMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignalMessage {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -11639,6 +12030,7 @@ pub struct SignalMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedPreKeyRecordStructure {
     #[prost(uint32, optional, tag = "1")]
@@ -11654,6 +12046,7 @@ pub struct SignedPreKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StatusAttribution {
     #[prost(enumeration = "status_attribution::Type", optional, tag = "1")]
@@ -11667,6 +12060,7 @@ pub struct StatusAttribution {
 pub mod status_attribution {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiCreatedAttribution {
         #[prost(enumeration = "ai_created_attribution::Source", optional, tag = "1")]
@@ -11705,6 +12099,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalShare {
         #[prost(string, optional, tag = "1")]
@@ -11776,6 +12171,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct GroupStatus {
         #[prost(string, optional, tag = "1")]
@@ -11783,6 +12179,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Music {
         #[prost(string, optional, tag = "1")]
@@ -11800,6 +12197,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RlAttribution {
         #[prost(enumeration = "rl_attribution::Source", optional, tag = "1")]
@@ -11844,6 +12242,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusReshare {
         #[prost(enumeration = "status_reshare::Source", optional, tag = "1")]
@@ -11855,6 +12254,7 @@ pub mod status_attribution {
     pub mod status_reshare {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Metadata {
             #[prost(int32, optional, tag = "1")]
@@ -11973,6 +12373,7 @@ pub mod status_attribution {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatusMentionMessage {
     #[prost(message, optional, tag = "1")]
@@ -11980,6 +12381,7 @@ pub struct StatusMentionMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StatusPsa {
     #[prost(uint64, required, tag = "44")]
@@ -11989,6 +12391,7 @@ pub struct StatusPsa {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StickerMetadata {
     #[prost(string, optional, tag = "1")]
@@ -12022,6 +12425,7 @@ pub struct StickerMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncActionData {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -12035,6 +12439,7 @@ pub struct SyncActionData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncActionValue {
     #[prost(int64, optional, tag = "1")]
@@ -12180,6 +12585,7 @@ pub struct SyncActionValue {
 pub mod sync_action_value {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AgentAction {
         #[prost(string, optional, tag = "1")]
@@ -12191,6 +12597,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadRenameAction {
         #[prost(string, optional, tag = "1")]
@@ -12198,6 +12605,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AndroidUnsupportedActions {
         #[prost(bool, optional, tag = "1")]
@@ -12205,6 +12613,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ArchiveChatAction {
         #[prost(bool, optional, tag = "1")]
@@ -12214,6 +12623,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AvatarUpdatedAction {
         #[prost(enumeration = "avatar_updated_action::AvatarEventType", optional, tag = "1")]
@@ -12257,6 +12667,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotWelcomeRequestAction {
         #[prost(bool, optional, tag = "1")]
@@ -12264,6 +12675,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BroadcastListParticipant {
         #[prost(string, required, tag = "1")]
@@ -12273,6 +12685,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessBroadcastAssociationAction {
         #[prost(bool, optional, tag = "1")]
@@ -12280,6 +12693,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct BusinessBroadcastListAction {
         #[prost(bool, optional, tag = "1")]
@@ -12293,6 +12707,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallLogAction {
         #[prost(message, optional, tag = "1")]
@@ -12300,6 +12715,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ChatAssignmentAction {
         #[prost(string, optional, tag = "1")]
@@ -12307,6 +12723,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ChatAssignmentOpenedStatusAction {
         #[prost(bool, optional, tag = "1")]
@@ -12314,6 +12731,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ClearChatAction {
         #[prost(message, optional, tag = "1")]
@@ -12321,6 +12739,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ContactAction {
         #[prost(string, optional, tag = "1")]
@@ -12338,6 +12757,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CtwaPerCustomerDataSharingAction {
         #[prost(bool, optional, tag = "1")]
@@ -12345,6 +12765,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CustomPaymentMethod {
         #[prost(string, required, tag = "1")]
@@ -12358,6 +12779,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CustomPaymentMethodMetadata {
         #[prost(string, required, tag = "1")]
@@ -12367,6 +12789,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CustomPaymentMethodsAction {
         #[prost(message, repeated, tag = "1")]
@@ -12374,6 +12797,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DeleteChatAction {
         #[prost(message, optional, tag = "1")]
@@ -12381,6 +12805,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeleteIndividualCallLogAction {
         #[prost(string, optional, tag = "1")]
@@ -12390,6 +12815,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeleteMessageForMeAction {
         #[prost(bool, optional, tag = "1")]
@@ -12399,6 +12825,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DetectedOutcomesStatusAction {
         #[prost(bool, optional, tag = "1")]
@@ -12406,6 +12833,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalWebBetaAction {
         #[prost(bool, optional, tag = "1")]
@@ -12413,6 +12841,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FavoritesAction {
         #[prost(message, repeated, tag = "1")]
@@ -12422,6 +12851,7 @@ pub mod sync_action_value {
     pub mod favorites_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Favorite {
             #[prost(string, optional, tag = "1")]
@@ -12430,6 +12860,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InteractiveMessageAction {
         #[prost(enumeration = "interactive_message_action::InteractiveMessageActionMode", required, tag = "1")]
@@ -12465,6 +12896,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct KeyExpiration {
         #[prost(int32, optional, tag = "1")]
@@ -12472,6 +12904,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelAssociationAction {
         #[prost(bool, optional, tag = "1")]
@@ -12479,6 +12912,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelEditAction {
         #[prost(string, optional, tag = "1")]
@@ -12557,6 +12991,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelReorderingAction {
         #[prost(int32, repeated, packed = "false", tag = "1")]
@@ -12564,6 +12999,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LidContactAction {
         #[prost(string, optional, tag = "1")]
@@ -12575,6 +13011,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LocaleSetting {
         #[prost(string, optional, tag = "1")]
@@ -12582,6 +13019,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LockChatAction {
         #[prost(bool, optional, tag = "1")]
@@ -12589,6 +13027,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MaibaAiFeaturesControlAction {
         #[prost(enumeration = "maiba_ai_features_control_action::MaibaAiFeatureStatus", optional, tag = "1")]
@@ -12630,6 +13069,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MarkChatAsReadAction {
         #[prost(bool, optional, tag = "1")]
@@ -12639,6 +13079,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MarketingMessageAction {
         #[prost(string, optional, tag = "1")]
@@ -12686,6 +13127,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MarketingMessageBroadcastAction {
         #[prost(int32, optional, tag = "1")]
@@ -12693,6 +13135,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MerchantPaymentPartnerAction {
         #[prost(enumeration = "merchant_payment_partner_action::Status", required, tag = "1")]
@@ -12737,6 +13180,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MusicUserIdAction {
         #[prost(string, optional, tag = "1")]
@@ -12746,6 +13190,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MuteAction {
         #[prost(bool, optional, tag = "1")]
@@ -12757,6 +13202,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NewsletterSavedInterestsAction {
         #[prost(string, optional, tag = "1")]
@@ -12764,6 +13210,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NoteEditAction {
         #[prost(enumeration = "note_edit_action::NoteType", optional, tag = "1")]
@@ -12810,6 +13257,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NotificationActivitySettingAction {
         #[prost(enumeration = "notification_activity_setting_action::NotificationActivitySetting", optional, tag = "1")]
@@ -12854,6 +13302,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NuxAction {
         #[prost(bool, optional, tag = "1")]
@@ -12861,6 +13310,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentInfoAction {
         #[prost(string, optional, tag = "1")]
@@ -12868,6 +13318,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentTosAction {
         #[prost(enumeration = "payment_tos_action::PaymentNotice", required, tag = "1")]
@@ -12905,6 +13356,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PinAction {
         #[prost(bool, optional, tag = "1")]
@@ -12912,6 +13364,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PnForLidChatAction {
         #[prost(string, optional, tag = "1")]
@@ -12919,6 +13372,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrimaryFeature {
         #[prost(string, repeated, tag = "1")]
@@ -12926,6 +13380,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrimaryVersionAction {
         #[prost(string, optional, tag = "1")]
@@ -12933,6 +13388,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingChannelsPersonalisedRecommendationAction {
         #[prost(bool, optional, tag = "1")]
@@ -12940,6 +13396,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingDisableLinkPreviewsAction {
         #[prost(bool, optional, tag = "1")]
@@ -12947,6 +13404,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingRelayAllCalls {
         #[prost(bool, optional, tag = "1")]
@@ -12954,6 +13412,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivateProcessingSettingAction {
         #[prost(enumeration = "private_processing_setting_action::PrivateProcessingStatus", optional, tag = "1")]
@@ -12995,6 +13454,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PushNameSetting {
         #[prost(string, optional, tag = "1")]
@@ -13002,6 +13462,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct QuickReplyAction {
         #[prost(string, optional, tag = "1")]
@@ -13017,6 +13478,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RecentEmojiWeightsAction {
         #[prost(message, repeated, tag = "1")]
@@ -13024,6 +13486,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RemoveRecentStickerAction {
         #[prost(int64, optional, tag = "1")]
@@ -13031,6 +13494,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SettingsSyncAction {
         #[prost(bool, optional, tag = "1")]
@@ -13250,6 +13714,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StarAction {
         #[prost(bool, optional, tag = "1")]
@@ -13257,6 +13722,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusPostOptInNotificationPreferencesAction {
         #[prost(bool, optional, tag = "1")]
@@ -13264,6 +13730,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusPrivacyAction {
         #[prost(enumeration = "status_privacy_action::StatusDistributionMode", optional, tag = "1")]
@@ -13310,6 +13777,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StickerAction {
         #[prost(string, optional, tag = "1")]
@@ -13341,6 +13809,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SubscriptionAction {
         #[prost(bool, optional, tag = "1")]
@@ -13352,6 +13821,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SyncActionMessage {
         #[prost(message, optional, tag = "1")]
@@ -13361,6 +13831,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SyncActionMessageRange {
         #[prost(int64, optional, tag = "1")]
@@ -13372,6 +13843,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TimeFormatAction {
         #[prost(bool, optional, tag = "1")]
@@ -13379,6 +13851,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UgcBot {
         #[prost(bytes = "vec", optional, tag = "1")]
@@ -13386,6 +13859,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UnarchiveChatsSetting {
         #[prost(bool, optional, tag = "1")]
@@ -13393,6 +13867,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserStatusMuteAction {
         #[prost(bool, optional, tag = "1")]
@@ -13400,6 +13875,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UsernameChatStartModeAction {
         #[prost(enumeration = "username_chat_start_mode_action::ChatStartMode", optional, tag = "1")]
@@ -13438,6 +13914,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WaffleAccountLinkStateAction {
         #[prost(enumeration = "waffle_account_link_state_action::AccountLinkState", optional, tag = "2")]
@@ -13479,6 +13956,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WamoUserIdentifierAction {
         #[prost(string, optional, tag = "1")]
@@ -13487,6 +13965,7 @@ pub mod sync_action_value {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdIndex {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -13494,6 +13973,7 @@ pub struct SyncdIndex {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdMutation {
     #[prost(enumeration = "syncd_mutation::SyncdOperation", optional, tag = "1")]
@@ -13534,6 +14014,7 @@ pub mod syncd_mutation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdMutations {
     #[prost(message, repeated, tag = "1")]
@@ -13541,6 +14022,7 @@ pub struct SyncdMutations {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdPatch {
     #[prost(message, optional, tag = "1")]
@@ -13564,6 +14046,7 @@ pub struct SyncdPatch {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdRecord {
     #[prost(message, optional, tag = "1")]
@@ -13575,6 +14058,7 @@ pub struct SyncdRecord {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdSnapshot {
     #[prost(message, optional, tag = "1")]
@@ -13588,6 +14072,7 @@ pub struct SyncdSnapshot {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdValue {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -13595,6 +14080,7 @@ pub struct SyncdValue {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdVersion {
     #[prost(uint64, optional, tag = "1")]
@@ -13602,6 +14088,7 @@ pub struct SyncdVersion {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TapLinkAction {
     #[prost(string, optional, tag = "1")]
@@ -13611,6 +14098,7 @@ pub struct TapLinkAction {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TemplateButton {
     #[prost(uint32, optional, tag = "4")]
@@ -13622,6 +14110,7 @@ pub struct TemplateButton {
 pub mod template_button {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallButton {
         #[prost(message, optional, tag = "1")]
@@ -13631,6 +14120,7 @@ pub mod template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct QuickReplyButton {
         #[prost(message, optional, tag = "1")]
@@ -13640,6 +14130,7 @@ pub mod template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct UrlButton {
         #[prost(message, optional, tag = "1")]
@@ -13661,6 +14152,7 @@ pub mod template_button {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ThreadId {
     #[prost(enumeration = "thread_id::ThreadType", optional, tag = "1")]
@@ -13704,6 +14196,7 @@ pub mod thread_id {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UrlTrackingMap {
     #[prost(message, repeated, tag = "1")]
@@ -13713,6 +14206,7 @@ pub struct UrlTrackingMap {
 pub mod url_tracking_map {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UrlTrackingMapElement {
         #[prost(string, optional, tag = "1")]
@@ -13727,6 +14221,7 @@ pub mod url_tracking_map {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserPassword {
     #[prost(enumeration = "user_password::Encoding", optional, tag = "1")]
@@ -13742,6 +14237,7 @@ pub struct UserPassword {
 pub mod user_password {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TransformerArg {
         #[prost(string, optional, tag = "1")]
@@ -13753,6 +14249,7 @@ pub mod user_password {
     pub mod transformer_arg {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Value {
             #[prost(oneof = "value::Value", tags = "1, 2")]
@@ -13833,6 +14330,7 @@ pub mod user_password {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UserReceipt {
     #[prost(string, required, tag = "1")]
@@ -13850,6 +14348,7 @@ pub struct UserReceipt {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VerifiedNameCertificate {
     #[prost(bytes = "vec", optional, tag = "1")]
@@ -13863,6 +14362,7 @@ pub struct VerifiedNameCertificate {
 pub mod verified_name_certificate {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Details {
         #[prost(uint64, optional, tag = "1")]
@@ -13879,6 +14379,7 @@ pub mod verified_name_certificate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WallpaperSettings {
     #[prost(string, optional, tag = "1")]
@@ -13888,6 +14389,7 @@ pub struct WallpaperSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WebFeatures {
     #[prost(enumeration = "web_features::Flag", optional, tag = "1")]
@@ -14020,6 +14522,7 @@ pub mod web_features {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebMessageInfo {
     #[prost(message, required, tag = "1")]
@@ -14930,6 +15433,7 @@ pub mod web_message_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebNotificationsInfo {
     #[prost(uint64, optional, tag = "2")]
