@@ -942,6 +942,11 @@ impl Client {
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify(usize::MAX);
 
+        // Flush dirty device state before tearing down the connection.
+        if let Err(e) = self.persistence_manager.flush().await {
+            log::error!("Failed to flush device state during disconnect: {e}");
+        }
+
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }

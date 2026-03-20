@@ -130,11 +130,13 @@ impl Client {
             return Ok(());
         }
         let _guard = scopeguard::guard((self.clone(), dedupe_key.clone()), |(client, key)| {
-            if let Some(mut set) = client.pending_retries.try_lock() {
-                set.remove(&key);
-            } else {
-                log::warn!("Failed to acquire pending_retries lock during cleanup for {key}");
-            }
+            // Spawn an async task for cleanup because pending_retries uses an
+            // async mutex which cannot be locked inside a synchronous Drop.
+            let rt = client.runtime.clone();
+            rt.spawn(Box::pin(async move {
+                client.pending_retries.lock().await.remove(&key);
+            }))
+            .detach();
         });
 
         let original_msg = match self
