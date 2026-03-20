@@ -58,12 +58,13 @@ pub use features::{
     Blocking, BlocklistEntry, ChatActions, ChatStateType, Chatstate, Community, CommunitySubgroup,
     ContactInfo, Contacts, CreateCommunityOptions, CreateCommunityResult, CreateGroupResult,
     GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
-    GroupSubject, GroupType, Groups, IsOnWhatsAppResult, LinkSubgroupsResult, MemberAddMode,
-    MemberLinkMode, MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest,
-    MexResponse, Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount,
-    NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
-    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Status,
-    StatusPrivacySetting, StatusSendOptions, TcToken, UnlinkSubgroupsResult, UserInfo, group_type,
+    GroupSubject, GroupType, Groups, IsOnWhatsAppResult, LinkSubgroupsResult, MediaRetryResult,
+    MediaReupload, MediaReuploadRequest, MemberAddMode, MemberLinkMode, MembershipApprovalMode,
+    Mex, MexError, MexErrorExtensions, MexRequest, MexResponse, Newsletter, NewsletterMessage,
+    NewsletterMetadata, NewsletterReactionCount, NewsletterRole, NewsletterState,
+    NewsletterVerification, ParticipantChangeResponse, Presence, PresenceError, PresenceStatus,
+    Profile, ProfilePicture, SetProfilePictureResponse, Status, StatusPrivacySetting,
+    StatusSendOptions, TcToken, UnlinkSubgroupsResult, UserInfo, group_type,
 };
 
 pub mod bot;

@@ -206,6 +206,14 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         "newsletter" => {
             handle_newsletter_notification(client, node);
         }
+        "mediaretry" => {
+            // Handled by wait_for_node waiter in MediaReupload::request().
+            // Ack is sent automatically by the stanza dispatch loop.
+            debug!(
+                "Received mediaretry notification for msg {}",
+                node.attrs().optional_string("id").unwrap_or_default()
+            );
+        }
         _ => {
             debug!("Unhandled notification type '{notification_type}', dispatching raw event");
             client

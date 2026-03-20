@@ -19,6 +19,7 @@ pub mod handshake;
 pub mod history_sync;
 pub mod ib;
 pub use wacore_libsignal as libsignal;
+pub mod media_retry;
 pub mod message_processing;
 pub mod messages;
 pub mod net;
