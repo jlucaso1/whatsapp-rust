@@ -1,4 +1,5 @@
 pub mod blocklist;
+pub mod business;
 pub mod chatstate;
 pub mod community;
 pub mod contacts;

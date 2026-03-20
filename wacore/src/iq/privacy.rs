@@ -157,6 +157,93 @@ impl IqSpec for PrivacySettingsSpec {
     }
 }
 
+/// Set a single privacy setting.
+///
+/// Wire format:
+/// ```xml
+/// <iq xmlns="privacy" type="set" to="s.whatsapp.net" id="...">
+///   <privacy>
+///     <category name="{category}" value="{value}"/>
+///   </privacy>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetPrivacySettingSpec {
+    pub category: String,
+    pub value: String,
+}
+
+impl SetPrivacySettingSpec {
+    pub fn new(category: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            category: category.into(),
+            value: value.into(),
+        }
+    }
+}
+
+impl IqSpec for SetPrivacySettingSpec {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        InfoQuery::set(
+            PRIVACY_NAMESPACE,
+            Jid::new("", SERVER_JID),
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("privacy")
+                    .children([NodeBuilder::new("category")
+                        .attr("name", &*self.category)
+                        .attr("value", &*self.value)
+                        .build()])
+                    .build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+        Ok(())
+    }
+}
+
+/// Set the default disappearing messages duration.
+///
+/// Wire format:
+/// ```xml
+/// <iq xmlns="disappearing_mode" type="set" to="s.whatsapp.net" id="...">
+///   <disappearing_mode duration="{seconds}"/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetDefaultDisappearingModeSpec {
+    pub duration: u32,
+}
+
+impl SetDefaultDisappearingModeSpec {
+    pub fn new(duration: u32) -> Self {
+        Self { duration }
+    }
+}
+
+impl IqSpec for SetDefaultDisappearingModeSpec {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        InfoQuery::set(
+            "disappearing_mode",
+            Jid::new("", SERVER_JID),
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("disappearing_mode")
+                    .attr("duration", self.duration.to_string())
+                    .build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

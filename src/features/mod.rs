@@ -27,8 +27,8 @@ pub use contacts::{ContactInfo, Contacts, IsOnWhatsAppResult, ProfilePicture, Us
 
 pub use groups::{
     CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,
-    GroupParticipantOptions, GroupSubject, Groups, MemberAddMode, MemberLinkMode,
-    MembershipApprovalMode, ParticipantChangeResponse,
+    GroupParticipantOptions, GroupSubject, Groups, JoinGroupResult, MemberAddMode, MemberLinkMode,
+    MembershipApprovalMode, MembershipRequest, ParticipantChangeResponse,
 };
 
 pub use media_reupload::{MediaRetryResult, MediaReupload, MediaReuploadRequest};

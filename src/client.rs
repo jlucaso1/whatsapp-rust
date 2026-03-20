@@ -1543,6 +1543,49 @@ impl Client {
         self.execute(PrivacySettingsSpec::new()).await
     }
 
+    /// Set a privacy setting by category name and value.
+    pub async fn set_privacy_setting(
+        &self,
+        category: &str,
+        value: &str,
+    ) -> Result<(), crate::request::IqError> {
+        use wacore::iq::privacy::SetPrivacySettingSpec;
+        self.execute(SetPrivacySettingSpec::new(category, value))
+            .await
+    }
+
+    /// Set the default disappearing messages duration (in seconds). Pass 0 to disable.
+    pub async fn set_default_disappearing_mode(
+        &self,
+        duration: u32,
+    ) -> Result<(), crate::request::IqError> {
+        use wacore::iq::privacy::SetDefaultDisappearingModeSpec;
+        self.execute(SetDefaultDisappearingModeSpec::new(duration))
+            .await
+    }
+
+    /// Reject an incoming call.
+    pub async fn reject_call(
+        &self,
+        call_id: &str,
+        call_from: &wacore_binary::jid::Jid,
+    ) -> Result<(), anyhow::Error> {
+        let id = self.generate_request_id();
+
+        let stanza = wacore_binary::builder::NodeBuilder::new("call")
+            .attr("to", call_from.clone())
+            .attr("id", id)
+            .children([wacore_binary::builder::NodeBuilder::new("reject")
+                .attr("call-id", call_id)
+                .attr("call-creator", call_from.clone())
+                .attr("count", "0")
+                .build()])
+            .build();
+
+        self.send_node(stanza).await?;
+        Ok(())
+    }
+
     pub async fn send_digest_key_bundle(&self) -> Result<(), crate::request::IqError> {
         use wacore::iq::prekeys::DigestKeyBundleSpec;
 
