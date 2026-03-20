@@ -27,7 +27,8 @@ use wacore_binary::{jid::SERVER_JID, node::Node};
 #[derive(Default)]
 pub struct NotificationHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for NotificationHandler {
     fn tag(&self) -> &'static str {
         "notification"
@@ -97,7 +98,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                 let generation = client
                     .connection_generation
                     .load(std::sync::atomic::Ordering::SeqCst);
-                tokio::spawn(async move {
+                client.runtime.spawn(Box::pin(async move {
                     // Check if connection was replaced before starting sync
                     if client_clone
                         .connection_generation
@@ -143,7 +144,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                             "Failed to batch sync app state from server_sync: {e}"
                         );
                     }
-                });
+                })).detach();
             }
         }
         "account_sync" => {
@@ -205,6 +206,14 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         "newsletter" => {
             handle_newsletter_notification(client, node);
         }
+        "mediaretry" => {
+            // Handled by wait_for_node waiter in MediaReupload::request().
+            // Ack is sent automatically by the stanza dispatch loop.
+            debug!(
+                "Received mediaretry notification for msg {}",
+                node.attrs().optional_string("id").unwrap_or_default()
+            );
+        }
         _ => {
             debug!("Unhandled notification type '{notification_type}', dispatching raw event");
             client
@@ -229,40 +238,43 @@ async fn handle_prekey_low(client: &Arc<Client>) {
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
     let client_clone = client.clone();
-    tokio::spawn(async move {
-        // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
-        // Done BEFORE acquiring the lock so the lock isn't held during an
-        // indefinite wait that could block digest-key or other upload paths.
-        client_clone.wait_for_offline_delivery_end().await;
+    client
+        .runtime
+        .spawn(Box::pin(async move {
+            // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
+            // Done BEFORE acquiring the lock so the lock isn't held during an
+            // indefinite wait that could block digest-key or other upload paths.
+            client_clone.wait_for_offline_delivery_end().await;
 
-        // Bail if disconnected during offline delivery wait
-        if !client_clone
-            .is_logged_in
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            debug!("Pre-key upload skipped: disconnected during offline delivery wait");
-            return;
-        }
+            // Bail if disconnected during offline delivery wait
+            if !client_clone
+                .is_logged_in
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                debug!("Pre-key upload skipped: disconnected during offline delivery wait");
+                return;
+            }
 
-        // Serialize upload — prevents concurrent uploads from count + digest paths
-        let _guard = client_clone.prekey_upload_lock.lock().await;
+            // Serialize upload — prevents concurrent uploads from count + digest paths
+            let _guard = client_clone.prekey_upload_lock.lock().await;
 
-        // Dedup: if a previous upload already succeeded, skip
-        if client_clone
-            .server_has_prekeys
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            debug!("Pre-key upload already completed by another task, skipping");
-            return;
-        }
+            // Dedup: if a previous upload already succeeded, skip
+            if client_clone
+                .server_has_prekeys
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                debug!("Pre-key upload already completed by another task, skipping");
+                return;
+            }
 
-        if let Err(e) = client_clone.upload_pre_keys_with_retry(false).await {
-            warn!(
-                "Failed to upload pre-keys after prekey_low notification: {:?}",
-                e
-            );
-        }
-    });
+            if let Err(e) = client_clone.upload_pre_keys_with_retry(false).await {
+                warn!(
+                    "Failed to upload pre-keys after prekey_low notification: {:?}",
+                    e
+                );
+            }
+        }))
+        .detach();
 }
 
 /// Handle encrypt/digest notification (Digest Key validation).
@@ -275,12 +287,15 @@ async fn handle_prekey_low(client: &Arc<Client>) {
 /// preventing concurrent uploads that could race on prekey ID allocation.
 fn handle_digest_key(client: &Arc<Client>) {
     let client_clone = client.clone();
-    tokio::spawn(async move {
-        let _guard = client_clone.prekey_upload_lock.lock().await;
-        if let Err(e) = client_clone.validate_digest_key().await {
-            warn!("Digest key validation failed: {:?}", e);
-        }
-    });
+    client
+        .runtime
+        .spawn(Box::pin(async move {
+            let _guard = client_clone.prekey_upload_lock.lock().await;
+            if let Err(e) = client_clone.validate_digest_key().await {
+                warn!("Digest key validation failed: {:?}", e);
+            }
+        }))
+        .detach();
 }
 
 /// Handle device list change notifications.
@@ -466,12 +481,11 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
         .map(|s| s.into_owned());
 
     // Get timestamp from notification
-    let timestamp = node.attrs().optional_u64("t").unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }) as i64;
+    let timestamp = node
+        .attrs()
+        .optional_u64("t")
+        .map(|v| v as i64)
+        .unwrap_or_else(wacore::time::now_secs);
 
     // Build DeviceListRecord for storage
     // Note: update_device_list() will automatically store under LID if mapping is known

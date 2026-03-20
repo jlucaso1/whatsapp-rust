@@ -60,41 +60,47 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                         }
                     }
 
-                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+                    let (stop_tx, stop_rx) = async_channel::bounded::<()>(1);
                     let codes_clone = codes.clone();
                     let client_clone = client.clone();
 
-                    tokio::spawn(async move {
-                        // The rotation logic is now inside the library
-                        let mut is_first = true;
-                        let mut stop_rx_clone = stop_rx.clone();
+                    client
+                        .runtime
+                        .spawn(Box::pin(async move {
+                            // The rotation logic is now inside the library
+                            let mut is_first = true;
 
-                        for code in codes_clone {
-                            let timeout = if is_first {
-                                is_first = false;
-                                std::time::Duration::from_secs(60)
-                            } else {
-                                std::time::Duration::from_secs(20)
-                            };
+                            for code in codes_clone {
+                                let timeout = if is_first {
+                                    is_first = false;
+                                    std::time::Duration::from_secs(60)
+                                } else {
+                                    std::time::Duration::from_secs(20)
+                                };
 
-                            // Dispatch the new, simple event for each code
-                            client_clone
-                                .core
-                                .event_bus
-                                .dispatch(&Event::PairingQrCode { code, timeout });
+                                // Dispatch the new, simple event for each code
+                                client_clone
+                                    .core
+                                    .event_bus
+                                    .dispatch(&Event::PairingQrCode { code, timeout });
 
-                            // Wait for the timeout OR a stop signal
-                            tokio::select! {
-                                _ = tokio::time::sleep(timeout) => {}
-                                _ = stop_rx_clone.changed() => {
-                                    info!("Pairing complete. Stopping QR code rotation.");
-                                    return;
+                                // Wait for the timeout OR a stop signal
+                                let sleep = client_clone.runtime.sleep(timeout);
+                                let stop = stop_rx.recv();
+                                futures::pin_mut!(sleep);
+                                futures::pin_mut!(stop);
+                                match futures::future::select(sleep, stop).await {
+                                    futures::future::Either::Left(_) => {} // timeout elapsed
+                                    futures::future::Either::Right(_) => {
+                                        info!("Pairing complete. Stopping QR code rotation.");
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                        info!("All QR codes for this session have expired.");
-                        client_clone.disconnect().await;
-                    });
+                            info!("All QR codes for this session have expired.");
+                            client_clone.disconnect().await;
+                        }))
+                        .detach();
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
 
@@ -120,7 +126,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
     // Cancel QR code rotation if active
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
-        let _ = tx.send(());
+        let _ = tx.try_send(());
     }
 
     // Clear pair code state if active
@@ -285,9 +291,12 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             }
 
             let client_for_unified = client.clone();
-            tokio::spawn(async move {
-                client_for_unified.send_unified_session().await;
-            });
+            client
+                .runtime
+                .spawn(Box::pin(async move {
+                    client_for_unified.send_unified_session().await;
+                }))
+                .detach();
 
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.

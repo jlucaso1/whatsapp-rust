@@ -4,15 +4,16 @@ mod lid_pn;
 mod sender_keys;
 mod sessions;
 
+use crate::cache::Cache;
 use crate::cache_store::TypedCache;
 use crate::handshake;
 use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
-use dashmap::{DashMap, DashSet};
-use moka::future::Cache;
+use futures::FutureExt;
 use std::borrow::Cow;
-use tokio::sync::watch;
+use std::collections::{HashMap, HashSet};
+
 use wacore::xml::DisplayableNode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::JidExt;
@@ -29,7 +30,6 @@ use log::{debug, error, info, trace, warn};
 
 use rand::{Rng, RngCore};
 use scopeguard;
-use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 
 use std::sync::Arc;
@@ -88,19 +88,23 @@ impl NodeFilter {
 
 struct NodeWaiter {
     filter: NodeFilter,
-    tx: tokio::sync::oneshot::Sender<Arc<Node>>,
+    tx: futures::channel::oneshot::Sender<Arc<Node>>,
 }
 
+use async_lock::Mutex;
+use async_lock::RwLock;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
-use tokio::time::{Duration, sleep};
+
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::client::context::GroupInfo;
+use wacore::runtime::timeout as rt_timeout;
 use waproto::whatsapp as wa;
 
 use crate::cache_config::CacheConfig;
 use crate::socket::{NoiseSocket, SocketError, error::EncryptSendError};
 use crate::sync_task::MajorSyncTask;
+use wacore::runtime::Runtime;
 
 /// Type alias for chatstate event handler functions.
 type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
@@ -239,10 +243,11 @@ pub(crate) struct OfflineSyncMetrics {
     pub total_messages: AtomicUsize,
     pub processed_messages: AtomicUsize,
     // Using simple std Mutex for timestamp as it's rarely contended and non-async
-    pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
+    pub start_time: std::sync::Mutex<Option<wacore::time::Instant>>,
 }
 
 pub struct Client {
+    pub(crate) runtime: Arc<dyn Runtime>,
     pub(crate) core: wacore::client::CoreClient,
 
     pub(crate) persistence_manager: Arc<PersistenceManager>,
@@ -255,7 +260,7 @@ pub struct Client {
     /// Uses an AtomicBool instead of probing the noise_socket mutex to avoid
     /// TOCTOU races where `try_lock()` fails due to contention, not disconnection.
     is_connected: Arc<AtomicBool>,
-    pub(crate) shutdown_notifier: Arc<Notify>,
+    pub(crate) shutdown_notifier: Arc<event_listener::Event>,
     /// Timestamp (ms since UNIX epoch) of the last received WebSocket data.
     /// Updated on every `DataReceived` transport event.
     /// WA Web: `parseAndHandleStanza` → `deadSocketTimer.cancel()`.
@@ -272,7 +277,7 @@ pub struct Client {
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
     pub(crate) response_waiters:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<wacore_binary::Node>>>>,
+        Arc<Mutex<HashMap<String, futures::channel::oneshot::Sender<wacore_binary::Node>>>>,
 
     /// Generic node waiters for waiting on specific stanzas by tag/attributes.
     /// Uses std::sync::Mutex (not tokio) since the critical section is trivial.
@@ -294,19 +299,19 @@ pub struct Client {
     /// During offline sync: permits=1 (sequential, like WA Web's allChatQueue)
     /// After offline sync: permits=N (parallel per-chat processing)
     /// Wrapped in std::sync::Mutex to allow replacing on reconnect.
-    pub(crate) message_processing_semaphore: std::sync::Mutex<Arc<tokio::sync::Semaphore>>,
+    pub(crate) message_processing_semaphore: std::sync::Mutex<Arc<async_lock::Semaphore>>,
 
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
     /// are processed concurrently across different chats.
     /// Keys are Signal protocol address strings (e.g., "user@s.whatsapp.net:0")
     /// to match the SignalProtocolStoreAdapter's internal locking.
-    pub(crate) session_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+    pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
     /// Per-chat message queues for sequential message processing.
     /// Prevents race conditions where a later message is processed before
     /// the PreKey message that establishes the Signal session.
-    pub(crate) message_queues: Cache<String, mpsc::Sender<Arc<Node>>>,
+    pub(crate) message_queues: Cache<String, async_channel::Sender<Arc<Node>>>,
 
     /// Cache for LID to Phone Number mappings (bidirectional).
     /// When we receive a message with sender_lid/sender_pn attributes, we store the mapping here.
@@ -317,10 +322,11 @@ pub struct Client {
     /// Per-chat mutex for serializing message enqueue operations.
     /// This ensures messages are enqueued in the order they arrive,
     /// preventing race conditions during queue initialization.
-    pub(crate) message_enqueue_locks: Cache<String, Arc<tokio::sync::Mutex<()>>>,
+    pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
-    pub group_cache: OnceCell<TypedCache<Jid, GroupInfo>>,
-    pub device_cache: OnceCell<TypedCache<Jid, Vec<Jid>>>,
+    pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
+    #[allow(clippy::type_complexity)]
+    pub device_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, Vec<Jid>>>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -333,7 +339,7 @@ pub struct Client {
     /// Uses moka cache with TTL and max capacity for automatic eviction.
     pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
 
-    pub(crate) pending_retries: Arc<DashSet<String>>,
+    pub(crate) pending_retries: Arc<async_lock::Mutex<HashSet<String>>>,
 
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
@@ -345,35 +351,35 @@ pub struct Client {
 
     pub(crate) needs_initial_full_sync: Arc<AtomicBool>,
 
-    pub(crate) app_state_processor: OnceCell<AppStateProcessor>,
-    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    pub(crate) app_state_processor: async_lock::Mutex<Option<Arc<AppStateProcessor>>>,
+    pub(crate) app_state_key_requests: Arc<Mutex<HashMap<String, wacore::time::Instant>>>,
     /// Tracks collections currently being synced to prevent duplicate sync tasks.
     /// Matches WA Web's in-flight tracking set in WAWebSyncdCollectionsStateMachine.
     pub(crate) app_state_syncing: Arc<Mutex<HashSet<WAPatchName>>>,
-    pub(crate) initial_keys_synced_notifier: Arc<Notify>,
+    pub(crate) initial_keys_synced_notifier: Arc<event_listener::Event>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
 
     /// Tracks whether the server has our prekeys (matches WA Web's `setServerHasPreKeys`).
     /// Set to `false` when encrypt/count notification arrives, `true` after successful upload.
     pub(crate) server_has_prekeys: Arc<AtomicBool>,
     /// Prevents concurrent prekey upload operations (matches WA Web's dedup set in `handlePreKeyLow`).
-    pub(crate) prekey_upload_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) prekey_upload_lock: Arc<async_lock::Mutex<()>>,
     /// Notifier for when offline sync (ib offline stanza) is received.
     /// WhatsApp Web waits for this before sending passive tasks (prekey upload, active IQ, presence).
-    pub(crate) offline_sync_notifier: Arc<Notify>,
+    pub(crate) offline_sync_notifier: Arc<event_listener::Event>,
     /// Flag indicating offline sync has completed (received ib offline stanza).
     pub(crate) offline_sync_completed: Arc<AtomicBool>,
     /// Number of history sync tasks currently queued or running.
     pub(crate) history_sync_tasks_in_flight: Arc<AtomicUsize>,
     /// Notifier triggered when history sync work becomes idle.
-    pub(crate) history_sync_idle_notifier: Arc<Notify>,
+    pub(crate) history_sync_idle_notifier: Arc<event_listener::Event>,
     /// Contacts with active presence subscriptions that must be re-subscribed on reconnect.
-    pub(crate) presence_subscriptions: Arc<tokio::sync::Mutex<HashSet<Jid>>>,
+    pub(crate) presence_subscriptions: Arc<async_lock::Mutex<HashSet<Jid>>>,
     /// Metrics for granular offline sync logging
     pub(crate) offline_sync_metrics: Arc<OfflineSyncMetrics>,
     /// Notifier for when the noise socket is established (before login).
     /// Use this to wait for the socket to be ready for sending messages.
-    pub(crate) socket_ready_notifier: Arc<Notify>,
+    pub(crate) socket_ready_notifier: Arc<event_listener::Event>,
     /// Set to `true` only when `dispatch_connected()` fires (after critical sync
     /// completes). Reset on each new connection attempt. Used by
     /// `wait_for_connected()` to avoid a false-positive fast path when the
@@ -381,16 +387,16 @@ pub struct Client {
     pub(crate) is_ready: Arc<AtomicBool>,
     /// Notifier for when the client is fully connected and logged in.
     /// Triggered after Event::Connected is dispatched.
-    pub(crate) connected_notifier: Arc<Notify>,
-    pub(crate) major_sync_task_sender: mpsc::Sender<MajorSyncTask>,
-    pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<watch::Sender<()>>>>,
+    pub(crate) connected_notifier: Arc<event_listener::Event>,
+    pub(crate) major_sync_task_sender: async_channel::Sender<MajorSyncTask>,
+    pub(crate) pairing_cancellation_tx: Arc<Mutex<Option<async_channel::Sender<()>>>>,
 
     /// State machine for pair code authentication flow.
     /// Tracks the pending pair code request and ephemeral keys.
     pub(crate) pair_code_state: Arc<Mutex<wacore::pair_code::PairCodeState>>,
 
     /// Custom handlers for encrypted message types
-    pub custom_enc_handlers: Arc<DashMap<String, Arc<dyn EncHandler>>>,
+    pub custom_enc_handlers: Arc<async_lock::RwLock<HashMap<String, Arc<dyn EncHandler>>>>,
 
     /// Chat state (typing indicator) handlers registered by external consumers.
     /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
@@ -463,7 +469,7 @@ impl Client {
         self.core
             .event_bus
             .dispatch(&Event::Connected(crate::types::events::Connected));
-        self.connected_notifier.notify_waiters();
+        self.connected_notifier.notify(usize::MAX);
     }
 
     /// Enable or disable skipping of history sync notifications at runtime.
@@ -488,12 +494,14 @@ impl Client {
     /// This is the standard constructor. Use [`Client::new_with_cache_config`]
     /// if you need to customise cache TTL / capacity.
     pub async fn new(
+        runtime: Arc<dyn Runtime>,
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
         override_version: Option<(u32, u32, u32)>,
-    ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
+    ) -> (Arc<Self>, async_channel::Receiver<MajorSyncTask>) {
         Self::new_with_cache_config(
+            runtime,
             persistence_manager,
             transport_factory,
             http_client,
@@ -505,21 +513,23 @@ impl Client {
 
     /// Create a new `Client` with a custom [`CacheConfig`].
     pub async fn new_with_cache_config(
+        runtime: Arc<dyn Runtime>,
         persistence_manager: Arc<PersistenceManager>,
         transport_factory: Arc<dyn crate::transport::TransportFactory>,
         http_client: Arc<dyn crate::http::HttpClient>,
         override_version: Option<(u32, u32, u32)>,
         cache_config: CacheConfig,
-    ) -> (Arc<Self>, mpsc::Receiver<MajorSyncTask>) {
+    ) -> (Arc<Self>, async_channel::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
         rand::rng().fill_bytes(&mut unique_id_bytes);
 
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
 
-        let (tx, rx) = mpsc::channel(32);
+        let (tx, rx) = async_channel::bounded(32);
 
         let this = Self {
+            runtime: runtime.clone(),
             core,
             persistence_manager: persistence_manager.clone(),
             media_conn: Arc::new(RwLock::new(None)),
@@ -527,7 +537,7 @@ impl Client {
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
             is_connected: Arc::new(AtomicBool::new(false)),
-            shutdown_notifier: Arc::new(Notify::new()),
+            shutdown_notifier: Arc::new(event_listener::Event::new()),
             last_data_received_ms: Arc::new(AtomicU64::new(0)),
             last_data_sent_ms: Arc::new(AtomicU64::new(0)),
 
@@ -545,7 +555,7 @@ impl Client {
 
             signal_cache: Arc::new(crate::store::signal_cache::SignalStoreCache::new()),
             message_processing_semaphore: std::sync::Mutex::new(Arc::new(
-                tokio::sync::Semaphore::new(1),
+                async_lock::Semaphore::new(1),
             )),
             // Coordination caches: capacity-only eviction, no TTL/TTI.
             // These hold live mutexes and channel senders; time-based eviction
@@ -563,8 +573,8 @@ impl Client {
             message_enqueue_locks: Cache::builder()
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
-            group_cache: OnceCell::new(),
-            device_cache: OnceCell::new(),
+            group_cache: async_lock::Mutex::new(None),
+            device_cache: async_lock::Mutex::new(None),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
@@ -572,7 +582,7 @@ impl Client {
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
 
-            pending_retries: Arc::new(DashSet::new()),
+            pending_retries: Arc::new(async_lock::Mutex::new(HashSet::new())),
 
             message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
 
@@ -588,25 +598,25 @@ impl Client {
 
             needs_initial_full_sync: Arc::new(AtomicBool::new(false)),
 
-            app_state_processor: OnceCell::new(),
+            app_state_processor: async_lock::Mutex::new(None),
             app_state_key_requests: Arc::new(Mutex::new(HashMap::new())),
             app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
-            initial_keys_synced_notifier: Arc::new(Notify::new()),
+            initial_keys_synced_notifier: Arc::new(event_listener::Event::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
             server_has_prekeys: Arc::new(AtomicBool::new(true)),
-            prekey_upload_lock: Arc::new(tokio::sync::Mutex::new(())),
-            offline_sync_notifier: Arc::new(Notify::new()),
+            prekey_upload_lock: Arc::new(async_lock::Mutex::new(())),
+            offline_sync_notifier: Arc::new(event_listener::Event::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
-            history_sync_idle_notifier: Arc::new(Notify::new()),
-            presence_subscriptions: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
-            socket_ready_notifier: Arc::new(Notify::new()),
+            history_sync_idle_notifier: Arc::new(event_listener::Event::new()),
+            presence_subscriptions: Arc::new(async_lock::Mutex::new(HashSet::new())),
+            socket_ready_notifier: Arc::new(event_listener::Event::new()),
             is_ready: Arc::new(AtomicBool::new(false)),
-            connected_notifier: Arc::new(Notify::new()),
+            connected_notifier: Arc::new(event_listener::Event::new()),
             major_sync_task_sender: tx,
             pairing_cancellation_tx: Arc::new(Mutex::new(None)),
             pair_code_state: Arc::new(Mutex::new(wacore::pair_code::PairCodeState::default())),
-            custom_enc_handlers: Arc::new(DashMap::new()),
+            custom_enc_handlers: Arc::new(async_lock::RwLock::new(HashMap::new())),
             chatstate_handlers: Arc::new(RwLock::new(Vec::new())),
             pdo_pending_requests: cache_config.pdo_pending_requests.build_with_ttl(),
             device_registry_cache: cache_config.device_registry_cache.build_typed_ttl(
@@ -625,51 +635,66 @@ impl Client {
 
         // Warm up the LID-PN cache from persistent storage
         let warm_up_arc = arc.clone();
-        tokio::spawn(async move {
-            if let Err(e) = warm_up_arc.warm_up_lid_pn_cache().await {
-                warn!("Failed to warm up LID-PN cache: {e}");
-            }
-        });
+        arc.runtime
+            .spawn(Box::pin(async move {
+                if let Err(e) = warm_up_arc.warm_up_lid_pn_cache().await {
+                    warn!("Failed to warm up LID-PN cache: {e}");
+                }
+            }))
+            .detach();
 
         // Start background task to clean up stale device registry entries
         let cleanup_arc = arc.clone();
-        tokio::spawn(async move {
-            cleanup_arc.device_registry_cleanup_loop().await;
-        });
+        arc.runtime
+            .spawn(Box::pin(async move {
+                cleanup_arc.device_registry_cleanup_loop().await;
+            }))
+            .detach();
 
         (arc, rx)
     }
 
-    pub(crate) async fn get_group_cache(&self) -> &TypedCache<Jid, GroupInfo> {
-        self.group_cache
-            .get_or_init(|| async {
-                debug!("Initializing Group Cache for the first time.");
-                self.cache_config
-                    .group_cache
-                    .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group")
-            })
-            .await
+    pub(crate) async fn get_group_cache(&self) -> Arc<TypedCache<Jid, GroupInfo>> {
+        let mut guard = self.group_cache.lock().await;
+        if let Some(cache) = guard.as_ref() {
+            return cache.clone();
+        }
+        debug!("Initializing Group Cache for the first time.");
+        let cache = Arc::new(
+            self.cache_config
+                .group_cache
+                .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group"),
+        );
+        *guard = Some(cache.clone());
+        cache
     }
 
-    pub(crate) async fn get_device_cache(&self) -> &TypedCache<Jid, Vec<Jid>> {
-        self.device_cache
-            .get_or_init(|| async {
-                debug!("Initializing Device Cache for the first time.");
-                self.cache_config.device_cache.build_typed_ttl(
-                    self.cache_config.cache_stores.device_cache.clone(),
-                    "device",
-                )
-            })
-            .await
+    pub(crate) async fn get_device_cache(&self) -> Arc<TypedCache<Jid, Vec<Jid>>> {
+        let mut guard = self.device_cache.lock().await;
+        if let Some(cache) = guard.as_ref() {
+            return cache.clone();
+        }
+        debug!("Initializing Device Cache for the first time.");
+        let cache = Arc::new(self.cache_config.device_cache.build_typed_ttl(
+            self.cache_config.cache_stores.device_cache.clone(),
+            "device",
+        ));
+        *guard = Some(cache.clone());
+        cache
     }
 
-    pub(crate) async fn get_app_state_processor(&self) -> &AppStateProcessor {
-        self.app_state_processor
-            .get_or_init(|| async {
-                debug!("Initializing AppStateProcessor for the first time.");
-                AppStateProcessor::new(self.persistence_manager.backend())
-            })
-            .await
+    pub(crate) async fn get_app_state_processor(&self) -> Arc<AppStateProcessor> {
+        let mut guard = self.app_state_processor.lock().await;
+        if let Some(proc) = guard.as_ref() {
+            return proc.clone();
+        }
+        debug!("Initializing AppStateProcessor for the first time.");
+        let proc = Arc::new(AppStateProcessor::new(
+            self.persistence_manager.backend(),
+            self.runtime.clone(),
+        ));
+        *guard = Some(proc.clone());
+        proc
     }
 
     /// Create and configure the stanza router with all the handlers.
@@ -774,9 +799,11 @@ impl Client {
         for handler in handlers {
             let event_clone = event.clone();
             let handler_clone = handler.clone();
-            tokio::spawn(async move {
-                (handler_clone)(event_clone);
-            });
+            self.runtime
+                .spawn(Box::pin(async move {
+                    (handler_clone)(event_clone);
+                }))
+                .detach();
         }
     }
 
@@ -788,8 +815,8 @@ impl Client {
         while self.is_running.load(Ordering::Relaxed) {
             self.expected_disconnect.store(false, Ordering::Relaxed);
 
-            if self.connect().await.is_err() {
-                error!("Failed to connect, will retry...");
+            if let Err(connect_err) = self.connect().await {
+                error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
                     warn!(
@@ -827,7 +854,7 @@ impl Client {
                 delay,
                 error_count + 1
             );
-            sleep(delay).await;
+            self.runtime.sleep(delay).await;
         }
         info!("Client run loop has shut down.");
     }
@@ -857,7 +884,8 @@ impl Client {
         // WA Web: both MQTT and DGW transports use a 20s connect timeout.
         // Without this, a dead network blocks on the OS TCP SYN timeout (~60-75s).
         // Version fetch is also wrapped so a hung HTTP request doesn't block connect().
-        let version_future = tokio::time::timeout(
+        let version_future = rt_timeout(
+            &*self.runtime,
             TRANSPORT_CONNECT_TIMEOUT,
             crate::version::resolve_and_update_version(
                 &self.persistence_manager,
@@ -865,13 +893,14 @@ impl Client {
                 self.override_version,
             ),
         );
-        let transport_future = tokio::time::timeout(
+        let transport_future = rt_timeout(
+            &*self.runtime,
             TRANSPORT_CONNECT_TIMEOUT,
             self.transport_factory.create_transport(),
         );
 
         debug!("Connecting WebSocket and fetching latest client version in parallel...");
-        let (version_result, transport_result) = tokio::join!(version_future, transport_future);
+        let (version_result, transport_result) = futures::join!(version_future, transport_future);
 
         version_result
             .map_err(|_| anyhow!("Version fetch timed out after {TRANSPORT_CONNECT_TIMEOUT:?}"))?
@@ -883,9 +912,13 @@ impl Client {
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
-        let noise_socket =
-            handshake::do_handshake(&device_snapshot, transport.clone(), &mut transport_events)
-                .await?;
+        let noise_socket = handshake::do_handshake(
+            self.runtime.clone(),
+            &device_snapshot,
+            transport.clone(),
+            &mut transport_events,
+        )
+        .await?;
 
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
@@ -893,10 +926,12 @@ impl Client {
         self.is_connected.store(true, Ordering::Release);
 
         // Notify waiters that socket is ready (before login)
-        self.socket_ready_notifier.notify_waiters();
+        self.socket_ready_notifier.notify(usize::MAX);
 
         let client_clone = self.clone();
-        tokio::spawn(async move { client_clone.keepalive_loop().await });
+        self.runtime
+            .spawn(Box::pin(async move { client_clone.keepalive_loop().await }))
+            .detach();
 
         Ok(())
     }
@@ -905,7 +940,12 @@ impl Client {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
-        self.shutdown_notifier.notify_waiters();
+        self.shutdown_notifier.notify(usize::MAX);
+
+        // Flush dirty device state before tearing down the connection.
+        if let Err(e) = self.persistence_manager.flush().await {
+            log::error!("Failed to flush device state during disconnect: {e}");
+        }
 
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
@@ -961,7 +1001,7 @@ impl Client {
         // Signal the keepalive loop (and any other tasks) to exit promptly.
         // Without this, a stale keepalive loop can overlap with the next one
         // after reconnect, causing duplicate pings.
-        self.shutdown_notifier.notify_waiters();
+        self.shutdown_notifier.notify(usize::MAX);
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
@@ -975,7 +1015,7 @@ impl Client {
         // Reset message processing semaphore to 1 permit (sequential mode for next offline sync).
         // Old workers holding the previous semaphore Arc will finish normally.
         *self.message_processing_semaphore.lock().unwrap() =
-            Arc::new(tokio::sync::Semaphore::new(1));
+            Arc::new(async_lock::Semaphore::new(1));
         // Reset dead-socket timestamps so stale values from the previous
         // connection don't trigger an immediate reconnect on the next one.
         self.last_data_received_ms.store(0, Ordering::Relaxed);
@@ -998,7 +1038,7 @@ impl Client {
         self.server_has_prekeys.store(true, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
             .store(0, Ordering::Relaxed);
-        self.history_sync_idle_notifier.notify_waiters();
+        self.history_sync_idle_notifier.notify(usize::MAX);
         // Drain all pending IQ waiters so they fail fast with InternalChannelClosed
         // instead of hanging until the 75s timeout.
         let mut waiters_map = self.response_waiters.lock().await;
@@ -1023,7 +1063,7 @@ impl Client {
         *self.media_conn.write().await = None;
 
         // Clear app state key cache — keys will be re-fetched from DB on demand
-        if let Some(proc) = self.app_state_processor.get() {
+        if let Some(proc) = self.app_state_processor.lock().await.as_ref() {
             proc.clear_key_cache().await;
         }
     }
@@ -1041,8 +1081,18 @@ impl Client {
         let (lid_lid, lid_pn) = self.lid_pn_cache.entry_counts();
 
         MemoryDiagnostics {
-            group_cache: self.group_cache.get().map_or(0, |c| c.entry_count()),
-            device_cache: self.device_cache.get().map_or(0, |c| c.entry_count()),
+            group_cache: self
+                .group_cache
+                .lock()
+                .await
+                .as_ref()
+                .map_or(0, |c| c.entry_count()),
+            device_cache: self
+                .device_cache
+                .lock()
+                .await
+                .as_ref()
+                .map_or(0, |c| c.entry_count()),
             device_registry_cache: self.device_registry_cache.entry_count(),
             lid_pn_lid_entries: lid_lid,
             lid_pn_pn_entries: lid_pn,
@@ -1055,7 +1105,7 @@ impl Client {
             message_enqueue_locks: self.message_enqueue_locks.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
-            pending_retries: self.pending_retries.len(),
+            pending_retries: self.pending_retries.lock().await.len(),
             presence_subscriptions: self.presence_subscriptions.lock().await.len(),
             app_state_key_requests: self.app_state_key_requests.lock().await.len(),
             app_state_syncing: self.app_state_syncing.lock().await.len(),
@@ -1063,7 +1113,7 @@ impl Client {
             signal_cache_identities: sig_identities,
             signal_cache_sender_keys: sig_sender_keys,
             chatstate_handlers: self.chatstate_handlers.read().await.len(),
-            custom_enc_handlers: self.custom_enc_handlers.len(),
+            custom_enc_handlers: self.custom_enc_handlers.read().await.len(),
         }
     }
 
@@ -1091,27 +1141,28 @@ impl Client {
         let mut frame_decoder = wacore::framing::FrameDecoder::new();
 
         loop {
-            tokio::select! {
-                    biased;
-                    _ = self.shutdown_notifier.notified() => {
+            futures::select_biased! {
+                    _ = self.shutdown_notifier.listen().fuse() => {
                         debug!("Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
-                    event_result = transport_events.recv() => {
+                    event_result = transport_events.recv().fuse() => {
                         match event_result {
                             Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Update dead-socket timer (WA Web: deadSocketTimer reset)
                                 self.last_data_received_ms.store(
-                                    chrono::Utc::now().timestamp_millis() as u64,
+                                    wacore::time::now_millis() as u64,
                                     Ordering::Relaxed,
                                 );
 
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
 
-                                // Process all complete frames
-                                // Note: Frame decryption must be sequential (noise protocol counter),
-                                // but we spawn node processing concurrently after decryption
+                                // Process all complete frames.
+                                // Frame decryption must be sequential (noise protocol counter),
+                                // but we spawn node processing concurrently after decryption.
+                                let mut frames_in_batch: u32 = 0;
+
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
                                     if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
@@ -1131,9 +1182,9 @@ impl Client {
                                             self.process_decrypted_node(node).await;
                                         } else {
                                             let client = self.clone();
-                                            tokio::spawn(async move {
+                                            self.runtime.spawn(Box::pin(async move {
                                                 client.process_decrypted_node(node).await;
-                                            });
+                                            })).detach();
                                         }
                                     }
 
@@ -1141,6 +1192,16 @@ impl Client {
                                     if self.expected_disconnect.load(Ordering::Relaxed) {
                                         debug!("Expected disconnect signaled during frame processing. Exiting message loop.");
                                         return Ok(());
+                                    }
+
+                                    // Cooperative yield: give other tasks a chance to run.
+                                    // The runtime decides whether yielding is needed — returns
+                                    // None (zero-cost) when unnecessary, Some(fut) otherwise.
+                                    frames_in_batch += 1;
+                                    if frames_in_batch.is_multiple_of(10)
+                                        && let Some(yield_fut) = self.runtime.yield_now()
+                                    {
+                                        yield_fut.await;
                                     }
                                 }
                             },
@@ -1245,8 +1306,8 @@ impl Client {
                         .active
                         .store(true, Ordering::Release);
                     match self.offline_sync_metrics.start_time.lock() {
-                        Ok(mut guard) => *guard = Some(std::time::Instant::now()),
-                        Err(poison) => *poison.into_inner() = Some(std::time::Instant::now()),
+                        Ok(mut guard) => *guard = Some(wacore::time::Instant::now()),
+                        Err(poison) => *poison.into_inner() = Some(wacore::time::Instant::now()),
                     }
                     debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
@@ -1323,7 +1384,7 @@ impl Client {
             } else {
                 warn!("Received <xmlstreamend/>, treating as disconnect.");
             }
-            self.shutdown_notifier.notify_waiters();
+            self.shutdown_notifier.notify(usize::MAX);
             return;
         }
 
@@ -1380,11 +1441,13 @@ impl Client {
         } else {
             let this = self.clone();
             // Node is already in Arc - just clone the Arc (cheap), not the Node
-            tokio::spawn(async move {
-                if let Err(e) = this.send_ack_for(&node).await {
-                    warn!("Failed to send ack: {e:?}");
-                }
-            });
+            self.runtime
+                .spawn(Box::pin(async move {
+                    if let Err(e) = this.send_ack_for(&node).await {
+                        warn!("Failed to send ack: {e:?}");
+                    }
+                }))
+                .detach();
         }
     }
 
@@ -1534,7 +1597,7 @@ impl Client {
 
         let client_clone = self.clone();
         let task_generation = current_generation;
-        tokio::spawn(async move {
+        self.runtime.spawn(Box::pin(async move {
             // Macro to check if this task is still valid (connection hasn't been replaced)
             macro_rules! check_generation {
                 () => {
@@ -1617,7 +1680,7 @@ impl Client {
             // Background initialization queries (can run in parallel, non-blocking)
             let bg_client = client_clone.clone();
             let bg_generation = task_generation;
-            tokio::spawn(async move {
+            client_clone.runtime.spawn(Box::pin(async move {
                 // Check connection and generation before starting background queries
                 if bg_client.connection_generation.load(Ordering::SeqCst) != bg_generation {
                     debug!("Skipping background init queries: connection generation changed");
@@ -1639,7 +1702,7 @@ impl Client {
                 let digest_fut = bg_client.send_digest_key_bundle();
 
                 let (r_props, r_block, r_priv, r_digest) =
-                    tokio::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
+                    futures::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
 
                 if let Err(e) = r_props {
                     warn!("Background init: Failed to fetch props: {e:?}");
@@ -1658,7 +1721,7 @@ impl Client {
                 if let Err(e) = bg_client.tc_token().prune_expired().await {
                     warn!("Background init: Failed to prune expired tc_tokens: {e:?}");
                 }
-            });
+            })).detach();
 
             check_generation!();
 
@@ -1682,9 +1745,10 @@ impl Client {
                         target: "Client/AppState",
                         "Waiting up to 5s for app state keys..."
                     );
-                    let _ = tokio::time::timeout(
+                    let _ = rt_timeout(
+                        &*client_clone.runtime,
                         Duration::from_secs(5),
-                        client_clone.initial_keys_synced_notifier.notified(),
+                        client_clone.initial_keys_synced_notifier.listen(),
                     )
                     .await;
 
@@ -1699,8 +1763,9 @@ impl Client {
                 const CRITICAL_SYNC_TIMEOUT_SECS: u64 = 180;
                 let timeout_client = client_clone.clone();
                 let timeout_generation = task_generation;
-                let critical_sync_timeout_handle = tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(CRITICAL_SYNC_TIMEOUT_SECS)).await;
+                let timeout_rt = client_clone.runtime.clone();
+                let critical_sync_timeout_handle = timeout_rt.spawn(Box::pin(async move {
+                    timeout_client.runtime.sleep(Duration::from_secs(CRITICAL_SYNC_TIMEOUT_SECS)).await;
                     // Check generation — if connection was replaced, this timeout is stale
                     if timeout_client.connection_generation.load(Ordering::SeqCst)
                         != timeout_generation
@@ -1726,7 +1791,7 @@ impl Client {
                             "Critical sync timeout fired but push_name was already synced"
                         );
                     }
-                });
+                }));
 
                 // Await critical collections via batched IQ before dispatching Connected.
                 check_generation!();
@@ -1767,7 +1832,7 @@ impl Client {
                 // Spawn remaining non-critical collections in background
                 let sync_client = client_clone.clone();
                 let sync_generation = task_generation;
-                tokio::spawn(async move {
+                client_clone.runtime.spawn(Box::pin(async move {
                     if sync_client.connection_generation.load(Ordering::SeqCst) != sync_generation {
                         debug!("App state sync cancelled: connection generation changed");
                         return;
@@ -1788,7 +1853,7 @@ impl Client {
                         .needs_initial_full_sync
                         .store(false, Ordering::Relaxed);
                     debug!(target: "Client/AppState", "Initial App State Sync Completed.");
-                });
+                })).detach();
             } else {
                 // === Reconnection path ===
                 // Pushname is already known, send presence and Connected immediately.
@@ -1811,7 +1876,7 @@ impl Client {
 
                 client_clone.dispatch_connected();
             }
-        });
+        })).detach();
     }
 
     /// Handles incoming `<ack/>` stanzas by resolving pending response waiters.
@@ -1872,9 +1937,10 @@ impl Client {
                     {
                         if !self.initial_app_state_keys_received.load(Ordering::Relaxed) {
                             debug!(target: "Client/AppState", "App state key missing for {:?}; waiting up to 10s for key share then retrying", name);
-                            if tokio::time::timeout(
+                            if rt_timeout(
+                                &*self.runtime,
                                 Duration::from_secs(10),
-                                self.initial_keys_synced_notifier.notified(),
+                                self.initial_keys_synced_notifier.listen(),
                             )
                             .await
                             .is_err()
@@ -1891,7 +1957,7 @@ impl Client {
                     if is_db_locked && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
-                        tokio::time::sleep(backoff).await;
+                        self.runtime.sleep(backoff).await;
                         continue;
                     }
                     return Err(e);
@@ -2106,7 +2172,7 @@ impl Client {
                 if !missing.is_empty() {
                     let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                     let mut guard = self.app_state_key_requests.lock().await;
-                    let now = std::time::Instant::now();
+                    let now = wacore::time::Instant::now();
                     for key_id in missing {
                         let hex_id = hex::encode(&key_id);
                         let should = guard
@@ -2231,7 +2297,7 @@ impl Client {
             }
             debug!(target: "Client/AppState", "Received IQ response for {:?}; decoding patches", name);
 
-            let _decode_start = std::time::Instant::now();
+            let _decode_start = wacore::time::Instant::now();
 
             // Pre-download all external blobs (snapshot and patch mutations)
             // We use directPath as the key to identify each blob
@@ -2313,7 +2379,7 @@ impl Client {
             if !missing.is_empty() {
                 let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
                 let mut guard = self.app_state_key_requests.lock().await;
-                let now = std::time::Instant::now();
+                let now = wacore::time::Instant::now();
                 for key_id in missing {
                     let hex_id = hex::encode(&key_id);
                     let should = guard
@@ -2529,10 +2595,12 @@ impl Client {
 
             let transport_opt = self.transport.lock().await.clone();
             if let Some(transport) = transport_opt {
-                tokio::spawn(async move {
-                    info!("Disconnecting transport after conflict");
-                    transport.disconnect().await;
-                });
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        info!("Disconnecting transport after conflict");
+                        transport.disconnect().await;
+                    }))
+                    .detach();
             }
         } else {
             match code {
@@ -2547,10 +2615,12 @@ impl Client {
                     let transport_opt = self.transport.lock().await.clone();
                     if let Some(transport) = transport_opt {
                         // Spawn disconnect in background so we don't block the message loop
-                        tokio::spawn(async move {
-                            info!("Disconnecting transport after 515");
-                            transport.disconnect().await;
-                        });
+                        self.runtime
+                            .spawn(Box::pin(async move {
+                                info!("Disconnecting transport after 515");
+                                transport.disconnect().await;
+                            }))
+                            .detach();
                     }
                 }
                 "516" => {
@@ -2566,10 +2636,12 @@ impl Client {
 
                     let transport_opt = self.transport.lock().await.clone();
                     if let Some(transport) = transport_opt {
-                        tokio::spawn(async move {
-                            info!("Disconnecting transport after 516");
-                            transport.disconnect().await;
-                        });
+                        self.runtime
+                            .spawn(Box::pin(async move {
+                                info!("Disconnecting transport after 516");
+                                transport.disconnect().await;
+                            }))
+                            .detach();
                     }
                 }
                 "401" => {
@@ -2587,10 +2659,12 @@ impl Client {
 
                     let transport_opt = self.transport.lock().await.clone();
                     if let Some(transport) = transport_opt {
-                        tokio::spawn(async move {
-                            info!("Disconnecting transport after 401");
-                            transport.disconnect().await;
-                        });
+                        self.runtime
+                            .spawn(Box::pin(async move {
+                                info!("Disconnecting transport after 401");
+                                transport.disconnect().await;
+                            }))
+                            .detach();
                     }
                 }
                 "409" => {
@@ -2605,10 +2679,12 @@ impl Client {
 
                     let transport_opt = self.transport.lock().await.clone();
                     if let Some(transport) = transport_opt {
-                        tokio::spawn(async move {
-                            info!("Disconnecting transport after 409");
-                            transport.disconnect().await;
-                        });
+                        self.runtime
+                            .spawn(Box::pin(async move {
+                                info!("Disconnecting transport after 409");
+                                transport.disconnect().await;
+                            }))
+                            .detach();
                     }
                 }
                 "429" => {
@@ -2636,12 +2712,12 @@ impl Client {
         }
 
         info!("Notifying shutdown from stream error handler");
-        self.shutdown_notifier.notify_waiters();
+        self.shutdown_notifier.notify(usize::MAX);
     }
 
     pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::Node) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.shutdown_notifier.notify_waiters();
+        self.shutdown_notifier.notify(usize::MAX);
 
         let mut attrs = node.attrs();
         let reason_code = attrs.optional_u64("reason").unwrap_or(0) as i32;
@@ -2748,8 +2824,11 @@ impl Client {
     /// client.groups().add_participants(&group_jid, &[jid_c]).await?;
     /// let node = waiter.await.expect("notification arrived");
     /// ```
-    pub fn wait_for_node(&self, filter: NodeFilter) -> tokio::sync::oneshot::Receiver<Arc<Node>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+    pub fn wait_for_node(
+        &self,
+        filter: NodeFilter,
+    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
         self.node_waiter_count.fetch_add(1, Ordering::Release);
         let mut waiters = self
             .node_waiters
@@ -2768,7 +2847,7 @@ impl Client {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut i = 0;
         while i < waiters.len() {
-            if waiters[i].tx.is_closed() {
+            if waiters[i].tx.is_canceled() {
                 // Receiver dropped — clean up
                 waiters.swap_remove(i);
                 self.node_waiter_count.fetch_sub(1, Ordering::Release);
@@ -2818,12 +2897,12 @@ impl Client {
 
         // Register waiter and re-check to avoid race condition:
         // If socket becomes ready between checks, the notified future captures it.
-        let notified = self.socket_ready_notifier.notified();
+        let notified = self.socket_ready_notifier.listen();
         if self.is_connected() {
             return Ok(());
         }
 
-        tokio::time::timeout(timeout, notified)
+        rt_timeout(&*self.runtime, timeout, notified)
             .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for socket"))
     }
@@ -2846,12 +2925,12 @@ impl Client {
 
         // Register waiter and re-check to avoid TOCTOU race:
         // dispatch_connected() could fire between the check above and notified() registration.
-        let notified = self.connected_notifier.notified();
+        let notified = self.connected_notifier.listen();
         if self.is_fully_ready() {
             return Ok(());
         }
 
-        tokio::time::timeout(timeout, notified)
+        rt_timeout(&*self.runtime, timeout, notified)
             .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for connection"))
     }
@@ -2898,7 +2977,7 @@ impl Client {
                         }),
                         r#type: Some(wa::message::protocol_message::Type::MessageEdit as i32),
                         edited_message: Some(Box::new(new_content)),
-                        timestamp_ms: Some(chrono::Utc::now().timestamp_millis()),
+                        timestamp_ms: Some(wacore::time::now_millis()),
                         ..Default::default()
                     })),
                     ..Default::default()
@@ -2953,10 +3032,8 @@ impl Client {
         }
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
-        self.last_data_sent_ms.store(
-            chrono::Utc::now().timestamp_millis() as u64,
-            Ordering::Relaxed,
-        );
+        self.last_data_sent_ms
+            .store(wacore::time::now_millis() as u64, Ordering::Relaxed);
 
         Ok(())
     }
@@ -2983,13 +3060,15 @@ impl Client {
         ));
 
         let client_clone = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = client_clone.presence().set_available().await {
-                log::warn!("Failed to send presence after push name update: {:?}", e);
-            } else {
-                log::debug!("Sent presence after push name update.");
-            }
-        });
+        self.runtime
+            .spawn(Box::pin(async move {
+                if let Err(e) = client_clone.presence().set_available().await {
+                    log::warn!("Failed to send presence after push name update: {:?}", e);
+                } else {
+                    log::debug!("Sent presence after push name update.");
+                }
+            }))
+            .detach();
     }
 
     pub async fn get_push_name(&self) -> String {
@@ -3191,7 +3270,7 @@ mod tests {
     use super::*;
     use crate::lid_pn_cache::LearningSource;
     use crate::test_utils::MockHttpClient;
-    use tokio::sync::oneshot;
+    use futures::channel::oneshot;
     use wacore_binary::jid::SERVER_JID;
 
     #[tokio::test]
@@ -3203,6 +3282,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3256,6 +3336,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3324,6 +3405,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3367,6 +3449,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3438,6 +3521,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3527,6 +3611,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3582,6 +3667,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3626,6 +3712,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3641,11 +3728,18 @@ mod tests {
             .await;
 
         let elapsed = start.elapsed();
-        let permits = client
+        // Count available permits by trying to acquire non-blockingly
+        let semaphore = client
             .message_processing_semaphore
             .lock()
             .expect("message_processing_semaphore poisoned")
-            .available_permits();
+            .clone();
+        let mut guards = Vec::new();
+        while let Some(guard) = semaphore.try_acquire() {
+            guards.push(guard);
+        }
+        let permits = guards.len();
+        drop(guards);
 
         assert!(
             elapsed.as_millis() >= 45, // Allow small timing variance
@@ -3680,6 +3774,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3692,7 +3787,7 @@ mod tests {
         // Spawn a task that will notify after 50ms
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            client_clone.offline_sync_notifier.notify_waiters();
+            client_clone.offline_sync_notifier.notify(usize::MAX);
         });
 
         let start = std::time::Instant::now();
@@ -3730,6 +3825,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3767,6 +3863,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3795,7 +3892,7 @@ mod tests {
 
         // 3. Simulate IB handler behavior (set flag and notify)
         client.offline_sync_completed.store(true, Ordering::Relaxed);
-        client.offline_sync_notifier.notify_waiters();
+        client.offline_sync_notifier.notify(usize::MAX);
 
         // 4. Waiter should complete
         let result = tokio::time::timeout(std::time::Duration::from_millis(100), waiter_handle)
@@ -3824,6 +3921,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3869,6 +3967,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -3916,7 +4015,7 @@ mod tests {
 
         // Now complete offline sync
         client.offline_sync_completed.store(true, Ordering::Relaxed);
-        client.offline_sync_notifier.notify_waiters();
+        client.offline_sync_notifier.notify(usize::MAX);
 
         // Now it should complete (might fail on session establishment, but that's ok)
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), ensure_handle).await;
@@ -3960,6 +4059,7 @@ mod tests {
         .await;
 
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4063,6 +4163,7 @@ mod tests {
         }
 
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4186,6 +4287,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4201,7 +4303,7 @@ mod tests {
         );
 
         // Create a node with a 't' attribute
-        let server_time = chrono::Utc::now().timestamp() + 10; // Server is 10 seconds ahead
+        let server_time = wacore::time::now_secs() + 10; // Server is 10 seconds ahead
         let node = NodeBuilder::new("success")
             .attr("t", server_time.to_string())
             .build();
@@ -4261,6 +4363,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4354,6 +4457,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4542,6 +4646,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4575,6 +4680,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4607,6 +4713,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4639,6 +4746,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4670,6 +4778,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -4874,6 +4983,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -5013,6 +5123,7 @@ mod tests {
         // Verify that constructing a client with a custom config does not panic
         // and the client is usable.
         let (client, _rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -5044,6 +5155,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -5060,7 +5172,12 @@ mod tests {
         let key = [0u8; 32];
         let write_key = NoiseCipher::new(&key).expect("valid key");
         let read_key = NoiseCipher::new(&key).expect("valid key");
-        let noise_socket = NoiseSocket::new(transport, write_key, read_key);
+        let noise_socket = NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            write_key,
+            read_key,
+        );
         *client.noise_socket.lock().await = Some(Arc::new(noise_socket));
         client.is_connected.store(true, Ordering::Release);
 
@@ -5087,6 +5204,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -5119,6 +5237,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),

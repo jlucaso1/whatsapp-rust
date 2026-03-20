@@ -102,6 +102,7 @@ pub struct Device {
     #[serde(with = "BigArray")]
     pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
+    #[serde(skip, default)]
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
     pub app_version_primary: u32,

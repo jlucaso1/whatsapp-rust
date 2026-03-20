@@ -3,6 +3,10 @@ pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;
 
+pub mod cache;
+#[cfg(not(feature = "moka-cache"))]
+pub mod portable_cache;
+
 pub mod cache_config;
 pub use cache_config::{CacheConfig, CacheEntryConfig, CacheStores};
 pub mod cache_store;
@@ -26,6 +30,11 @@ pub mod message;
 pub mod pair;
 pub mod pair_code;
 pub mod request;
+#[cfg(feature = "tokio-runtime")]
+pub mod runtime_impl;
+#[cfg(feature = "tokio-runtime")]
+pub use runtime_impl::TokioRuntime;
+pub use wacore::runtime::Runtime;
 pub mod send;
 pub use send::{RevokeType, SendOptions};
 pub mod session;
@@ -49,12 +58,13 @@ pub use features::{
     Blocking, BlocklistEntry, ChatActions, ChatStateType, Chatstate, Community, CommunitySubgroup,
     ContactInfo, Contacts, CreateCommunityOptions, CreateCommunityResult, CreateGroupResult,
     GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions,
-    GroupSubject, GroupType, Groups, IsOnWhatsAppResult, LinkSubgroupsResult, MemberAddMode,
-    MemberLinkMode, MembershipApprovalMode, Mex, MexError, MexErrorExtensions, MexRequest,
-    MexResponse, Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount,
-    NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
-    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Status,
-    StatusPrivacySetting, StatusSendOptions, TcToken, UnlinkSubgroupsResult, UserInfo, group_type,
+    GroupSubject, GroupType, Groups, IsOnWhatsAppResult, LinkSubgroupsResult, MediaRetryResult,
+    MediaReupload, MediaReuploadRequest, MemberAddMode, MemberLinkMode, MembershipApprovalMode,
+    Mex, MexError, MexErrorExtensions, MexRequest, MexResponse, Newsletter, NewsletterMessage,
+    NewsletterMetadata, NewsletterReactionCount, NewsletterRole, NewsletterState,
+    NewsletterVerification, ParticipantChangeResponse, Presence, PresenceError, PresenceStatus,
+    Profile, ProfilePicture, SetProfilePictureResponse, Status, StatusPrivacySetting,
+    StatusSendOptions, TcToken, UnlinkSubgroupsResult, UserInfo, group_type,
 };
 
 pub mod bot;

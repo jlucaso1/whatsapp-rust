@@ -1,50 +1,16 @@
 use crate::client::Client;
 use crate::request::IqError;
+use futures::FutureExt;
 use log::{debug, warn};
 use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use wacore::iq::spec::IqSpec;
-
-/// Returns the number of milliseconds elapsed since a stored timestamp.
-/// Returns `None` if the timestamp was never set (value 0).
-fn ms_since(timestamp_ms: u64) -> Option<u64> {
-    if timestamp_ms == 0 {
-        return None;
-    }
-    let now = chrono::Utc::now().timestamp_millis() as u64;
-    Some(now.saturating_sub(timestamp_ms))
-}
-
-/// Checks the dead-socket condition: data was sent but nothing received
-/// within `DEAD_SOCKET_TIME`.
-///
-/// WA Web: `deadSocketTimer` is armed on every `callStanza` (send) and
-/// cancelled on every `parseAndHandleStanza` (receive).  It fires when
-/// `deadSocketTime` (20 s) elapses after the last send without any receive.
-fn is_dead_socket(last_sent_ms: u64, last_received_ms: u64) -> bool {
-    // Never sent anything yet — timer not armed.
-    if last_sent_ms == 0 {
-        return false;
-    }
-    // Received data after (or at) the last send — timer cancelled.
-    if last_received_ms >= last_sent_ms {
-        return false;
-    }
-    // Sent but no reply: check if DEAD_SOCKET_TIME has elapsed since the send.
-    ms_since(last_sent_ms)
-        .map(|elapsed| elapsed > DEAD_SOCKET_TIME.as_millis() as u64)
-        .unwrap_or(false)
-}
-
-/// WA Web: `healthCheckInterval = 15` → `15 * (1 + random())` = 15–30 s.
-const KEEP_ALIVE_INTERVAL_MIN: Duration = Duration::from_secs(15);
-const KEEP_ALIVE_INTERVAL_MAX: Duration = Duration::from_secs(30);
-const KEEP_ALIVE_RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
-/// WA Web: `deadSocketTime = 20_000` — if no data arrives for this long
-/// after a send, the socket is considered dead and forcibly closed.
-const DEAD_SOCKET_TIME: Duration = Duration::from_secs(20);
+use wacore::protocol::keepalive::{
+    KEEP_ALIVE_INTERVAL_MAX, KEEP_ALIVE_INTERVAL_MIN, KEEP_ALIVE_RESPONSE_DEADLINE, is_dead_socket,
+    ms_since,
+};
 
 #[derive(Debug, PartialEq)]
 enum KeepaliveResult {
@@ -96,12 +62,12 @@ impl Client {
 
         debug!(target: "Client/Keepalive", "Sending keepalive ping");
 
-        let start_ms = chrono::Utc::now().timestamp_millis();
+        let start_ms = wacore::time::now_millis();
         let iq = wacore::iq::keepalive::KeepaliveSpec::with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE)
             .build_iq();
         match self.send_iq(iq).await {
             Ok(response_node) => {
-                let end_ms = chrono::Utc::now().timestamp_millis();
+                let end_ms = wacore::time::now_millis();
                 let rtt_ms = end_ms - start_ms;
                 debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_ms}ms)");
                 // WA Web: onClockSkewUpdate — Math.round((startTime + rtt/2) / 1000 - serverTime)
@@ -126,13 +92,17 @@ impl Client {
         let sent_msg_ttl = self.cache_config.sent_message_ttl_secs;
 
         loop {
+            // Register the shutdown listener BEFORE calculating the sleep
+            // duration so we never miss a notification between loop iterations.
+            let shutdown = self.shutdown_notifier.listen();
+
             let interval_ms = rand::rng().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
             );
             let interval = Duration::from_millis(interval_ms as u64);
 
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {
+            futures::select! {
+                _ = self.runtime.sleep(interval).fuse() => {
                     if !self.is_connected() {
                         debug!(target: "Client/Keepalive", "Not connected, exiting keepalive loop.");
                         return;
@@ -173,16 +143,13 @@ impl Client {
                             if sent_msg_ttl > 0 && cleanup_counter >= 12 {
                                 cleanup_counter = 0;
                                 let backend = self.persistence_manager.backend();
-                                let cutoff = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64
+                                let cutoff = wacore::time::now_secs()
                                     - sent_msg_ttl as i64;
-                                tokio::spawn(async move {
+                                self.runtime.spawn(Box::pin(async move {
                                     if let Err(e) = backend.delete_expired_sent_messages(cutoff).await {
                                         log::debug!(target: "Client/Keepalive", "Sent message cleanup error: {e}");
                                     }
-                                });
+                                })).detach();
                             }
                         }
                         KeepaliveResult::FatalFailure => {
@@ -210,7 +177,7 @@ impl Client {
                         }
                     }
                 },
-                _ = self.shutdown_notifier.notified() => {
+                _ = shutdown.fuse() => {
                     debug!(target: "Client/Keepalive", "Shutdown signaled, exiting keepalive loop.");
                     return;
                 }
@@ -288,87 +255,5 @@ mod tests {
         );
     }
 
-    // ── ms_since tests ───────────────────────────────────────────────────
-
-    #[test]
-    fn test_ms_since_never_set() {
-        assert_eq!(ms_since(0), None, "should return None when timestamp is 0");
-    }
-
-    #[test]
-    fn test_ms_since_recent() {
-        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-        let elapsed = ms_since(now_ms).unwrap();
-        assert!(elapsed < 100, "should be near-zero, got {elapsed}ms");
-    }
-
-    #[test]
-    fn test_ms_since_stale() {
-        let thirty_sec_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(30_000);
-        let elapsed = ms_since(thirty_sec_ago).unwrap();
-        assert!(
-            (29_000..=31_000).contains(&elapsed),
-            "should be ~30s, got {elapsed}ms"
-        );
-    }
-
-    // ── is_dead_socket tests ─────────────────────────────────────────────
-
-    #[test]
-    fn test_dead_socket_never_sent() {
-        // Never sent anything → timer not armed
-        assert!(!is_dead_socket(0, 0));
-    }
-
-    #[test]
-    fn test_dead_socket_received_after_send() {
-        // Sent at T, received at T+1 → timer cancelled
-        let t = chrono::Utc::now().timestamp_millis() as u64;
-        assert!(!is_dead_socket(t, t + 1));
-    }
-
-    #[test]
-    fn test_dead_socket_sent_recently() {
-        // Sent just now, no reply yet but within 20s → not dead
-        let now = chrono::Utc::now().timestamp_millis() as u64;
-        assert!(!is_dead_socket(now, 0));
-    }
-
-    #[test]
-    fn test_dead_socket_sent_long_ago_no_reply() {
-        // Sent 30s ago, no reply → dead
-        let thirty_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(30_000);
-        assert!(is_dead_socket(thirty_ago, 0));
-    }
-
-    #[test]
-    fn test_dead_socket_sent_long_ago_old_reply() {
-        // Sent 30s ago, last reply was 31s ago (before the send) → dead
-        let thirty_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(30_000);
-        let thirty_one_ago = thirty_ago.saturating_sub(1_000);
-        assert!(is_dead_socket(thirty_ago, thirty_one_ago));
-    }
-
-    #[test]
-    fn test_dead_socket_sent_long_ago_recent_reply() {
-        // Sent 30s ago, last reply was 1s ago → not dead (reply cancelled timer)
-        let thirty_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(30_000);
-        let one_ago = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(1_000);
-        assert!(!is_dead_socket(thirty_ago, one_ago));
-    }
-
-    // ── constants sanity tests ───────────────────────────────────────────
-
-    #[test]
-    fn test_keepalive_interval_matches_wa_web() {
-        // WA Web: healthCheckInterval = 15, formula 15*(1+random()) = 15–30s
-        assert_eq!(KEEP_ALIVE_INTERVAL_MIN, Duration::from_secs(15));
-        assert_eq!(KEEP_ALIVE_INTERVAL_MAX, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn test_dead_socket_time_matches_wa_web() {
-        // WA Web: deadSocketTime = 20_000
-        assert_eq!(DEAD_SOCKET_TIME, Duration::from_secs(20));
-    }
+    // ms_since, is_dead_socket, and constants tests live in wacore::protocol::keepalive
 }

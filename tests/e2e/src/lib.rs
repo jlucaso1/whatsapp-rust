@@ -44,7 +44,7 @@ impl EventHandler for ChannelEventHandler {
 pub struct TestClient {
     pub client: Arc<whatsapp_rust::client::Client>,
     pub event_rx: tokio::sync::broadcast::Receiver<Event>,
-    pub run_handle: tokio::task::JoinHandle<()>,
+    pub run_handle: whatsapp_rust::bot::BotHandle,
 }
 
 impl TestClient {
@@ -71,7 +71,8 @@ impl TestClient {
         let mut builder = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport_factory)
-            .with_http_client(UreqHttpClient::new());
+            .with_http_client(UreqHttpClient::new())
+            .with_runtime(whatsapp_rust::TokioRuntime);
 
         if let Some(name) = push_name {
             builder = builder.with_push_name(name);
@@ -123,14 +124,14 @@ impl TestClient {
         match wait_result {
             Err(_) => {
                 client.disconnect().await;
-                run_handle.abort();
+                drop(run_handle); // aborts task via AbortHandle drop
                 return Err(anyhow::anyhow!(
                     "Timed out waiting for PairSuccess + Connected"
                 ));
             }
             Ok(Err(e)) => {
                 client.disconnect().await;
-                run_handle.abort();
+                drop(run_handle);
                 return Err(e);
             }
             Ok(Ok(())) => {}
@@ -144,8 +145,7 @@ impl TestClient {
             .await
         {
             client.disconnect().await;
-            run_handle.abort();
-            let _ = run_handle.await;
+            drop(run_handle);
             return Err(anyhow::anyhow!(
                 "Timed out waiting for startup sync to become idle: {e}"
             ));
@@ -222,21 +222,16 @@ impl TestClient {
         Ok(())
     }
 
-    /// Disconnect and abort the run handle.
+    /// Disconnect and drop the run handle (which aborts the task).
     pub async fn disconnect(self) {
         self.client.disconnect().await;
-        let mut run_handle = self.run_handle;
+        let run_handle = self.run_handle;
 
-        match tokio::time::timeout(tokio::time::Duration::from_secs(5), &mut run_handle).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) if e.is_cancelled() => {}
-            Ok(Err(e)) => {
-                eprintln!("WARN: client run task finished with error during disconnect: {e}");
-            }
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), run_handle).await {
+            Ok(_) => {}
             Err(_) => {
-                eprintln!("WARN: timed out waiting for client run task shutdown; aborting");
-                run_handle.abort();
-                let _ = run_handle.await;
+                eprintln!("WARN: timed out waiting for client run task shutdown");
+                // BotHandle's Drop aborts the task automatically
             }
         }
     }

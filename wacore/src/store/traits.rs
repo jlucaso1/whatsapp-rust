@@ -76,7 +76,8 @@ pub struct DeviceListRecord {
 ///
 /// Handles identity keys, sessions, pre-keys, signed pre-keys, and sender keys
 /// for end-to-end encryption.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait SignalStore: Send + Sync {
     // --- Identity Operations ---
 
@@ -158,7 +159,8 @@ pub trait SignalStore: Send + Sync {
 /// WhatsApp app state synchronization storage.
 ///
 /// Handles sync keys, version tracking, and mutation MACs for the app state protocol.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait AppSyncStore: Send + Sync {
     /// Get an app state sync key by ID.
     async fn get_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>>;
@@ -194,7 +196,8 @@ pub trait AppSyncStore: Send + Sync {
 ///
 /// Handles SKDM tracking, LID-PN mapping, base key collision detection,
 /// device registry, and sender key status.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ProtocolStore: Send + Sync {
     // --- SKDM Tracking ---
 
@@ -291,7 +294,8 @@ pub trait ProtocolStore: Send + Sync {
 }
 
 /// Device data persistence operations.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait DeviceStore: Send + Sync {
     /// Save device data.
     async fn save(&self, device: &crate::store::Device) -> Result<()>;

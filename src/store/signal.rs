@@ -1,7 +1,7 @@
 use crate::store::Device;
+use async_lock::Mutex;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use wacore::libsignal::protocol::error::Result as SignalResult;
 use wacore::libsignal::protocol::{
     Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, PrivateKey,
@@ -16,7 +16,8 @@ type StoreError = Box<dyn std::error::Error + Send + Sync>;
 
 macro_rules! impl_store_wrapper {
     ($wrapper_ty:ty, $read_lock:ident, $write_lock:ident) => {
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl IdentityKeyStore for $wrapper_ty {
             async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
                 self.0.$read_lock().await.get_identity_key_pair().await
@@ -59,7 +60,8 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl PreKeyStore for $wrapper_ty {
             async fn load_prekey(
                 &self,
@@ -90,7 +92,8 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl SignedPreKeyStore for $wrapper_ty {
             async fn load_signed_prekey(
                 &self,
@@ -141,7 +144,8 @@ macro_rules! impl_store_wrapper {
             }
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl SessionStore for $wrapper_ty {
             async fn load_session(
                 &self,
@@ -188,7 +192,8 @@ macro_rules! impl_store_wrapper {
     };
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl IdentityKeyStore for Device {
     async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
         Ok(self.identity_key.clone().into())
@@ -259,7 +264,8 @@ impl IdentityKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PreKeyStore for Device {
     async fn load_prekey(
         &self,
@@ -323,7 +329,8 @@ impl PreKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignedPreKeyStore for Device {
     async fn load_signed_prekey(
         &self,
@@ -334,7 +341,7 @@ impl SignedPreKeyStore for Device {
                 self.signed_pre_key_id,
                 &self.signed_pre_key,
                 self.signed_pre_key_signature,
-                chrono::Utc::now(),
+                wacore::time::now_utc(),
             );
             return Ok(Some(record));
         }
@@ -373,7 +380,8 @@ impl SignedPreKeyStore for Device {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SessionStore for Device {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<SessionRecord, StoreError> {
         let address_str = address.to_string();
@@ -427,7 +435,7 @@ impl SessionStore for Device {
     }
 }
 
-use tokio::sync::RwLock;
+use async_lock::RwLock;
 
 pub struct DeviceRwLockWrapper(pub Arc<RwLock<Device>>);
 
@@ -461,7 +469,8 @@ impl Clone for DeviceStore {
 
 impl_store_wrapper!(DeviceStore, lock, lock);
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SenderKeyStore for Device {
     async fn store_sender_key(
         &mut self,

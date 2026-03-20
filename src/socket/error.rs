@@ -1,5 +1,4 @@
 use thiserror::Error;
-use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 pub enum SocketError {
@@ -23,7 +22,7 @@ pub enum EncryptSendErrorKind {
     Framing,
     #[error("transport error")]
     Transport,
-    #[error("tokio join error")]
+    #[error("task join error")]
     Join,
     #[error("sender channel closed")]
     ChannelClosed,
@@ -59,7 +58,7 @@ impl EncryptSendError {
         }
     }
 
-    pub fn join(source: JoinError) -> Self {
+    pub fn join(source: impl Into<anyhow::Error>) -> Self {
         Self {
             kind: EncryptSendErrorKind::Join,
             source: source.into(),

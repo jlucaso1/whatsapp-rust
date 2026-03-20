@@ -14,10 +14,10 @@
 //! 3. The phone responds with PeerDataOperationRequestResponseMessage containing the decoded message
 //! 4. We emit the message as if we had decrypted it ourselves
 
+use crate::cache::Cache;
 use crate::client::Client;
 use crate::types::message::MessageInfo;
 use log::{debug, info, warn};
-use moka::future::Cache;
 use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +30,7 @@ use waproto::whatsapp as wa;
 #[derive(Clone, Debug)]
 pub struct PendingPdoRequest {
     pub message_info: MessageInfo,
-    pub requested_at: std::time::Instant,
+    pub requested_at: wacore::time::Instant,
 }
 
 /// Creates a new PDO request cache.
@@ -81,26 +81,24 @@ impl Client {
             None
         };
 
-        // Atomically check-and-insert to avoid race conditions where two concurrent
-        // calls could both pass a contains_key check before either inserts.
+        // Check-and-insert to avoid duplicate PDO requests for the same message.
         let cache_key = format!("{}:{}", remote_jid, info.id);
-        let pending = PendingPdoRequest {
-            message_info: info.clone(),
-            requested_at: std::time::Instant::now(),
-        };
-        let entry = self
-            .pdo_pending_requests
-            .entry(cache_key.clone())
-            .or_insert(pending)
-            .await;
 
-        if !entry.is_fresh() {
+        if self.pdo_pending_requests.get(&cache_key).await.is_some() {
             debug!(
                 "PDO request already pending for message {} from {} (resolved: {})",
                 info.id, info.source.sender, remote_jid
             );
             return Ok(());
         }
+
+        let pending = PendingPdoRequest {
+            message_info: info.clone(),
+            requested_at: wacore::time::Instant::now(),
+        };
+        self.pdo_pending_requests
+            .insert(cache_key.clone(), pending)
+            .await;
 
         // Build the message key for the placeholder resend request
         let message_key = wa::MessageKey {
@@ -378,23 +376,25 @@ impl Client {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
 
-        tokio::spawn(async move {
-            if !immediate {
-                // Add a small delay to allow the retry receipt to be processed first
-                // This avoids overwhelming the phone with simultaneous requests
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        self.runtime
+            .spawn(Box::pin(async move {
+                if !immediate {
+                    // Add a small delay to allow the retry receipt to be processed first
+                    // This avoids overwhelming the phone with simultaneous requests
+                    client_clone.runtime.sleep(Duration::from_millis(500)).await;
+                }
 
-            if let Err(e) = client_clone
-                .send_pdo_placeholder_resend_request(&info_clone)
-                .await
-            {
-                warn!(
-                    "Failed to send PDO request for message {} from {}: {:?}",
-                    info_clone.id, info_clone.source.sender, e
-                );
-            }
-        });
+                if let Err(e) = client_clone
+                    .send_pdo_placeholder_resend_request(&info_clone)
+                    .await
+                {
+                    warn!(
+                        "Failed to send PDO request for message {} from {}: {:?}",
+                        info_clone.id, info_clone.source.sender, e
+                    );
+                }
+            }))
+            .detach();
     }
 
     /// Spawns a PDO request for a message that failed to decrypt.

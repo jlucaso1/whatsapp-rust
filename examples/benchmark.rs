@@ -4,6 +4,7 @@ use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
@@ -48,7 +49,8 @@ fn main() {
         let builder = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport_factory)
-            .with_http_client(http_client);
+            .with_http_client(http_client)
+            .with_runtime(TokioRuntime);
 
         let mut bot = builder
             .on_event(move |event, client| async move {

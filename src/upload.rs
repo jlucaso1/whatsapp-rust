@@ -241,11 +241,11 @@ struct RawUploadResponse {
 
 impl Client {
     pub async fn upload(&self, data: Vec<u8>, media_type: MediaType) -> Result<UploadResponse> {
-        let enc = tokio::task::spawn_blocking({
+        let enc = wacore::runtime::blocking(&*self.runtime, {
             let data = data.clone();
             move || wacore::upload::encrypt_media(&data, media_type)
         })
-        .await??;
+        .await?;
 
         upload_media_with_retry(
             &enc,
@@ -263,9 +263,9 @@ impl Client {
 mod tests {
     use super::*;
     use crate::mediaconn::{MediaConn, MediaConnHost};
+    use async_lock::Mutex;
     use std::sync::Arc;
-    use std::time::Instant;
-    use tokio::sync::Mutex;
+    use wacore::time::Instant;
 
     fn media_conn(auth: &str, hosts: &[&str]) -> MediaConn {
         MediaConn {

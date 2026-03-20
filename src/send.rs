@@ -409,79 +409,10 @@ impl Client {
     /// (already in <participants>) uses device JIDs with <enc> children.
     async fn ensure_status_participants(
         &self,
-        mut stanza: wacore_binary::Node,
+        stanza: wacore_binary::Node,
         group_info: &wacore::client::context::GroupInfo,
     ) -> Result<wacore_binary::Node, anyhow::Error> {
-        use wacore_binary::builder::NodeBuilder;
-        use wacore_binary::node::NodeContent;
-
-        // Build bare <to jid="USER_JID"/> entries for each participant.
-        // WhatsApp Web uses USER_JID (not DEVICE_JID) for the participantList.
-        let bare_to_nodes: Vec<wacore_binary::Node> = group_info
-            .participants
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("to")
-                    .attr("jid", jid.to_non_ad().to_string())
-                    .build()
-            })
-            .collect();
-
-        // Check if <participants> already exists in the stanza children
-        let children = match &mut stanza.content {
-            Some(NodeContent::Nodes(nodes)) => nodes,
-            _ => {
-                stanza.content = Some(NodeContent::Nodes(vec![]));
-                match &mut stanza.content {
-                    Some(NodeContent::Nodes(nodes)) => nodes,
-                    _ => unreachable!(),
-                }
-            }
-        };
-
-        if let Some(participants_node) = children.iter_mut().find(|n| n.tag == "participants") {
-            // <participants> already exists (from SKDM distribution).
-            // Add bare <to> user JID entries for users whose devices are NOT
-            // already represented by SKDM device-level entries.
-            let existing_users: std::collections::HashSet<String> = participants_node
-                .children()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|n| {
-                    n.attrs
-                        .get("jid")
-                        .and_then(|v| v.to_string().parse::<Jid>().ok().map(|j| j.user.clone()))
-                })
-                .collect();
-
-            let new_to_nodes: Vec<wacore_binary::Node> = bare_to_nodes
-                .into_iter()
-                .filter(|n| {
-                    n.attrs
-                        .get("jid")
-                        .and_then(|v| v.to_string().parse::<Jid>().ok())
-                        .map(|j| !existing_users.contains(&j.user))
-                        .unwrap_or(false)
-                })
-                .collect();
-
-            if !new_to_nodes.is_empty() {
-                match &mut participants_node.content {
-                    Some(NodeContent::Nodes(nodes)) => nodes.extend(new_to_nodes),
-                    _ => {
-                        participants_node.content = Some(NodeContent::Nodes(new_to_nodes));
-                    }
-                }
-            }
-        } else {
-            // No <participants> node — create one with bare <to> entries.
-            let participants_node = NodeBuilder::new("participants")
-                .children(bare_to_nodes)
-                .build();
-            children.insert(0, participants_node);
-        }
-
-        Ok(stanza)
+        Ok(wacore::send::ensure_status_participants(stanza, group_info))
     }
 
     /// Delete a message for everyone in the chat (revoke).
@@ -612,7 +543,7 @@ impl Client {
             let session_mutex = self
                 .session_locks
                 .get_with(signal_addr_str.clone(), async {
-                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    std::sync::Arc::new(async_lock::Mutex::new(()))
                 })
                 .await;
             let _session_guard = session_mutex.lock().await;
@@ -897,7 +828,7 @@ impl Client {
             let session_mutex = self
                 .session_locks
                 .get_with(signal_addr_str.clone(), async {
-                    std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                    std::sync::Arc::new(async_lock::Mutex::new(()))
                 })
                 .await;
             let _session_guard = session_mutex.lock().await;
@@ -1004,10 +935,7 @@ impl Client {
                 // Check if we should re-issue (bucket boundary crossed).
                 // Update sender_timestamp to mark we've sent our token in this bucket.
                 if should_send_new_tc_token(entry.sender_timestamp) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
+                    let now = wacore::time::now_secs();
                     let updated_entry = TcTokenEntry {
                         sender_timestamp: Some(now),
                         ..entry
@@ -1025,10 +953,7 @@ impl Client {
                     .await
                 {
                     Ok(response) => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
+                        let now = wacore::time::now_secs();
                         for received in &response.tokens {
                             let entry = TcTokenEntry {
                                 token: received.token.clone(),

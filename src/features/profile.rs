@@ -129,7 +129,7 @@ impl<'a> Profile<'a> {
             push_name_setting: Some(wa::sync_action_value::PushNameSetting {
                 name: Some(name.to_string()),
             }),
-            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
 

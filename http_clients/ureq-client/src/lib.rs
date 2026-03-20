@@ -1,3 +1,7 @@
+// ureq is a blocking HTTP client that depends on std::net and OS threads.
+// It cannot work on wasm32 targets — users must provide their own HttpClient.
+#![cfg(not(target_arch = "wasm32"))]
+
 use anyhow::Result;
 use async_trait::async_trait;
 use wacore::net::{HttpClient, HttpRequest, HttpResponse, StreamingHttpResponse};

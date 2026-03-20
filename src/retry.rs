@@ -112,13 +112,7 @@ impl Client {
             format!("{}:{}", receipt.source.chat, message_id)
         };
 
-        let entry = self
-            .retried_group_messages
-            .entry(dedupe_key.clone())
-            .or_insert(())
-            .await;
-
-        if !entry.is_fresh() {
+        if self.retried_group_messages.get(&dedupe_key).await.is_some() {
             log::debug!(
                 "Ignoring duplicate retry for message {} from {}: already handled.",
                 message_id,
@@ -126,14 +120,23 @@ impl Client {
             );
             return Ok(());
         }
+        self.retried_group_messages
+            .insert(dedupe_key.clone(), ())
+            .await;
 
         // Prevent concurrent retries for the same message+participant.
-        if !self.pending_retries.insert(dedupe_key.clone()) {
+        if !self.pending_retries.lock().await.insert(dedupe_key.clone()) {
             log::debug!("Ignoring retry for {dedupe_key}: a retry is already in progress.");
             return Ok(());
         }
         let _guard = scopeguard::guard((self.clone(), dedupe_key.clone()), |(client, key)| {
-            client.pending_retries.remove(&key);
+            // Spawn an async task for cleanup because pending_retries uses an
+            // async mutex which cannot be locked inside a synchronous Drop.
+            let rt = client.runtime.clone();
+            rt.spawn(Box::pin(async move {
+                client.pending_retries.lock().await.remove(&key);
+            }))
+            .detach();
         });
 
         let original_msg = match self
@@ -548,7 +551,7 @@ impl Client {
         let session_mutex = self
             .session_locks
             .get_with(signal_addr_str.clone(), async {
-                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
         let _session_guard = session_mutex.lock().await;
@@ -842,6 +845,7 @@ mod tests {
         let mut config = crate::cache_config::CacheConfig::default();
         config.recent_messages.capacity = 1_000;
         let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -1740,6 +1744,7 @@ mod tests {
         let mut config = crate::cache_config::CacheConfig::default();
         config.recent_messages.capacity = 1_000;
         let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),

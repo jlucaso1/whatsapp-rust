@@ -10,19 +10,27 @@ description = "Core WhatsApp protocol implementation without runtime dependencie
 [features]
 default = ["simd"]
 simd = ["wacore-appstate/simd"]
+debug-diagnostics = []
 debug-snapshots = []
+# Enable JS-based random number generation for wasm32 targets.
+# Activates getrandom's wasm_js backend so rand works in the browser.
+js = ["getrandom/wasm_js"]
 
 [dependencies]
 aes = { workspace = true }
 aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
+event-listener = { workspace = true }
 flate2 = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+getrandom = { version = "0.3", default-features = false, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }

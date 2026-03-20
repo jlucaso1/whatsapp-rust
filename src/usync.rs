@@ -94,10 +94,7 @@ impl Client {
                                 .flatten(),
                         })
                         .collect(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64,
+                    timestamp: wacore::time::now_secs(),
                     phash: user_list.phash.clone(),
                 };
                 if let Err(e) = self.update_device_list(device_list).await {
@@ -154,7 +151,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_size_eviction() {
-        use moka::future::Cache;
+        use crate::cache::Cache;
 
         // Create a small cache
         let cache: Cache<i32, String> = Cache::builder().max_capacity(2).build();
@@ -165,7 +162,7 @@ mod tests {
         cache.insert(3, "three".to_string()).await;
 
         // Give time for eviction to occur
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        cache.run_pending_tasks().await;
 
         // The cache should have at most 2 items
         let count = cache.entry_count();

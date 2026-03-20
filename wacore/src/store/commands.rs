@@ -36,7 +36,7 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
             device.app_version_primary = p;
             device.app_version_secondary = s;
             device.app_version_tertiary = t;
-            device.app_version_last_fetched_ms = chrono::Utc::now().timestamp_millis();
+            device.app_version_last_fetched_ms = crate::time::now_millis();
         }
         DeviceCommand::SetDeviceProps(os, version, platform_type) => {
             device.set_device_props(os, version, platform_type);

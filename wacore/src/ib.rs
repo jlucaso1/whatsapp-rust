@@ -28,7 +28,7 @@ impl UnifiedSession {
         const WEEK_MS: i64 = 7 * DAY_MS;
         const OFFSET_MS: i64 = 3 * DAY_MS;
 
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_millis();
         let adjusted_now = now + server_time_offset_ms;
         let id = (adjusted_now + OFFSET_MS) % WEEK_MS;
         id.to_string()

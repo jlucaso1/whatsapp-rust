@@ -161,8 +161,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;
@@ -193,8 +199,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;

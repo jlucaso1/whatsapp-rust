@@ -308,20 +308,18 @@ impl Client {
             MediaDecryption::Encrypted {
                 media_key,
                 media_type,
-            } => tokio::task::spawn_blocking(move || {
+            } => wacore::runtime::blocking(&*self.runtime, move || {
                 DownloadUtils::decrypt_stream(&response.body[..], &media_key, media_type)
             })
             .await
-            .map_err(DownloadRequestError::other)?
             .map_err(DownloadRequestError::other),
             MediaDecryption::Plaintext { file_sha256 } => {
                 let body = response.body;
-                tokio::task::spawn_blocking(move || {
+                wacore::runtime::blocking(&*self.runtime, move || {
                     DownloadUtils::validate_plaintext_sha256(&body, &file_sha256)?;
                     Ok::<Vec<u8>, anyhow::Error>(body)
                 })
                 .await
-                .map_err(DownloadRequestError::other)?
                 .map_err(DownloadRequestError::other)
             }
         }
@@ -382,7 +380,7 @@ impl Client {
         let url = request.url.clone();
         let decryption = request.decryption.clone();
 
-        tokio::task::spawn_blocking(move || {
+        wacore::runtime::blocking(&*self.runtime, move || {
             let mut writer = writer;
 
             // Seek to start before each attempt so retries start fresh
@@ -440,7 +438,6 @@ impl Client {
             Ok((writer, result))
         })
         .await
-        .map_err(anyhow::Error::from)?
     }
 }
 
@@ -448,10 +445,10 @@ impl Client {
 mod tests {
     use super::*;
     use crate::mediaconn::{MediaConn, MediaConnHost};
+    use async_lock::Mutex;
     use std::io::Cursor;
     use std::sync::Arc;
-    use std::time::Instant;
-    use tokio::sync::Mutex;
+    use wacore::time::Instant;
 
     struct PlaintextDownloadable {
         direct_path: String,

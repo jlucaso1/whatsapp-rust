@@ -6,6 +6,7 @@ use wacore::download::{Downloadable, MediaType};
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::pair_code::PairCodeOptions;
 use whatsapp_rust::store::SqliteStore;
@@ -76,7 +77,8 @@ fn main() {
         let mut builder = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport_factory)
-            .with_http_client(http_client);
+            .with_http_client(http_client)
+            .with_runtime(TokioRuntime);
         // Optional: Override the WhatsApp version (normally auto-fetched)
         // builder = builder.with_version((2, 3000, 1027868167));
 

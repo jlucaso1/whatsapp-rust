@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
-use moka::future::Cache;
+use crate::cache::Cache;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::cache_store::TypedCache;
@@ -29,10 +29,10 @@ impl CacheEntryConfig {
         Self { timeout, capacity }
     }
 
-    /// Build a moka Cache using time_to_live semantics.
+    /// Build a Cache using time_to_live semantics.
     pub(crate) fn build_with_ttl<K, V>(&self) -> Cache<K, V>
     where
-        K: std::hash::Hash + Eq + Send + Sync + 'static,
+        K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
         let mut builder = Cache::builder().max_capacity(self.capacity);
@@ -43,14 +43,14 @@ impl CacheEntryConfig {
     }
 
     /// Build a [`TypedCache`] with TTL semantics, using the custom store if
-    /// provided or falling back to an in-process moka cache.
+    /// provided or falling back to an in-process cache.
     pub(crate) fn build_typed_ttl<K, V>(
         &self,
         store: Option<Arc<dyn CacheStore>>,
         namespace: &'static str,
     ) -> TypedCache<K, V>
     where
-        K: std::hash::Hash + Eq + Display + Send + Sync + 'static,
+        K: std::hash::Hash + Eq + Clone + Display + Send + Sync + 'static,
         V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     {
         match store {
@@ -59,10 +59,10 @@ impl CacheEntryConfig {
         }
     }
 
-    /// Build a moka Cache using time_to_idle semantics.
+    /// Build a Cache using time_to_idle semantics.
     pub(crate) fn build_with_tti<K, V>(&self) -> Cache<K, V>
     where
-        K: std::hash::Hash + Eq + Send + Sync + 'static,
+        K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
         let mut builder = Cache::builder().max_capacity(self.capacity);

@@ -25,7 +25,8 @@ use std::time::Duration;
 /// Cache operations are best-effort. The client falls back gracefully when
 /// cache reads fail (treats as miss) and logs warnings on write failures.
 /// Implementations should still return errors for observability.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait CacheStore: Send + Sync + 'static {
     /// Retrieve a cached value by namespace and key.
     async fn get(&self, namespace: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>>;

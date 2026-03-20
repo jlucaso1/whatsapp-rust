@@ -1,18 +1,21 @@
 use super::error::{StoreError, db_err};
 use crate::store::Device;
 use crate::store::traits::Backend;
+use async_lock::RwLock;
+use event_listener::Event;
+use futures::FutureExt;
 use log::{debug, error};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Notify, RwLock};
-use tokio::time::{Duration, sleep};
+use std::time::Duration;
+use wacore::runtime::Runtime;
 use wacore_binary::jid::Jid;
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
-    save_notify: Arc<Notify>,
+    save_notify: Arc<Event>,
 }
 
 impl PersistenceManager {
@@ -50,7 +53,7 @@ impl PersistenceManager {
             device: Arc::new(RwLock::new(device)),
             backend,
             dirty: Arc::new(AtomicBool::new(false)),
-            save_notify: Arc::new(Notify::new()),
+            save_notify: Arc::new(Event::new()),
         })
     }
 
@@ -74,9 +77,14 @@ impl PersistenceManager {
         let result = modifier(&mut device_guard);
 
         self.dirty.store(true, Ordering::Relaxed);
-        self.save_notify.notify_one();
+        self.save_notify.notify(1);
 
         result
+    }
+
+    /// Flush any dirty device state to the backend immediately.
+    pub async fn flush(&self) -> Result<(), StoreError> {
+        self.save_to_disk().await
     }
 
     async fn save_to_disk(&self) -> Result<(), StoreError> {
@@ -86,10 +94,11 @@ impl PersistenceManager {
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
 
-            self.backend
-                .save(&serializable_device)
-                .await
-                .map_err(db_err)?;
+            if let Err(e) = self.backend.save(&serializable_device).await {
+                // Restore dirty flag so the next tick retries the save
+                self.dirty.store(true, Ordering::Release);
+                return Err(db_err(e));
+            }
             debug!("Device state saved successfully.");
         }
         Ok(())
@@ -120,21 +129,38 @@ impl PersistenceManager {
         }
     }
 
-    pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = self.save_notify.notified() => {
-                        debug!("Save notification received.");
-                    }
-                    _ = sleep(interval) => {}
-                }
+    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+        let rt = runtime.clone();
+        let weak = Arc::downgrade(&self);
+        drop(self); // Release the strong reference; the caller's Arc keeps it alive
+        runtime
+            .spawn(Box::pin(async move {
+                loop {
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
+                    // Create the listener BEFORE the event can fire to avoid missing notifications.
+                    let listener = this.save_notify.listen();
+                    drop(this); // Don't hold strong ref while sleeping
 
-                if let Err(e) = self.save_to_disk().await {
-                    error!("Error saving device state in background: {e}");
+                    futures::select! {
+                        _ = listener.fuse() => {
+                            debug!("Save notification received.");
+                        }
+                        _ = rt.sleep(interval).fuse() => {}
+                    }
+
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
+                    if let Err(e) = this.save_to_disk().await {
+                        error!("Error saving device state in background: {e}");
+                    }
                 }
-            }
-        });
+            }))
+            .detach();
         debug!("Background saver task started with interval {interval:?}");
     }
 }

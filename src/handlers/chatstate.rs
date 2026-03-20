@@ -47,7 +47,8 @@ impl ChatStateEvent {
 #[derive(Default)]
 pub struct ChatstateHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for ChatstateHandler {
     fn tag(&self) -> &'static str {
         "chatstate"

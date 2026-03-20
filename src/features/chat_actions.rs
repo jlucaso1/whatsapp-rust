@@ -68,7 +68,7 @@ pub(crate) fn dispatch_chat_mutation(
         .as_ref()
         .and_then(|v| v.timestamp)
         .unwrap_or(0);
-    let time = DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now);
+    let time = DateTime::from_timestamp_millis(ts).unwrap_or_else(wacore::time::now_utc);
     let jid: Jid = if m.index.len() > 1 {
         match m.index[1].parse() {
             Ok(j) => j,
@@ -264,7 +264,7 @@ impl<'a> ChatActions<'a> {
                 "mute_end_timestamp_ms must be a positive future timestamp (use mute_chat() for indefinite)"
             );
         }
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_ms = wacore::time::now_millis();
         if mute_end_timestamp_ms <= now_ms {
             anyhow::bail!(
                 "mute_end_timestamp_ms is in the past ({mute_end_timestamp_ms} <= {now_ms})"
@@ -326,7 +326,7 @@ impl<'a> ChatActions<'a> {
                 archived: Some(archived),
                 message_range: None,
             }),
-            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
         self.send_mutation(WAPatchName::RegularLow, &index, &value)
@@ -339,7 +339,7 @@ impl<'a> ChatActions<'a> {
             pin_action: Some(wa::sync_action_value::PinAction {
                 pinned: Some(pinned),
             }),
-            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
         self.send_mutation(WAPatchName::RegularLow, &index, &value)
@@ -366,7 +366,7 @@ impl<'a> ChatActions<'a> {
                 mute_end_timestamp: mute_end,
                 auto_muted: None,
             }),
-            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
         self.send_mutation(WAPatchName::RegularHigh, &index, &value)
@@ -404,7 +404,7 @@ impl<'a> ChatActions<'a> {
             star_action: Some(wa::sync_action_value::StarAction {
                 starred: Some(starred),
             }),
-            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
         self.send_mutation(WAPatchName::RegularHigh, &index, &value)

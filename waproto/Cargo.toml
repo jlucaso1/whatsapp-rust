@@ -7,6 +7,10 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Protocol Buffers definitions for WhatsApp"
 
+[features]
+default = []
+serde-deserialize = []
+
 [dependencies]
 prost = { workspace = true, features = ["derive"] }
 serde = { workspace = true }

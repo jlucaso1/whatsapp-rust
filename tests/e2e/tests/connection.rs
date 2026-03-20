@@ -29,6 +29,7 @@ async fn test_connect_and_pair() -> anyhow::Result<()> {
         .with_backend(backend)
         .with_transport_factory(transport_factory)
         .with_http_client(UreqHttpClient::new())
+        .with_runtime(whatsapp_rust::TokioRuntime)
         .build()
         .await?;
 

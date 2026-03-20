@@ -196,7 +196,9 @@ impl Client {
                     let delay = delay_a.min(MAX_DELAY_SECS);
                     log::warn!("Pre-key upload failed, retrying in {}s: {:?}", delay, e);
 
-                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    self.runtime
+                        .sleep(std::time::Duration::from_secs(delay))
+                        .await;
 
                     // Bail if disconnected during retry wait
                     if !self.is_logged_in.load(Ordering::Relaxed) {

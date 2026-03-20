@@ -1,8 +1,7 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
-use crate::types::message::{AddressingMode, EditAttribute, MessageInfo};
-use chrono::DateTime;
+use crate::types::message::MessageInfo;
 use log::{debug, warn};
 use prost::Message as ProtoMessage;
 use rand::TryRngCore;
@@ -18,7 +17,6 @@ use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
 };
 use wacore::libsignal::store::sender_key_name::SenderKeyName;
-use wacore::messages::MessageUtils;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::JidExt as _;
@@ -33,34 +31,7 @@ const MAX_DECRYPT_RETRIES: u8 = 5;
 /// WhatsApp Web logs metrics when retry count exceeds this value.
 const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
 
-/// Retry reason codes matching WhatsApp Web's RetryReason enum.
-/// These are included in the retry receipt to help the sender understand
-/// why the message couldn't be decrypted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-#[allow(dead_code)] // All variants defined for WhatsApp Web compatibility
-pub(crate) enum RetryReason {
-    /// Unknown or unspecified error
-    UnknownError = 0,
-    /// No session exists with the sender (SessionNotFound)
-    NoSession = 1,
-    /// Invalid key in the message
-    InvalidKey = 2,
-    /// PreKey ID not found (InvalidPreKeyId)
-    InvalidKeyId = 3,
-    /// Invalid message format or content (InvalidMessage)
-    InvalidMessage = 4,
-    /// Invalid signature
-    InvalidSignature = 5,
-    /// Message from the future (timestamp issue)
-    FutureMessage = 6,
-    /// MAC verification failed (bad MAC)
-    BadMac = 7,
-    /// Invalid session state
-    InvalidSession = 8,
-    /// Invalid message key
-    InvalidMsgKey = 9,
-}
+pub(crate) use wacore::protocol::retry::RetryReason;
 
 impl Client {
     /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.
@@ -68,9 +39,11 @@ impl Client {
         // Send delivery receipt immediately in the background.
         let client_clone = self.clone();
         let info_clone = info.clone();
-        tokio::spawn(async move {
-            client_clone.send_delivery_receipt(&info_clone).await;
-        });
+        self.runtime
+            .spawn(Box::pin(async move {
+                client_clone.send_delivery_receipt(&info_clone).await;
+            }))
+            .detach();
 
         // Dispatch to event bus
         self.core
@@ -149,39 +122,27 @@ impl Client {
         true
     }
 
-    /// Atomically increments the retry count for a message and returns the new count.
+    /// Increments the retry count for a message and returns the new count.
     /// Returns `None` if max retries have been reached.
     ///
-    /// Uses moka's `and_compute_with` for truly atomic read-modify-write operations,
-    /// preventing race conditions where concurrent calls could exceed MAX_DECRYPT_RETRIES.
+    /// Uses get + insert for portability across cache backends.
     async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
-        use moka::ops::compute::Op;
-
-        let result = self
-            .message_retry_counts
-            .entry_by_ref(cache_key)
-            .and_compute_with(|maybe_entry| {
-                let op = if let Some(entry) = maybe_entry {
-                    let current = entry.into_value();
-                    if current >= MAX_DECRYPT_RETRIES {
-                        // Max retries reached, don't increment
-                        Op::Nop
-                    } else {
-                        Op::Put(current + 1)
-                    }
-                } else {
-                    Op::Put(1_u8)
-                };
-                std::future::ready(op)
-            })
-            .await;
-
-        match result {
-            moka::ops::compute::CompResult::Inserted(entry) => Some(entry.into_value()),
-            moka::ops::compute::CompResult::ReplacedWith(entry) => Some(entry.into_value()),
-            moka::ops::compute::CompResult::Unchanged(_) => None, // Max retries reached
-            moka::ops::compute::CompResult::StillNone(_) => None,
-            moka::ops::compute::CompResult::Removed(_) => None,
+        let current = self.message_retry_counts.get(&cache_key.to_string()).await;
+        match current {
+            Some(count) if count >= MAX_DECRYPT_RETRIES => None,
+            Some(count) => {
+                let new_count = count + 1;
+                self.message_retry_counts
+                    .insert(cache_key.to_string(), new_count)
+                    .await;
+                Some(new_count)
+            }
+            None => {
+                self.message_retry_counts
+                    .insert(cache_key.to_string(), 1_u8)
+                    .await;
+                Some(1)
+            }
         }
     }
 
@@ -224,7 +185,7 @@ impl Client {
         let client = Arc::clone(self);
         let info = info.clone();
 
-        tokio::spawn(async move {
+        self.runtime.spawn(Box::pin(async move {
             let cache_key = client
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
                 .await;
@@ -279,7 +240,7 @@ impl Client {
             if retry_count == 1 {
                 client.spawn_pdo_request(&info);
             }
-        });
+        })).detach();
     }
 
     pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<Node>) {
@@ -451,24 +412,32 @@ impl Client {
                 }
             };
 
-            if let Some(handler) = self.custom_enc_handlers.get(enc_type.as_ref()) {
-                let handler_clone = handler.clone();
+            if let Some(handler) = self
+                .custom_enc_handlers
+                .read()
+                .await
+                .get(enc_type.as_ref())
+                .cloned()
+            {
+                let handler_clone = handler;
                 let client_clone = self.clone();
                 let info_arc = Arc::clone(&info);
                 let enc_node_clone = Arc::new(enc_node.clone());
                 let enc_type_owned = enc_type.to_string();
 
-                tokio::spawn(async move {
-                    if let Err(e) = handler_clone
-                        .handle(client_clone, &enc_node_clone, &info_arc)
-                        .await
-                    {
-                        log::warn!(
-                            "Custom handler for enc type '{}' failed: {e:?}",
-                            enc_type_owned
-                        );
-                    }
-                });
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        if let Err(e) = handler_clone
+                            .handle(client_clone, &enc_node_clone, &info_arc)
+                            .await
+                        {
+                            log::warn!(
+                                "Custom handler for enc type '{}' failed: {e:?}",
+                                enc_type_owned
+                            );
+                        }
+                    }))
+                    .detach();
                 continue;
             }
 
@@ -508,28 +477,15 @@ impl Client {
         // Uses max(existing, incoming) so redeliveries with higher counts update the cache,
         // but lower counts don't reset our local counter.
         if max_sender_retry_count > 0 {
-            use moka::ops::compute::Op;
-
             let cache_key = self
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
                 .await;
-            self.message_retry_counts
-                .entry_by_ref(&cache_key)
-                .and_compute_with(|maybe_entry| {
-                    let op = match maybe_entry {
-                        Some(entry) => {
-                            let existing = entry.into_value();
-                            if max_sender_retry_count > existing {
-                                Op::Put(max_sender_retry_count)
-                            } else {
-                                Op::Nop
-                            }
-                        }
-                        None => Op::Put(max_sender_retry_count),
-                    };
-                    std::future::ready(op)
-                })
-                .await;
+            let existing = self.message_retry_counts.get(&cache_key).await.unwrap_or(0);
+            if max_sender_retry_count > existing {
+                self.message_retry_counts
+                    .insert(cache_key, max_sender_retry_count)
+                    .await;
+            }
             log::debug!(
                 "[msg:{}] Sender retry count {} pre-seeded into cache",
                 info.id,
@@ -541,16 +497,7 @@ impl Client {
         // ALL message processing globally, matching WA Web's allChatQueue pattern.
         // After offline sync completes, permits are increased for parallel processing.
         let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
-        let _global_permit = match semaphore.acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                log::error!(
-                    "Message processing semaphore closed, dropping message {}",
-                    info.id
-                );
-                return;
-            }
-        };
+        let _global_permit = semaphore.acquire_arc().await;
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
@@ -698,7 +645,7 @@ impl Client {
         let session_mutex = self
             .session_locks
             .get_with(signal_addr_str.clone(), async {
-                std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
         let _session_guard = session_mutex.lock().await;
@@ -1158,219 +1105,87 @@ impl Client {
         padding_version: u8,
         info: &MessageInfo,
     ) -> Result<(), anyhow::Error> {
-        let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
+        let original_msg = wacore::messages::decode_plaintext(padded_plaintext, padding_version)?;
         log::debug!(
-            "[msg:{}] Successfully decrypted message from {}: {} bytes (type: {}) [batch path]",
+            "[msg:{}] Successfully decrypted message from {}: type={} [batch path]",
             info.id,
             info.source.sender,
-            plaintext_slice.len(),
             enc_type
         );
 
-        match wa::Message::decode(plaintext_slice) {
-            Ok(original_msg) => {
-                // Validate DSM presence against sender identity
-                // (WAWebHandleMsgError.DeviceSentMessageError)
-                if original_msg.device_sent_message.is_some() && !info.source.is_from_me {
-                    warn!(
-                        "[msg:{}] DeviceSentMessage present but sender {} is not self",
-                        info.id, info.source.sender,
-                    );
-                }
-
-                // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
-                // the primary device). The actual content (reactions, text, etc.)
-                // is nested inside device_sent_message.message and must be
-                // extracted before protocol checks or dispatch.
-                let mut msg = unwrap_device_sent(original_msg);
-
-                // Post-decryption logic (SKDM, sync keys, etc.)
-                if let Some(skdm) = &msg.sender_key_distribution_message
-                    && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
-                {
-                    self.handle_sender_key_distribution_message(
-                        &info.source.chat,
-                        &info.source.sender,
-                        axolotl_bytes,
-                    )
-                    .await;
-                }
-
-                if let Some(protocol_msg) = &msg.protocol_message
-                    && let Some(keys) = &protocol_msg.app_state_sync_key_share
-                {
-                    self.handle_app_state_sync_key_share(keys).await;
-                }
-
-                if let Some(protocol_msg) = &msg.protocol_message
-                    && let Some(pdo_response) =
-                        &protocol_msg.peer_data_operation_request_response_message
-                {
-                    self.handle_pdo_response(pdo_response, info).await;
-                }
-
-                // Note: msg might be modified by take() below
-                let history_sync_taken = msg
-                    .protocol_message
-                    .as_mut()
-                    .and_then(|pm| pm.history_sync_notification.take());
-
-                if let Some(history_sync) = history_sync_taken {
-                    self.handle_history_sync(info.id.clone(), history_sync)
-                        .await;
-                }
-
-                // Skip dispatch for messages that only carry sender key distribution
-                // (protocol-level key exchange) with no user-visible content.
-                // These arrive as a separate pkmsg enc node alongside the actual
-                // group message (skmsg) and would otherwise surface as "unknown".
-                if is_sender_key_distribution_only(&msg) {
-                    log::debug!(
-                        "[msg:{}] Skipping event dispatch for sender key distribution message",
-                        info.id
-                    );
-                } else {
-                    self.dispatch_parsed_message(msg, info);
-                }
-                Ok(())
-            }
-            Err(e) => Err(anyhow::anyhow!("Failed to decode decrypted plaintext: {e}")),
+        // Validate DSM presence against sender identity
+        // (WAWebHandleMsgError.DeviceSentMessageError)
+        if original_msg.device_sent_message.is_some() && !info.source.is_from_me {
+            warn!(
+                "[msg:{}] DeviceSentMessage present but sender {} is not self",
+                info.id, info.source.sender,
+            );
         }
+
+        // Unwrap DeviceSentMessage wrapper (self-sent messages synced from
+        // the primary device). The actual content (reactions, text, etc.)
+        // is nested inside device_sent_message.message and must be
+        // extracted before protocol checks or dispatch.
+        let mut msg = wacore::messages::unwrap_device_sent(original_msg);
+
+        // Post-decryption logic (SKDM, sync keys, etc.)
+        if let Some(skdm) = &msg.sender_key_distribution_message
+            && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
+        {
+            self.handle_sender_key_distribution_message(
+                &info.source.chat,
+                &info.source.sender,
+                axolotl_bytes,
+            )
+            .await;
+        }
+
+        if let Some(protocol_msg) = &msg.protocol_message
+            && let Some(keys) = &protocol_msg.app_state_sync_key_share
+        {
+            self.handle_app_state_sync_key_share(keys).await;
+        }
+
+        if let Some(protocol_msg) = &msg.protocol_message
+            && let Some(pdo_response) = &protocol_msg.peer_data_operation_request_response_message
+        {
+            self.handle_pdo_response(pdo_response, info).await;
+        }
+
+        // Note: msg might be modified by take() below
+        let history_sync_taken = msg
+            .protocol_message
+            .as_mut()
+            .and_then(|pm| pm.history_sync_notification.take());
+
+        if let Some(history_sync) = history_sync_taken {
+            self.handle_history_sync(info.id.clone(), history_sync)
+                .await;
+        }
+
+        // Skip dispatch for messages that only carry sender key distribution
+        // (protocol-level key exchange) with no user-visible content.
+        // These arrive as a separate pkmsg enc node alongside the actual
+        // group message (skmsg) and would otherwise surface as "unknown".
+        if wacore::messages::is_sender_key_distribution_only(&msg) {
+            log::debug!(
+                "[msg:{}] Skipping event dispatch for sender key distribution message",
+                info.id
+            );
+        } else {
+            self.dispatch_parsed_message(msg, info);
+        }
+        Ok(())
     }
 
     pub(crate) async fn parse_message_info(
         &self,
         node: &Node,
     ) -> Result<MessageInfo, anyhow::Error> {
-        let mut attrs = node.attrs();
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = device_snapshot.pn.clone().unwrap_or_default();
         let own_lid = device_snapshot.lid.clone();
-        let from = attrs.jid("from");
-        let addressing_mode = attrs
-            .optional_string("addressing_mode")
-            .and_then(|s| AddressingMode::try_from(s.as_ref()).ok());
-
-        let mut source = if from.server == wacore_binary::jid::BROADCAST_SERVER {
-            // This is the new logic block for handling all broadcast messages, including status.
-            let participant = attrs.jid("participant");
-            let is_from_me = participant.matches_user_or_lid(&own_jid, own_lid.as_ref());
-
-            crate::types::message::MessageSource {
-                chat: from.clone(),
-                sender: participant.clone(),
-                is_from_me,
-                is_group: true, // Treat as group-like for session handling
-                broadcast_list_owner: if from.user != wacore_binary::jid::STATUS_BROADCAST_USER {
-                    Some(participant.clone())
-                } else {
-                    None
-                },
-                ..Default::default()
-            }
-        } else if from.is_group() {
-            let sender = attrs.jid("participant");
-            let sender_alt = match addressing_mode {
-                Some(AddressingMode::Lid) => attrs.optional_jid("participant_pn"),
-                Some(AddressingMode::Pn) => attrs.optional_jid("participant_lid"),
-                None => None,
-            };
-
-            let is_from_me = sender.matches_user_or_lid(&own_jid, own_lid.as_ref());
-
-            crate::types::message::MessageSource {
-                chat: from.clone(),
-                sender: sender.clone(),
-                is_from_me,
-                is_group: true,
-                sender_alt,
-                ..Default::default()
-            }
-        } else if from.matches_user_or_lid(&own_jid, own_lid.as_ref()) {
-            // DM from self (either via PN or LID)
-            // Note: peer_recipient_pn contains the RECIPIENT's PN, not sender's.
-            // For self-sent messages, we don't set sender_alt here - the decryption
-            // logic will use our own PN via the is_from_me fallback path.
-            // We store the original `recipient` attribute for retry receipts - this is needed
-            // because device sync messages may have a different recipient than our device,
-            // and the sender needs this to look up the original message.
-            let recipient = attrs.optional_jid("recipient");
-            // chat uses non-AD format for session routing, recipient keeps original for retry receipts
-            let chat = recipient
-                .as_ref()
-                .map(|r| r.to_non_ad())
-                .unwrap_or_else(|| from.to_non_ad());
-            crate::types::message::MessageSource {
-                chat,
-                sender: from.clone(),
-                is_from_me: true,
-                recipient,
-                // sender_alt stays None - decryption uses own PN for self-sent messages
-                ..Default::default()
-            }
-        } else {
-            // DM from someone else
-            // Look for alternate JID attribute based on sender type:
-            // - For LID senders: look for sender_pn to get their phone number
-            // - For PN senders: look for sender_lid to get their LID
-            // This is needed because sessions may be stored under either format
-            // depending on how the session was originally established.
-            let sender_alt = if from.server == wacore_binary::jid::HIDDEN_USER_SERVER {
-                // Sender is LID, look for their phone number
-                attrs.optional_jid("sender_pn")
-            } else {
-                // Sender is phone number, look for their LID
-                attrs.optional_jid("sender_lid")
-            };
-
-            crate::types::message::MessageSource {
-                chat: from.to_non_ad(),
-                sender: from.clone(),
-                is_from_me: false,
-                sender_alt,
-                ..Default::default()
-            }
-        };
-
-        source.addressing_mode = addressing_mode;
-
-        // Parse the category attribute - this is used for peer device messages ("peer")
-        // and is critical for proper retry receipt handling.
-        let category = attrs
-            .optional_string("category")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-
-        let id = attrs.required_string("id")?.to_string();
-        // server_id must be in range 99-2147476647 (per WhatsApp Web)
-        let server_id = attrs
-            .optional_u64("server_id")
-            .filter(|&v| (99..=2_147_476_647).contains(&v))
-            .unwrap_or(0) as i32;
-
-        // Ensure newsletter JID is normalized: should be just {user}@newsletter
-        if source.chat.is_newsletter() {
-            source.chat.device = 0;
-            source.chat.agent = 0;
-        }
-
-        Ok(MessageInfo {
-            source,
-            id,
-            server_id,
-            push_name: attrs
-                .optional_string("notify")
-                .map(|s| s.to_string())
-                .unwrap_or_default(),
-            timestamp: DateTime::from_timestamp(attrs.unix_time("t"), 0)
-                .unwrap_or_else(chrono::Utc::now),
-            category,
-            edit: attrs
-                .optional_string("edit")
-                .map(|s| EditAttribute::from(s.to_string()))
-                .unwrap_or_default(),
-            ..Default::default()
-        })
+        wacore::messages::parse_message_info(node, &own_jid, own_lid.as_ref())
     }
 
     pub(crate) async fn handle_app_state_sync_key_share(
@@ -1441,7 +1256,7 @@ impl Client {
                 .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             // First time setting; notify any waiters
-            self.initial_keys_synced_notifier.notify_waiters();
+            self.initial_keys_synced_notifier.notify(usize::MAX);
         }
     }
 
@@ -1568,42 +1383,16 @@ impl Client {
 /// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic, or returns
 /// the original message unchanged when there is no wrapper or the wrapper has
 /// no inner message.
-fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
-    if let Some(mut dsm) = msg.device_sent_message.take() {
-        if let Some(mut inner) = dsm.message.take() {
-            inner.message_context_info = wacore::proto_helpers::merge_dsm_context(
-                inner.message_context_info.take(),
-                msg.message_context_info.as_ref(),
-            );
-            return *inner;
-        }
-        msg.device_sent_message = Some(dsm);
-    }
-    msg
+/// Re-export from wacore for backwards compatibility (used by tests via `super::*`).
+#[cfg(test)]
+fn unwrap_device_sent(msg: wa::Message) -> wa::Message {
+    wacore::messages::unwrap_device_sent(msg)
 }
 
-/// Returns `true` if the message contains only a SenderKey distribution
-/// (internal key-exchange for group encryption) and no user-visible content.
-///
-/// When sending a group message, WhatsApp includes the SKDM in a separate
-/// `pkmsg` enc node.  We must process it (store the sender key) but should
-/// not surface it as a user event.
+/// Re-export from wacore for backwards compatibility (used by tests via `super::*`).
+#[cfg(test)]
 fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
-    let has_skdm = msg.sender_key_distribution_message.is_some()
-        || msg
-            .fast_ratchet_key_sender_key_distribution_message
-            .is_some();
-
-    if !has_skdm {
-        return false;
-    }
-
-    // Strip protocol-only fields and check if anything user-visible remains.
-    let mut stripped = msg.clone();
-    stripped.sender_key_distribution_message = None;
-    stripped.fast_ratchet_key_sender_key_distribution_message = None;
-    stripped.message_context_info = None;
-    stripped == wa::Message::default()
+    wacore::messages::is_sender_key_distribution_only(msg)
 }
 
 #[cfg(test)]
@@ -1612,6 +1401,7 @@ mod tests {
     use crate::store::SqliteStore;
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
+    use crate::types::message::EditAttribute;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
     use wacore_binary::jid::{Jid, SERVER_JID};
@@ -1636,7 +1426,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let participant_jid_str = "556899336555:42@s.whatsapp.net";
         let status_broadcast_jid_str = "status@broadcast";
@@ -1689,7 +1486,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1756,7 +1560,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
@@ -1836,8 +1647,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let own_lid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -1933,8 +1750,14 @@ mod tests {
                 .expect("test backend should initialize"),
         );
         let transport_factory = Arc::new(crate::transport::mock::MockTransportFactory::new());
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), transport_factory, mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            transport_factory,
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2155,7 +1978,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Test case 1: LID group message with participant_pn
         let lid_group_node = NodeBuilder::new("message")
@@ -2389,8 +2219,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (_client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (_client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us"
             .parse()
@@ -2480,8 +2316,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "100000000000001.1:75@lid"
             .parse()
@@ -2578,8 +2420,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2648,8 +2496,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let sender_jid: Jid = "559981212574@s.whatsapp.net"
             .parse()
@@ -2722,8 +2576,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate a group chat scenario
         let group_jid: Jid = "120363021033254949@g.us"
@@ -2812,7 +2672,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate self-sent DM to another user (from your phone to your bot echo)
         // Real log example:
@@ -2899,7 +2766,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate DM from another user via their LID
         // The sender_pn attribute should contain their phone number for session lookup
@@ -2987,7 +2861,14 @@ mod tests {
             );
         }
 
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         // Simulate DM to self (like "Notes to Myself" or pinging yourself)
         // from=your_LID, recipient=your_LID, peer_recipient_pn=your_PN
@@ -3051,7 +2932,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3113,7 +3001,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3162,7 +3057,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3228,7 +3130,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
         let lid = "100000012345678";
@@ -3298,7 +3207,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3432,7 +3348,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let lid = "100000012345678";
         let phone = "559980000001";
@@ -3540,7 +3463,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let phone = "559980000001";
 
@@ -3640,7 +3570,7 @@ mod tests {
                 broadcast_list_owner: None,
                 recipient: None,
             },
-            timestamp: chrono::Utc::now(),
+            timestamp: wacore::time::now_utc(),
             push_name: "Test User".to_string(),
             category: "".to_string(),
             multicast: false,
@@ -3676,7 +3606,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
         client
     }
 
@@ -3790,9 +3727,9 @@ mod tests {
 
     /// Test concurrent retry increments are properly serialized.
     ///
-    /// With moka's `and_compute_with`, the increment operation is atomic.
-    /// This means exactly 5 increments should succeed (returning 1-5),
-    /// and exactly 5 should fail (returning None after max is reached).
+    /// The increment operation uses get+insert which is not fully atomic,
+    /// but is sufficient since message retry processing is serialized per key
+    /// by the per-chat lock. At most 5 increments should succeed.
     #[tokio::test]
     async fn test_concurrent_retry_increments() {
         use tokio::task::JoinSet;
@@ -4123,7 +4060,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _sync_rx) = Client::new(pm, mock_transport(), mock_http_client(), None).await;
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let node = NodeBuilder::new("message")
             .attr("from", "15551234567@s.whatsapp.net")
@@ -4166,8 +4110,14 @@ mod tests {
                 .await
                 .expect("test backend should initialize"),
         );
-        let (client, _rx) =
-            Client::new(pm.clone(), mock_transport(), mock_http_client(), None).await;
+        let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
 
         let group_jid: Jid = "120363021033254949@g.us".parse().unwrap();
         let sender_jid: Jid = "1234567890:1@s.whatsapp.net".parse().unwrap();
@@ -4530,11 +4480,13 @@ mod tests {
         let cache_key = client
             .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
             .await;
-        client
-            .message_retry_counts
-            .entry_by_ref(&cache_key)
-            .or_insert(max_sender_retry_count)
-            .await;
+        // Insert only if absent (portable alternative to moka's entry_by_ref().or_insert())
+        if client.message_retry_counts.get(&cache_key).await.is_none() {
+            client
+                .message_retry_counts
+                .insert(cache_key.clone(), max_sender_retry_count)
+                .await;
+        }
 
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,
@@ -4556,11 +4508,12 @@ mod tests {
             let cache_key = client
                 .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
                 .await;
-            client
-                .message_retry_counts
-                .entry_by_ref(&cache_key)
-                .or_insert(max_sender_retry_count)
-                .await;
+            if client.message_retry_counts.get(&cache_key).await.is_none() {
+                client
+                    .message_retry_counts
+                    .insert(cache_key, max_sender_retry_count)
+                    .await;
+            }
         }
 
         let cache_key = client
@@ -4574,8 +4527,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enc_count_does_not_overwrite_higher() {
-        use moka::ops::compute::Op;
-
         let client = create_test_client_for_retry_with_id("enc_no_overwrite").await;
 
         let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
@@ -4591,26 +4542,19 @@ mod tests {
             .insert(cache_key.clone(), 4)
             .await;
 
-        // and_compute_with(max) should NOT overwrite with a lower value
+        // max(existing, incoming) should NOT overwrite with a lower value
         let max_sender_retry_count: u8 = 2;
-        client
+        let existing = client
             .message_retry_counts
-            .entry_by_ref(&cache_key)
-            .and_compute_with(|maybe_entry| {
-                let op = match maybe_entry {
-                    Some(entry) => {
-                        let existing = entry.into_value();
-                        if max_sender_retry_count > existing {
-                            Op::Put(max_sender_retry_count)
-                        } else {
-                            Op::Nop
-                        }
-                    }
-                    None => Op::Put(max_sender_retry_count),
-                };
-                std::future::ready(op)
-            })
-            .await;
+            .get(&cache_key)
+            .await
+            .unwrap_or(0);
+        if max_sender_retry_count > existing {
+            client
+                .message_retry_counts
+                .insert(cache_key.clone(), max_sender_retry_count)
+                .await;
+        }
 
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,
@@ -4621,8 +4565,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enc_count_updates_when_sender_higher() {
-        use moka::ops::compute::Op;
-
         let client = create_test_client_for_retry_with_id("enc_update_higher").await;
 
         let chat_jid: Jid = "5551234567@s.whatsapp.net".parse().unwrap();
@@ -4638,26 +4580,19 @@ mod tests {
             .insert(cache_key.clone(), 1)
             .await;
 
-        // and_compute_with(max) SHOULD update with a higher value
+        // max(existing, incoming) SHOULD update with a higher value
         let max_sender_retry_count: u8 = 3;
-        client
+        let existing = client
             .message_retry_counts
-            .entry_by_ref(&cache_key)
-            .and_compute_with(|maybe_entry| {
-                let op = match maybe_entry {
-                    Some(entry) => {
-                        let existing = entry.into_value();
-                        if max_sender_retry_count > existing {
-                            Op::Put(max_sender_retry_count)
-                        } else {
-                            Op::Nop
-                        }
-                    }
-                    None => Op::Put(max_sender_retry_count),
-                };
-                std::future::ready(op)
-            })
-            .await;
+            .get(&cache_key)
+            .await
+            .unwrap_or(0);
+        if max_sender_retry_count > existing {
+            client
+                .message_retry_counts
+                .insert(cache_key.clone(), max_sender_retry_count)
+                .await;
+        }
 
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,

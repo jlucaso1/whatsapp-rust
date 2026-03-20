@@ -62,7 +62,7 @@ impl Client {
                 sender: sender.clone(),
                 ..Default::default()
             },
-            timestamp: chrono::Utc::now(),
+            timestamp: wacore::time::now_utc(),
             r#type: receipt_type.clone(),
             message_sender: sender.clone(),
         };
@@ -71,18 +71,20 @@ impl Client {
             let client_clone = Arc::clone(self);
             // Arc clone is cheap - just reference count increment
             let node_clone = Arc::clone(&node);
-            tokio::spawn(async move {
-                if let Err(e) = client_clone
-                    .handle_retry_receipt(&receipt, &node_clone)
-                    .await
-                {
-                    log::warn!(
-                        "Failed to handle retry receipt for {}: {:?}",
-                        receipt.message_ids[0],
-                        e
-                    );
-                }
-            });
+            self.runtime
+                .spawn(Box::pin(async move {
+                    if let Err(e) = client_clone
+                        .handle_retry_receipt(&receipt, &node_clone)
+                        .await
+                    {
+                        log::warn!(
+                            "Failed to handle retry receipt for {}: {:?}",
+                            receipt.message_ids[0],
+                            e
+                        );
+                    }
+                }))
+                .detach();
         } else if receipt_type == ReceiptType::EncRekeyRetry {
             // WA Web: both "retry" and "enc_rekey_retry" route through
             // handleMessageRetryRequest, but enc_rekey_retry branches to the
@@ -169,11 +171,7 @@ impl Client {
             return Ok(());
         }
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .to_string();
+        let timestamp = (wacore::time::now_secs() as u64).to_string();
 
         let mut builder = NodeBuilder::new("receipt")
             .attr("to", chat.clone())
@@ -245,6 +243,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -288,6 +287,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -324,6 +324,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -362,6 +363,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -398,6 +400,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
@@ -485,6 +488,7 @@ mod tests {
                 .expect("persistence manager should initialize"),
         );
         let (client, _rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
             pm,
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),

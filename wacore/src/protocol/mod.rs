@@ -1,3 +1,6 @@
+pub mod keepalive;
+pub mod retry;
+
 use anyhow::Result;
 use wacore_binary::node::Node;
 

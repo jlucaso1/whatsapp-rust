@@ -4,6 +4,7 @@ mod chatstate;
 mod community;
 mod contacts;
 mod groups;
+mod media_reupload;
 mod mex;
 pub(crate) mod newsletter;
 mod presence;
@@ -29,6 +30,8 @@ pub use groups::{
     GroupParticipantOptions, GroupSubject, Groups, MemberAddMode, MemberLinkMode,
     MembershipApprovalMode, ParticipantChangeResponse,
 };
+
+pub use media_reupload::{MediaRetryResult, MediaReupload, MediaReuploadRequest};
 
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
 

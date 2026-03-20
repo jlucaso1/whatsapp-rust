@@ -17,7 +17,8 @@ use wacore_binary::node::{Node, NodeContent};
 #[derive(Default)]
 pub struct IbHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for IbHandler {
     fn tag(&self) -> &'static str {
         "ib"
@@ -53,36 +54,39 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 // offlineDeliveryEnd — only process them after offline sync completes.
                 // `account_sync` and `syncd_app_state` run immediately.
                 // See WAWebHandleDirtyBits in 5Yec01dI04o.js:50765-50782.
-                tokio::spawn(async move {
-                    if dirty_type == "groups" || dirty_type == "newsletter_metadata" {
-                        client_clone.wait_for_offline_delivery_end().await;
-                    }
-                    if let Err(e) = client_clone
-                        .clean_dirty_bits(&dirty_type, timestamp.as_deref())
-                        .await
-                    {
-                        warn!("Failed to send clean dirty bits IQ: {e:?}");
-                    }
-
-                    // Re-sync app state collections when notified they are stale.
-                    // Real WA Web re-syncs all collections on syncd_app_state dirty.
-                    // See WAWebHandleDirtyBits → WAWebSyncdCollectionsStateMachine.
-                    if dirty_type == "syncd_app_state" {
-                        info!("syncd_app_state dirty — re-syncing all app state collections");
+                client
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        if dirty_type == "groups" || dirty_type == "newsletter_metadata" {
+                            client_clone.wait_for_offline_delivery_end().await;
+                        }
                         if let Err(e) = client_clone
-                            .sync_collections_batched(vec![
-                                WAPatchName::CriticalBlock,
-                                WAPatchName::CriticalUnblockLow,
-                                WAPatchName::RegularLow,
-                                WAPatchName::RegularHigh,
-                                WAPatchName::Regular,
-                            ])
+                            .clean_dirty_bits(&dirty_type, timestamp.as_deref())
                             .await
                         {
-                            warn!("App state re-sync after dirty notification failed: {e:?}");
+                            warn!("Failed to send clean dirty bits IQ: {e:?}");
                         }
-                    }
-                });
+
+                        // Re-sync app state collections when notified they are stale.
+                        // Real WA Web re-syncs all collections on syncd_app_state dirty.
+                        // See WAWebHandleDirtyBits → WAWebSyncdCollectionsStateMachine.
+                        if dirty_type == "syncd_app_state" {
+                            info!("syncd_app_state dirty — re-syncing all app state collections");
+                            if let Err(e) = client_clone
+                                .sync_collections_batched(vec![
+                                    WAPatchName::CriticalBlock,
+                                    WAPatchName::CriticalUnblockLow,
+                                    WAPatchName::RegularLow,
+                                    WAPatchName::RegularHigh,
+                                    WAPatchName::Regular,
+                                ])
+                                .await
+                            {
+                                warn!("App state re-sync after dirty notification failed: {e:?}");
+                            }
+                        }
+                    }))
+                    .detach();
             }
             "edge_routing" => {
                 // Edge routing info is used for optimized reconnection to WhatsApp servers.
