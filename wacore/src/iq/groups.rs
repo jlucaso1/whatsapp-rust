@@ -1949,9 +1949,9 @@ impl IqSpec for GetMembershipRequestsIq {
                 .parse()
                 .map_err(|e| anyhow!("invalid jid in membership request: {e}"))?;
             let request_time = child
-                .attrs
-                .get("request_time")
-                .and_then(|v| v.to_string().parse::<u64>().ok());
+                .attrs()
+                .optional_string("request_time")
+                .and_then(|s| s.parse::<u64>().ok());
             requests.push(MembershipRequest { jid, request_time });
         }
         Ok(requests)
