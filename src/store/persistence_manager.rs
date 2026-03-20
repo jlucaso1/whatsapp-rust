@@ -82,6 +82,11 @@ impl PersistenceManager {
         result
     }
 
+    /// Flush any dirty device state to the backend immediately.
+    pub async fn flush(&self) -> Result<(), StoreError> {
+        self.save_to_disk().await
+    }
+
     async fn save_to_disk(&self) -> Result<(), StoreError> {
         if self.dirty.swap(false, Ordering::AcqRel) {
             debug!("Device state is dirty, saving to disk.");
