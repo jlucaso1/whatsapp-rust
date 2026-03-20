@@ -134,10 +134,9 @@ impl Default for Device {
 
 impl Device {
     pub fn new() -> Self {
-        use rand::Rng;
-        use rand::RngCore;
+        use rand::{Rng, RngExt};
 
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let identity_key_pair = IdentityKeyPair::generate(&mut rng);
 
         let identity_key: KeyPair = KeyPair::new(

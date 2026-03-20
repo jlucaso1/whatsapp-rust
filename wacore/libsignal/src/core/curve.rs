@@ -492,8 +492,8 @@ impl TryFrom<PrivateKey> for KeyPair {
 mod tests {
     use super::*;
 
-    fn rng() -> impl rand::CryptoRng + rand::Rng {
-        rand::rng()
+    fn rng() -> impl rand::CryptoRng {
+        rand::make_rng::<rand::rngs::StdRng>()
     }
 
     #[test]

@@ -280,12 +280,12 @@ mod tests {
     use crate::iq::prekeys::PreKeyBundleUserNode;
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
     use crate::protocol::ProtocolNode;
-    use rand::TryRngCore;
+
     use std::borrow::Cow;
     use wacore_binary::node::NodeValue;
 
     fn create_mock_bundle(device_id: u32) -> PreKeyBundle {
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let identity_pair = IdentityKeyPair::generate(&mut rng);
         let signed_prekey_pair = KeyPair::generate(&mut rng);
         let prekey_pair = KeyPair::generate(&mut rng);

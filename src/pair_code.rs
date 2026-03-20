@@ -49,7 +49,7 @@ use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::events::Event;
 use log::{error, info, warn};
-use rand::TryRngCore;
+
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
@@ -135,7 +135,7 @@ impl Client {
         );
 
         // Generate ephemeral keypair for this pairing session
-        let ephemeral_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let ephemeral_keypair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
         // Get device state for noise key
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;

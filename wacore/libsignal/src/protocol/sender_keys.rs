@@ -512,7 +512,7 @@ mod tests {
     /// Test SenderKeyState basic operations
     #[test]
     fn test_sender_key_state_basic() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -529,7 +529,7 @@ mod tests {
     /// Test SenderKeyState with private signing key
     #[test]
     fn test_sender_key_state_with_private_key() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -549,7 +549,7 @@ mod tests {
     /// Test SenderKeyState chain key operations
     #[test]
     fn test_sender_key_state_chain_key_update() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -580,7 +580,7 @@ mod tests {
     /// Test SenderKeyState message key storage
     #[test]
     fn test_sender_key_state_message_key_storage() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -609,7 +609,7 @@ mod tests {
     /// Test SenderKeyState message key limit
     #[test]
     fn test_sender_key_state_message_key_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -657,7 +657,7 @@ mod tests {
     /// Test SenderKeyRecord add and retrieve state
     #[test]
     fn test_sender_key_record_add_state() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -680,7 +680,7 @@ mod tests {
     /// Test SenderKeyRecord state limit
     #[test]
     fn test_sender_key_record_state_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let chain_key = [0x42u8; 32];
 
         let mut record = SenderKeyRecord::new_empty();
@@ -706,7 +706,7 @@ mod tests {
     /// Test SenderKeyRecord chain ID lookup
     #[test]
     fn test_sender_key_record_chain_id_lookup() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair1 = KeyPair::generate(&mut rng);
         let keypair2 = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
@@ -747,7 +747,7 @@ mod tests {
     /// Test SenderKeyRecord serialization roundtrip
     #[test]
     fn test_sender_key_record_serialization() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 

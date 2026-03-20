@@ -258,8 +258,8 @@ const USE_CASE_REPORT_TOKEN: &str = "Report Token";
 
 /// Generate a random message secret (32 bytes)
 pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
-    use rand::Rng;
-    let mut rng = rand::rng();
+    use rand::RngExt;
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     rng.random()
 }
 

@@ -418,7 +418,7 @@ impl<'a> ChatActions<'a> {
         index: &[u8],
         value: &wa::SyncActionValue,
     ) -> Result<()> {
-        use rand::RngCore;
+        use rand::Rng;
         use wacore::appstate::encode::encode_record;
 
         let proc = self.client.get_app_state_processor().await;
@@ -431,7 +431,7 @@ impl<'a> ChatActions<'a> {
         let keys = proc.get_app_state_key(&key_id).await?;
 
         let mut iv = [0u8; 16];
-        rand::rng().fill_bytes(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
         let (mutation, value_mac) = encode_record(
             wa::syncd_mutation::SyncdOperation::Set,

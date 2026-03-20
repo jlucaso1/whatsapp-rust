@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use rand::{CryptoRng, Rng};
+use rand::{CryptoRng, Rng, RngExt};
 
 use crate::crypto::aes_256_cbc_decrypt_into;
 use crate::crypto::{DecryptionError as DecryptionErrorCrypto, aes_256_cbc_encrypt_into};

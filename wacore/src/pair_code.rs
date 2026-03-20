@@ -26,7 +26,7 @@ use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
 use ctr::Ctr128BE;
 use hkdf::Hkdf;
-use rand::Rng;
+use rand::RngExt;
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::SERVER_JID;
@@ -153,7 +153,7 @@ impl PairCodeUtils {
     /// which excludes 0, I, O, and U to prevent visual confusion.
     pub fn generate_code() -> String {
         let mut bytes = [0u8; 5];
-        rand::rng().fill(&mut bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut bytes);
         Self::encode_crockford(&bytes)
     }
 
@@ -204,8 +204,8 @@ impl PairCodeUtils {
         // Generate random salt and IV
         let mut salt = [0u8; PAIR_CODE_SALT_SIZE];
         let mut iv = [0u8; PAIR_CODE_IV_SIZE];
-        rand::rng().fill(&mut salt);
-        rand::rng().fill(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // Derive key from code and encrypt with AES-256-CTR
         let key = Self::derive_key(code, &salt);
@@ -403,7 +403,7 @@ impl PairCodeUtils {
 
         // Generate random bytes for ADV secret derivation
         let mut random_bytes = [0u8; 32];
-        rand::rng().fill(&mut random_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut random_bytes);
 
         // Derive ADV secret using HKDF
         // Combined secret = ephemeral_shared + identity_shared + random_bytes
@@ -426,7 +426,7 @@ impl PairCodeUtils {
 
         // Generate salt for HKDF
         let mut key_bundle_salt = [0u8; 32];
-        rand::rng().fill(&mut key_bundle_salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut key_bundle_salt);
 
         // Derive bundle encryption key using HKDF
         // HKDF(IKM=ephemeral_shared, salt=random_salt, info="link_code_pairing_key_bundle_encryption_key")
@@ -440,7 +440,7 @@ impl PairCodeUtils {
 
         // Generate random IV for AES-GCM (12 bytes)
         let mut iv = [0u8; 12];
-        rand::rng().fill(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // AES-GCM encrypt the bundle
         let cipher = Aes256Gcm::new_from_slice(&enc_key)

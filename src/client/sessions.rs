@@ -192,7 +192,6 @@ impl Client {
     /// Fetch prekeys and establish sessions for a batch of JIDs.
     /// Returns the number of sessions successfully established.
     async fn fetch_and_establish_sessions(&self, jids: &[Jid]) -> Result<usize, anyhow::Error> {
-        use rand::TryRngCore;
         use wacore::libsignal::protocol::{UsePQRatchet, process_prekey_bundle};
         use wacore::types::jid::JidExt;
 
@@ -231,7 +230,7 @@ impl Client {
                     &mut adapter.session_store,
                     &mut adapter.identity_store,
                     bundle,
-                    &mut rand::rngs::OsRng.unwrap_err(),
+                    &mut rand::make_rng::<rand::rngs::StdRng>(),
                     UsePQRatchet::No,
                 )
                 .await

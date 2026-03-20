@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::request::IqError;
 use futures::FutureExt;
 use log::{debug, warn};
-use rand::Rng;
+use rand::RngExt;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -96,7 +96,7 @@ impl Client {
             // duration so we never miss a notification between loop iterations.
             let shutdown = self.shutdown_notifier.listen();
 
-            let interval_ms = rand::rng().random_range(
+            let interval_ms = rand::make_rng::<rand::rngs::StdRng>().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
             );
             let interval = Duration::from_millis(interval_ms as u64);
