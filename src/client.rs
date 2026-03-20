@@ -831,17 +831,18 @@ impl Client {
                 self.cleanup_connection_state().await;
             }
 
-            if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
-                info!("Auto-reconnect disabled, shutting down.");
-                self.is_running.store(false, Ordering::Relaxed);
-                break;
-            }
-
-            // If this was an expected disconnect (e.g., 515 after pairing), reconnect immediately
+            // Expected disconnects (e.g., 515 after pairing) always reconnect
+            // immediately, regardless of auto-reconnect setting.
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 self.auto_reconnect_errors.store(0, Ordering::Relaxed);
                 info!("Expected disconnect (e.g., 515), reconnecting immediately...");
                 continue;
+            }
+
+            if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
+                info!("Auto-reconnect disabled, shutting down.");
+                self.is_running.store(false, Ordering::Relaxed);
+                break;
             }
 
             let error_count = self.auto_reconnect_errors.fetch_add(1, Ordering::SeqCst);
