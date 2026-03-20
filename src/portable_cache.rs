@@ -315,21 +315,15 @@ where
     where
         F: std::future::Future<Output = V>,
     {
-        // Fast path: cache hit.
+        // Fast path: cache hit (no lock contention).
         if let Some(v) = self.get(&key).await {
             return v;
         }
 
         // Get or create a per-key init mutex to serialize concurrent inits.
+        // Keep the critical section short — only HashMap access, no I/O.
         let init_mutex = {
             let mut locks = self.init_locks.lock().await;
-
-            // Double-check under the init_locks map lock: another task may have
-            // completed initialization between our cache miss and acquiring this lock.
-            if let Some(v) = self.get(&key).await {
-                return v;
-            }
-
             locks
                 .entry(key.clone())
                 .or_insert_with(|| Arc::new(AsyncMutex::new(())))
@@ -339,7 +333,8 @@ where
         // Serialize per key — only one task runs the initializer.
         let _init_guard = init_mutex.lock().await;
 
-        // Double-check: another task that held this lock may have already initialized.
+        // Double-check: another task that held this lock may have already
+        // initialized the value while we waited.
         if let Some(v) = self.get(&key).await {
             return v;
         }
@@ -355,19 +350,12 @@ where
     where
         F: std::future::Future<Output = V>,
     {
-        // Fast path: cache hit.
         if let Some(v) = self.get(key).await {
             return v;
         }
 
-        // Get or create a per-key init mutex.
         let init_mutex = {
             let mut locks = self.init_locks.lock().await;
-
-            if let Some(v) = self.get(key).await {
-                return v;
-            }
-
             locks
                 .entry(key.clone())
                 .or_insert_with(|| Arc::new(AsyncMutex::new(())))
@@ -400,6 +388,8 @@ where
             guard.map.remove(k);
         }
         guard.insertion_order.retain(|k| !expired_keys.contains(k));
+        // Release `inner` before acquiring `init_locks` to maintain a
+        // consistent lock ordering (init_locks → inner) across all methods.
         drop(guard);
 
         // Clean up init locks for keys no longer being initialized.

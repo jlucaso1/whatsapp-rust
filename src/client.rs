@@ -1153,9 +1153,11 @@ impl Client {
                                 // Feed data into the frame decoder
                                 frame_decoder.feed(&data);
 
-                                // Process all complete frames
-                                // Note: Frame decryption must be sequential (noise protocol counter),
-                                // but we spawn node processing concurrently after decryption
+                                // Process all complete frames.
+                                // Frame decryption must be sequential (noise protocol counter),
+                                // but we spawn node processing concurrently after decryption.
+                                let mut frames_in_batch: u32 = 0;
+
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
                                     if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
@@ -1185,6 +1187,16 @@ impl Client {
                                     if self.expected_disconnect.load(Ordering::Relaxed) {
                                         debug!("Expected disconnect signaled during frame processing. Exiting message loop.");
                                         return Ok(());
+                                    }
+
+                                    // Cooperative yield: give other tasks a chance to run.
+                                    // The runtime decides whether yielding is needed — returns
+                                    // None (zero-cost) when unnecessary, Some(fut) otherwise.
+                                    frames_in_batch += 1;
+                                    if frames_in_batch.is_multiple_of(10)
+                                        && let Some(yield_fut) = self.runtime.yield_now()
+                                    {
+                                        yield_fut.await;
                                     }
                                 }
                             },

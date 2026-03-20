@@ -17,6 +17,18 @@ pub trait Runtime: Send + Sync + 'static {
         &self,
         f: Box<dyn FnOnce() + Send + 'static>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+
+    /// Cooperatively yield, allowing other tasks and I/O to make progress.
+    ///
+    /// Use this in tight async loops that process many items to avoid
+    /// starving other work. Returns `None` if yielding is unnecessary
+    /// (e.g. multi-threaded runtimes where other tasks run on separate
+    /// threads), or `Some(future)` that the caller must `.await` to
+    /// actually yield.
+    ///
+    /// Returning `None` avoids any allocation or async overhead, making
+    /// the call zero-cost on runtimes that don't need cooperative yielding.
+    fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 }
 
 /// WASM variant — `Send` bounds removed since WASM is single-threaded.
@@ -27,6 +39,12 @@ pub trait Runtime: Send + Sync + 'static {
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> AbortHandle;
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()>>>;
     fn spawn_blocking(&self, f: Box<dyn FnOnce() + 'static>) -> Pin<Box<dyn Future<Output = ()>>>;
+
+    /// Cooperatively yield, allowing other tasks and I/O to make progress.
+    ///
+    /// Returns `None` if yielding is unnecessary, or `Some(future)` that
+    /// the caller must `.await` to actually yield.
+    fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()>>>>;
 }
 
 /// Handle returned by [`Runtime::spawn`]. Aborts the spawned task when dropped.

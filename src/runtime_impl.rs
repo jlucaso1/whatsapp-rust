@@ -29,6 +29,12 @@ mod tokio_impl {
                 let _ = tokio::task::spawn_blocking(f).await;
             })
         }
+
+        fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
+            // Multi-threaded runtime: other tasks run on separate threads,
+            // no cooperative yielding needed.
+            None
+        }
     }
 }
 
