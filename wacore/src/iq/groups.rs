@@ -1784,19 +1784,13 @@ impl IqSpec for GetLinkedGroupsParticipantsIq {
 // ---------------------------------------------------------------------------
 
 /// Result of joining a group via invite code.
-///
-/// The server returns `<group>` for immediate joins, or
-/// `<membership_approval_request>` when the group requires admin approval.
 #[derive(Debug, Clone)]
 pub enum JoinGroupResult {
-    /// Successfully joined the group immediately.
     Joined(Jid),
-    /// A membership approval request was created; waiting for admin approval.
     PendingApproval(Jid),
 }
 
 impl JoinGroupResult {
-    /// Returns the group JID regardless of join status.
     pub fn group_jid(&self) -> &Jid {
         match self {
             JoinGroupResult::Joined(jid) | JoinGroupResult::PendingApproval(jid) => jid,
@@ -1804,17 +1798,13 @@ impl JoinGroupResult {
     }
 }
 
-/// Join a group using an invite code (the part after https://chat.whatsapp.com/).
+/// Join a group using an invite code.
 ///
-/// Wire format:
 /// ```xml
 /// <iq type="set" xmlns="w:g2" to="@g.us">
 ///   <invite code="{code}"/>
 /// </iq>
 /// ```
-///
-/// Response contains either `<group jid="...">` (immediate join) or
-/// `<membership_approval_request jid="...">` (pending admin approval).
 #[derive(Debug, Clone)]
 pub struct AcceptGroupInviteIq {
     pub code: String,
@@ -1867,7 +1857,6 @@ impl IqSpec for AcceptGroupInviteIq {
 
 /// Get group metadata from an invite code without joining.
 ///
-/// Wire format:
 /// ```xml
 /// <iq type="get" xmlns="w:g2" to="@g.us">
 ///   <invite code="{code}"/>
@@ -1910,7 +1899,6 @@ impl IqSpec for GetGroupInviteInfoIq {
 
 /// Get pending membership approval requests for a group.
 ///
-/// Wire format:
 /// ```xml
 /// <iq type="get" xmlns="w:g2" to="{group_jid}">
 ///   <membership_approval_requests/>
@@ -1929,7 +1917,6 @@ impl GetMembershipRequestsIq {
     }
 }
 
-/// A pending membership request.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MembershipRequest {
     pub jid: Jid,
@@ -1973,13 +1960,12 @@ impl IqSpec for GetMembershipRequestsIq {
 
 /// Approve or reject pending membership requests.
 ///
-/// Wire format:
 /// ```xml
 /// <iq type="set" xmlns="w:g2" to="{group_jid}">
 ///   <membership_requests_action>
-///     <approve|reject>
+///     <approve> or <reject>
 ///       <participant jid="{jid}"/>
-///     </approve|reject>
+///     </approve>
 ///   </membership_requests_action>
 /// </iq>
 /// ```
@@ -2052,7 +2038,6 @@ impl IqSpec for MembershipRequestActionIq {
 
 /// Set who can add members to the group.
 ///
-/// Wire format:
 /// ```xml
 /// <iq type="set" xmlns="w:g2" to="{group_jid}">
 ///   <member_add_mode>admin_add|all_member_add</member_add_mode>

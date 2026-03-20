@@ -1543,7 +1543,7 @@ impl Client {
         self.execute(PrivacySettingsSpec::new()).await
     }
 
-    /// Set a privacy setting by category name and value.
+    /// Set a privacy setting (e.g. "last" → "contacts").
     pub async fn set_privacy_setting(
         &self,
         category: &str,
@@ -1554,7 +1554,7 @@ impl Client {
             .await
     }
 
-    /// Set the default disappearing messages duration (in seconds). Pass 0 to disable.
+    /// Set the default disappearing messages duration (seconds). Pass 0 to disable.
     pub async fn set_default_disappearing_mode(
         &self,
         duration: u32,

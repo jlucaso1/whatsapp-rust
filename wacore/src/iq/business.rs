@@ -1,36 +1,4 @@
-//! Business profile IQ specification.
-//!
-//! Fetches business profile information for a WhatsApp Business account.
-//!
-//! ## Wire Format
-//! ```xml
-//! <!-- Request -->
-//! <iq xmlns="w:biz" type="get" to="s.whatsapp.net" id="...">
-//!   <business_profile v="244">
-//!     <profile jid="1234567890@s.whatsapp.net"/>
-//!   </business_profile>
-//! </iq>
-//!
-//! <!-- Response -->
-//! <iq from="s.whatsapp.net" id="..." type="result">
-//!   <business_profile>
-//!     <profile jid="1234567890@s.whatsapp.net">
-//!       <description>Business description</description>
-//!       <address>123 Main St</address>
-//!       <email>biz@example.com</email>
-//!       <website>https://example.com</website>
-//!       <categories>
-//!         <category>Restaurant</category>
-//!       </categories>
-//!       <business_hours timezone="America/New_York">
-//!         <business_hours_config day_of_week="mon" mode="open" open_time="0900" close_time="1700"/>
-//!       </business_hours>
-//!     </profile>
-//!   </business_profile>
-//! </iq>
-//! ```
-//!
-//! Verified against WhatsApp Web JS (WAWebBizProfileQueryJob).
+//! Business profile IQ specification (namespace `w:biz`).
 
 use crate::iq::node::optional_attr;
 use crate::iq::spec::IqSpec;
@@ -39,7 +7,6 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// Extract string content from a node.
 fn node_text(node: &Node) -> Option<String> {
     match &node.content {
         Some(NodeContent::String(s)) => Some(s.clone()),
@@ -48,41 +15,29 @@ fn node_text(node: &Node) -> Option<String> {
     }
 }
 
-/// Business profile data returned from the server.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct BusinessProfile {
-    /// The JID of the business account.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wid: Option<Jid>,
-    /// Business description text.
     pub description: String,
-    /// Business email address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// Business website URLs.
     pub website: Vec<String>,
-    /// Business categories (e.g., "Restaurant", "Retail").
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<BusinessCategory>,
-    /// Business street address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-    /// Business operating hours.
     pub business_hours: BusinessHours,
 }
 
-/// Business operating hours configuration.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct BusinessHours {
-    /// Timezone (e.g., "America/New_York").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
-    /// Per-day configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub business_config: Option<Vec<BusinessHoursConfig>>,
 }
 
-/// Single day's business hours configuration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BusinessHoursConfig {
     pub day_of_week: String,
@@ -93,14 +48,12 @@ pub struct BusinessHoursConfig {
     pub close_time: Option<String>,
 }
 
-/// Business category with ID and display name.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BusinessCategory {
     pub id: String,
     pub name: String,
 }
 
-/// Fetches a business profile from the server.
 #[derive(Debug, Clone)]
 pub struct BusinessProfileSpec {
     pub jid: Jid,

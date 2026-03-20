@@ -366,30 +366,22 @@ impl<'a> Groups<'a> {
     }
 
     /// Join a group using an invite code.
-    ///
-    /// Returns [`JoinGroupResult::Joined`] if the group was joined immediately,
-    /// or [`JoinGroupResult::PendingApproval`] if the group requires admin approval.
     pub async fn join_with_invite_code(
         &self,
         code: &str,
     ) -> Result<JoinGroupResult, anyhow::Error> {
-        // Strip URL prefix if present
-        let code = code
-            .trim_start_matches("https://chat.whatsapp.com/")
-            .trim_start_matches("http://chat.whatsapp.com/");
+        let code = strip_invite_url(code);
         Ok(self.client.execute(AcceptGroupInviteIq::new(code)).await?)
     }
 
     /// Get group metadata from an invite code without joining.
     pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error> {
-        let code = code
-            .trim_start_matches("https://chat.whatsapp.com/")
-            .trim_start_matches("http://chat.whatsapp.com/");
+        let code = strip_invite_url(code);
         let group = self.client.execute(GetGroupInviteInfoIq::new(code)).await?;
         Ok(GroupMetadata::from(group))
     }
 
-    /// Get pending membership approval requests for a group.
+    /// Get pending membership approval requests.
     pub async fn get_membership_requests(
         &self,
         jid: &Jid,
@@ -441,6 +433,11 @@ impl Client {
     pub fn groups(&self) -> Groups<'_> {
         Groups::new(self)
     }
+}
+
+fn strip_invite_url(code: &str) -> &str {
+    code.trim_start_matches("https://chat.whatsapp.com/")
+        .trim_start_matches("http://chat.whatsapp.com/")
 }
 
 #[cfg(test)]

@@ -162,12 +162,7 @@ impl Client {
         }
     }
 
-    /// Sends a PDO request to fetch on-demand message history from the primary phone.
-    ///
-    /// This sends a `HistorySyncOnDemand` PDO request to our own phone (device 0),
-    /// which will respond with history sync data for the requested chat.
-    ///
-    /// Returns the message ID of the sent PDO request.
+    /// Request on-demand message history from the primary phone via PDO.
     pub async fn fetch_message_history(
         self: &Arc<Self>,
         chat_jid: &Jid,

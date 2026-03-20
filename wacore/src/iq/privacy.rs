@@ -159,9 +159,8 @@ impl IqSpec for PrivacySettingsSpec {
 
 /// Set a single privacy setting.
 ///
-/// Wire format:
 /// ```xml
-/// <iq xmlns="privacy" type="set" to="s.whatsapp.net" id="...">
+/// <iq xmlns="privacy" type="set" to="s.whatsapp.net">
 ///   <privacy>
 ///     <category name="{category}" value="{value}"/>
 ///   </privacy>
@@ -207,9 +206,8 @@ impl IqSpec for SetPrivacySettingSpec {
 
 /// Set the default disappearing messages duration.
 ///
-/// Wire format:
 /// ```xml
-/// <iq xmlns="disappearing_mode" type="set" to="s.whatsapp.net" id="...">
+/// <iq xmlns="disappearing_mode" type="set" to="s.whatsapp.net">
 ///   <disappearing_mode duration="{seconds}"/>
 /// </iq>
 /// ```
