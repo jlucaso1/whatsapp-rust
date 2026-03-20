@@ -15,7 +15,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
 use prost::Message;
-use rand::RngCore;
+use rand::Rng;
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
@@ -70,7 +70,7 @@ pub fn encrypt_media_retry_receipt(
         Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("AES-GCM key init failed: {e}"))?;
 
     let mut iv = [0u8; ENC_IV_SIZE];
-    rand::rng().fill_bytes(&mut iv);
+    rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
     let receipt = wa::ServerErrorReceipt {
         stanza_id: Some(stanza_id.to_string()),

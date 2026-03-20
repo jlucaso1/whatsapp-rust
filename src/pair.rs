@@ -3,7 +3,7 @@ use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
 use log::{error, info, warn};
 use prost::Message;
-use rand::TryRngCore;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
@@ -347,7 +347,7 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+    let master_ephemeral = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {

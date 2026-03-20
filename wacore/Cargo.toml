@@ -30,7 +30,7 @@ ctr = { workspace = true }
 event-listener = { workspace = true }
 flate2 = { workspace = true }
 futures = { workspace = true, features = ["std"] }
-getrandom = { version = "0.3", default-features = false, optional = true }
+getrandom = { workspace = true, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }

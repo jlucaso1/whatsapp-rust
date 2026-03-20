@@ -898,8 +898,8 @@ mod tests {
     use crate::protocol::ratchet::keys::MessageKeyGenerator;
     use crate::protocol::{IdentityKey, KeyPair};
 
-    fn rng() -> impl rand::CryptoRng + rand::Rng {
-        rand::rng()
+    fn rng() -> impl rand::CryptoRng {
+        rand::make_rng::<rand::rngs::StdRng>()
     }
 
     /// Creates a minimal valid SessionState for testing.

@@ -28,7 +28,7 @@ use crate::types::events::{ConnectFailureReason, Event};
 
 use log::{debug, error, info, trace, warn};
 
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 use scopeguard;
 use wacore_binary::jid::Jid;
 
@@ -521,7 +521,7 @@ impl Client {
         cache_config: CacheConfig,
     ) -> (Arc<Self>, async_channel::Receiver<MajorSyncTask>) {
         let mut unique_id_bytes = [0u8; 2];
-        rand::rng().fill_bytes(&mut unique_id_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut unique_id_bytes);
 
         let device_snapshot = persistence_manager.get_device_snapshot().await;
         let core = wacore::client::CoreClient::new(device_snapshot.core.clone());
@@ -3257,7 +3257,8 @@ fn fibonacci_backoff(attempt: u32) -> Duration {
     // ±10% jitter (WA Web: jitter: 0.1)
     let jitter_range = base / 10;
     let jitter = if jitter_range > 0 {
-        rand::rng().random_range(0..=(jitter_range * 2)) as i64 - jitter_range as i64
+        rand::make_rng::<rand::rngs::StdRng>().random_range(0..=(jitter_range * 2)) as i64
+            - jitter_range as i64
     } else {
         0
     };

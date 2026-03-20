@@ -6,7 +6,7 @@ use base64::prelude::*;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
-use rand::TryRngCore;
+
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
@@ -207,7 +207,7 @@ impl PairUtils {
         let device_signature = device_state
             .identity_key
             .private_key
-            .calculate_signature(&msg_to_sign, &mut rand::rngs::OsRng.unwrap_err())
+            .calculate_signature(&msg_to_sign, &mut rand::make_rng::<rand::rngs::StdRng>())
             .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",

@@ -119,7 +119,7 @@ impl<'a> Profile<'a> {
 
     /// Build and send the `setting_pushName` app state mutation.
     async fn send_push_name_mutation(&self, name: &str) -> Result<()> {
-        use rand::RngCore;
+        use rand::Rng;
         use wacore::appstate::encode::encode_record;
         use waproto::whatsapp as wa;
 
@@ -145,7 +145,7 @@ impl<'a> Profile<'a> {
 
         // Generate random IV
         let mut iv = [0u8; 16];
-        rand::rng().fill_bytes(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
         let (mutation, value_mac) = encode_record(
             wa::syncd_mutation::SyncdOperation::Set,

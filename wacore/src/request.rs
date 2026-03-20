@@ -1,5 +1,5 @@
 use crate::StringEnum;
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
@@ -141,7 +141,7 @@ impl RequestUtils {
         }
 
         let mut random_bytes = [0u8; 16];
-        rand::rng().fill_bytes(&mut random_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut random_bytes);
         data.extend_from_slice(&random_bytes);
 
         let hash = Sha256::digest(&data);

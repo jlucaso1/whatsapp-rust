@@ -924,8 +924,11 @@ impl SetGroupDescriptionIq {
         description: Option<GroupDescription>,
         prev: Option<String>,
     ) -> Self {
-        use rand::Rng;
-        let id = format!("{:08X}", rand::rng().random::<u32>());
+        use rand::RngExt;
+        let id = format!(
+            "{:08X}",
+            rand::make_rng::<rand::rngs::StdRng>().random::<u32>()
+        );
         Self {
             group_jid: group_jid.clone(),
             description,

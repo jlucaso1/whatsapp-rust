@@ -12,7 +12,7 @@ use crate::reporting_token::{
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
-use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand::{CryptoRng, Rng, RngExt};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -218,7 +218,7 @@ where
                         stores.session_store,
                         stores.identity_store,
                         bundle,
-                        &mut rand::rngs::OsRng.unwrap_err(),
+                        &mut rand::make_rng::<rand::rngs::StdRng>(),
                         UsePQRatchet::No,
                     )
                     .await
@@ -274,7 +274,7 @@ where
                                 stores.session_store,
                                 stores.identity_store,
                                 bundle,
-                                &mut rand::rngs::OsRng.unwrap_err(),
+                                &mut rand::make_rng::<rand::rngs::StdRng>(),
                                 UsePQRatchet::No,
                             )
                             .await
@@ -771,7 +771,7 @@ pub async fn prepare_group_stanza<
         &to_jid,
         &own_sending_jid,
         &plaintext,
-        &mut rand::rngs::OsRng.unwrap_err(),
+        &mut rand::make_rng::<rand::rngs::StdRng>(),
     )
     .await?;
 
@@ -856,7 +856,7 @@ pub async fn create_sender_key_distribution_message_for_group(
             group_jid
         );
 
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
 
         let chain_id = (rng.random::<u32>()) >> 1;
@@ -1374,7 +1374,7 @@ mod tests {
 
     /// Helper function to create a mock PreKeyBundle with valid types
     fn create_mock_bundle() -> PreKeyBundle {
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let identity_pair = IdentityKeyPair::generate(&mut rng);
         let signed_prekey_pair = KeyPair::generate(&mut rng);
         let prekey_pair = KeyPair::generate(&mut rng);

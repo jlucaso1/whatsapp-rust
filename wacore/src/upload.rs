@@ -1,7 +1,7 @@
 use crate::download::MediaType;
 use crate::libsignal::crypto::{CryptographicHash, CryptographicMac, aes_256_cbc_encrypt_into};
 use anyhow::Result;
-use rand::Rng;
+use rand::RngExt;
 use rand::rng;
 
 pub struct EncryptedMedia {

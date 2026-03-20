@@ -8,8 +8,8 @@ pub struct MessageUtils;
 
 impl MessageUtils {
     pub fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
-        use rand::Rng;
-        let mut rng = rand::rng();
+        use rand::RngExt;
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
         let mut pad_val = rng.random::<u8>() & 0x0F;
         if pad_val == 0 {

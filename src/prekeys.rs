@@ -7,7 +7,7 @@
 use crate::client::Client;
 use anyhow;
 use log;
-use rand::TryRngCore;
+
 use std::sync::atomic::Ordering;
 use wacore::iq::prekeys::{
     DigestKeyBundleSpec, PreKeyCountSpec, PreKeyFetchSpec, PreKeyUploadSpec,
@@ -106,7 +106,7 @@ impl Client {
                 break;
             }
 
-            let key_pair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+            let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
 
             keys_to_upload.push((pre_key_id, pre_key_record));

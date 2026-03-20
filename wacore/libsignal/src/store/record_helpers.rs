@@ -100,11 +100,11 @@ pub fn signed_prekey_structure_to_record(
 mod tests {
     use super::*;
     use crate::protocol::{GenericSignedPreKey, KeyPair, PreKeyRecord};
-    use rand::RngCore;
+    use rand::Rng;
 
     #[test]
     fn test_prekey_serialization_length() -> Result<(), Box<dyn std::error::Error>> {
-        let key_pair = KeyPair::generate(&mut rand::rng());
+        let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
         let record = PreKeyRecord::new(1.into(), &key_pair);
         let structure = prekey_record_to_structure(&record)?;
 
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_prekey_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-        let key_pair = KeyPair::generate(&mut rand::rng());
+        let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
         let original_record = PreKeyRecord::new(42.into(), &key_pair);
 
         // Serialize to structure
@@ -149,9 +149,9 @@ mod tests {
 
     #[test]
     fn test_signed_prekey_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-        let key_pair = KeyPair::generate(&mut rand::rng());
+        let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
         let mut signature = [0u8; 64];
-        rand::rng().fill_bytes(&mut signature);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut signature);
         let timestamp = chrono::Utc::now();
         let id = 123u32;
 
