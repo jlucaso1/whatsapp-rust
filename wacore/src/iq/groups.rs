@@ -1779,6 +1779,305 @@ impl IqSpec for GetLinkedGroupsParticipantsIq {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Accept group invite (join via code)
+// ---------------------------------------------------------------------------
+
+/// Result of joining a group via invite code.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JoinGroupResult {
+    Joined(Jid),
+    PendingApproval(Jid),
+}
+
+impl JoinGroupResult {
+    pub fn group_jid(&self) -> &Jid {
+        match self {
+            JoinGroupResult::Joined(jid) | JoinGroupResult::PendingApproval(jid) => jid,
+        }
+    }
+}
+
+/// Join a group using an invite code.
+///
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="@g.us">
+///   <invite code="{code}"/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct AcceptGroupInviteIq {
+    pub code: String,
+}
+
+impl AcceptGroupInviteIq {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+impl IqSpec for AcceptGroupInviteIq {
+    type Response = JoinGroupResult;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let to = Jid::new("", GROUP_SERVER);
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &to,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("invite").attr("code", &self.code).build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        if let Some(group_node) = response.get_optional_child("group") {
+            let jid_str = required_attr(group_node, "jid")?;
+            let jid: Jid = jid_str
+                .parse()
+                .map_err(|e| anyhow!("invalid group jid: {e}"))?;
+            return Ok(JoinGroupResult::Joined(jid));
+        }
+        if let Some(approval_node) = response.get_optional_child("membership_approval_request") {
+            let jid_str = required_attr(approval_node, "jid")?;
+            let jid: Jid = jid_str
+                .parse()
+                .map_err(|e| anyhow!("invalid group jid: {e}"))?;
+            return Ok(JoinGroupResult::PendingApproval(jid));
+        }
+        Err(anyhow!(
+            "expected <group> or <membership_approval_request> child in invite response"
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Get group info by invite code
+// ---------------------------------------------------------------------------
+
+/// Get group metadata from an invite code without joining.
+///
+/// ```xml
+/// <iq type="get" xmlns="w:g2" to="@g.us">
+///   <invite code="{code}"/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct GetGroupInviteInfoIq {
+    pub code: String,
+}
+
+impl GetGroupInviteInfoIq {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+impl IqSpec for GetGroupInviteInfoIq {
+    type Response = GroupInfoResponse;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let to = Jid::new("", GROUP_SERVER);
+        InfoQuery::get_ref(
+            GROUP_IQ_NAMESPACE,
+            &to,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("invite").attr("code", &self.code).build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        let group_node = required_child(response, "group")?;
+        GroupInfoResponse::try_from_node(group_node)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Membership approval requests
+// ---------------------------------------------------------------------------
+
+/// Get pending membership approval requests for a group.
+///
+/// ```xml
+/// <iq type="get" xmlns="w:g2" to="{group_jid}">
+///   <membership_approval_requests/>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct GetMembershipRequestsIq {
+    pub group_jid: Jid,
+}
+
+impl GetMembershipRequestsIq {
+    pub fn new(jid: &Jid) -> Self {
+        Self {
+            group_jid: jid.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MembershipRequest {
+    pub jid: Jid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_time: Option<u64>,
+}
+
+impl IqSpec for GetMembershipRequestsIq {
+    type Response = Vec<MembershipRequest>;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        InfoQuery::get_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("membership_approval_requests").build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        let requests_node = response
+            .get_optional_child("membership_approval_requests")
+            .ok_or_else(|| anyhow!("missing membership_approval_requests"))?;
+
+        let mut requests = Vec::new();
+        for child in requests_node.get_children_by_tag("membership_approval_request") {
+            let jid_str = required_attr(child, "jid")?;
+            let jid: Jid = jid_str
+                .parse()
+                .map_err(|e| anyhow!("invalid jid in membership request: {e}"))?;
+            let request_time = child
+                .attrs()
+                .optional_string("request_time")
+                .and_then(|s| s.parse::<u64>().ok());
+            requests.push(MembershipRequest { jid, request_time });
+        }
+        Ok(requests)
+    }
+}
+
+/// Approve or reject pending membership requests.
+///
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <membership_requests_action>
+///     <approve> or <reject>
+///       <participant jid="{jid}"/>
+///     </approve>
+///   </membership_requests_action>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct MembershipRequestActionIq {
+    pub group_jid: Jid,
+    pub participants: Vec<Jid>,
+    pub approve: bool,
+}
+
+impl MembershipRequestActionIq {
+    pub fn approve(group_jid: &Jid, participants: &[Jid]) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            participants: participants.to_vec(),
+            approve: true,
+        }
+    }
+
+    pub fn reject(group_jid: &Jid, participants: &[Jid]) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            participants: participants.to_vec(),
+            approve: false,
+        }
+    }
+}
+
+impl IqSpec for MembershipRequestActionIq {
+    type Response = Vec<ParticipantChangeResponse>;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let action_tag = if self.approve { "approve" } else { "reject" };
+        let participant_nodes: Vec<Node> = self
+            .participants
+            .iter()
+            .map(|jid| {
+                NodeBuilder::new("participant")
+                    .attr("jid", jid.clone())
+                    .build()
+            })
+            .collect();
+
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("membership_requests_action")
+                    .children(vec![
+                        NodeBuilder::new(action_tag)
+                            .children(participant_nodes)
+                            .build(),
+                    ])
+                    .build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        let action_node = required_child(response, "membership_requests_action")?;
+        let action_tag = if self.approve { "approve" } else { "reject" };
+        let inner = required_child(action_node, action_tag)?;
+        collect_children::<ParticipantChangeResponse>(inner, "participant")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Member add mode
+// ---------------------------------------------------------------------------
+
+/// Set who can add members to the group.
+///
+/// ```xml
+/// <iq type="set" xmlns="w:g2" to="{group_jid}">
+///   <member_add_mode>admin_add|all_member_add</member_add_mode>
+/// </iq>
+/// ```
+#[derive(Debug, Clone)]
+pub struct SetMemberAddModeIq {
+    pub group_jid: Jid,
+    pub mode: MemberAddMode,
+}
+
+impl SetMemberAddModeIq {
+    pub fn new(jid: &Jid, mode: MemberAddMode) -> Self {
+        Self {
+            group_jid: jid.clone(),
+            mode,
+        }
+    }
+}
+
+impl IqSpec for SetMemberAddModeIq {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("member_add_mode")
+                    .string_content(self.mode.as_str())
+                    .build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

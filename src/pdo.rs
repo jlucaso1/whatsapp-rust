@@ -162,6 +162,62 @@ impl Client {
         }
     }
 
+    /// Request on-demand message history from the primary phone via PDO.
+    pub async fn fetch_message_history(
+        self: &Arc<Self>,
+        chat_jid: &Jid,
+        oldest_msg_id: &str,
+        oldest_msg_from_me: bool,
+        oldest_msg_timestamp_ms: i64,
+        count: i32,
+    ) -> Result<String, anyhow::Error> {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_pn = device_snapshot
+            .pn
+            .clone()
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
+        let primary_phone_jid = own_pn.with_device(0);
+
+        let pdo_request = wa::message::PeerDataOperationRequestMessage {
+            peer_data_operation_request_type: Some(
+                wa::message::PeerDataOperationRequestType::HistorySyncOnDemand as i32,
+            ),
+            history_sync_on_demand_request: Some(
+                wa::message::peer_data_operation_request_message::HistorySyncOnDemandRequest {
+                    chat_jid: Some(chat_jid.to_string()),
+                    oldest_msg_id: Some(oldest_msg_id.to_string()),
+                    oldest_msg_from_me: Some(oldest_msg_from_me),
+                    oldest_msg_timestamp_ms: Some(oldest_msg_timestamp_ms),
+                    on_demand_msg_count: Some(count),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        let protocol_message = wa::message::ProtocolMessage {
+            r#type: Some(
+                wa::message::protocol_message::Type::PeerDataOperationRequestMessage as i32,
+            ),
+            peer_data_operation_request_message: Some(pdo_request),
+            ..Default::default()
+        };
+
+        let msg = wa::Message {
+            protocol_message: Some(Box::new(protocol_message)),
+            ..Default::default()
+        };
+
+        info!(
+            "Sending PDO history sync on-demand request for chat {} (count={}) to primary phone {}",
+            chat_jid, count, primary_phone_jid
+        );
+
+        self.ensure_e2e_sessions(vec![primary_phone_jid.clone()])
+            .await?;
+        self.send_peer_message(primary_phone_jid, &msg).await
+    }
+
     /// Sends a peer message (message to our own devices).
     /// This is used for PDO requests and similar device-to-device communication.
     async fn send_peer_message(

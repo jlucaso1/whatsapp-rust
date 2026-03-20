@@ -2,18 +2,20 @@ use crate::client::Client;
 use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
-    AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteLinkIq, GroupCreateIq,
-    GroupInfoResponse, GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
-    PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq, SetGroupDescriptionIq,
-    SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq, SetGroupSubjectIq,
-    normalize_participants,
+    AcceptGroupInviteIq, AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteInfoIq,
+    GetGroupInviteLinkIq, GetMembershipRequestsIq, GroupCreateIq, GroupInfoResponse,
+    GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
+    MembershipRequestActionIq, PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq,
+    SetGroupDescriptionIq, SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq,
+    SetGroupSubjectIq, SetMemberAddModeIq, normalize_participants,
 };
 use wacore::types::message::AddressingMode;
 use wacore_binary::jid::Jid;
 
 pub use wacore::iq::groups::{
-    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, MemberAddMode,
-    MemberLinkMode, MembershipApprovalMode, ParticipantChangeResponse,
+    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, JoinGroupResult,
+    MemberAddMode, MemberLinkMode, MembershipApprovalMode, MembershipRequest,
+    ParticipantChangeResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -362,12 +364,82 @@ impl<'a> Groups<'a> {
             .execute(SetGroupMembershipApprovalIq::new(jid, mode))
             .await?)
     }
+
+    /// Join a group using an invite code.
+    pub async fn join_with_invite_code(
+        &self,
+        code: &str,
+    ) -> Result<JoinGroupResult, anyhow::Error> {
+        let code = strip_invite_url(code);
+        Ok(self.client.execute(AcceptGroupInviteIq::new(code)).await?)
+    }
+
+    /// Get group metadata from an invite code without joining.
+    pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error> {
+        let code = strip_invite_url(code);
+        let group = self.client.execute(GetGroupInviteInfoIq::new(code)).await?;
+        Ok(GroupMetadata::from(group))
+    }
+
+    /// Get pending membership approval requests.
+    pub async fn get_membership_requests(
+        &self,
+        jid: &Jid,
+    ) -> Result<Vec<MembershipRequest>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(GetMembershipRequestsIq::new(jid))
+            .await?)
+    }
+
+    /// Approve pending membership requests.
+    pub async fn approve_membership_requests(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(MembershipRequestActionIq::approve(jid, participants))
+            .await?)
+    }
+
+    /// Reject pending membership requests.
+    pub async fn reject_membership_requests(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(MembershipRequestActionIq::reject(jid, participants))
+            .await?)
+    }
+
+    /// Set who can add members to the group.
+    pub async fn set_member_add_mode(
+        &self,
+        jid: &Jid,
+        mode: MemberAddMode,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetMemberAddModeIq::new(jid, mode))
+            .await?)
+    }
 }
 
 impl Client {
     pub fn groups(&self) -> Groups<'_> {
         Groups::new(self)
     }
+}
+
+fn strip_invite_url(code: &str) -> &str {
+    let code = code.trim().trim_end_matches('/');
+    code.strip_prefix("https://chat.whatsapp.com/")
+        .or_else(|| code.strip_prefix("http://chat.whatsapp.com/"))
+        .unwrap_or(code)
 }
 
 #[cfg(test)]
