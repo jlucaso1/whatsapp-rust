@@ -17,34 +17,16 @@ concurrency:
 jobs:
   validate:
     name: Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/main.yml
 
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-01-30
-          components: rustfmt, clippy
-
-      - name: Install protoc
-        uses: taiki-e/install-action@v2
-        with:
-          tool: protoc@${{ env.PROTOC_VERSION }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --all --verbose
+  validate-e2e:
+    name: Validate E2E
+    uses: ./.github/workflows/e2e.yml
+    secrets: inherit
 
   publish:
     name: Publish to crates.io
-    needs: validate
+    needs: [validate, validate-e2e]
     runs-on: ubuntu-latest
     environment: release
     steps:
