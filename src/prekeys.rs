@@ -237,6 +237,11 @@ impl Client {
                 log::warn!("digestKey: service unavailable");
                 return Ok(());
             }
+            Err(crate::request::IqError::ParseError(e)) => {
+                // WA Web catches parse failures without re-uploading
+                log::debug!("digestKey: unparseable digest response ({e}), skipping");
+                return Ok(());
+            }
             Err(e) => {
                 log::warn!("digestKey: server error: {:?}", e);
                 return Ok(());
